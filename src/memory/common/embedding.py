@@ -166,6 +166,21 @@ def embed_chunks(
     logger.debug(f"Embedding {len(chunks)} chunks with model {model}")
     vo = voyageai.Client(api_key=key, timeout=timeout)  # type: ignore
 
+    return [
+        vector
+        for batch in request_batches(chunks, model)
+        for vector in embed_request(vo, batch, model, input_type, max_retries, retry_delay)
+    ]
+
+
+def embed_request(
+    vo: Any,
+    chunks: list[list[extract.MulitmodalChunk]],
+    model: str,
+    input_type: Literal["document", "query"],
+    max_retries: int,
+    retry_delay: float,
+) -> list[Vector]:
     last_error = None
     for attempt in range(max_retries):
         try:
@@ -200,6 +215,53 @@ def embed_chunks(
     raise EmbeddingError(
         f"Failed to generate embeddings after {max_retries} attempts"
     ) from last_error
+
+
+# Voyage's per-request caps: https://docs.voyageai.com/docs/embeddings and
+# https://docs.voyageai.com/docs/multimodal-embeddings. 120K is the smallest text
+# model cap (voyage-3-large among them), so it holds for any text model.
+MAX_REQUEST_INPUTS = 1000
+TEXT_REQUEST_TOKENS = 120_000
+MULTIMODAL_REQUEST_TOKENS = 320_000
+IMAGE_PIXELS_PER_TOKEN = 560
+
+
+def request_token_cap(model: str) -> int:
+    if model == settings.MIXED_EMBEDDING_MODEL:
+        return MULTIMODAL_REQUEST_TOKENS
+    return TEXT_REQUEST_TOKENS
+
+
+def estimated_tokens(chunk: list[extract.MulitmodalChunk]) -> int:
+    """UTF-8 bytes / 3 overestimates English (~4 chars a token) and covers CJK
+    (~1 token per 3-byte character)."""
+
+    def item_tokens(item: extract.MulitmodalChunk) -> int:
+        if isinstance(item, Image.Image):
+            return item.width * item.height // IMAGE_PIXELS_PER_TOKEN + 1
+        if isinstance(item, str):
+            item = item.encode()
+        return len(item) // 3 + 1
+
+    return sum(item_tokens(item) for item in chunk)
+
+
+def request_batches(
+    chunks: list[list[extract.MulitmodalChunk]], model: str
+) -> list[list[list[extract.MulitmodalChunk]]]:
+    """Split chunks, in order, into requests within Voyage's input and token caps."""
+    # Half the cap leaves room for text denser than the estimate, e.g. code or digits.
+    budget = request_token_cap(model) // 2
+    batches: list[list[list[extract.MulitmodalChunk]]] = [[]]
+    tokens = 0
+    for chunk in chunks:
+        cost = estimated_tokens(chunk)
+        if batches[-1] and (tokens + cost > budget or len(batches[-1]) >= MAX_REQUEST_INPUTS):
+            batches.append([])
+            tokens = 0
+        batches[-1].append(chunk)
+        tokens += cost
+    return batches
 
 
 def break_chunk(

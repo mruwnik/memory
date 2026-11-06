@@ -158,6 +158,27 @@ def test_process_attachment_same_name_from_same_sender_kept_apart():
     )
 
 
+@pytest.mark.parametrize(
+    "first, second", [("invoice.pdf", "invoice.pdf"), ("a b.pdf", "a_b.pdf")]
+)
+def test_process_attachments_same_name_in_one_message_kept_apart(first, second):
+    attachments = [
+        {"filename": name, "content_type": "application/pdf", "size": len(content), "content": content}
+        for name, content in [(first, b"first pdf"), (second, b"second pdf")]
+    ]
+    message = MailMessage(
+        message_id=f"<{first}{second}@example.com>", sender="a@example.com", folder="INBOX"
+    )
+
+    stored = process_attachments(cast(list[Attachment], attachments), message)
+    again = process_attachments(cast(list[Attachment], attachments), message)
+
+    assert [a.filename for a in again] == [a.filename for a in stored]
+    assert [
+        (settings.FILE_STORAGE_DIR / cast(str, a.filename)).read_bytes() for a in stored
+    ] == [b"first pdf", b"second pdf"]
+
+
 def test_process_attachment_tags_skip_sender():
     attachment = {"filename": "a.txt", "content_type": "text/plain", "size": 1, "content": b"a"}
     message = MailMessage(

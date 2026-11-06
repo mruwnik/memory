@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 def process_attachment(
-    attachment: Attachment, message: MailMessage
+    attachment: Attachment, message: MailMessage, tag: str = ""
 ) -> EmailAttachment | None:
     """Process an attachment, storing large files on disk and returning metadata.
 
@@ -43,8 +43,9 @@ def process_attachment(
     ].startswith("text/"):
         content = real_content.decode("utf-8", errors="replace")
     else:
-        file_path = message.safe_filename(attachment["filename"])
+        file_path = message.safe_filename(attachment["filename"], tag)
         try:
+            file_path.parent.mkdir(parents=True, exist_ok=True)
             file_path.write_bytes(real_content)
         except Exception:
             logger.exception("Failed to save an attachment to disk")
@@ -77,13 +78,17 @@ def process_attachments(
     Returns:
         List of processed attachment dictionaries with appropriate metadata
     """
-    if not attachments:
-        return []
-
+    names = [message.safe_filename(a["filename"]) for a in attachments]
+    # A repeated name gets a content-hash tag: stable across reingests, and two
+    # copies of the same file may share a path.
+    tags = [
+        hashlib.sha256(a.get("content") or b"").hexdigest()[:8] if name in names[:i] else ""
+        for i, (a, name) in enumerate(zip(attachments, names))
+    ]
     return [
         attachment
-        for a in attachments
-        if (attachment := process_attachment(a, message))
+        for a, tag in zip(attachments, tags)
+        if (attachment := process_attachment(a, message, tag))
     ]
 
 

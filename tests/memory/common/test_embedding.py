@@ -25,7 +25,7 @@ from tests.memory.agents.fakes import key_rejected, submitted
 
 @pytest.fixture
 def mock_embed(mock_voyage_client):
-    vectors = ([i] for i in range(1000))
+    vectors = ([i] for i in range(10_000))
 
     def embed_func(texts, model, input_type):
         return Mock(embeddings=[next(vectors) for _ in texts])
@@ -163,6 +163,32 @@ def test_embed_chunks_does_not_retry_decompression_bomb(mock_voyage_client, monk
 
     mock_voyage_client.multimodal_embed.assert_called_once()
     slept.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "model, method, chunk, count",
+    [
+        # ~1M tokens of text, far over one text request's cap.
+        (settings.TEXT_EMBEDDING_MODEL, "embed", ["word " * 2000], 400),
+        # 1500 tiny inputs: over the 1000-inputs-per-request cap.
+        (settings.TEXT_EMBEDDING_MODEL, "embed", ["hi"], 1500),
+        # ~28K tokens per 16-megapixel image, ~570K for 20.
+        (settings.MIXED_EMBEDDING_MODEL, "multimodal_embed", [Image.new("1", (4000, 4000))], 20),
+    ],
+)
+def test_embed_chunks_splits_large_items_across_requests(mock_embed, model, method, chunk, count):
+    calls = getattr(mock_embed, method)
+
+    result = embed_chunks([chunk] * count, model=model)
+
+    assert result == [[i] for i in range(count)]
+    assert calls.call_count > 1
+    requests = [c.args[0] for c in calls.call_args_list]
+    assert all(len(r) <= embedding.MAX_REQUEST_INPUTS for r in requests)
+    assert all(
+        len(r) * embedding.estimated_tokens(chunk) <= embedding.request_token_cap(model)
+        for r in requests
+    )
 
 
 @pytest.mark.parametrize(

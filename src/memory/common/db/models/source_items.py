@@ -158,12 +158,11 @@ class MailMessage(SourceItem):
             / message_dir
         )
 
-    def safe_filename(self, filename: str) -> pathlib.Path:
+    def safe_filename(self, filename: str, tag: str = "") -> pathlib.Path:
+        """`tag` tells apart attachments of this message that share a name."""
         suffix = pathlib.Path(filename).suffix
-        name = clean_filename(filename.removesuffix(suffix)) + suffix
-        path = self.attachments_path / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        return path
+        stem = clean_filename(filename.removesuffix(suffix))
+        return self.attachments_path / f"{stem}{tag and '-' + tag}{suffix}"
 
     def as_payload(self) -> MailMessagePayload:
         base = super().as_payload()
