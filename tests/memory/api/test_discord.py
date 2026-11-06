@@ -387,12 +387,24 @@ def test_invite_url_uses_the_application_id(client, db_session, user):
     assert "client_id=77777&" in url
 
 
-def test_owner_removes_the_bot(client, db_session, user):
+def test_owner_removes_the_bot_keeping_its_messages(client, db_session, user):
     bot = DiscordBot(id=11111, application_id=11111, name="Owned bot", created_by_user_id=user.id)
-    db_session.add(bot)
+    channel = DiscordChannel(id=20, name="dm", channel_type="dm")
+    author = DiscordUser(id=100, username="alice")
+    db_session.add_all([bot, channel, author])
+    db_session.flush()
+    message = DiscordMessage(
+        modality="message", sha256=b"\x01" * 32, content="hi", message_id=5, channel_id=20,
+        author_id=100, bot_id=bot.id, sent_at="2024-01-01T00:00:00+00:00",
+    )
+    db_session.add(message)
     db_session.commit()
+
     assert client.delete("/discord/bots/11111").status_code == 200
+
+    db_session.expire_all()
     assert db_session.get(DiscordBot, 11111) is None
+    assert db_session.get_one(DiscordMessage, message.id).bot_id is None
 
 
 def test_deleting_a_bot_hands_its_server_to_the_owners_other_bot(client, db_session, user):

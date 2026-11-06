@@ -408,9 +408,9 @@ class DiscordMessage(SourceItem):
     author_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("discord_users.id"), nullable=False
     )
-    # Nullable because existing messages from before bot system was added won't have this
+    # NULL for messages from before bots were tracked, or whose bot was deleted
     bot_id: Mapped[int | None] = mapped_column(
-        BigInteger, ForeignKey("discord_bots.id"), nullable=True
+        BigInteger, ForeignKey("discord_bots.id", ondelete="SET NULL"), nullable=True
     )
 
     # Timestamps
