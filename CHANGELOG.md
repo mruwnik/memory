@@ -12,6 +12,46 @@ section has nothing in it:
 - **Migrations**: new alembic revisions; flag any that are slow or lock large tables.
 - **Post-deploy commands**: run after the update, in order. Each must be safe to re-run.
 
+## v0.4.8 (2026-11-06)
+
+### Required env vars
+
+None.
+
+### Manual steps
+
+None.
+
+### Other changes for operators
+
+- OAuth client registration accepts the claude.ai, claude.com, ChatGPT and
+  Grok connector callbacks by default. Entries for them added to the redirect
+  allowlist by hand can be removed.
+- The Slack app wizard can go back to earlier steps. An app goes live on the
+  first event that ingests something; step 6 still shows when that happened.
+- Agent runs can be placed on external workers: an agent's `placement`
+  (`server_only`, the default; `runner_only`; `server_first`; `runner_first`),
+  `fallback_after` and `requires` decide who runs it. Users or API keys with
+  the new `agents:work` scope claim matching runs with `agent_work_claim` and
+  finish them with `agent_work_submit`. Grant the scope only to workers you
+  trust with other users' run input.
+- New optional settings: `AGENT_WORK_LEASE_DEFAULT_SEC`,
+  `AGENT_WORK_LEASE_MIN_SEC`, `AGENT_WORK_LEASE_MAX_SEC`,
+  `AGENT_WORK_HOLD_MAX_SEC`, `AGENT_WORK_MAX_LAPSES`,
+  `AGENT_WORK_MAX_RESULT_BYTES` (see the README).
+- The new `sweep_worker_runs` beat task runs on the `agents` queue, so worker
+  runs only lapse, fall back and expire while `agents-worker` is running.
+
+### Migrations
+
+- `20261203_agent_run_workers`: adds lease, worker and `placed_at` columns to
+  `agent_runs` (backfilling `placed_at` from `created_at`) and two indexes.
+  Quick.
+
+### Post-deploy commands
+
+None.
+
 ## v0.4.7 (2026-11-06)
 
 ### Required env vars
