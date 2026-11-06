@@ -127,6 +127,23 @@ def test_index_session_creates_segments(indexing_env, coding_session, sessions_d
     assert coding_session.indexed_at is not None
 
 
+def test_index_session_strips_nul_characters(indexing_env, coding_session, sessions_dir):
+    events = make_events(12)
+    events[3]["message"]["content"] = "binary\x00 output"
+    write_transcript(sessions_dir / coding_session.transcript_path, events)
+
+    result = sessions_tasks.index_session(str(coding_session.id))
+
+    assert result["status"] == "success"
+    indexing_env.expire_all()
+    contents = [s.content for s in indexing_env.query(SessionSegment).all()]
+    assert any("binary output" in c for c in contents)
+    assert all("\x00" not in c for c in contents)
+    chunks = indexing_env.query(Chunk).all()
+    assert chunks
+    assert all("\x00" not in c.content for c in chunks)
+
+
 def test_index_session_is_idempotent(indexing_env, coding_session, sessions_dir):
     write_transcript(sessions_dir / coding_session.transcript_path, make_events(12))
 

@@ -142,6 +142,33 @@ def test_process_simple_email(db_session, test_email_account, qdrant):
     assert mail_message.folder == "INBOX"
 
 
+@pytest.mark.parametrize(
+    "subject, body",
+    [
+        ("Test Email 1", "This is\x00 test email 1"),
+        ("Test\x00 Email 1", "This is test email 1"),
+    ],
+)
+def test_process_email_with_nul_characters(
+    db_session, test_email_account, qdrant, subject, body
+):
+    raw_email = SIMPLE_EMAIL_RAW.replace("Test Email 1", subject).replace(
+        "This is test email 1", body
+    )
+
+    res = run_process_message(
+        account_id=test_email_account.id,
+        message_id="101",
+        folder="INBOX",
+        raw_email=raw_email,
+    )
+
+    mail_message = db_session.get(MailMessage, res["mail_message_id"])
+    assert mail_message.subject == "Test Email 1"
+    assert "This is test email 1" in mail_message.content
+    assert all("\x00" not in chunk.content for chunk in mail_message.chunks)
+
+
 def test_process_email_with_attachment(db_session, test_email_account, qdrant):
     """Test processing a message with an attachment."""
     mail_message_id = run_process_message(

@@ -127,3 +127,15 @@ def test_the_beat_schedule_has_only_fixed_intervals():
     """Beat orders its heap by due times computed once, so an interval that changes under it starves every other entry."""
     schedules = [entry["schedule"] for entry in build_beat_schedule().values()]
     assert all(type(s) in (int, float, crontab) for s in schedules)
+
+
+def test_long_beat_intervals_are_on_the_clock():
+    """An interval entry first fires one interval after beat starts, and beat's
+    schedule file doesn't survive a container recreate, so a long interval
+    would slip with every deploy."""
+    long_intervals = {
+        name: entry["schedule"]
+        for name, entry in build_beat_schedule().items()
+        if not isinstance(entry["schedule"], crontab) and entry["schedule"] > 60 * 60
+    }
+    assert long_intervals == {}

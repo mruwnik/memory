@@ -43,6 +43,13 @@ a new, empty `## Unreleased` above it.
   redelivered or by the hourly stuck-meeting cleanup; if that run is lost too,
   it is marked failed instead of sitting unextracted. Meetings an earlier
   cleanup left `pending` get the same single rerun.
+- Text containing NUL characters (some emails, Claude session transcripts,
+  JSON metadata) is stored with them removed instead of failing the
+  `process_message` or `index_session` job. Failed jobs can be retried.
+- Comic sync works again: since v0.2.3 every page it fetched read as empty, so
+  no new xkcd or SMBC comics were found. SMBC comic pages, which the site
+  currently serves with status 500, are read too. Comics that have dropped out
+  of the feeds since then are not fetched back.
 
 ### Required env vars
 
@@ -54,7 +61,15 @@ None.
 
 ### Other changes for operators
 
-None.
+- Scheduled jobs slower than hourly run at fixed UTC times instead of on an
+  interval that restarted with every deploy, so near-daily deploys no longer
+  stop them: S3 file backup 02:00, Discord catch-up 02:30, Qdrant collection
+  cleanup 05:50, comic sync 06:15, Beeper reconcile every 6 hours from 00:20,
+  orphan verification every 6 hours from 01:40. Their interval settings
+  `S3_BACKUP_INTERVAL`, `DISCORD_BACKFILL_INTERVAL`, `CLEAN_COLLECTION_INTERVAL`,
+  `COMIC_SYNC_INTERVAL`, `BEEPER_RECONCILE_INTERVAL` and
+  `VERIFICATION_SYNC_INTERVAL` are removed: delete them from `.env`; they are
+  ignored.
 
 ### Migrations
 

@@ -2,9 +2,10 @@
 Database connection utilities.
 """
 
+import json
 from contextlib import contextmanager
-from typing import Generator, TypeAlias
-from sqlalchemy import create_engine
+from typing import Any, Generator, TypeAlias
+from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import sessionmaker, scoped_session, Session
 
 from memory.common import settings
@@ -18,6 +19,27 @@ DBSession: TypeAlias = Session | scoped_session[Session]
 # pin a pooled connection. Combined with pool_pre_ping below, the pool then
 # transparently replaces the dead connection on next checkout.
 IDLE_IN_TRANSACTION_TIMEOUT_MS = 60_000
+
+
+def strip_nul(value: Any) -> Any:
+    """``value`` with NUL characters removed from every string in it."""
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+    if isinstance(value, list):
+        return [strip_nul(v) for v in value]
+    if isinstance(value, tuple):
+        return tuple(strip_nul(v) for v in value)
+    if isinstance(value, dict):
+        return {strip_nul(k): strip_nul(v) for k, v in value.items()}
+    return value
+
+
+@event.listens_for(Engine, "before_cursor_execute", retval=True)
+def strip_nul_from_parameters(conn, cursor, statement, parameters, context, executemany):
+    # Postgres text can't hold NUL and psycopg2 rejects the whole statement over
+    # one, while ingested text (mail, session transcripts, files) can carry them.
+    return statement, strip_nul(parameters)
+
 
 # Cached engine and session factory for connection pooling
 _engine = None
@@ -43,6 +65,9 @@ def get_engine():
             pool_pre_ping=True,  # Verify connections before use
             pool_recycle=3600,   # Recycle connections after 1 hour
             connect_args=connect_args,
+            # JSON is serialised before before_cursor_execute sees it, and jsonb
+            # rejects the \u0000 escapes that NULs become.
+            json_serializer=lambda value: json.dumps(strip_nul(value)),
         )
     return _engine
 

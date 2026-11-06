@@ -1,6 +1,7 @@
 from unittest.mock import patch
 
 import pytest
+import requests
 
 from memory.parsers.comics import extract_smbc, extract_xkcd
 
@@ -93,6 +94,34 @@ def test_extract_smbc(to_remove, overrides):
         mock_get.return_value.status_code = 200
         mock_get.return_value.text = MOCK_SMBC_HTML.replace(to_remove, "")
         assert extract_smbc("https://www.smbc-comics.com/") == expected | overrides
+
+
+@pytest.mark.parametrize("status", [500, 503])
+def test_extract_smbc_reads_comic_pages_served_as_server_errors(status):
+    with patch("memory.parsers.comics.safe_get") as mock_get:
+        mock_get.return_value.status_code = status
+        mock_get.return_value.raise_for_status.side_effect = requests.HTTPError(str(status))
+        mock_get.return_value.text = MOCK_SMBC_HTML
+        info = extract_smbc("https://www.smbc-comics.com/comic/time-6")
+    assert info["image_url"] == "https://www.smbc-comics.com/comics/1746375102-20250504.webp"
+
+
+@pytest.mark.parametrize(
+    "status, html",
+    [
+        (500, "<html><body>Oops</body></html>"),
+        (404, MOCK_SMBC_HTML),
+        (403, MOCK_SMBC_HTML),
+    ],
+    ids=["500-no-comic", "404-with-comic", "403-with-comic"],
+)
+def test_extract_smbc_raises_for_error_pages(status, html):
+    with patch("memory.parsers.comics.safe_get") as mock_get:
+        mock_get.return_value.status_code = status
+        mock_get.return_value.raise_for_status.side_effect = requests.HTTPError(str(status))
+        mock_get.return_value.text = html
+        with pytest.raises(requests.HTTPError):
+            extract_smbc("https://www.smbc-comics.com/comic/time-6")
 
 
 # Create a stripped-down version of the XKCD HTML

@@ -386,6 +386,9 @@ app.conf.update(
 def build_beat_schedule() -> dict:
     """Build the beat schedule dict. Used by the ingest worker to register
     with celery, and by the API to expose schedule metadata."""
+    # Anything slower than hourly runs on the clock: beat's schedule file is
+    # lost when the container is recreated, and an interval entry first fires
+    # a whole interval after beat starts, so it would slip with every deploy.
     schedule = {
         "collect-system-metrics": {
             "task": COLLECT_SYSTEM_METRICS,
@@ -397,7 +400,7 @@ def build_beat_schedule() -> dict:
         },
         "clean-all-collections": {
             "task": CLEAN_ALL_COLLECTIONS,
-            "schedule": settings.CLEAN_COLLECTION_INTERVAL,
+            "schedule": crontab(hour="5", minute="50"),
         },
         "reconcile-access-control-recent": {
             # Frequent, cheap backstop for the event-driven dispatch:
@@ -428,7 +431,7 @@ def build_beat_schedule() -> dict:
         "sync-due-sources": {"task": SYNC_DUE_SOURCES, "schedule": 60},
         "sync-all-comics": {
             "task": SYNC_ALL_COMICS,
-            "schedule": settings.COMIC_SYNC_INTERVAL,
+            "schedule": crontab(hour="6", minute="15"),
         },
         # The interval is a server setting, so the task checks it: beat's own intervals are fixed.
         "sync-notes-when-due": {"task": SYNC_NOTES_WHEN_DUE, "schedule": 60},
@@ -438,7 +441,7 @@ def build_beat_schedule() -> dict:
         },
         "backup-all": {
             "task": BACKUP_ALL,
-            "schedule": settings.S3_BACKUP_INTERVAL,
+            "schedule": crontab(hour="2", minute="0"),
         },
         "sync-slack-workspaces": {
             "task": SYNC_ALL_SLACK_WORKSPACES,
@@ -446,15 +449,15 @@ def build_beat_schedule() -> dict:
         },
         "schedule-discord-backfills": {
             "task": SCHEDULE_DISCORD_BACKFILLS,
-            "schedule": settings.DISCORD_BACKFILL_INTERVAL,
+            "schedule": crontab(hour="2", minute="30"),
         },
         "sync-beeper-accounts": {
             "task": SYNC_ALL_BEEPER_ACCOUNTS,
-            "schedule": settings.BEEPER_RECONCILE_INTERVAL,
+            "schedule": crontab(hour="*/6", minute="20"),
         },
         "verify-orphans": {
             "task": VERIFY_ORPHANS,
-            "schedule": settings.VERIFICATION_SYNC_INTERVAL,
+            "schedule": crontab(hour="1-23/6", minute="40"),
         },
         "cleanup-old-claude-sessions": {
             "task": CLEANUP_OLD_CLAUDE_SESSIONS,
@@ -501,8 +504,6 @@ def build_beat_schedule() -> dict:
         },
         "sync-all-transcript-accounts": {
             "task": SYNC_ALL_TRANSCRIPT_ACCOUNTS,
-            # On the clock, not an interval: beat's schedule file is lost when
-            # the container is recreated, so an interval restarts at each deploy.
             "schedule": crontab(hour="5", minute="10"),
         },
         "summarize-stale-sessions": {

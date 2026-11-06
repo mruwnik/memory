@@ -229,7 +229,7 @@ Behind a reverse proxy, `/transcripts/ingest/` must reach the api without a logi
 
 Add a bot in **Sources → Discord** with its name and token (the application ID
 is read from the token). Every bot reads and sends with its token over the REST
-API, and a daily catch-up (`DISCORD_BACKFILL_INTERVAL`, default a day) refreshes
+API, and a daily catch-up (02:30 UTC) refreshes
 its servers and channels, re-reads the last `DISCORD_CATCH_UP_DAYS` (2) of each
 collected channel to store messages that didn't arrive and apply missed edits,
 and continues the history backfill. Missed deletes and reactions are not
@@ -316,7 +316,7 @@ Google Chat, LINE, Google Messages) are cloud-only.
 The ingest hub keeps a WebSocket open to each active, verified account and
 queues its message and chat events. The socket has no replay, so a
 (re)connect (unless a reconcile ran in the last 5 minutes), and every
-`BEEPER_RECONCILE_INTERVAL` (default 6 hours), re-reads each collected chat
+six hours (00:20, 06:20, 12:20 and 18:20 UTC), re-reads each collected chat
 from where it stopped. A chat's first read backfills its history as far back
 as the Server has it, `BEEPER_SYNC_MAX_MESSAGES_PER_RUN` messages per run; a
 chat whose Server keeps finding no older history for about an hour pauses
@@ -400,7 +400,7 @@ Configuration lives in `.env` (or environment variables on the host). LLM featur
 | `MIXED_EMBEDDING_MODEL`           | `voyage-multimodal-3`| Voyage mixed text+image embedding model                        |
 | `RERANK_MODEL`                    | `rerank-2.5`         | Voyage reranker used after candidate retrieval                 |
 | `FILE_STORAGE_DIR`                | `/tmp/memory_files`  | Where uploaded content is stored                               |
-| `S3_BACKUP_BUCKET`                | unset (backups off)  | Bucket for daily encrypted backups; setting it turns them on and requires `BACKUP_ENCRYPTION_KEY` (the workers refuse to start without it). The workers also need AWS credentials |
+| `S3_BACKUP_BUCKET`                | unset (backups off)  | Bucket for daily encrypted backups (files at 02:00 UTC); setting it turns them on and requires `BACKUP_ENCRYPTION_KEY` (the workers refuse to start without it). The workers also need AWS credentials |
 | `S3_BACKUP_PREFIX`, `S3_BACKUP_REGION` | `memory` / `eu-central-1` | Key prefix inside the bucket and the bucket's region |
 | `BACKUP_ENCRYPTION_KEY`           | unset                | Passphrase for the backups; `tools/install.sh` generates one when you choose S3 backups. Keep a copy elsewhere: backups can't be decrypted without it |
 | `FORWARDED_ALLOW_IPS`             | `127.0.0.1,::1`      | Trusted-proxy IPs/CIDRs for `X-Forwarded-*` (see proxy section)|

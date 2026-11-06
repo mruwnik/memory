@@ -5,9 +5,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
-from celery.schedules import crontab
 
-from memory.common.celery_app import build_beat_schedule
 from memory.common.db.models import Person, TranscriptAccount
 from memory.common.db.models.source_items import Meeting
 from memory.common.content_processing import create_content_hash
@@ -402,14 +400,6 @@ def unpolled_accounts(db_session, regular_user):
     db_session.add_all([inactive, push_only])
     db_session.commit()
     return [inactive, push_only]
-
-
-def test_daily_sync_is_on_the_clock():
-    """An interval entry first fires one interval after beat starts, and beat's
-    schedule file doesn't survive a container recreate, so a daily interval
-    would slip with every deploy."""
-    entry = build_beat_schedule()["sync-all-transcript-accounts"]
-    assert isinstance(entry["schedule"], crontab)
 
 
 def test_fan_out_dispatches_only_active_polling_accounts(

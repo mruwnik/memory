@@ -54,7 +54,6 @@ def test_backfill_routes_to_dedicated_queue():
 
 
 def test_backfill_settings_have_defaults():
-    assert settings.DISCORD_BACKFILL_INTERVAL == 60 * 60 * 24
     assert settings.DISCORD_CATCH_UP_DAYS > 0
     assert settings.DISCORD_BACKFILL_JITTER_SECONDS >= 0
     assert settings.DISCORD_BACKFILL_MAX_MESSAGES_PER_RUN > 0

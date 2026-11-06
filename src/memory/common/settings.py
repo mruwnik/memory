@@ -236,8 +236,6 @@ QDRANT_SEARCH_TIMEOUT = int(os.getenv("QDRANT_SEARCH_TIMEOUT", "5"))
 
 # Worker settings
 # Intervals are in seconds
-COMIC_SYNC_INTERVAL = int(os.getenv("COMIC_SYNC_INTERVAL", 60 * 60 * 24))
-CLEAN_COLLECTION_INTERVAL = int(os.getenv("CLEAN_COLLECTION_INTERVAL", 24 * 60 * 60))
 CHUNK_REINGEST_INTERVAL = int(os.getenv("CHUNK_REINGEST_INTERVAL", 60 * 60))
 NOTES_SYNC_INTERVAL = optional_int_env("NOTES_SYNC_INTERVAL")
 NOTES_SYNC_INTERVAL_RANGE = (60, 24 * 60 * 60)
@@ -489,9 +487,6 @@ DISCORD_COLLECTOR_PORT = int(os.getenv("DISCORD_COLLECTOR_PORT", 8003))
 DISCORD_COLLECTOR_SERVER_URL = os.getenv("DISCORD_COLLECTOR_SERVER_URL", "0.0.0.0")
 
 # Discord history backfill
-DISCORD_BACKFILL_INTERVAL = int(
-    os.getenv("DISCORD_BACKFILL_INTERVAL", 60 * 60 * 24)  # daily (seconds)
-)
 DISCORD_BACKFILL_JITTER_SECONDS = int(
     os.getenv("DISCORD_BACKFILL_JITTER_SECONDS", 60 * 60 * 3)  # spread dispatch over 3h
 )
@@ -531,8 +526,6 @@ BEEPER_HOMESERVER_ORIGINS = [
 # The release docker/beeper/Dockerfile pins; other versions get a warning.
 BEEPER_SERVER_VERSION = os.getenv("BEEPER_SERVER_VERSION", "4.3.284")
 BEEPER_REQUEST_TIMEOUT = float(os.getenv("BEEPER_REQUEST_TIMEOUT", 60))
-# The WebSocket has no replay, so collected chats are re-read this often (seconds).
-BEEPER_RECONCILE_INTERVAL = int(os.getenv("BEEPER_RECONCILE_INTERVAL", 60 * 60 * 6))
 BEEPER_SYNC_MAX_MESSAGES_PER_RUN = int(os.getenv("BEEPER_SYNC_MAX_MESSAGES_PER_RUN", 2000))
 BEEPER_ATTACHMENT_MAX_BYTES = int(os.getenv("BEEPER_ATTACHMENT_MAX_BYTES", 50 * 1024 * 1024))
 
@@ -543,9 +536,6 @@ S3_BACKUP_BUCKET = os.getenv("S3_BACKUP_BUCKET", "")
 S3_BACKUP_PREFIX = os.getenv("S3_BACKUP_PREFIX", "memory")
 S3_BACKUP_REGION = os.getenv("S3_BACKUP_REGION", "eu-central-1")
 BACKUP_ENCRYPTION_KEY = secret_env("BACKUP_ENCRYPTION_KEY")
-S3_BACKUP_INTERVAL = int(
-    os.getenv("S3_BACKUP_INTERVAL", 60 * 60 * 24)
-)  # Daily by default
 
 # Google OAuth settings
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
@@ -558,9 +548,6 @@ GOOGLE_REDIRECT_URI = os.getenv(
 VERIFICATION_BATCH_SIZE = int(os.getenv("VERIFICATION_BATCH_SIZE", 100))
 VERIFICATION_INTERVAL_HOURS = int(os.getenv("VERIFICATION_INTERVAL_HOURS", 24))
 MAX_VERIFICATION_FAILURES = int(os.getenv("MAX_VERIFICATION_FAILURES", 3))
-VERIFICATION_SYNC_INTERVAL = int(
-    os.getenv("VERIFICATION_SYNC_INTERVAL", 60 * 60 * 6)
-)  # 6 hours
 
 # Session retention settings
 SESSION_RETENTION_DAYS = int(os.getenv("SESSION_RETENTION_DAYS", 365 * 2))

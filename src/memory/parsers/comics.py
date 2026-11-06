@@ -27,10 +27,13 @@ def extract_smbc(url: str) -> ComicInfo:
     # each redirect target — the comic URL may be attacker-influenced if
     # the upstream RSS feed is poisoned.
     response = safe_get(url, timeout=30)
-    response.raise_for_status()
     soup = BeautifulSoup(response.text, "html.parser")
 
     comic_img = soup.find("img", id="cc-comic")
+    if not comic_img or response.status_code < 500:
+        # SMBC serves working comic pages with status 500, so a server error
+        # only counts when the page has no comic.
+        response.raise_for_status()
     title = ""
     image_url = ""
 

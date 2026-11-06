@@ -217,6 +217,9 @@ class DownloadResponse(requests.Response):
     def __init__(self, response: httpx.Response, client: httpx.Client):
         super().__init__()
         self.response = response
+        # requests.Response.content reads nothing while raw is None; raw is the
+        # httpx.Response, so only iter_content below may read from it.
+        self.raw = response
         self.client = client
         self.status_code = response.status_code
         self.headers = CaseInsensitiveDict(response.headers)
@@ -224,6 +227,12 @@ class DownloadResponse(requests.Response):
         self.encoding = response.encoding
 
     def iter_content(self, chunk_size=1, decode_unicode=False):
+        # The stream can be read once, so later reads replay .content like requests does.
+        content = self._content
+        if isinstance(content, bytes):
+            size = chunk_size or max(len(content), 1)
+            yield from (content[i : i + size] for i in range(0, len(content), size))
+            return
         try:
             for chunk in self.response.iter_bytes(chunk_size):
                 yield chunk.decode(self.encoding or "utf-8") if decode_unicode else chunk

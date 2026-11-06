@@ -6,6 +6,7 @@ import pathlib
 from typing import cast
 from unittest.mock import patch
 
+import httpx
 import pytest
 import requests
 
@@ -205,6 +206,22 @@ def test_stream_download_to_bytes_ignores_unparseable_content_length(invalid_cl)
     with patch("memory.common.downloads.checked_get", return_value=fake):
         result = stream_download_to_bytes("http://example.com/f", max_bytes=1024)
     assert result == b"ok"
+
+
+@pytest.mark.parametrize("body", ["<html>comic</html>", ""])
+def test_safe_get_reads_the_whole_body(body):
+    client = httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, text=body)))
+    with patch("memory.common.downloads.public_sync_http_client", return_value=client):
+        response = safe_get("http://example.com/f")
+    assert response.text == body
+    assert response.content == body.encode()
+
+
+def test_safe_get_iter_content_replays_a_read_body():
+    client = httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, stream=httpx.ByteStream(b"abcde"))))
+    with patch("memory.common.downloads.public_sync_http_client", return_value=client):
+        response = safe_get("http://example.com/f")
+    assert b"".join(response.iter_content(2)) == b"abcde"
 
 
 # --- safe_get redirect handling -----------------------------------------
