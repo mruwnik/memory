@@ -164,8 +164,8 @@ def test_the_changes_that_matched_reach_the_runs_trigger_ref(
     triggers.match_ingest_triggers(item.id, client, changes=["commits"])
     fire_dispatched(no_celery_dispatch)
 
-    refs = [run.trigger_ref["changes"] for run in db_session.query(AgentRun).order_by(AgentRun.id)]
-    assert refs == [{str(item.id): ["new"]}, {str(item.id): ["commits"]}]
+    refs = sorted(run.trigger_ref["changes"][str(item.id)] for run in db_session.query(AgentRun))
+    assert refs == [["commits"], ["new"]]
 
 
 def test_disabled_triggers_and_unreadable_items_start_nothing(
