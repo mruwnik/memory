@@ -1119,14 +1119,9 @@ def update_slack_channel(
 ) -> dict[str, Any]:
     """Cheap upsert of channel metadata in response to a `channel_*` event.
 
-    Used for ``channel_created`` (insert), ``channel_renamed`` (update name),
-    ``channel_archived`` / ``channel_unarchived`` (update is_archived).
+    ``channel_created`` inserts; ``channel_rename``, ``channel_archive`` and
+    ``channel_unarchive`` change only the fields their payload carries.
     """
-    name = channel_payload.get("name") or channel_id
-    is_private = bool(channel_payload.get("is_private", False))
-    is_archived = bool(channel_payload.get("is_archived", False))
-    channel_type = get_channel_type(channel_payload)
-
     with make_session() as session:
         channel = session.get(SlackChannel, channel_id)
         if channel is not None and channel.workspace_id != workspace_id:
@@ -1137,17 +1132,17 @@ def update_slack_channel(
             channel = SlackChannel(
                 id=channel_id,
                 workspace_id=workspace_id,
-                name=name,
-                channel_type=channel_type,
-                is_private=is_private,
-                is_archived=is_archived,
+                name=channel_payload.get("name") or channel_id,
+                channel_type=get_channel_type(channel_payload),
+                is_private=bool(channel_payload.get("is_private", False)),
+                is_archived=bool(channel_payload.get("is_archived", False)),
             )
             session.add(channel)
         else:
-            channel.name = name
-            channel.is_private = is_private
-            channel.is_archived = is_archived
-            channel.channel_type = channel_type
+            if channel_payload.get("name"):
+                channel.name = channel_payload["name"]
+            if "is_archived" in channel_payload:
+                channel.is_archived = bool(channel_payload["is_archived"])
         session.commit()
         return {
             "status": "created" if created else "updated",

@@ -3,6 +3,7 @@
 // Hits the per-app wizard endpoints. The flow is:
 //
 //   1. createApp({name, client_id})              POST /slack/apps
+//      (going back: updateApp(app_id, ...)        PATCH /slack/apps/{id})
 //   2. setClientSecret(app_id, secret)           POST /slack/apps/{id}/client-secret
 //   3. issueWizardNonce(app_id)                  POST /slack/apps/{id}/wizard-nonce
 //      → returns {nonce, callback_url, events_url} for the user to paste.
@@ -10,9 +11,8 @@
 //   5. setSigningSecret(app_id, secret)          POST /slack/apps/{id}/signing-secret
 //   6. User pastes events_url + ticks events in Slack; Slack POSTs
 //      url_verification, server advances setup_state to 'signing_verified'.
-//   7. beginTestMessage(app_id, token)           POST /slack/apps/{id}/test-message
-//      User posts the token in any channel; events handler matches and
-//      flips setup_state to 'live'.
+//   7. User posts a message in a channel the bot is in; the first event
+//      that gets ingested from a connected workspace flips setup_state to 'live'.
 //
 // Frontend polls /apps/{id}/wizard-status to know when async transitions
 // (4, 6, 7) have completed.
@@ -53,6 +53,10 @@ export interface SlackAppCreate {
   api_base_url?: string
 }
 
+// client_id can change only while no workspace is connected; changing it drops both secrets.
+// A null URL resets it to Slack's.
+export type SlackAppUpdate = Partial<{ [K in keyof SlackAppCreate]: SlackAppCreate[K] | null }>
+
 export interface SlackAppNonceResponse {
   nonce: string
   callback_url: string
@@ -62,11 +66,6 @@ export interface SlackAppNonceResponse {
 export interface SlackWizardStatus {
   setup_state: SlackAppSetupState
   has_credentials: boolean
-  test_message_pending: boolean
-}
-
-export interface SlackTestMessageStatus {
-  status: 'waiting' | 'matched' | 'expired'
 }
 
 const apiOk = async (response: Response, fallback: string) => {
@@ -97,6 +96,17 @@ export const useSlackWizard = () => {
         body: JSON.stringify(data),
       })
       return apiOk(r, 'Failed to create Slack app')
+    },
+    [apiCall],
+  )
+
+  const updateApp = useCallback(
+    async (appId: number, data: SlackAppUpdate): Promise<SlackAppResponse> => {
+      const r = await apiCall(`/slack/apps/${appId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(data),
+      })
+      return apiOk(r, 'Failed to update Slack app')
     },
     [apiCall],
   )
@@ -160,42 +170,19 @@ export const useSlackWizard = () => {
     [apiCall],
   )
 
-  const beginTestMessage = useCallback(
-    async (
-      appId: number,
-      token: string,
-    ): Promise<SlackTestMessageStatus> => {
-      const r = await apiCall(`/slack/apps/${appId}/test-message`, {
-        method: 'POST',
-        body: JSON.stringify({ token }),
-      })
-      return apiOk(r, 'Failed to begin test message')
-    },
-    [apiCall],
-  )
-
-  const pollTestMessage = useCallback(
-    async (appId: number): Promise<SlackTestMessageStatus> => {
-      const r = await apiCall(`/slack/apps/${appId}/test-message`)
-      return apiOk(r, 'Failed to poll test message')
-    },
-    [apiCall],
-  )
-
   return useMemo(
     () => ({
       listApps,
       getApp,
       createApp,
+      updateApp,
       deleteApp,
       setClientSecret,
       setSigningSecret,
       issueWizardNonce,
       issueOAuthState,
       getWizardStatus,
-      beginTestMessage,
-      pollTestMessage,
     }),
-    [listApps, getApp, createApp, deleteApp, setClientSecret, setSigningSecret, issueWizardNonce, issueOAuthState, getWizardStatus, beginTestMessage, pollTestMessage],
+    [listApps, getApp, createApp, updateApp, deleteApp, setClientSecret, setSigningSecret, issueWizardNonce, issueOAuthState, getWizardStatus],
   )
 }

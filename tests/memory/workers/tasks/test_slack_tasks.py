@@ -1262,6 +1262,23 @@ def test_update_slack_reactions_retries_a_lock_conflict(db_session, stored_messa
     assert (result["status"], retry.call_args.kwargs["kwargs"]["attempt"]) == ("retrying", 1)
 
 
+@pytest.mark.parametrize(
+    "payload, expected",
+    [
+        ({"is_archived": True}, ("general", True, "private_channel")),
+        ({"id": "C12345678", "name": "renamed", "created": 1}, ("renamed", False, "private_channel")),
+    ],
+)
+def test_a_channel_event_changes_only_what_it_carries(db_session, slack_channel, payload, expected):
+    slack_channel.channel_type = "private_channel"
+    db_session.commit()
+
+    slack.update_slack_channel(slack_channel.workspace_id, slack_channel.id, payload)
+
+    db_session.refresh(slack_channel)
+    assert (slack_channel.name, slack_channel.is_archived, slack_channel.channel_type) == expected
+
+
 # =============================================================================
 # Cross-tenant isolation
 # =============================================================================

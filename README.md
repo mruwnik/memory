@@ -554,7 +554,7 @@ This is a personal knowledge base system. Feel free to fork and adapt for your o
 
 ### Slack event ingestion and history sweeps
 
-Complete the Slack setup wizard and its test message to verify event delivery.
+An app switches from polling to events once Slack delivers a message from a connected workspace (wizard step 6 waits for one). Pasting a new signing secret sends it back to polling until Slack delivers another message.
 Verified installations ingest new messages through Events API; background history
 sweeps default to daily. Set **Sources → Slack → Background sweep frequency** per
 workspace, or use **Sync now** for an immediate sweep. Initial imports run immediately.

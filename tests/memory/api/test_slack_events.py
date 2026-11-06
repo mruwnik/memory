@@ -13,10 +13,12 @@ import time
 from unittest.mock import patch
 
 import pytest
+from sqlalchemy import update
 
 from memory.api import slack as slack_api
 from memory.api.slack import _dispatch_event_callback, _verify_slack_signature
 from memory.common.db.models.slack import SlackApp, SlackUserCredentials, SlackWorkspace
+from memory.common.encryption import encrypt_value
 
 
 def _slack_sig(secret: str, ts: str, body: bytes) -> str:
@@ -370,6 +372,32 @@ def test_dispatch_event_callback_accepts_dict_channel_with_valid_id():
     assert kwargs["channel_payload"]["name"] == "renamed"
 
 
+@pytest.mark.parametrize(
+    "event_type, payload",
+    [("channel_archive", {"is_archived": True}), ("channel_unarchive", {"is_archived": False})],
+)
+def test_dispatch_archive_events_carry_only_the_archived_flag(event_type, payload):
+    with _capture_send_task() as mock_send:
+        result = _dispatch_event_callback(
+            {"event": {"type": event_type, "channel": GOOD_CHANNEL_ID, "user": "U1"}, "team_id": GOOD_TEAM_ID},
+            slack_app_id=3,
+        )
+
+    assert (result["dispatch"], mock_send.call_args.kwargs["kwargs"]["channel_payload"]) == ("update_channel", payload)
+
+
+@pytest.mark.parametrize("event_type", ["channel_deleted", "channel_left", "channel_history_changed"])
+def test_dispatch_ignores_channel_events_that_carry_no_metadata(event_type):
+    with _capture_send_task() as mock_send:
+        result = _dispatch_event_callback(
+            {"event": {"type": event_type, "channel": GOOD_CHANNEL_ID}, "team_id": GOOD_TEAM_ID},
+            slack_app_id=3,
+        )
+
+    mock_send.assert_not_called()
+    assert result["dispatch"] == "ignored"
+
+
 # ---------------------------------------------------------------------------
 # url_verification on the route
 # ---------------------------------------------------------------------------
@@ -482,10 +510,7 @@ def test_events_for_a_team_the_app_has_no_credential_in_are_dropped(client, db_s
 
 
 def test_events_for_a_team_the_app_is_connected_to_are_dispatched(client, db_session, events_app, user):
-    db_session.add(SlackWorkspace(id=GOOD_TEAM_ID, name="W"))
-    db_session.flush()
-    db_session.add(SlackUserCredentials(slack_app_id=events_app.id, workspace_id=GOOD_TEAM_ID, user_id=user.id))
-    db_session.commit()
+    connect_workspace(db_session, events_app, user)
 
     with _capture_send_task() as send:
         post_signed(client, f"/slack/events/{events_app.id}", message_event(GOOD_TEAM_ID, "7.2"))
@@ -504,6 +529,113 @@ def test_events_for_another_apps_team_are_dropped(client, db_session, events_app
         post_signed(client, f"/slack/events/{events_app.id}", message_event(GOOD_TEAM_ID, "7.3"))
 
     send.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "state, after",
+    [
+        ("draft", "signing_verified"),
+        ("signing_verified", "signing_verified"),
+        ("live", "live"),
+        ("degraded", "degraded"),
+    ],
+)
+def test_a_signed_event_for_an_unconnected_workspace_verifies_the_signing_secret(
+    client, db_session, events_app, state, after
+):
+    events_app.setup_state = state
+    db_session.commit()
+
+    with _capture_send_task():
+        post_signed(client, f"/slack/events/{events_app.id}", message_event(GOOD_TEAM_ID, f"8.{state}"))
+
+    db_session.refresh(events_app)
+    assert events_app.setup_state == after
+
+
+def connect_workspace(db_session, app, user):
+    db_session.add(SlackWorkspace(id=GOOD_TEAM_ID, name="W"))
+    db_session.flush()
+    db_session.add(SlackUserCredentials(slack_app_id=app.id, workspace_id=GOOD_TEAM_ID, user_id=user.id))
+    db_session.commit()
+
+
+def event_callback(event: dict) -> dict:
+    return {"type": "event_callback", "team_id": GOOD_TEAM_ID, "event": event}
+
+
+@pytest.mark.parametrize(
+    "state, after",
+    [
+        ("draft", "live"),
+        ("signing_verified", "live"),
+        ("live", "live"),
+        ("degraded", "degraded"),
+    ],
+)
+def test_an_ingested_message_makes_the_app_live(client, db_session, events_app, user, state, after):
+    events_app.setup_state = state
+    connect_workspace(db_session, events_app, user)
+
+    with _capture_send_task():
+        post_signed(client, f"/slack/events/{events_app.id}", message_event(GOOD_TEAM_ID, f"9.{state}"))
+
+    db_session.refresh(events_app)
+    assert events_app.setup_state == after
+
+
+@pytest.mark.parametrize(
+    "event, after",
+    [
+        ({"type": "message", "subtype": "message_changed", "channel": GOOD_CHANNEL_ID,
+          "message": {"ts": "11.1", "user": "U1", "text": "edited"}}, "live"),
+        ({"type": "message", "subtype": "message_deleted", "deleted_ts": "11.2",
+          "channel": GOOD_CHANNEL_ID}, "live"),
+        ({"type": "message", "subtype": "file_share", "ts": "11.3", "user": "U1", "text": "",
+          "files": [{"id": "F1"}], "channel": GOOD_CHANNEL_ID}, "live"),
+        ({"type": "reaction_added", "user": "U1", "reaction": "tada",
+          "item": {"type": "message", "channel": GOOD_CHANNEL_ID, "ts": "11.4"}}, "live"),
+        ({"type": "channel_rename", "channel": {"id": GOOD_CHANNEL_ID, "name": "renamed"}}, "live"),
+        ({"type": "tokens_revoked", "tokens": {"oauth": ["U1"], "bot": ["B1"]}}, "signing_verified"),
+        ({"type": "app_uninstalled"}, "signing_verified"),
+        ({"type": "team_renamed", "channel": GOOD_CHANNEL_ID}, "signing_verified"),
+        ({"type": "reaction_added", "user": "U1", "reaction": "tada",
+          "item": {"type": "file", "file": "F1"}}, "signing_verified"),
+        ({"type": "message", "ts": "11.5", "user": "U1", "text": "x", "channel": "not-a-channel"},
+         "signing_verified"),
+    ],
+)
+def test_only_events_that_queue_ingestion_make_the_app_live(client, db_session, events_app, user, event, after):
+    events_app.setup_state = "signing_verified"
+    connect_workspace(db_session, events_app, user)
+
+    with _capture_send_task():
+        post_signed(client, f"/slack/events/{events_app.id}", event_callback(event))
+
+    db_session.refresh(events_app)
+    assert events_app.setup_state == after
+
+
+@pytest.mark.parametrize("envelope", [challenge("race"), message_event(GOOD_TEAM_ID, "10.1")])
+def test_a_secret_pasted_while_an_old_signed_request_is_handled_stays_draft(
+    client, db_session, events_app, user, envelope
+):
+    connect_workspace(db_session, events_app, user)
+
+    def paste_new_secret(*_args):
+        db_session.execute(
+            update(SlackApp)
+            .where(SlackApp.id == events_app.id)
+            .values(signing_secret_encrypted=encrypt_value("newly-pasted"))
+        )
+        db_session.commit()
+        return True
+
+    with _capture_send_task(), patch.object(slack_api, "register_body_seen", side_effect=paste_new_secret):
+        post_signed(client, f"/slack/events/{events_app.id}", envelope)
+
+    db_session.refresh(events_app)
+    assert (events_app.signing_secret, events_app.setup_state) == ("newly-pasted", "draft")
 
 
 def test_an_oversized_body_is_rejected(client, events_app):

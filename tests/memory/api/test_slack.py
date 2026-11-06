@@ -1162,6 +1162,18 @@ def test_slack_app_endpoint_urls_set_by_patch(client, db_session, user):
     assert {k: body[k] for k in CUSTOM_SLACK_URLS} == CUSTOM_SLACK_URLS
 
 
+def test_slack_app_endpoint_urls_reset_to_slack_by_patching_null(client, db_session, user):
+    app_id = client.post(
+        "/slack/apps", json={"name": "A", "client_id": "urls.reset"} | CUSTOM_SLACK_URLS
+    ).json()["id"]
+
+    body = client.patch(f"/slack/apps/{app_id}", json={"token_url": None, "name": "B"}).json()
+
+    assert {k: body[k] for k in CUSTOM_SLACK_URLS} == CUSTOM_SLACK_URLS | {
+        "token_url": "https://slack.com/api/oauth.v2.access"
+    }
+
+
 @pytest.mark.parametrize(
     "field", ["authorize_url", "token_url", "api_base_url"]
 )
@@ -1403,6 +1415,77 @@ def test_patch_slack_app_cannot_mutate_setup_state(client, db_session, user):
     refreshed = db_session.get(SlackApp, app_id)
     db_session.refresh(refreshed)
     assert refreshed.setup_state == "draft"
+
+
+@pytest.fixture
+def configured_app(db_session, user):
+    app = SlackApp(client_id="old.id", name="Configured", setup_state="live", created_by_user_id=user.id)
+    app.client_secret = "old-client-secret"
+    app.signing_secret = "old-signing-secret"
+    db_session.add(app)
+    db_session.commit()
+    return app
+
+
+@pytest.mark.parametrize("client_id", ["new.id", "  new.id "])
+def test_patch_client_id_of_an_unconnected_app_drops_what_belonged_to_the_old_one(
+    client, db_session, configured_app, client_id
+):
+    response = client.patch(f"/slack/apps/{configured_app.id}", json={"client_id": client_id})
+
+    assert response.status_code == 200
+    db_session.refresh(configured_app)
+    assert (configured_app.client_id, configured_app.client_secret, configured_app.signing_secret, configured_app.setup_state) == (
+        "new.id", None, None, "draft",
+    )
+
+
+@pytest.mark.parametrize(
+    "client_id, status, expected", [("new.id", 409, "old.id"), ("old.id", 200, "old.id"), (" old.id ", 200, "old.id")]
+)
+def test_patch_client_id_of_a_connected_app_only_accepts_the_same_one(
+    client, db_session, user, slack_workspace, configured_app, client_id, status, expected
+):
+    cred = SlackUserCredentials(slack_app_id=configured_app.id, workspace_id=slack_workspace.id, user_id=user.id)
+    cred.access_token = "xoxp-token"
+    db_session.add(cred)
+    db_session.commit()
+
+    response = client.patch(f"/slack/apps/{configured_app.id}", json={"client_id": client_id})
+
+    assert response.status_code == status
+    db_session.refresh(configured_app)
+    assert (configured_app.client_id, configured_app.client_secret) == (expected, "old-client-secret")
+
+
+@pytest.mark.parametrize("client_id", ["", "   "])
+def test_patch_client_id_cannot_be_blank(client, db_session, configured_app, client_id):
+    response = client.patch(f"/slack/apps/{configured_app.id}", json={"client_id": client_id})
+
+    assert response.status_code == 422
+    db_session.refresh(configured_app)
+    assert (configured_app.client_id, configured_app.client_secret) == ("old.id", "old-client-secret")
+
+
+def test_patch_client_id_to_one_the_user_already_registered_returns_409(client, db_session, user, configured_app):
+    db_session.add(SlackApp(client_id="taken.id", name="Other", created_by_user_id=user.id))
+    db_session.commit()
+
+    response = client.patch(f"/slack/apps/{configured_app.id}", json={"client_id": "taken.id"})
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "You already have a Slack app with this client ID. Reconnect or delete it on the Slack tab."
+    db_session.refresh(configured_app)
+    assert configured_app.client_secret == "old-client-secret"
+
+
+@pytest.mark.parametrize("secret, state", [("old-signing-secret", "live"), ("new-signing-secret", "draft")])
+def test_a_new_signing_secret_must_be_verified_again(client, db_session, configured_app, secret, state):
+    response = client.post(f"/slack/apps/{configured_app.id}/signing-secret", json={"secret": secret})
+
+    assert response.json()["setup_state"] == state
+    db_session.refresh(configured_app)
+    assert (configured_app.signing_secret, configured_app.setup_state) == (secret, state)
 
 
 def test_delete_slack_app_owner_only_and_cascades(

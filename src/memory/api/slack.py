@@ -17,14 +17,15 @@ import secrets
 import threading
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import set_committed_value
 
 from memory.api.auth import (
     assert_project_membership,
@@ -50,15 +51,19 @@ from memory.common.data_source_access import (
     enqueue_access_control_propagation,
     mark_access_control_changed_if_needed,
 )
-from memory.common.db.connection import get_session, make_session
+from memory.common.db.connection import get_session
 from memory.common.db.models import User
 from memory.common.db.models.slack import (
+    DEFAULT_SLACK_API_BASE_URL,
+    DEFAULT_SLACK_AUTHORIZE_URL,
+    DEFAULT_SLACK_TOKEN_URL,
     SlackApp,
     SlackChannel,
     SlackUserCredentials,
     SlackWorkspace,
 )
 from memory.common.db.models.source_items import SlackMessage
+from memory.common.encryption import decrypt_value
 from memory.common.oauth_client import (
     generate_state,
     log_corr_id,
@@ -159,11 +164,14 @@ class SlackChannelUpdate(BaseModel):
 # --- SlackApp request/response models (§3.2, §4 S4) ---
 
 
+ClientId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+
 class SlackAppCreate(BaseModel):
     """Body for POST /slack/apps."""
 
     name: str
-    client_id: str
+    client_id: ClientId
     authorize_url: HttpsUrl | None = None
     token_url: HttpsUrl | None = None
     api_base_url: HttpsUrl | None = None
@@ -173,18 +181,24 @@ class SlackAppUpdate(BaseModel):
     """Body for PATCH /slack/apps/{id}.
 
     `setup_state` is intentionally NOT here — state advances only via the
-    wizard endpoints (paste-secret + url_verification + test-message).
+    wizard endpoints (paste-secret + url_verification) and ingested events.
     Direct mutation would let an owner bypass verification.
     """
 
     name: str | None = None
     is_active: bool | None = None
+    client_id: ClientId | None = None
     authorize_url: HttpsUrl | None = None
     token_url: HttpsUrl | None = None
     api_base_url: HttpsUrl | None = None
 
 
-SLACK_APP_URL_FIELDS = ("authorize_url", "token_url", "api_base_url")
+SLACK_APP_URL_DEFAULTS = {
+    "authorize_url": DEFAULT_SLACK_AUTHORIZE_URL,
+    "token_url": DEFAULT_SLACK_TOKEN_URL,
+    "api_base_url": DEFAULT_SLACK_API_BASE_URL,
+}
+DUPLICATE_CLIENT_ID = "You already have a Slack app with this client ID. Reconnect or delete it on the Slack tab."
 
 
 class SlackAppResponse(BaseModel):
@@ -893,12 +907,16 @@ def slack_app_to_response(app: SlackApp, current_user: User) -> SlackAppResponse
     )
 
 
-def get_slack_app_for_owner(db: Session, app_id: int, user: User) -> SlackApp:
+def get_slack_app_for_owner(db: Session, app_id: int, user: User, lock: bool = False) -> SlackApp:
     """Fetch a SlackApp owned by the user; 404 otherwise, whether or not it exists."""
-    app = db.get(SlackApp, app_id)
+    app = db.get(SlackApp, app_id, with_for_update=lock or None)
     if app is None or not app.is_owner(user):
         raise HTTPException(status_code=404, detail="Slack app not found")
     return app
+
+
+def app_connected(db: Session, app_id: int) -> bool:
+    return db.query(SlackUserCredentials).filter(SlackUserCredentials.slack_app_id == app_id).first() is not None
 
 
 def list_slack_apps_for_user(db: Session, user: User) -> list[SlackApp]:
@@ -916,7 +934,7 @@ def create_slack_app(
     Several users can register the same client_id (a shared Slack app);
     one user registering it twice gets a 409.
     """
-    for field in SLACK_APP_URL_FIELDS:
+    for field in SLACK_APP_URL_DEFAULTS:
         if value := getattr(body, field):
             require_chat_url(value, user)
     app = SlackApp(
@@ -925,17 +943,14 @@ def create_slack_app(
         created_by_user_id=user.id,
         setup_state="draft",
         is_active=True,
-        **{f: getattr(body, f) for f in SLACK_APP_URL_FIELDS if getattr(body, f)},
+        **{f: getattr(body, f) for f in SLACK_APP_URL_DEFAULTS if getattr(body, f)},
     )
     db.add(app)
     try:
         db.commit()
     except IntegrityError:
         db.rollback()
-        raise HTTPException(
-            status_code=409,
-            detail="You already have a Slack app with this client ID. Reconnect or delete it on the Slack tab.",
-        )
+        raise HTTPException(status_code=409, detail=DUPLICATE_CLIENT_ID)
     db.refresh(app)
     return slack_app_to_response(app, user)
 
@@ -968,19 +983,36 @@ def update_slack_app(
     user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> SlackAppResponse:
-    """Update display name, is_active and the OAuth / API URLs. Owner only."""
-    app = get_slack_app_for_owner(db, app_id, user)
+    """Update display name, is_active, the OAuth / API URLs and, until a workspace is connected, client_id. Owner only."""
+    # Locked so an event's state advance can't land between this read and the reset to 'draft'.
+    app = get_slack_app_for_owner(db, app_id, user, lock=True)
 
+    if body.client_id and body.client_id != app.client_id:
+        if app_connected(db, app.id):
+            raise HTTPException(
+                status_code=409,
+                detail="A workspace is connected through this app, so its client ID can't change. Delete the app and register it again.",
+            )
+        # The secrets and verification belonged to the Slack app the old client_id named.
+        app.client_id = body.client_id
+        app.client_secret = None
+        app.signing_secret = None
+        app.setup_state = "draft"
     if body.name is not None:
         app.name = body.name
     if body.is_active is not None:
         app.is_active = body.is_active
-    for field in SLACK_APP_URL_FIELDS:
-        if value := getattr(body, field):
-            require_chat_url(value, user)
-            setattr(app, field, value)
+    for field in SLACK_APP_URL_DEFAULTS.keys() & body.model_fields_set:
+        # An explicit null resets the URL to Slack's.
+        value = getattr(body, field) or SLACK_APP_URL_DEFAULTS[field]
+        require_chat_url(value, user)
+        setattr(app, field, value)
 
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=DUPLICATE_CLIENT_ID)
     db.refresh(app)
     return slack_app_to_response(app, user)
 
@@ -1023,7 +1055,6 @@ the caller)."""
 # fine; multi-worker deployments would lose this state across workers.
 _slack_state_lock = threading.Lock()
 _wizard_nonces: dict[int, tuple[str, float]] = {}  # app_id → (nonce, expiry)
-_test_message_tokens: dict[int, tuple[str, float]] = {}  # app_id → (token, expiry)
 
 
 def _set_wizard_nonce(slack_app_id: int, nonce: str, ttl_seconds: int) -> None:
@@ -1042,29 +1073,6 @@ def _get_wizard_nonce(slack_app_id: int) -> str | None:
             _wizard_nonces.pop(slack_app_id, None)
             return None
         return nonce
-
-
-def _set_test_message_token(slack_app_id: int, token: str, ttl_seconds: int) -> None:
-    with _slack_state_lock:
-        _test_message_tokens[slack_app_id] = (token, time.monotonic() + ttl_seconds)
-
-
-def _get_test_message_token(slack_app_id: int) -> str | None:
-    now = time.monotonic()
-    with _slack_state_lock:
-        entry = _test_message_tokens.get(slack_app_id)
-        if entry is None:
-            return None
-        token, expiry = entry
-        if expiry <= now:
-            _test_message_tokens.pop(slack_app_id, None)
-            return None
-        return token
-
-
-def _clear_test_message_token(slack_app_id: int) -> None:
-    with _slack_state_lock:
-        _test_message_tokens.pop(slack_app_id, None)
 
 
 def _events_logger() -> logging.Logger:
@@ -1121,6 +1129,21 @@ def _slack_app_for_event(db: Session, slack_app_id: int) -> SlackApp | None:
     if slack_app_id <= 0:
         return None
     return db.get(SlackApp, slack_app_id)
+
+
+INGESTING_DISPATCHES = frozenset({"add_message", "mark_deleted", "update_reactions", "update_channel"})
+
+
+def channel_event_payload(event_type: str, raw_channel: object) -> dict | None:
+    """The channel fields a channel_* event changes, or None if it changes none."""
+    # Archive events name the channel by id only; created/rename carry the object.
+    if event_type in ("channel_created", "channel_rename") and isinstance(raw_channel, dict):
+        return raw_channel
+    if event_type == "channel_archive":
+        return {"is_archived": True}
+    if event_type == "channel_unarchive":
+        return {"is_archived": False}
+    return None
 
 
 def _dispatch_event_callback(body: dict, slack_app_id: int) -> dict[str, str]:
@@ -1224,11 +1247,8 @@ def _dispatch_event_callback(body: dict, slack_app_id: int) -> dict[str, str]:
         )
         return {"dispatch": "update_reactions"}
 
-    if event_type.startswith("channel_"):
-        # channel_id is already normalized at the top regardless of whether
-        # `event.channel` was a string or a dict. The full channel object
-        # (when present) still ships as channel_payload.
-        channel_payload = raw_channel if isinstance(raw_channel, dict) else {}
+    channel_payload = channel_event_payload(event_type, raw_channel)
+    if channel_payload is not None:
         celery_app.send_task(
             UPDATE_SLACK_CHANNEL,
             kwargs={
@@ -1243,30 +1263,26 @@ def _dispatch_event_callback(body: dict, slack_app_id: int) -> dict[str, str]:
     return {"dispatch": "ignored"}
 
 
-def _check_test_message_token(slack_app_id: int, body: dict) -> None:
-    """Wizard step-6 hook: if there's an active test-message token AND a
-    `message` event for this app contains it, advance the SlackApp state to
-    ``live`` (slack-changes.md §3.4 row 6).
-
-    Idempotent: removes the token on match so duplicate events don't keep
-    re-flipping state. No-ops when there's no token waiting.
-    """
-    event = body.get("event") or {}
-    if event.get("type") != "message":
+def advance_setup_state(db: Session, app: SlackApp, verified_secret: bytes, from_state: str, to_state: str) -> None:
+    # The loaded state gates the write so busy live apps cost no UPDATE; a
+    # stale read can only miss a reset to 'draft', which follows a secret
+    # change this request couldn't vouch for anyway.
+    if app.setup_state != from_state:
         return
-    text = event.get("text") or ""
-    if not text:
-        return
-    token = _get_test_message_token(slack_app_id)
-    if token is None or token not in text:
-        return
-    _clear_test_message_token(slack_app_id)
-    with make_session() as session:
-        app = session.get(SlackApp, slack_app_id)
-        if app is None:
-            return
-        app.setup_state = "live"
-        session.commit()
+    # Matching on the secret the request was verified with keeps a secret
+    # pasted mid-request (which resets to 'draft') from being marked verified.
+    updated = (
+        db.query(SlackApp)
+        .filter(
+            SlackApp.id == app.id,
+            SlackApp.setup_state == from_state,
+            SlackApp.signing_secret_encrypted == verified_secret,
+        )
+        .update({SlackApp.setup_state: to_state}, synchronize_session=False)
+    )
+    db.commit()
+    if updated:
+        set_committed_value(app, "setup_state", to_state)
 
 
 @router.post("/events/{slack_app_id}")
@@ -1307,9 +1323,10 @@ async def slack_events(
     app = _slack_app_for_event(db, slack_app_id)
     if app is None or not app.is_active:
         return _uniform_401()
-    signing_secret = app.signing_secret  # decrypts under the hood
-    if not signing_secret:
+    verified_secret = app.signing_secret_encrypted
+    if verified_secret is None:
         return _uniform_401()
+    signing_secret = decrypt_value(verified_secret)
     sig_header = request.headers.get("x-slack-signature", "")
     if not _verify_slack_signature(signing_secret, ts_header, body, sig_header):
         body_sha = hashlib.sha256(body).hexdigest()[:16]
@@ -1352,13 +1369,13 @@ async def slack_events(
             if not hmac.compare_digest(stored_nonce, nonce_qs):
                 return _uniform_401()
 
-        if app.setup_state == "draft":
-            app.setup_state = "signing_verified"
-            db.commit()
-
+        advance_setup_state(db, app, verified_secret, "draft", "signing_verified")
         return PlainTextResponse(content=challenge, status_code=200)
 
     if envelope_type == "event_callback":
+        # A secret rotated outside the wizard gets no new url_verification;
+        # a signed event proves the same thing.
+        advance_setup_state(db, app, verified_secret, "draft", "signing_verified")
         record_event_arrival(db, app)
         # The signature only proves the app's owner sent this; an event counts
         # only for a workspace the app was authorized into.
@@ -1375,13 +1392,10 @@ async def slack_events(
                 "body_sha256": body_sha[:16],
             },
         )
-        # Run dispatch first so its team_id/channel_id regex checks gate the
-        # test-message hook too — otherwise an event with a valid HMAC but
-        # malformed identifiers would advance setup_state without ever
-        # exercising the dispatcher's defense-in-depth.
-        dispatch_result = _dispatch_event_callback(envelope, slack_app_id)
-        if not dispatch_result["dispatch"].startswith("rejected"):
-            _check_test_message_token(slack_app_id, envelope)
+        # Content actually being ingested is what 'live' claims; lifecycle,
+        # ignored and malformed events don't show that.
+        if _dispatch_event_callback(envelope, slack_app_id)["dispatch"] in INGESTING_DISPATCHES:
+            advance_setup_state(db, app, verified_secret, "signing_verified", "live")
         return PlainTextResponse(content="", status_code=200)
 
     # Unknown envelope type — accept (Slack expects 200) but don't dispatch.
@@ -1395,9 +1409,6 @@ async def slack_events(
 
 WIZARD_NONCE_TTL_SECONDS = 30 * 60  # 30 min — long enough for the user to
 # paste the URL into Slack and click Save.
-
-WIZARD_TEST_MESSAGE_TTL_SECONDS = 60  # 60s window — slack-changes.md §3.4
-# row 6.
 
 
 class SlackAppSecretBody(BaseModel):
@@ -1425,15 +1436,6 @@ class SlackOAuthStateResponse(BaseModel):
 class SlackWizardStatus(BaseModel):
     setup_state: str
     has_credentials: bool
-    test_message_pending: bool
-
-
-class SlackTestMessageStart(BaseModel):
-    token: str
-
-
-class SlackTestMessageStatus(BaseModel):
-    status: Literal["waiting", "matched", "expired"]
 
 
 def _events_url_for(slack_app_id: int, nonce: str) -> str:
@@ -1474,13 +1476,17 @@ def set_signing_secret(
 ) -> SlackAppResponse:
     """Store the SlackApp signing_secret encrypted. Owner only.
 
-    State stays 'draft' until url_verification succeeds in /slack/events.
-    Failed verification doesn't roll state back — user can re-paste and retry.
+    State stays 'draft' until /slack/events receives a request signed with
+    it, and a different secret sends a verified app back to 'draft'.
     """
-    app = get_slack_app_for_owner(db, app_id, user)
-    if not body.secret.strip():
+    # Locked so an event's state advance can't land between this read and the reset to 'draft'.
+    app = get_slack_app_for_owner(db, app_id, user, lock=True)
+    secret = body.secret.strip()
+    if not secret:
         raise HTTPException(status_code=400, detail="signing_secret cannot be empty")
-    app.signing_secret = body.secret.strip()
+    if secret != app.signing_secret:
+        app.signing_secret = secret
+        app.setup_state = "draft"
     db.commit()
     db.refresh(app)
     return slack_app_to_response(app, user)
@@ -1544,64 +1550,4 @@ def wizard_status(
 ) -> SlackWizardStatus:
     """Return wizard progress for the frontend's polling loop."""
     app = get_slack_app_for_owner(db, app_id, user)
-    has_credentials = (
-        db.query(SlackUserCredentials)
-        .filter(SlackUserCredentials.slack_app_id == app.id)
-        .first()
-        is not None
-    )
-    test_pending = _get_test_message_token(app.id) is not None
-    return SlackWizardStatus(
-        setup_state=app.setup_state,
-        has_credentials=has_credentials,
-        test_message_pending=test_pending,
-    )
-
-
-@router.post("/apps/{app_id}/test-message", response_model=SlackTestMessageStatus)
-def begin_test_message(
-    app_id: int,
-    body: SlackTestMessageStart,
-    user: User = Depends(get_interactive_user),
-    db: Session = Depends(get_session),
-) -> SlackTestMessageStatus:
-    """Begin the 60s test-message window. Owner only.
-
-    Stores the user-supplied token in Redis; the events handler matches
-    incoming `message` events against it and advances setup_state to
-    'live' when a match arrives. Token requirement (slack-changes.md §3.4
-    B4 fix) prevents false-positives from chatty workspaces.
-    """
-    app = get_slack_app_for_owner(db, app_id, user)
-    if app.setup_state not in ("signing_verified", "live", "degraded"):
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"App must be in signing_verified/live state to begin "
-                f"test-message; current: {app.setup_state}"
-            ),
-        )
-    token = body.token.strip()
-    if not token or len(token) < 8:
-        raise HTTPException(status_code=400, detail="token must be at least 8 chars")
-    _set_test_message_token(app.id, token, WIZARD_TEST_MESSAGE_TTL_SECONDS)
-    return SlackTestMessageStatus(status="waiting")
-
-
-@router.get("/apps/{app_id}/test-message", response_model=SlackTestMessageStatus)
-def poll_test_message(
-    app_id: int,
-    user: User = Depends(get_interactive_user),
-    db: Session = Depends(get_session),
-) -> SlackTestMessageStatus:
-    """Poll for the test-message advance.
-
-    The events handler clears the Redis token and advances setup_state on
-    match. The frontend polls this endpoint to know when to advance UI.
-    """
-    app = get_slack_app_for_owner(db, app_id, user)
-    if app.setup_state == "live":
-        return SlackTestMessageStatus(status="matched")
-    if _get_test_message_token(app.id) is not None:
-        return SlackTestMessageStatus(status="waiting")
-    return SlackTestMessageStatus(status="expired")
+    return SlackWizardStatus(setup_state=app.setup_state, has_credentials=app_connected(db, app.id))

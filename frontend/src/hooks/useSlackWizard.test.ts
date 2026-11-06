@@ -61,7 +61,7 @@ describe('useSlackWizard read operations', () => {
   })
 
   it('getWizardStatus returns the wizard status payload', async () => {
-    const status = { setup_state: 'draft', has_credentials: false, test_message_pending: false }
+    const status = { setup_state: 'draft', has_credentials: false }
     const fetchMock = mockJson(status)
     const r = await setup().getWizardStatus(1)
     expect(r).toEqual(status)
@@ -71,20 +71,6 @@ describe('useSlackWizard read operations', () => {
   it('getWizardStatus throws default message on non-ok', async () => {
     mockJson({}, 500)
     await expect(setup().getWizardStatus(1)).rejects.toThrow('Failed to fetch wizard status')
-  })
-
-  it('pollTestMessage GETs the test-message endpoint and returns status', async () => {
-    const fetchMock = mockJson({ status: 'waiting' })
-    const r = await setup().pollTestMessage(1)
-    expect(r).toEqual({ status: 'waiting' })
-    const { url, init } = callTo(fetchMock, '/slack/apps/1/test-message')
-    expect(url).toContain('/test-message')
-    expect(init?.method).toBeUndefined() // GET (no explicit method)
-  })
-
-  it('pollTestMessage throws default message on non-ok', async () => {
-    mockJson({}, 500)
-    await expect(setup().pollTestMessage(1)).rejects.toThrow('Failed to poll test message')
   })
 })
 
@@ -180,20 +166,6 @@ describe('useSlackWizard mutations', () => {
     await expect(setup().issueOAuthState(1)).rejects.toThrow('Failed to issue OAuth state')
   })
 
-  it('beginTestMessage POSTs the token and returns status', async () => {
-    const fetchMock = mockJson({ status: 'waiting' })
-    const r = await setup().beginTestMessage(1, 'token-42')
-    expect(r).toEqual({ status: 'waiting' })
-    const { url, init } = callTo(fetchMock, '/slack/apps/1/test-message')
-    expect(url).toContain('/test-message')
-    expect(init?.method).toBe('POST')
-    expect(JSON.parse(init?.body as string)).toEqual({ token: 'token-42' })
-  })
-
-  it('beginTestMessage throws default message on non-ok', async () => {
-    mockJson({}, 500)
-    await expect(setup().beginTestMessage(1, 't')).rejects.toThrow('Failed to begin test message')
-  })
 })
 
 describe('useSlackWizard apiOk error parsing', () => {
@@ -226,12 +198,8 @@ describe('useSlackWizard multi-step state transitions', () => {
           json: {
             setup_state,
             has_credentials: setup_state !== 'draft',
-            test_message_pending: setup_state === 'signing_verified',
           },
         })
-      }
-      if (url.includes('/test-message')) {
-        return mockResponse({ json: { status: 'matched' } })
       }
       return mockResponse({ json: APP })
     })
@@ -248,10 +216,6 @@ describe('useSlackWizard multi-step state transitions', () => {
     await wiz.setSigningSecret(1, 'ss')
     const s2 = await wiz.getWizardStatus(1)
     expect(s2.setup_state).toBe('signing_verified')
-    expect(s2.test_message_pending).toBe(true)
-
-    const begun = await wiz.beginTestMessage(1, 'tok')
-    expect(begun.status).toBe('matched')
 
     const s3 = await wiz.getWizardStatus(1)
     expect(s3.setup_state).toBe('live')

@@ -2,12 +2,13 @@
 //
 // Walks the user through registering a Slack app at api.slack.com, pasting
 // client_id / client_secret / signing_secret, completing the OAuth flow,
-// configuring the events URL, and posting a test message that flips the
-// app to 'live'. Polls /slack/apps/{id}/wizard-status for async
-// transitions (url_verification, test-message match).
-import {useCallback, useEffect, useMemo, useState} from 'react'
+// configuring the events URL, and posting a first message, whose ingestion
+// flips the app to 'live'. Polls /slack/apps/{id}/wizard-status for async
+// transitions (url_verification, first ingested event).
+import {useCallback, useEffect, useState} from 'react'
 import {useAuth} from '../../../hooks/useAuth'
 import {
+  type SlackAppCreate,
   type SlackAppNonceResponse,
   type SlackAppResponse,
   useSlackWizard,
@@ -15,7 +16,21 @@ import {
 import { Button, Disclosure, Field, FormActions, Hint, Input, Modal, Notice, CopyButton, NewTabLink } from '@/components/shared/ui'
 import { PopupBlockedNotice, openPopup } from '../shared'
 
-const DEFAULT_SLACK_AUTHORIZE_URL = 'https://slack.com/oauth/v2/authorize'
+// The server's defaults; the Advanced fields hold only a Slack-compatible server's URLs.
+const SLACK_URL_DEFAULTS = {
+  authorize_url: 'https://slack.com/oauth/v2/authorize',
+  token_url: 'https://slack.com/api/oauth.v2.access',
+  api_base_url: 'https://slack.com/api',
+}
+
+// The register step's fields as the form shows them for `app`: '' for a Slack URL.
+const formFields = (app: SlackAppResponse | null) => ({
+  client_id: app?.client_id ?? '',
+  ...Object.fromEntries(Object.entries(SLACK_URL_DEFAULTS).map(([field, slackUrl]) => {
+    const url = app?.[field as keyof typeof SLACK_URL_DEFAULTS]
+    return [field, url && url !== slackUrl ? url : '']
+  })) as Record<keyof typeof SLACK_URL_DEFAULTS, string>,
+})
 
 interface SlackAppWizardProps {
   initialApp?: SlackAppResponse | null
@@ -32,8 +47,10 @@ type Step =
   | 'oauth'           // launch OAuth popup, wait for credentials
   | 'signing-secret'  // paste signing_secret
   | 'events-url'      // user pastes events_url into Slack; we poll for url_verification
-  | 'test-message'    // user posts the token; we poll for match
+  | 'test-message'    // user posts any message; we poll until it's ingested
   | 'done'
+
+const STEPS: Step[] = ['register', 'client-secret', 'oauth', 'signing-secret', 'events-url', 'test-message', 'done']
 
 // An app with no workspace needs OAuth first, even if it was live before its workspace was removed.
 const resumeStep = (app: SlackAppResponse, connected: boolean): Step => {
@@ -45,17 +62,34 @@ const resumeStep = (app: SlackAppResponse, connected: boolean): Step => {
   return 'events-url'
 }
 
-const POLL_INTERVAL_MS = 3000
+export const POLL_INTERVAL_MS = 3000
+export const MESSAGE_HINT_AFTER_MS = 30_000
 
-const TEST_STATUS_TEXT: Record<string, string> = {
-  waiting: 'Waiting for the message...',
-  matched: 'Message received.',
-  expired: 'No message arrived in 60 seconds. Start the window again and post the token.',
-}
+const SUGGESTED_TEST_MESSAGE = 'Testing the Memory connection'
 
 const submit = (handler: () => void) => (e: React.FormEvent) => {
   e.preventDefault()
   handler()
+}
+
+const AwaitingMessage = () => {
+  const [slow, setSlow] = useState(false)
+  useEffect(() => {
+    const timer = setTimeout(() => setSlow(true), MESSAGE_HINT_AFTER_MS)
+    return () => clearTimeout(timer)
+  }, [])
+  return (
+    <>
+      <p role="status" className="text-sm text-slate-600">Waiting for your message…</p>
+      {slow && (
+        <Notice tone="warning">
+          Still nothing from Slack. Usually the bot isn't in that channel, or
+          the app isn't subscribed to the message.channels (public) or
+          message.groups (private) bot events on step 5.
+        </Notice>
+      )}
+    </>
+  )
 }
 
 // Hand-selecting a long URL is hard on touch screens, so each value gets a copy button.
@@ -86,17 +120,6 @@ const SLACK_OAUTH_SCOPES = [
   'files:read',
 ].join(' ')
 
-const generateRandomToken = () => {
-  // 24 chars of base32-like alphabet — wide enough that a chatty channel
-  // is exceedingly unlikely to contain it by accident, and short enough to
-  // type if needed.
-  const alphabet = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
-  return Array.from(
-    {length: 24},
-    () => alphabet.charAt(Math.floor(Math.random() * alphabet.length)),
-  ).join('')
-}
-
 export const SlackAppWizard = ({
   initialApp = null,
   initialAppConnected = true,
@@ -110,18 +133,18 @@ export const SlackAppWizard = ({
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [blockedOAuthUrl, setBlockedOAuthUrl] = useState<string | null>(null)
+  const [connected, setConnected] = useState(initialApp !== null && initialAppConnected)
 
+  const [initialFields] = useState(() => formFields(initialApp))
   const [name, setName] = useState(initialApp?.name ?? '')
-  const [clientId, setClientId] = useState(initialApp?.client_id ?? '')
-  const [authorizeUrl, setAuthorizeUrl] = useState('')
-  const [tokenUrl, setTokenUrl] = useState('')
-  const [apiBaseUrl, setApiBaseUrl] = useState('')
+  const [clientId, setClientId] = useState(initialFields.client_id)
+  const [authorizeUrl, setAuthorizeUrl] = useState(initialFields.authorize_url)
+  const [tokenUrl, setTokenUrl] = useState(initialFields.token_url)
+  const [apiBaseUrl, setApiBaseUrl] = useState(initialFields.api_base_url)
   const [clientSecret, setClientSecret] = useState('')
   const [signingSecret, setSigningSecret] = useState('')
 
   const [nonceData, setNonceData] = useState<SlackAppNonceResponse | null>(null)
-  const [testToken] = useState<string>(() => generateRandomToken())
-  const [testStatus, setTestStatus] = useState<string | null>(null)
 
   const callbackUrl = nonceData?.callback_url
   const eventsUrl = nonceData?.events_url
@@ -137,10 +160,11 @@ export const SlackAppWizard = ({
   }, [app, nonceData, step, wizard])
 
   // === Polling for async state transitions ===
-  // setup_state: draft → (url_verification) → signing_verified → (test message) → live
+  // setup_state: draft → (url_verification) → signing_verified → (first ingested event) → live
   useEffect(() => {
     if (!app) return
-    if (step !== 'events-url' && step !== 'test-message') return
+    // A verified URL has nothing left to wait for, and polling would bounce a user who came back to it.
+    if (!(step === 'events-url' && app.setup_state === 'draft') && step !== 'test-message') return
     let cancelled = false
     let consecutiveFailures = 0
     const FAILURE_THRESHOLD = 3
@@ -150,14 +174,16 @@ export const SlackAppWizard = ({
         if (cancelled) return
         consecutiveFailures = 0
         clearError()
-        if (step === 'events-url' && status.setup_state === 'signing_verified') {
-          setStep('test-message')
-        }
-        if (step === 'test-message' && status.setup_state === 'live') {
+        if (status.setup_state === 'live') {
           const fresh = await wizard.getApp(app.id)
           if (cancelled) return
           setApp(fresh)
           setStep('done')
+          return
+        }
+        if (step === 'events-url' && status.setup_state !== 'draft') {
+          setApp({...app, setup_state: status.setup_state})
+          setStep('test-message')
         }
       } catch (e) {
         consecutiveFailures += 1
@@ -188,6 +214,7 @@ export const SlackAppWizard = ({
       if (evt.data?.type === 'oauth-complete' && app) {
         const fresh = await wizard.getApp(app.id)
         setApp(fresh)
+        setConnected(true)
         setStep(resumeStep(fresh, true))
       }
     })
@@ -205,35 +232,43 @@ export const SlackAppWizard = ({
     }
     setBusy(true)
     try {
-      const urls = Object.fromEntries(
-        [['authorize_url', authorizeUrl], ['token_url', tokenUrl], ['api_base_url', apiBaseUrl]]
-          .filter(([, url]) => url.trim())
-          .map(([field, url]) => [field, url.trim()]),
+      const fields = {
+        client_id: clientId.trim(),
+        authorize_url: authorizeUrl.trim(),
+        token_url: tokenUrl.trim(),
+        api_base_url: apiBaseUrl.trim(),
+      }
+      // Only what the user changed is sent, so the server's checks apply to it
+      // alone; an emptied URL (null) resets to Slack's.
+      const saved = formFields(app)
+      const changed = Object.fromEntries(
+        Object.entries(fields)
+          .filter(([field, value]) => value !== saved[field as keyof typeof saved])
+          .map(([field, value]) => [field, value || null]),
       )
-      const created = await wizard.createApp({ name: name.trim(), client_id: clientId.trim(), ...urls })
-      setApp(created)
+      setApp(app
+        ? await wizard.updateApp(app.id, { name: name.trim(), ...changed })
+        : await wizard.createApp({ name: name.trim(), ...changed } as SlackAppCreate))
       setStep('client-secret')
     } catch (e) {
       handleError(e)
     } finally {
       setBusy(false)
     }
-  }, [name, clientId, authorizeUrl, tokenUrl, apiBaseUrl, wizard])
+  }, [app, name, clientId, authorizeUrl, tokenUrl, apiBaseUrl, wizard])
 
   const handleClientSecret = useCallback(async () => {
     if (!app) return
     clearError()
     if (!clientSecret.trim()) {
-      setError('Client secret is required')
+      if (app.client_secret_configured) setStep('oauth')
+      else setError('Client secret is required')
       return
     }
     setBusy(true)
     try {
-      const updated = await wizard.setClientSecret(app.id, clientSecret.trim())
-      setApp(updated)
-      // Issue a wizard nonce so we can show the OAuth + events URLs.
-      const nonce = await wizard.issueWizardNonce(app.id)
-      setNonceData(nonce)
+      setApp(await wizard.setClientSecret(app.id, clientSecret.trim()))
+      setClientSecret('')
       setStep('oauth')
     } catch (e) {
       handleError(e)
@@ -257,7 +292,7 @@ export const SlackAppWizard = ({
       const { blockedUrl } = await openPopup(async () => {
         const state = await wizard.issueOAuthState(app.id)
         // Slack-compatible servers issue user tokens only, so they get no bot `scope`.
-        const scopes: Record<string, string> = app.authorize_url === DEFAULT_SLACK_AUTHORIZE_URL
+        const scopes: Record<string, string> = app.authorize_url === SLACK_URL_DEFAULTS.authorize_url
           ? { scope: SLACK_OAUTH_SCOPES, user_scope: SLACK_OAUTH_SCOPES }
           : { user_scope: SLACK_OAUTH_SCOPES }
         const params = new URLSearchParams({
@@ -280,13 +315,14 @@ export const SlackAppWizard = ({
     if (!app) return
     clearError()
     if (!signingSecret.trim()) {
-      setError('Signing secret is required')
+      if (app.signing_secret_configured) setStep('events-url')
+      else setError('Signing secret is required')
       return
     }
     setBusy(true)
     try {
-      const updated = await wizard.setSigningSecret(app.id, signingSecret.trim())
-      setApp(updated)
+      setApp(await wizard.setSigningSecret(app.id, signingSecret.trim()))
+      setSigningSecret('')
       // Re-issue nonce so the URL the user pastes carries a fresh token.
       const nonce = await wizard.issueWizardNonce(app.id)
       setNonceData(nonce)
@@ -298,28 +334,17 @@ export const SlackAppWizard = ({
     }
   }, [app, signingSecret, wizard])
 
-  const handleBeginTestMessage = useCallback(async () => {
-    if (!app) return
+  const stepIndex = STEPS.indexOf(step)
+  const back = () => {
     clearError()
-    setBusy(true)
-    try {
-      const status = await wizard.beginTestMessage(app.id, testToken)
-      setTestStatus(status.status)
-    } catch (e) {
-      handleError(e)
-    } finally {
-      setBusy(false)
-    }
-  }, [app, testToken, wizard])
-
-  const stepIndex = useMemo(() => {
-    const order: Step[] = [
-      'register', 'client-secret', 'oauth',
-      'signing-secret', 'events-url', 'test-message', 'done',
-    ]
-    return order.indexOf(step)
-  }, [step])
-
+    setStep(STEPS[stepIndex - 1])
+  }
+  const leaveButtons = (
+    <>
+      {stepIndex > 0 && <Button type="button" onClick={back}>Back</Button>}
+      <Button type="button" onClick={onCancel}>Cancel</Button>
+    </>
+  )
 
   const finish = () => (app ? onComplete?.(app) : onCancel())
 
@@ -363,28 +388,34 @@ export const SlackAppWizard = ({
                 value={clientId}
                 onChange={(e) => setClientId(e.target.value)}
                 placeholder="1234567890.1234567890"
+                readOnly={connected}
                 disabled={busy}
               />
             </Field>
+            {connected && (
+              <Hint>
+                A workspace is connected through this app, so its client ID can't change. To use a different Slack app, delete this app and register it again.
+              </Hint>
+            )}
             <Disclosure summary="Advanced">
               <p className="text-sm text-slate-600 mb-3">For a Slack-compatible server. Leave empty to use Slack.</p>
               <Field label="Authorize URL">
                 <Input type="url" value={authorizeUrl} onChange={(e) => setAuthorizeUrl(e.target.value)}
-                  placeholder={DEFAULT_SLACK_AUTHORIZE_URL} disabled={busy} />
+                  placeholder={SLACK_URL_DEFAULTS.authorize_url} disabled={busy} />
               </Field>
               <Field label="Token URL">
                 <Input type="url" value={tokenUrl} onChange={(e) => setTokenUrl(e.target.value)}
-                  placeholder="https://slack.com/api/oauth.v2.access" disabled={busy} />
+                  placeholder={SLACK_URL_DEFAULTS.token_url} disabled={busy} />
               </Field>
               <Field label="API base URL">
                 <Input type="url" value={apiBaseUrl} onChange={(e) => setApiBaseUrl(e.target.value)}
-                  placeholder="https://slack.com/api" disabled={busy} />
+                  placeholder={SLACK_URL_DEFAULTS.api_base_url} disabled={busy} />
               </Field>
             </Disclosure>
             <FormActions>
-              <Button type="button" onClick={onCancel}>Cancel</Button>
+              {leaveButtons}
               <Button variant="primary" type="submit" disabled={busy}>
-                {busy ? 'Creating…' : 'Create app'}
+                {app ? (busy ? 'Saving…' : 'Save and continue') : (busy ? 'Creating…' : 'Create app')}
               </Button>
             </FormActions>
           </form>
@@ -403,8 +434,9 @@ export const SlackAppWizard = ({
                 disabled={busy}
               />
             </Field>
+            {app.client_secret_configured && <Hint>A client secret is saved. Paste a new one to replace it, or continue to keep it.</Hint>}
             <FormActions>
-              <Button type="button" onClick={onCancel}>Cancel</Button>
+              {leaveButtons}
               <Button variant="primary" type="submit" disabled={busy}>
                 {busy ? 'Storing…' : 'Save and continue'}
               </Button>
@@ -424,17 +456,18 @@ export const SlackAppWizard = ({
             </p>
             <PopupBlockedNotice url={blockedOAuthUrl} label="Open Slack authorization" onDismiss={() => setBlockedOAuthUrl(null)} />
             <FormActions>
-              <Button type="button" onClick={onCancel}>Cancel</Button>
-              <Button variant="primary"
+              {leaveButtons}
+              <Button variant={connected ? undefined : 'primary'}
                 type="button"
                 onClick={handleOpenOAuth}
                 disabled={busy}
               >
                 Authorize workspace
               </Button>
+              {connected && <Button variant="primary" type="button" onClick={() => setStep('signing-secret')}>Continue</Button>}
             </FormActions>
             <Hint>
-              We'll advance automatically once you complete OAuth.
+              {connected ? 'A workspace is already connected through this app.' : "We'll advance automatically once you complete OAuth."}
             </Hint>
           </div>
         )}
@@ -452,8 +485,11 @@ export const SlackAppWizard = ({
                 disabled={busy}
               />
             </Field>
+            {app.signing_secret_configured && (
+              <Hint>A signing secret is saved. Continue to keep it; a different one has to be verified by Slack again.</Hint>
+            )}
             <FormActions>
-              <Button type="button" onClick={onCancel}>Cancel</Button>
+              {leaveButtons}
               <Button variant="primary" type="submit" disabled={busy}>
                 {busy ? 'Storing…' : 'Save and continue'}
               </Button>
@@ -478,15 +514,18 @@ export const SlackAppWizard = ({
               <li>message.mpim</li>
               <li>reaction_added</li>
               <li>reaction_removed</li>
-              <li>channel_created / channel_renamed / channel_archived</li>
+              <li>channel_created / channel_rename / channel_archive / channel_unarchive</li>
             </ul>
             <p className="text-sm text-slate-600">
               Click "Save Changes" in Slack — we'll detect the verification ping
               and advance automatically.
             </p>
-            <Hint>Polling…</Hint>
+            <Hint>{app.setup_state === 'draft' ? 'Polling…' : 'Slack has verified the events URL.'}</Hint>
             <FormActions>
-              <Button type="button" onClick={onCancel}>Cancel</Button>
+              {leaveButtons}
+              {app.setup_state !== 'draft' && (
+                <Button variant="primary" type="button" onClick={() => setStep('test-message')}>Continue</Button>
+              )}
             </FormActions>
           </div>
         )}
@@ -494,26 +533,17 @@ export const SlackAppWizard = ({
         {step === 'test-message' && app && (
           <div className="space-y-4">
             <p className="text-sm text-slate-600">
-              Almost done. Post the following token in any Slack channel the
-              bot has joined (invite the app to the channel first):
+              Almost done. Post a message in any Slack channel the bot has
+              joined (invite the app to the channel first), for example:
             </p>
-            <CopyableCode value={testToken} label="Copy token" />
-            <FormActions>
-              <Button type="button" onClick={onCancel}>Cancel</Button>
-              <Button variant="primary"
-                type="button"
-                onClick={handleBeginTestMessage}
-                disabled={busy}
-              >
-                {busy ? 'Starting…' : 'Start 60-second window'}
-              </Button>
-            </FormActions>
-            {testStatus && (
-              <p role="status" className="text-sm text-slate-600">{TEST_STATUS_TEXT[testStatus] ?? testStatus}</p>
-            )}
+            <CopyableCode value={SUGGESTED_TEST_MESSAGE} label="Copy message" />
             <Hint>
-              Once the message arrives, the app moves to "live" automatically.
+              The first message we receive switches events on: the app goes
+              live and this wizard finishes by itself. Inviting the bot to a
+              channel posts a join message, so that alone can be enough.
             </Hint>
+            <AwaitingMessage />
+            <FormActions>{leaveButtons}</FormActions>
           </div>
         )}
 

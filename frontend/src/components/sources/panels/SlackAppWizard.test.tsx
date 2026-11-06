@@ -2,24 +2,24 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { fireEvent, renderWithUser, screen, waitFor } from '@/test/utils'
 
 const createApp = vi.fn()
+const updateApp = vi.fn()
 const getApp = vi.fn()
 const setClientSecret = vi.fn()
 const setSigningSecret = vi.fn()
 const issueWizardNonce = vi.fn()
 const issueOAuthState = vi.fn()
 const getWizardStatus = vi.fn()
-const beginTestMessage = vi.fn()
 
 vi.mock('../../../hooks/useSlackWizard', () => ({
   useSlackWizard: () => ({
     createApp,
+    updateApp,
     getApp,
     setClientSecret,
     setSigningSecret,
     issueWizardNonce,
     issueOAuthState,
     getWizardStatus,
-    beginTestMessage,
   }),
 }))
 
@@ -27,7 +27,7 @@ vi.mock('../../../hooks/useAuth', () => ({
   useAuth: () => ({ user: { id: 42, name: 'Tester', email: 't@e.com' } }),
 }))
 
-import { SlackAppWizard } from './SlackAppWizard'
+import { MESSAGE_HINT_AFTER_MS, POLL_INTERVAL_MS, SlackAppWizard } from './SlackAppWizard'
 import type { SlackAppResponse } from '../../../hooks/useSlackWizard'
 
 const app = (over: Partial<SlackAppResponse> = {}): SlackAppResponse => ({
@@ -58,13 +58,13 @@ const nonce = {
 beforeEach(() => {
   vi.clearAllMocks()
   createApp.mockResolvedValue(app())
+  updateApp.mockResolvedValue(app())
   getApp.mockResolvedValue(app())
   setClientSecret.mockResolvedValue(app({ client_secret_configured: true }))
   setSigningSecret.mockResolvedValue(app({ signing_secret_configured: true }))
   issueWizardNonce.mockResolvedValue(nonce)
   issueOAuthState.mockResolvedValue('signed-state')
-  getWizardStatus.mockResolvedValue({ setup_state: 'draft', has_credentials: false, test_message_pending: false })
-  beginTestMessage.mockResolvedValue({ status: 'waiting' })
+  getWizardStatus.mockResolvedValue({ setup_state: 'draft', has_credentials: false })
 })
 
 afterEach(() => {
@@ -88,7 +88,7 @@ describe('SlackAppWizard - initial step', () => {
     ['no client secret', app({ client_secret_configured: false }), /Paste the Client Secret/, 'Step 2 of 7'],
     ['no signing secret', app({ client_secret_configured: true }), /Paste the Signing Secret/, 'Step 4 of 7'],
     ['unverified events URL', app({ client_secret_configured: true, signing_secret_configured: true }), nonce.events_url, 'Step 5 of 7'],
-    ['no test message', app({ setup_state: 'signing_verified' }), /Post the following token/, 'Step 6 of 7'],
+    ['no message yet', app({ setup_state: 'signing_verified' }), /channel the bot has joined/, 'Step 6 of 7'],
   ])('resumes an app with %s at that step', async (_label, initialApp, text, step) => {
     renderWithUser(<SlackAppWizard initialApp={initialApp} onCancel={vi.fn()} />)
     expect(await screen.findByText(text)).toBeInTheDocument()
@@ -301,22 +301,32 @@ describe('SlackAppWizard - signing-secret -> events-url', () => {
 })
 
 describe('SlackAppWizard - test message', () => {
-  it('shows a generated token and starts the 60s window', async () => {
-    const { user } = renderWithUser(<SlackAppWizard initialApp={app({ setup_state: 'signing_verified' })} onCancel={vi.fn()} />)
-    expect(screen.getByText(/Post the following token/)).toBeInTheDocument()
+  it('asks for a message in a channel the bot has joined and waits for it to switch events on', () => {
+    renderWithUser(<SlackAppWizard initialApp={app({ setup_state: 'signing_verified' })} onCancel={vi.fn()} />)
     expect(screen.getByText('Step 6 of 7')).toBeInTheDocument()
-
-    await user.click(screen.getByRole('button', { name: 'Start 60-second window' }))
-    await waitFor(() => expect(beginTestMessage).toHaveBeenCalledTimes(1))
-    expect(beginTestMessage.mock.calls[0][0]).toBe(5)
-    expect(screen.getByText('Waiting for the message...')).toBeInTheDocument()
+    expect(screen.getByText(/channel the bot has joined/)).toBeInTheDocument()
+    expect(screen.getByText(/first message .* switches events on/)).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('Waiting for your message')
   })
 
-  it('copies the test token and says so', async () => {
+  it('names the usual causes once the message has been awaited a while', async () => {
+    vi.useFakeTimers()
+    getWizardStatus.mockResolvedValue({ setup_state: 'signing_verified', has_credentials: true })
+    renderWithUser(<SlackAppWizard initialApp={app({ setup_state: 'signing_verified' })} onCancel={vi.fn()} />)
+
+    await vi.advanceTimersByTimeAsync(MESSAGE_HINT_AFTER_MS - 1)
+    expect(screen.queryByText(/message\.channels/)).not.toBeInTheDocument()
+
+    await vi.advanceTimersByTimeAsync(1)
+    expect(screen.getByText(/isn't in that channel/)).toBeInTheDocument()
+    expect(screen.getByText(/message\.channels/)).toBeInTheDocument()
+  })
+
+  it('copies the suggested message and says so', async () => {
     const { user } = renderWithUser(<SlackAppWizard initialApp={app({ setup_state: 'signing_verified' })} onCancel={vi.fn()} />)
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
-    await user.click(screen.getByRole('button', { name: 'Copy token' }))
+    await user.click(screen.getByRole('button', { name: 'Copy message' }))
     expect(writeText).toHaveBeenCalledWith(expect.stringMatching(/\S/))
     expect(await screen.findByRole('button', { name: 'Copied' })).toBeInTheDocument()
   })
@@ -326,19 +336,12 @@ describe('SlackAppWizard - test message', () => {
     await user.type(document.querySelector('input[type="password"]') as HTMLInputElement, 'super-secret{Enter}')
     await waitFor(() => expect(setClientSecret).toHaveBeenCalledWith(5, 'super-secret'))
   })
-
-  it('surfaces an error if beginTestMessage rejects', async () => {
-    beginTestMessage.mockRejectedValueOnce(new Error('window failed'))
-    const { user } = renderWithUser(<SlackAppWizard initialApp={app({ setup_state: 'signing_verified' })} onCancel={vi.fn()} />)
-    await user.click(screen.getByRole('button', { name: 'Start 60-second window' }))
-    expect(await screen.findByText('window failed')).toBeInTheDocument()
-  })
 })
 
 describe('SlackAppWizard - polling transitions', () => {
   it('advances events-url -> test-message when status becomes signing_verified', async () => {
     getApp.mockResolvedValue(app({ client_secret_configured: true }))
-    getWizardStatus.mockResolvedValue({ setup_state: 'signing_verified', has_credentials: true, test_message_pending: false })
+    getWizardStatus.mockResolvedValue({ setup_state: 'signing_verified', has_credentials: true })
 
     const { user } = renderWithUser(<SlackAppWizard initialApp={app()} onCancel={vi.fn()} />)
     await advanceToSigningSecret(user)
@@ -348,23 +351,162 @@ describe('SlackAppWizard - polling transitions', () => {
     await screen.findByText(nonce.events_url)
 
     // Polling on the events-url step should detect signing_verified and advance.
-    await screen.findByText(/Post the following token/, {}, { timeout: 4000 })
+    await screen.findByText(/channel the bot has joined/, {}, { timeout: 4000 })
     expect(screen.getByText('Step 6 of 7')).toBeInTheDocument()
+  })
+
+  it('finishes from the events-url step when the app went live before the poll saw it verified', async () => {
+    vi.useFakeTimers()
+    getWizardStatus.mockResolvedValue({ setup_state: 'live', has_credentials: true })
+    getApp.mockResolvedValue(app({ setup_state: 'live' }))
+
+    renderWithUser(<SlackAppWizard initialApp={app({ client_secret_configured: true, signing_secret_configured: true })} onCancel={vi.fn()} />)
+
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS)
+    await vi.waitFor(() => expect(screen.getByText(/configured and live/)).toBeInTheDocument())
   })
 
   it('shows the done step when the app goes live and completes when the user closes it', async () => {
     vi.useFakeTimers()
     const onComplete = vi.fn()
-    getWizardStatus.mockResolvedValue({ setup_state: 'live', has_credentials: true, test_message_pending: false })
+    getWizardStatus.mockResolvedValue({ setup_state: 'live', has_credentials: true })
     getApp.mockResolvedValue(app({ setup_state: 'live' }))
 
     renderWithUser(<SlackAppWizard initialApp={app({ setup_state: 'signing_verified' })} onComplete={onComplete} onCancel={vi.fn()} />)
 
-    await vi.advanceTimersByTimeAsync(3100)
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS)
     await vi.waitFor(() => expect(screen.getByText(/configured and live/)).toBeInTheDocument())
     expect(getApp).toHaveBeenCalledWith(5)
     expect(onComplete).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'Done' }))
     expect(onComplete.mock.calls[0][0].setup_state).toBe('live')
+  })
+})
+
+const verifiedApp = app({ client_secret_configured: true, signing_secret_configured: true, setup_state: 'signing_verified' })
+
+describe('SlackAppWizard - going back', () => {
+  it.each([
+    ['client-secret', app(), true, 'Step 1 of 7'],
+    ['oauth', app({ client_secret_configured: true }), false, 'Step 2 of 7'],
+    ['signing-secret', app({ client_secret_configured: true }), true, 'Step 3 of 7'],
+    ['events-url', app({ client_secret_configured: true, signing_secret_configured: true }), true, 'Step 4 of 7'],
+    ['test-message', verifiedApp, true, 'Step 5 of 7'],
+  ])('Back from the %s step shows the step before it', async (_step, initialApp, connected, previous) => {
+    const { user } = renderWithUser(<SlackAppWizard initialApp={initialApp} initialAppConnected={connected} onCancel={vi.fn()} />)
+    await user.click(await screen.findByRole('button', { name: 'Back' }))
+    expect(await screen.findByText(previous)).toBeInTheDocument()
+  })
+
+  it.each([
+    ['register', null],
+    ['done', app({ setup_state: 'live' })],
+  ])('offers no Back on the %s step', (_step, initialApp) => {
+    renderWithUser(<SlackAppWizard initialApp={initialApp} onCancel={vi.fn()} />)
+    expect(screen.queryByRole('button', { name: 'Back' })).not.toBeInTheDocument()
+  })
+
+  it('saves changes to the existing app instead of creating another', async () => {
+    const { user } = renderWithUser(<SlackAppWizard initialApp={app()} initialAppConnected={false} onCancel={vi.fn()} />)
+    await user.click(screen.getByRole('button', { name: 'Back' }))
+    const nameInput = screen.getByDisplayValue('My App')
+    expect(screen.getByDisplayValue('cid-123')).not.toHaveAttribute('readonly')
+    await user.clear(nameInput)
+    await user.type(nameInput, 'Renamed')
+    await user.click(screen.getByRole('button', { name: 'Save and continue' }))
+
+    await waitFor(() => expect(updateApp).toHaveBeenCalledWith(5, { name: 'Renamed' }))
+    expect(createApp).not.toHaveBeenCalled()
+    expect(await screen.findByText('Step 2 of 7')).toBeInTheDocument()
+  })
+
+  it('sends nothing but the name when an app created this session is saved again unchanged', async () => {
+    createApp.mockResolvedValue(app({ name: 'Acme', client_id: 'cid-9' }))
+    const { user } = renderWithUser(<SlackAppWizard onCancel={vi.fn()} />)
+    await user.type(screen.getByPlaceholderText("My team's Slack"), 'Acme')
+    await user.type(screen.getByPlaceholderText('1234567890.1234567890'), 'cid-9')
+    await user.click(screen.getByRole('button', { name: 'Create app' }))
+    await user.click(await screen.findByRole('button', { name: 'Back' }))
+    await user.click(screen.getByRole('button', { name: 'Save and continue' }))
+
+    await waitFor(() => expect(updateApp).toHaveBeenCalledWith(5, { name: 'Acme' }))
+  })
+
+  it("leaves the Advanced URLs empty for an app on Slack's servers", async () => {
+    const { user } = renderWithUser(<SlackAppWizard initialApp={app()} initialAppConnected={false} onCancel={vi.fn()} />)
+    await user.click(screen.getByRole('button', { name: 'Back' }))
+    await user.click(screen.getByText('Advanced'))
+
+    expect(['Authorize URL', 'Token URL', 'API base URL'].map(label => (screen.getByLabelText(label) as HTMLInputElement).value))
+      .toEqual(['', '', ''])
+  })
+
+  it('resets a cleared Advanced URL to Slack', async () => {
+    const { user } = renderWithUser(
+      <SlackAppWizard initialApp={app({ token_url: 'https://chat.example.com/api/oauth.v2.access' })} initialAppConnected={false} onCancel={vi.fn()} />,
+    )
+    await user.click(screen.getByRole('button', { name: 'Back' }))
+    await user.click(screen.getByText('Advanced'))
+    await user.clear(screen.getByLabelText('Token URL'))
+    await user.click(screen.getByRole('button', { name: 'Save and continue' }))
+
+    await waitFor(() => expect(updateApp).toHaveBeenCalledWith(5, { name: 'My App', token_url: null }))
+  })
+
+  it('keeps the client ID of an app that has been through OAuth', async () => {
+    const { user } = renderWithUser(<SlackAppWizard initialApp={app({ client_secret_configured: true })} onCancel={vi.fn()} />)
+    for (const step of ['Step 3 of 7', 'Step 2 of 7', 'Step 1 of 7']) {
+      await user.click(screen.getByRole('button', { name: 'Back' }))
+      await screen.findByText(step)
+    }
+    expect(screen.getByDisplayValue('cid-123')).toHaveAttribute('readonly')
+    expect(screen.getByText(/delete this app and register it again/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Save and continue' }))
+
+    await waitFor(() => expect(updateApp).toHaveBeenCalledTimes(1))
+    expect(updateApp.mock.calls[0][1]).not.toHaveProperty('client_id')
+  })
+
+  it('a connected app continues past OAuth without authorizing again', async () => {
+    const { user } = renderWithUser(<SlackAppWizard initialApp={app({ client_secret_configured: true })} onCancel={vi.fn()} />)
+    await user.click(screen.getByRole('button', { name: 'Back' }))
+    await user.click(await screen.findByRole('button', { name: 'Continue' }))
+    expect(await screen.findByText('Step 4 of 7')).toBeInTheDocument()
+  })
+
+  it.each([
+    ['client secret', app({ client_secret_configured: true }), false, setClientSecret, 'Step 3 of 7'],
+    ['signing secret', app({ client_secret_configured: true, signing_secret_configured: true }), true, setSigningSecret, 'Step 5 of 7'],
+  ])('continues past a saved %s without pasting it again', async (_secret, initialApp, connected, setter, current) => {
+    const { user } = renderWithUser(<SlackAppWizard initialApp={initialApp} initialAppConnected={connected} onCancel={vi.fn()} />)
+    await user.click(await screen.findByRole('button', { name: 'Back' }))
+    expect(await screen.findByText(/is saved/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Save and continue' }))
+
+    expect(await screen.findByText(current)).toBeInTheDocument()
+    expect(setter).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['events-url', app({ client_secret_configured: true, signing_secret_configured: true }), 'Step 4 of 7'],
+    ['test-message', verifiedApp, 'Step 5 of 7'],
+  ])('stops polling after going back from the %s step', async (_step, initialApp, previous) => {
+    vi.useFakeTimers()
+    getWizardStatus.mockResolvedValue({ setup_state: 'live', has_credentials: true })
+    renderWithUser(<SlackAppWizard initialApp={initialApp} onCancel={vi.fn()} />)
+    await vi.advanceTimersByTimeAsync(0)
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    await vi.advanceTimersByTimeAsync(10_000)
+
+    expect(getWizardStatus).not.toHaveBeenCalled()
+    expect(screen.getByText(previous)).toBeInTheDocument()
+  })
+
+  it('a verified events URL continues to the test message', async () => {
+    const { user } = renderWithUser(<SlackAppWizard initialApp={verifiedApp} onCancel={vi.fn()} />)
+    await user.click(screen.getByRole('button', { name: 'Back' }))
+    expect(await screen.findByText(nonce.events_url)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Continue' }))
+    expect(await screen.findByText('Step 6 of 7')).toBeInTheDocument()
   })
 })
