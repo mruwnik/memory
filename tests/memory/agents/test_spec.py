@@ -5,7 +5,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import pytest
 from pydantic import ValidationError
 
-from memory.agents.spec import AgentSpec, result_errors, spec_errors
+from memory.agents.spec import AgentSpec, Requirements, result_errors, satisfies, spec_errors
 from memory.common import settings
 
 BASE = {
@@ -82,6 +82,10 @@ def test_defaults_are_valid_on_the_default_model():
     "overrides,expected",
     [
         ({"tools": ["agent_list_runs"]}, "tool 'agent_list_runs' can never be used inside a run"),
+        *[
+            ({"tools": [tool]}, f"tool '{tool}' can never be used inside a run")
+            for tool in ("agent_work_claim", "agent_work_submit")
+        ],
         *[
             ({"tools": [tool]}, f"tool '{tool}' can never be used inside a run")
             for tool in ("scheduler_upsert", "scheduler_delete", "scheduler_cancel")
@@ -296,3 +300,48 @@ def test_unset_max_output_tokens_fits_any_model(fake_providers):
     assert spec_errors(spec(model="openai/m", max_output_tokens=16_000)) == [
         "max_output_tokens 16000 > model limit 8000"
     ]
+
+
+@pytest.mark.parametrize(
+    "requires,declared,expected",
+    [
+        ({}, {}, True),
+        ({}, {"models": ["x"]}, True),
+        ({"models": ["claude-haiku-*"]}, {"models": ["claude-haiku-4-5"]}, True),
+        ({"models": ["claude-haiku-*"]}, {"models": ["claude-sonnet-5"]}, False),
+        ({"models": ["claude-haiku-*"]}, {}, False),
+        ({"tools": ["memory:send_message"]}, {"tools": ["memory:*"]}, True),
+        ({"tools": ["raspberry:*"]}, {"tools": ["raspberry:*"]}, True),
+        ({"tools": ["memory:send_message", "raspberry:*"]}, {"tools": ["memory:*"]}, False),
+        ({"flags": ["filesystem"]}, {"flags": ["web", "filesystem"]}, True),
+        ({"flags": ["filesystem"]}, {"flags": ["web"]}, False),
+        # Each kind is matched against its own declarations only.
+        ({"flags": ["web"]}, {"tools": ["web"]}, False),
+    ],
+)
+def test_requirements_are_satisfied_when_each_matches_a_declared_capability(
+    requires, declared, expected
+):
+    assert satisfies(Requirements(**requires), Requirements(**declared)) is expected
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"placement": "server_only", "fallback_after": 5},
+        {"placement": "runner_only", "fallback_after": 5},
+        {"placement": "anywhere"},
+        {"placement": "server_first", "fallback_after": -1},
+        {"placement": "server_first", "fallback_after": 0},
+        {"placement": "runner_first", "fallback_after": 12 * 60 + 1},
+        {"requires": {"gpus": ["a100"]}},
+    ],
+)
+def test_invalid_placements_are_rejected(overrides):
+    with pytest.raises(ValidationError):
+        spec(**overrides)
+
+
+def test_a_runner_only_spec_is_not_checked_against_server_models():
+    # Workers bring their own models: the server's registry has no say.
+    assert spec_errors(spec(placement="runner_only", model="local/llama")) == []

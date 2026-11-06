@@ -32,6 +32,7 @@ from memory.agents.spec import (
     finish_tool_names,
     generation_params,
     output_rate,
+    resolve_max_output_tokens,
     result_errors,
 )
 from memory.agents.toolhub import ToolHub, open_toolhub
@@ -45,7 +46,7 @@ from memory.common.db.models import (
     LLMProviderKey,
     UserSession,
 )
-from memory.common.db.models.agents import RunStatus
+from memory.common.db.models.agents import EXECUTOR_SERVER, RunStatus
 from memory.common.db.models.users import hash_token
 from memory.common.llms.neutral import (
     MTOK,
@@ -108,6 +109,10 @@ def claim(run_id: str) -> Claim | None:
             logger.warning(
                 "agent run %s is %s, not pending; not executing", run_id, run.status
             )
+            return None
+        if run.executor != EXECUTOR_SERVER:
+            # Moved to workers after it was dispatched: theirs to claim now.
+            logger.info("agent run %s is placed on workers; not executing", run_id)
             return None
         run.status = RunStatus.RUNNING.value
         run.started_at = now()
@@ -329,7 +334,11 @@ async def run_loop(
     key = run_key(claimed)
     provider = get_provider(spec.model, api_key=key.key)
     info = provider.model_info(provider.model)
-    params = generation_params(spec)
+    params = generation_params(
+        spec.model_copy(
+            update={"max_output_tokens": resolve_max_output_tokens(spec, info, claimed.max_cost)}
+        )
+    )
     finish_tools = finish_tool_names(spec)
     async with hub_factory(
         spec=spec,

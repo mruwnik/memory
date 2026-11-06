@@ -8,7 +8,13 @@ only the agents-worker image installs, while every worker autodiscovers this mod
 import asyncio
 
 from memory.common import module_settings, settings
-from memory.common.celery_app import FIRE_TRIGGER, RUN_AGENT, START_CRON_RUN, app
+from memory.common.celery_app import (
+    FIRE_TRIGGER,
+    RUN_AGENT,
+    START_CRON_RUN,
+    SWEEP_WORKER_RUNS,
+    app,
+)
 
 
 def follow_module_flags() -> None:
@@ -54,3 +60,13 @@ def start_cron_run(execution_id: str) -> str | None:
     from memory.agents.cron import start_cron_run as start
 
     return start(execution_id)
+
+
+@app.task(name=SWEEP_WORKER_RUNS)
+def sweep_worker_runs() -> dict[str, int]:
+    """Release lapsed worker leases, move *_first runs past fallback_after to their
+    other side, and end worker runs nobody claimed within retention."""
+    follow_module_flags()
+    from memory.agents.work import sweep_worker_runs as sweep
+
+    return sweep()

@@ -1,12 +1,18 @@
 """The one way any trigger starts an agent run."""
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
 from pydantic import ValidationError
 
-from memory.agents.caps import CapExceeded, check_run_rate, children_cost, resolve_run_cap
+from memory.agents.caps import (
+    CapExceeded,
+    check_run_rate,
+    children_cost,
+    resolve_run_cap,
+)
 from memory.agents.provider_keys import KeyUnavailable, choose_key
 from memory.agents.spec import (
     MAX_TEXT_CHARS,
@@ -15,12 +21,14 @@ from memory.agents.spec import (
     model_info,
     resolve_max_output_tokens,
     spec_errors,
+    starts_on_server,
+    uses_server,
 )
+from memory.api.auth import TokenLookup, system_scopes
 from memory.common import settings
 from memory.common.access_control import narrow_scopes
 from memory.common.celery_app import RUN_AGENT, app
 from memory.common.db.connection import DBSession
-from memory.api.auth import TokenLookup, system_scopes
 from memory.common.db.models import (
     AgentDefinition,
     AgentRun,
@@ -30,7 +38,12 @@ from memory.common.db.models import (
     ServerStatus,
     User,
 )
-from memory.common.db.models.agents import TERMINAL_STATUSES
+from memory.common.db.models.agents import (
+    EXECUTOR_SERVER,
+    EXECUTOR_WORKERS,
+    TERMINAL_STATUSES,
+    RunStatus,
+)
 from memory.common.mcp_oauth import unusable_message
 from memory.common.module_settings import enabled_modules
 from memory.common.modules import server_module
@@ -105,7 +118,10 @@ def start_problems(
 ) -> tuple[LLMProviderKey | None, list[str]]:
     """The key that pays for a run of `spec`, and what stops one starting. Tools a
     server stopped offering are left out: the cached list only refreshes when a run
-    opens the server, so refusing on it would block the agent for good."""
+    opens the server, so refusing on it would block the agent for good. A spec the
+    server never runs needs no key or servers."""
+    if not uses_server(spec):
+        return None, spec_errors(spec)
     try:
         key, key_problems = choose_key(db, user_id, spec.model, spec.provider_key), []
     except KeyUnavailable as e:
@@ -120,7 +136,8 @@ def start_problems(
 
 def run_problems(db: DBSession, user_id: int, spec: AgentSpec) -> list[str]:
     """Why `spec` can't run as configured; empty when it can."""
-    return start_problems(db, user_id, spec)[1] + missing_tools(db, user_id, spec)
+    problems = start_problems(db, user_id, spec)[1]
+    return problems + missing_tools(db, user_id, spec) if uses_server(spec) else problems
 
 
 def stored_spec_problems(db: DBSession, user_id: int, spec: dict[str, Any]) -> list[str]:
@@ -146,6 +163,8 @@ def child_problems(parent: AgentRun, spec: AgentSpec) -> list[str]:
             f"runs started by runs nest at most {settings.AGENT_MAX_SPAWN_DEPTH} deep "
             "(AGENT_MAX_SPAWN_DEPTH)"
         )
+    if spec.placement != "server_only":
+        problems.append("runs started by runs execute on the server (placement server_only)")
     allowed = set(exposed_tools(AgentSpec.model_validate(parent.spec)))
     if extra := [t for t in exposed_tools(spec) if t not in allowed]:
         problems.append(f"tools the parent run doesn't have: {', '.join(extra)}")
@@ -200,7 +219,7 @@ def enqueue_run(
     provider_key, problems = start_problems(db, user_id, spec)
     if parent is not None:
         problems += child_problems(parent, spec)
-    if problems or provider_key is None:
+    if problems or (provider_key is None and uses_server(spec)):
         raise SpecInvalid(problems)
     if definition is not None:
         # Serialises a definition's enqueues until this run is committed, so
@@ -221,6 +240,49 @@ def enqueue_run(
             return existing
     if definition is not None:
         check_run_rate(db, definition, spec.max_runs_per_hour)
+    if provider_key is None or not starts_on_server(spec):
+        # Workers spend their own credentials; a fallback to the server is budgeted then.
+        max_cost = Decimal(0)
+    else:
+        max_cost = server_budget(db, spec, definition, api_key, provider_key, parent)
+    run = AgentRun(
+        user_id=user_id,
+        definition_id=definition.id if definition else None,
+        agent=agent,
+        spec=spec.model_dump(mode="json"),
+        input=input,
+        max_cost_usd=max_cost,
+        trigger_kind=trigger.kind,
+        trigger_ref=trigger.ref,
+        dedupe_key=trigger.dedupe_key,
+        api_key_id=api_key.id if api_key else None,
+        provider_key_id=provider_key.id if provider_key else None,
+        scopes=scopes,
+        parent_run_id=parent.id if parent else None,
+        depth=parent.depth + 1 if parent else 0,
+        executor=EXECUTOR_SERVER if starts_on_server(spec) else EXECUTOR_WORKERS,
+    )
+    db.add(run)
+    db.commit()
+    if run.executor == EXECUTOR_SERVER:
+        dispatch(run.id)
+    return run
+
+
+def dispatch(run_id: str) -> None:
+    # The run id doubles as the Celery task id, so cancellation can revoke by run id.
+    app.send_task(RUN_AGENT, args=[run_id], task_id=run_id)
+
+
+def server_budget(
+    db: DBSession,
+    spec: AgentSpec,
+    definition: AgentDefinition | None,
+    api_key: APIKey | None,
+    provider_key: LLMProviderKey,
+    parent: AgentRun | None,
+) -> Decimal:
+    """The run's cap, which must buy at least one output token."""
     max_cost = resolve_run_cap(
         db,
         run_cap=spec.max_cost_usd,
@@ -233,30 +295,37 @@ def enqueue_run(
         left = parent_left(db, parent)
         # Without its own cap a child gets half, so its parent can still afford to wait for it.
         max_cost = min(max_cost, left if spec.max_cost_usd is not None else left / 2)
-    output_tokens = resolve_max_output_tokens(spec, model_info(spec.model), max_cost)
-    if output_tokens < 1:
+    if resolve_max_output_tokens(spec, model_info(spec.model), max_cost) < 1:
         raise CapExceeded(
             f"${max_cost} left in this run's budget can't pay for any output on {spec.model}"
         )
-    snapshot = spec.model_copy(update={"max_output_tokens": output_tokens})
-    run = AgentRun(
-        user_id=user_id,
-        definition_id=definition.id if definition else None,
-        agent=agent,
-        spec=snapshot.model_dump(mode="json"),
-        input=input,
-        max_cost_usd=max_cost,
-        trigger_kind=trigger.kind,
-        trigger_ref=trigger.ref,
-        dedupe_key=trigger.dedupe_key,
-        api_key_id=api_key.id if api_key else None,
-        provider_key_id=provider_key.id,
-        scopes=scopes,
-        parent_run_id=parent.id if parent else None,
-        depth=parent.depth + 1 if parent else 0,
-    )
-    db.add(run)
-    db.commit()
-    # The run id doubles as the Celery task id, so cancellation can revoke by run id.
-    app.send_task(RUN_AGENT, args=[run.id], task_id=run.id)
-    return run
+    return max_cost
+
+
+def fall_back_to_server(db: DBSession, run: AgentRun) -> None:
+    """Hand a pending worker run to the server, checked and budgeted as of now: its
+    owner's key, servers and pools may have changed since submit. Fails the run if the
+    server can't take it. The caller holds the run's lock and commits; dispatch follows
+    the commit."""
+    spec = AgentSpec.model_validate(run.spec)
+    provider_key, problems = start_problems(db, run.user_id, spec)
+    budget = None
+    if not problems and provider_key is not None:
+        definition = db.get(AgentDefinition, run.definition_id) if run.definition_id else None
+        api_key = db.get(APIKey, run.api_key_id) if run.api_key_id else None
+        try:
+            budget = server_budget(db, spec, definition, api_key, provider_key, None)
+        except CapExceeded as e:
+            problems = [str(e)]
+    now = datetime.now(timezone.utc)
+    if budget is None or provider_key is None:
+        run.status = RunStatus.FAILED.value
+        run.error = (
+            f"no worker claimed it within {spec.fallback_after} minutes, and the server "
+            f"can't run it: {'; '.join(problems)}"
+        )
+        run.finished_at = now
+        return
+    run.provider_key_id, run.max_cost_usd = provider_key.id, budget
+    run.executor = EXECUTOR_SERVER
+    run.placed_at = now

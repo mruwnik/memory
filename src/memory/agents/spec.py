@@ -5,6 +5,7 @@ import json
 import re
 from collections import Counter
 from decimal import Decimal
+from fnmatch import fnmatchcase
 from typing import Annotated, Any, Literal
 
 import jsonschema
@@ -71,8 +72,47 @@ class ExternalMCP(BaseModel):
     tools: list[str] = Field(min_length=1)
 
 
+Glob = Annotated[str, Field(min_length=1, max_length=200)]
+GlobList = Annotated[list[Glob], Field(max_length=50)]
+Placement = Literal["server_only", "runner_only", "server_first", "runner_first"]
+# Well inside the 24h the daily pools look back over, so a run that falls back to the
+# server still counts against the pools its budget was taken from.
+MAX_FALLBACK_MINUTES = 12 * 60
+
+
+class Requirements(BaseModel):
+    """What a worker needs to take a run, as globs; a worker declares what it has in the
+    same shape. Tools are "server:tool" globs, so a worker can declare whole servers."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    models: GlobList = []
+    tools: GlobList = []
+    flags: GlobList = []
+
+
+def covers(declared: str, required: str) -> bool:
+    """Either side may be the glob: "claude-haiku-*" is met by "claude-haiku-4-5", and
+    "memory:send_message" by a worker declaring "memory:*"."""
+    return fnmatchcase(required, declared) or fnmatchcase(declared, required)
+
+
+def satisfies(requires: Requirements, declared: Requirements) -> bool:
+    return all(
+        any(covers(d, r) for d in getattr(declared, kind))
+        for kind in ("models", "tools", "flags")
+        for r in getattr(requires, kind)
+    )
+
+
 class AgentSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+    # Who executes runs: the server, workers (agent_work_claim), or one first, moving
+    # to the other once a run has waited fallback_after minutes (None: never).
+    placement: Placement = "server_only"
+    fallback_after: int | None = Field(default=None, ge=1, le=MAX_FALLBACK_MINUTES)
+    requires: Requirements = Requirements()
 
     system_prompt: str = Field(min_length=1, max_length=MAX_TEXT_CHARS)
     model: str = DEFAULT_AGENT_MODEL
@@ -95,6 +135,21 @@ class AgentSpec(BaseModel):
     provider_key: Annotated[int, Field(ge=1)] | None = None
     # Days a finished, unstarred run is kept; None: AGENT_RUN_RETENTION_DAYS.
     retention_days: int | None = Field(default=None, ge=1, le=MAX_RETENTION_DAYS)
+
+    @model_validator(mode="after")
+    def fallback_needs_a_first_placement(self) -> "AgentSpec":
+        if self.fallback_after is not None and self.placement.endswith("_only"):
+            raise ValueError(f"placement {self.placement} has no side to fall back to")
+        return self
+
+
+def starts_on_server(spec: AgentSpec) -> bool:
+    return spec.placement.startswith("server")
+
+
+def uses_server(spec: AgentSpec) -> bool:
+    """Whether the server may run it: where it starts, or where it falls back to."""
+    return starts_on_server(spec) or spec.fallback_after is not None
 
 
 def is_denied(tool: str) -> bool:
@@ -148,7 +203,7 @@ def resolve_max_output_tokens(
 
 
 def generation_params(spec: AgentSpec) -> GenerationParams:
-    """For a run's snapshot, whose max_output_tokens enqueue has resolved."""
+    """For a spec whose max_output_tokens has been resolved."""
     if spec.max_output_tokens is None:
         raise ValueError("max_output_tokens must be resolved before a run starts")
     return GenerationParams(
@@ -328,11 +383,7 @@ def spec_errors(spec: AgentSpec) -> list[str]:
     """Everything wrong with `spec` that can be known without the DB or MCP.
 
     Tool visibility to the owner and its provider key are checked separately
-    (they need the owner).
+    (they need the owner). A spec the server never runs isn't held to its models.
     """
-    return (
-        tool_errors(spec)
-        + schema_errors(spec.result_schema)
-        + budget_errors(spec)
-        + model_errors(spec)
-    )
+    errors = tool_errors(spec) + schema_errors(spec.result_schema) + budget_errors(spec)
+    return errors + model_errors(spec) if uses_server(spec) else errors

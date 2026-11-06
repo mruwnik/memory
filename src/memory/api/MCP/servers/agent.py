@@ -3,41 +3,45 @@
 Every tool acts as the caller. A run always executes as the definition's owner
 (only owners may run a definition), with the caller's API-key scopes when one
 was used. A run that calls agent_run, agent_wait or agent_cancel (opted in
-through its spec's tools) acts on its own children only.
+through its spec's tools) acts on its own children only. Runs placed on workers
+are claimed and answered (agent_work_*) by anyone with the agents:work scope, as
+themselves; the run stays its owner's.
 """
 
 import asyncio
+import json
 import logging
+import secrets
 import time
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_access_token
-from pydantic import ValidationError
-from sqlalchemy import and_, func, or_
+from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, ValidationError
+from sqlalchemy import and_, func, or_, tuple_
 from sqlalchemy.exc import IntegrityError
 
 from memory.agents.cancel import cancel_tree
 from memory.agents.caps import CapExceeded
-from memory.agents.external import (
-    AuthInput,
-    authorize,
-    configure,
-    load_detached,
-    STATUS_COLUMNS,
-    TOKEN_COLUMNS,
-    TOOL_COLUMNS,
-    refresh_tool_cache,
-    save,
-)
 from memory.agents.enqueue import (
     SpecInvalid,
     TriggerInfo,
     enqueue_run,
     stored_spec_problems,
+)
+from memory.agents.external import (
+    STATUS_COLUMNS,
+    TOKEN_COLUMNS,
+    TOOL_COLUMNS,
+    AuthInput,
+    authorize,
+    configure,
+    load_detached,
+    refresh_tool_cache,
+    save,
 )
 from memory.agents.mcp_client import calling_run, memory_tools
 from memory.agents.prebuilt import PREBUILT_AGENTS
@@ -50,6 +54,21 @@ from memory.agents.provider_keys import (
     system_key,
     usable,
 )
+from memory.agents.spec import (
+    DEFAULT_AGENT_MODEL,
+    MAX_NAME_CHARS,
+    MAX_TEXT_CHARS,
+    AgentSpec,
+    Money,
+    Placement,
+    Requirements,
+    external_tool_name,
+    memory_tool_denied,
+    result_errors,
+    satisfies,
+    spec_errors,
+    uses_server,
+)
 from memory.agents.system import SYSTEM_AGENTS, SystemAgent
 from memory.agents.triggers import (
     INGEST,
@@ -59,15 +78,7 @@ from memory.agents.triggers import (
     buffer_key,
     source_types,
 )
-from memory.agents.spec import (
-    external_tool_name,
-    DEFAULT_AGENT_MODEL,
-    MAX_NAME_CHARS,
-    MAX_TEXT_CHARS,
-    AgentSpec,
-    memory_tool_denied,
-    spec_errors,
-)
+from memory.agents.work import HELD_OUT
 from memory.api.auth import token_api_key
 from memory.api.MCP.access import get_mcp_current_user
 from memory.api.MCP.servers.scheduler import (
@@ -81,23 +92,28 @@ from memory.common.access_control import has_admin_scope
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import (
     AgentDefinition,
-    ExternalMCPServer,
-    LLMProviderKey,
-    ServerStatus,
     AgentRun,
     AgentRunStep,
     AgentTrigger,
+    ExternalMCPServer,
+    LLMProviderKey,
     ScheduledTask,
+    ServerStatus,
 )
-from memory.common.db.models.agents import TERMINAL_STATUSES
+from memory.common.db.models.agents import (
+    EXECUTOR_WORKERS,
+    TERMINAL_STATUSES,
+    RunStatus,
+    iso,
+)
+from memory.common.db.models.mcp import TRANSPORTS
+from memory.common.db.models.provider_keys import KEY_PROVIDERS, KeyStatus
 from memory.common.db.models.scheduled_tasks import TaskType, compute_next_cron
 from memory.common.llms.neutral import BUILTIN_TOOLS, Capabilities
 from memory.common.llms.registry import PROVIDERS, all_models, split_model
-from memory.common.scopes import SCOPE_AGENTS, SCOPE_WRITE
-from memory.common.db.models.mcp import TRANSPORTS
-from memory.common.db.models.provider_keys import KEY_PROVIDERS, KeyStatus
 from memory.common.mcp_oauth import MCPServerError, describe, revoke
 from memory.common.rate_limit import check_rate_limit
+from memory.common.scopes import SCOPE_AGENTS, SCOPE_AGENTS_WORK, SCOPE_WRITE
 
 logger = logging.getLogger(__name__)
 
@@ -245,6 +261,12 @@ def provider_key_errors(spec: AgentSpec) -> list[str]:
 
 
 async def check_spec(spec: AgentSpec) -> None:
+    """Workers act with their own credentials, so a spec only they run isn't held to
+    the caller's keys, tools or servers."""
+    if not uses_server(spec):
+        if errors := spec_errors(spec):
+            raise ValueError("; ".join(errors))
+        return
     errors = (
         spec_errors(spec)
         + provider_key_errors(spec)
@@ -272,7 +294,13 @@ async def upsert(
     {"mode": "tool", "tools": [...]}), result_schema, max_turns, max_cost_usd,
     max_cost_usd_per_day, timeout_sec, provider_key (one of your agent_key_list keys, by id
     or name; stored as its id; omit for your default key for the model's provider),
-    retention_days (how long its finished runs are kept; omit for AGENT_RUN_RETENTION_DAYS).
+    retention_days (how long its finished runs are kept; omit for AGENT_RUN_RETENTION_DAYS),
+    placement (who executes its runs: server_only (default); runner_only, for workers,
+    i.e. anyone with the agents:work scope, who claim them with agent_work_claim; or
+    server_first / runner_first, which move a run nobody has claimed fallback_after
+    minutes (1..720) after it was placed to the other side; omit fallback_after for never), requires (what a worker
+    needs to take its runs: {"models": [globs], "tools": ["server:tool" globs],
+    "flags": [...]}). A spec only workers run isn't checked against your keys or tools.
     Errors name every problem at once.
     """
     user_id, _ = caller()
@@ -442,25 +470,57 @@ def resolve_agent(
     raise ValueError(f"unknown agent {agent!r}")
 
 
+def placement_overrides(
+    placement: str | None, fallback_after: int | None, requires: dict | None
+) -> dict[str, Any]:
+    overrides: dict[str, Any] = {}
+    if placement is not None:
+        overrides |= {"placement": placement, "fallback_after": fallback_after}
+    elif fallback_after is not None:
+        overrides["fallback_after"] = fallback_after
+    if requires is not None:
+        overrides["requires"] = requires
+    return overrides
+
+
 @agent_mcp.tool()
 @visible_when(require_scopes(SCOPE_AGENTS))
-async def run(input: str, agent: int | str | dict) -> dict:
+async def run(
+    input: str,
+    agent: int | str | dict,
+    placement: Placement | None = None,
+    fallback_after: int | None = None,
+    requires: dict | None = None,
+) -> dict:
     """Start a run, paid with your key. Returns its run_id at once; follow it with agent_wait.
 
     `agent` is one of your definitions (its id or name), a prebuilt agent's slug
     (agent_catalog) or a system agent's (agent_system_list, "system:..."), or an
     inline spec (the fields agent_upsert takes), which runs without being saved.
 
-    Called by a run, this starts its child: it may use only the run's tools, nests
-    at most AGENT_MAX_SPAWN_DEPTH deep, and gets half of what the run has left of its
-    budget, which it holds until it finishes. A child spec's own max_cost_usd is
-    capped at what the run has left; taking all of it ends the run budget_exceeded.
+    `placement`, `fallback_after` and `requires` override the agent's own for this run
+    (see agent_upsert); with `placement` given, an omitted fallback_after means never.
+    Runs placed on workers wait for anyone with the agents:work scope to claim them, need
+    no key of yours unless the server may take them, and cost you nothing. System agents
+    always run on the server.
+
+    Called by a run, this starts its child: it may use only the run's tools, runs on the
+    server, nests at most AGENT_MAX_SPAWN_DEPTH deep, and gets half of what the run has
+    left of its budget, which it holds until it finishes. A child spec's own max_cost_usd
+    is capped at what the run has left; taking all of it ends the run budget_exceeded.
     """
     user_id, _ = caller()
     token, _ = caller_token()
     parent_id = calling_run(get_access_token())
+    overrides = placement_overrides(placement, fallback_after, requires)
     with make_session() as db:
         parsed, definition, slug = resolve_agent(db, user_id, agent)
+        if overrides and parent_id is not None:
+            raise ValueError("runs started by runs can't override placement")
+        if overrides and slug in SYSTEM_AGENTS:
+            raise ValueError("system agents run on the server only")
+        if overrides:
+            parsed = parse_spec(parsed.model_dump(mode="json") | overrides)
         await check_spec(parsed)
         parent = None
         if parent_id is not None:
@@ -564,7 +624,8 @@ async def list_runs(
 @visible_when(require_scopes(SCOPE_AGENTS))
 async def cancel(run_id: str) -> dict:
     """Cancel a run and the runs it started. Pending runs stop at once; running ones
-    stop before their next model or tool call."""
+    stop before their next model or tool call. Runs a worker holds end at once; the
+    worker learns of it on renewal."""
     user_id, is_admin = caller()
     with make_session() as db:
         found = readable_run(db, run_id, user_id, is_admin, lock=True)
@@ -583,6 +644,268 @@ async def star(run_id: str, starred: bool) -> dict:
         found.starred = starred
         db.flush()
         return found.serialize()
+
+
+class WorkerUsage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    input_tokens: NonNegativeInt | None = None
+    output_tokens: NonNegativeInt | None = None
+    model: str | None = Field(default=None, max_length=200)
+    cost_usd: Money | None = None
+
+
+# Candidates read per query while looking for a run the worker can take.
+CLAIM_SCAN = 200
+MAX_WORKER_LABEL_CHARS = 200
+MAX_WORKER_ERROR_CHARS = 10_000
+# What a worker needs to execute a run. An allow-list, so new spec fields and run
+# columns (the owner's keys, servers, triggers) never reach workers by default.
+WORKER_SPEC_FIELDS = (
+    "system_prompt",
+    "model",
+    "max_output_tokens",
+    "reasoning",
+    "temperature",
+    "tools",
+    "finish",
+    "result_schema",
+    "max_turns",
+    "timeout_sec",
+    "requires",
+)
+
+
+def worker_caller() -> int:
+    """The calling worker's user id; runs may never take work, which would escape their caps."""
+    if calling_run(get_access_token()) is not None:
+        raise ValueError("runs can't claim or submit work")
+    user_id, _ = caller()
+    return user_id
+
+
+def leased_payload(run: AgentRun) -> dict:
+    return {
+        "id": run.id,
+        "status": run.status,
+        "input": run.input,
+        "spec": {k: run.spec.get(k) for k in WORKER_SPEC_FIELDS},
+        "lease_token": run.lease_token,
+        "lease_expires_at": iso(run.lease_expires_at),
+        "lease_lapses": run.lease_lapses,
+        "worker_label": run.worker_label,
+    }
+
+
+def lease_length(lease_sec: int | None) -> timedelta:
+    requested = lease_sec or settings.AGENT_WORK_LEASE_DEFAULT_SEC
+    return timedelta(
+        seconds=min(
+            max(requested, settings.AGENT_WORK_LEASE_MIN_SEC), settings.AGENT_WORK_LEASE_MAX_SEC
+        )
+    )
+
+
+def hold_ends(run: AgentRun) -> datetime:
+    assert run.started_at is not None
+    return run.started_at + timedelta(seconds=settings.AGENT_WORK_HOLD_MAX_SEC)
+
+
+def leased_run(db: DBSession, run_id: str, lease_token: str, user_id: int) -> AgentRun:
+    run = db.get(AgentRun, run_id, with_for_update=True)
+    if run is None or run.executor != EXECUTOR_WORKERS or run.lease_token is None:
+        raise ValueError(f"unknown run {run_id}")
+    if run.worker_user_id != user_id or not secrets.compare_digest(run.lease_token, lease_token):
+        raise ValueError("lease token does not match this run's current claim")
+    return run
+
+
+def renew(run_id: str, lease_token: str, user_id: int, lease: timedelta) -> dict:
+    with make_session() as db:
+        run = leased_run(db, run_id, lease_token, user_id)
+        if run.status == RunStatus.CANCELLED.value:
+            return {"run": leased_payload(run), "cancel_requested": True}
+        if run.status in TERMINAL_STATUSES:
+            raise ValueError(f"the run already ended ({run.status}): {run.error}")
+        now = datetime.now(timezone.utc)
+        if hold_ends(run) <= now:
+            run.status, run.finished_at, run.error = RunStatus.FAILED.value, now, HELD_OUT
+            db.commit()
+            raise ValueError(f"the run failed: {HELD_OUT}")
+        # A lapsed lease nobody else claimed yet is taken back as it was.
+        run.status = RunStatus.RUNNING.value
+        run.lease_expires_at = min(now + lease, hold_ends(run))
+        db.commit()
+        return {"run": leased_payload(run), "cancel_requested": False}
+
+
+def take_next(
+    user_id: int, declared: Requirements, worker: str | None, lease: timedelta
+) -> dict | None:
+    """Scans the queue oldest first in CLAIM_SCAN batches, by (created_at, id) cursor,
+    without locks, then locks only the run it picks, passing over it if another worker
+    has it or took it since the scan. The requirement globs are matched here: either
+    side may be a glob, which SQL can't match."""
+    with make_session() as db:
+        cursor = None
+        while True:
+            now = datetime.now(timezone.utc)
+            claimable = (
+                AgentRun.status == RunStatus.PENDING.value,
+                AgentRun.executor == EXECUTOR_WORKERS,
+                or_(
+                    AgentRun.started_at.is_(None),
+                    AgentRun.started_at
+                    > now - timedelta(seconds=settings.AGENT_WORK_HOLD_MAX_SEC),
+                ),
+            )
+            query = db.query(AgentRun.created_at, AgentRun.id, AgentRun.spec["requires"]).filter(
+                *claimable
+            )
+            if cursor is not None:
+                query = query.filter(tuple_(AgentRun.created_at, AgentRun.id) > cursor)
+            batch = query.order_by(AgentRun.created_at, AgentRun.id).limit(CLAIM_SCAN).all()
+            if not batch:
+                return None
+            for created_at, run_id, requires in batch:
+                cursor = (created_at, run_id)
+                if not satisfies(Requirements.model_validate(requires or {}), declared):
+                    continue
+                run = (
+                    db.query(AgentRun)
+                    .filter(AgentRun.id == run_id, *claimable)
+                    .with_for_update(skip_locked=True)
+                    .one_or_none()
+                )
+                if run is None:
+                    continue
+                run.status = RunStatus.RUNNING.value
+                run.lease_token = secrets.token_urlsafe(24)
+                run.worker_user_id, run.worker_label = user_id, worker
+                run.started_at = run.started_at or now
+                run.lease_expires_at = min(now + lease, hold_ends(run))
+                db.commit()
+                return leased_payload(run)
+
+
+@agent_mcp.tool()
+@visible_when(require_scopes(SCOPE_AGENTS_WORK))
+async def work_claim(
+    capabilities: dict | None = None,
+    worker: str | None = None,
+    lease_sec: int | None = None,
+    wait: int = 0,
+    run_id: str | None = None,
+    lease_token: str | None = None,
+) -> dict:
+    """Take the oldest run placed on workers whose requirements you meet, from any user,
+    to execute yourself with your own models and tools. Returns {"run": null} if none.
+
+    `capabilities` declares what you have, as {"models": [...], "tools": ["server:tool",
+    ...], "flags": [...]} (globs allowed, e.g. "memory:*"); a run is yours to take when
+    each of its spec's `requires` entries matches one of them. The run comes with its
+    input, spec (system_prompt, model, tools, result_schema, limits, ...), a lease_token
+    and lease_expires_at: finish it with agent_work_submit before the lease runs out
+    (lease_sec, default AGENT_WORK_LEASE_DEFAULT_SEC, kept within
+    AGENT_WORK_LEASE_MIN_SEC..AGENT_WORK_LEASE_MAX_SEC), or it goes back for anyone to
+    claim; after AGENT_WORK_MAX_LAPSES lapses it fails. With wait > 0, blocks up to that
+    many seconds (at most AGENT_MAX_WAIT_SEC) for a run. `worker` labels you to the
+    run's owner (at most 200 characters).
+
+    To renew a lease, call again with the run's `run_id` and `lease_token`: the lease
+    is extended by lease_sec, but never past AGENT_WORK_HOLD_MAX_SEC from the run's
+    first claim, after which the run fails; "cancel_requested": true means its owner cancelled it,
+    so stop.
+    """
+    user_id = worker_caller()
+    lease = lease_length(lease_sec)
+    if worker is not None and len(worker) > MAX_WORKER_LABEL_CHARS:
+        raise ValueError(f"worker label is longer than {MAX_WORKER_LABEL_CHARS} characters")
+    if (run_id is None) != (lease_token is None):
+        raise ValueError("give both run_id and lease_token to renew a lease, or neither")
+    if run_id is not None and lease_token is not None:
+        return await asyncio.to_thread(renew, run_id, lease_token, user_id, lease)
+    declared = Requirements.model_validate(capabilities or {})
+    deadline = time.monotonic() + min(max(wait, 0), settings.AGENT_MAX_WAIT_SEC)
+    while True:
+        taken = await asyncio.to_thread(take_next, user_id, declared, worker, lease)
+        if taken is not None:
+            return {"run": taken}
+        if time.monotonic() >= deadline:
+            return {"run": None}
+        await asyncio.sleep(1)
+
+
+def worker_result(spec: dict[str, Any], result: Any) -> dict[str, Any]:
+    """Stored as the server's runs store theirs: {"data": ...} against a result_schema,
+    else {"text": ...}."""
+    if len(json.dumps(result)) > settings.AGENT_WORK_MAX_RESULT_BYTES:
+        raise ValueError(f"result is larger than {settings.AGENT_WORK_MAX_RESULT_BYTES} bytes")
+    schema = spec.get("result_schema")
+    if schema is None:
+        if not isinstance(result, str):
+            raise ValueError("result must be text: this run has no result_schema")
+        return {"text": result}
+    if errors := result_errors(schema, result):
+        raise ValueError("result does not match result_schema: " + "; ".join(errors))
+    return {"data": result}
+
+
+def same_outcome(run: AgentRun, result: Any, error: str | None) -> bool:
+    """Whether an ended run's outcome is the one being submitted: a retried submit."""
+    if error is not None:
+        return run.status == RunStatus.FAILED.value and run.error == error
+    return run.status == RunStatus.DONE.value and run.result == worker_result(run.spec, result)
+
+
+def record_outcome(
+    run_id: str, lease_token: str, user_id: int, result: Any, error: str | None, usage: dict
+) -> dict:
+    with make_session() as db:
+        run = leased_run(db, run_id, lease_token, user_id)
+        if run.status in TERMINAL_STATUSES:
+            if same_outcome(run, result, error):
+                return run.serialize()
+            raise ValueError(f"the run already ended ({run.status}): {run.error}")
+        stored = None if result is None else worker_result(run.spec, result)
+        run.status = (RunStatus.DONE if error is None else RunStatus.FAILED).value
+        run.result, run.error = stored, error
+        run.worker_usage = usage or None
+        run.finished_at = datetime.now(timezone.utc)
+        db.commit()
+        return run.serialize()
+
+
+@agent_mcp.tool()
+@visible_when(require_scopes(SCOPE_AGENTS_WORK))
+async def work_submit(
+    run_id: str,
+    lease_token: str,
+    result: Any = None,
+    error: str | None = None,
+    usage: dict | None = None,
+) -> dict:
+    """Finish a run you claimed with agent_work_claim: either its `result` (text, or an
+    object matching the run's result_schema) or an `error` (at most 10000 characters)
+    saying why it couldn't be done.
+
+    `lease_token` is the one agent_work_claim returned; it stops working once someone else
+    claims the run. A result that doesn't match keeps your lease, so fix it and resubmit.
+    Resubmitting the outcome you recorded returns it again; any other submit to a run
+    that ended (cancelled, already answered, or failed by the server for lapsed or
+    overlong leases) is refused, saying how it ended. `usage` optionally reports what you spent (input_tokens,
+    output_tokens, model, cost_usd): it is shown to the run's owner and never counted
+    against their budgets.
+    """
+    user_id = worker_caller()
+    if (result is None) == (error is None):
+        raise ValueError("give exactly one of result or error")
+    if error is not None and len(error) > MAX_WORKER_ERROR_CHARS:
+        raise ValueError(f"error is longer than {MAX_WORKER_ERROR_CHARS} characters")
+    reported = WorkerUsage.model_validate(usage or {}).model_dump(mode="json", exclude_none=True)
+    return await asyncio.to_thread(
+        record_outcome, run_id, lease_token, user_id, result, error, reported
+    )
 
 
 def capabilities_json(caps: Capabilities) -> dict:

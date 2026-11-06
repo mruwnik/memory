@@ -166,6 +166,7 @@ SYNC_DUE_SOURCES = f"{SYNC_SCHEDULE_ROOT}.sync_due_sources"
 RUN_AGENT = f"{AGENTS_ROOT}.run_agent"
 START_CRON_RUN = f"{AGENTS_ROOT}.start_cron_run"
 FIRE_TRIGGER = f"{AGENTS_ROOT}.fire_trigger"
+SWEEP_WORKER_RUNS = f"{AGENTS_ROOT}.sweep_worker_runs"
 
 # Access control tasks
 UPDATE_SOURCE_ACCESS_CONTROL = f"{MAINTENANCE_ROOT}.update_source_access_control"
@@ -486,6 +487,7 @@ def build_beat_schedule() -> dict:
             "schedule": crontab(hour="4", minute="0"),
         },
         "sweep-agent-runs": {"task": SWEEP_AGENT_RUNS, "schedule": 300},
+        "sweep-worker-runs": {"task": SWEEP_WORKER_RUNS, "schedule": 60},
         "sweep-trigger-buffers": {"task": SWEEP_TRIGGER_BUFFERS, "schedule": 60},
         "purge-agent-runs": {
             "task": PURGE_AGENT_RUNS,

@@ -342,6 +342,25 @@ async def test_each_turn_may_only_spend_what_is_left(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "explicit,expected",
+    [
+        (None, 16_000),  # the default, under the 64000 model limit
+        (1_000, 1_000),
+    ],
+)
+async def test_an_unset_max_output_tokens_resolves_when_the_run_starts(
+    db_session, regular_user, fake_providers, explicit, expected
+):
+    run_id = make_run(db_session, regular_user, "anthropic/m", max_output_tokens=explicit)
+    fake_providers.script = [reply("42")]
+
+    await execute_run(run_id, hub().factory())
+
+    assert fake_providers.requests[0]["params"].max_output_tokens == expected
+
+
+@pytest.mark.asyncio
 async def test_timeout_is_a_budget(db_session, regular_user, fake_providers):
     run_id = make_run(db_session, regular_user, "anthropic/m", timeout_sec=1)
 
@@ -489,15 +508,21 @@ async def test_provider_executed_calls_are_not_run_by_the_runner(
 
 
 @pytest.mark.asyncio
-async def test_only_pending_runs_execute(db_session, regular_user, fake_providers):
+@pytest.mark.parametrize(
+    "status,executor", [("running", "server"), ("pending", "workers"), ("running", "workers")]
+)
+async def test_only_pending_server_runs_execute(
+    db_session, regular_user, fake_providers, status, executor
+):
     run_id = make_run(db_session, regular_user, "anthropic/m")
-    db_session.get(AgentRun, run_id).status = "running"
+    found = db_session.get(AgentRun, run_id)
+    found.status, found.executor = status, executor
     db_session.commit()
 
     await execute_run(run_id, hub().factory())
 
     run, _ = load(db_session, run_id)
-    assert run.status == "running"
+    assert (run.status, run.executor) == (status, executor)
     assert fake_providers.requests == []
 
 

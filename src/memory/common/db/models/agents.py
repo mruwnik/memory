@@ -34,6 +34,9 @@ class RunStatus(str, enum.Enum):
     CANCELLED = "cancelled"
 
 
+EXECUTOR_SERVER = "server"
+EXECUTOR_WORKERS = "workers"
+
 # The longest an agent may keep its runs; also clamps older snapshots in the purge.
 MAX_RETENTION_DAYS = 3650
 
@@ -101,10 +104,24 @@ class AgentRun(Base):
     # spec, which only the snapshot in `spec` keeps.
     agent: Mapped[str | None] = mapped_column(Text)
     spec: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
-    # Where the run executes: "server" (the agents worker).
+    # Where the run executes: EXECUTOR_SERVER (the agents worker) or EXECUTOR_WORKERS
+    # (anyone with the agents:work scope claims it); a placement fallback moves it.
     executor: Mapped[str] = mapped_column(
-        String(64), nullable=False, default="server", server_default="server"
+        String(64), nullable=False, default=EXECUTOR_SERVER, server_default=EXECUTOR_SERVER
     )
+    # Who holds (or last held) the run's worker lease; the run stays its owner's.
+    worker_user_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL")
+    )
+    worker_label: Mapped[str | None] = mapped_column(Text)
+    # Kept after a lapse, so a late worker can still deliver until someone else claims.
+    lease_token: Mapped[str | None] = mapped_column(Text)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_lapses: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    # What the worker says it spent: shown, never counted against any cap.
+    worker_usage: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     input: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(
         String(20),
@@ -155,6 +172,11 @@ class AgentRun(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+    # When the run was put on its current executor: a placement fallback resets it, so
+    # waiting on the new side is timed from the move.
+    placed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -179,6 +201,13 @@ class AgentRun(Base):
         Index("agent_runs_parent_idx", "parent_run_id"),
         Index("agent_runs_finished_idx", "finished_at"),
         Index(
+            "agent_runs_workers_queue_idx",
+            "created_at",
+            "id",
+            postgresql_where=text("status = 'pending' AND executor = 'workers'"),
+        ),
+        Index("agent_runs_worker_user_idx", "worker_user_id"),
+        Index(
             "agent_runs_definition_dedupe_key",
             "definition_id",
             "dedupe_key",
@@ -194,6 +223,11 @@ class AgentRun(Base):
             "definition_id": self.definition_id,
             "agent": self.agent,
             "executor": self.executor,
+            "worker_user_id": self.worker_user_id,
+            "worker_label": self.worker_label,
+            "worker_usage": self.worker_usage,
+            "lease_expires_at": iso(self.lease_expires_at),
+            "lease_lapses": self.lease_lapses,
             "parent_run_id": self.parent_run_id,
             "depth": self.depth,
             "input": self.input,

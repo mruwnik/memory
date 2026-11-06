@@ -425,6 +425,10 @@ Configuration lives in `.env` (or environment variables on the host). LLM featur
 | `AGENT_RUN_RETENTION_DAYS`        | `14`                 | Days a finished, unstarred run is kept when its agent sets no `retention_days` |
 | `AGENT_MAX_SPAWN_DEPTH`           | `2`                  | How deep runs may start runs (`agent_run` in an agent's tools); top-level runs are depth 0 |
 | `AGENT_MAX_RUNS_PER_HOUR`         | `60`                 | Most runs one agent definition may start per hour; definitions can only lower it |
+| `AGENT_WORK_LEASE_DEFAULT_SEC`, `AGENT_WORK_LEASE_MIN_SEC`, `AGENT_WORK_LEASE_MAX_SEC` | `600` / `30` / `3600` | How long one `agent_work_claim` lease holds a run placed on workers, and the bounds a worker's `lease_sec` is kept within |
+| `AGENT_WORK_HOLD_MAX_SEC`         | `86400`              | Longest workers may hold a run in all, from its first claim across renewals and re-claims; past it the run fails |
+| `AGENT_WORK_MAX_LAPSES`           | `3`                  | Lapsed worker leases after which the run fails instead of going back for claiming |
+| `AGENT_WORK_MAX_RESULT_BYTES`     | `1048576`            | Largest result a worker may submit                             |
 | `AGENT_MAX_TRIGGERS_PER_USER`     | `20`                 | Most ingest triggers a user may have enabled at once           |
 | `AGENT_WORKER_CONCURRENCY`        | `2`                  | Concurrent agent runs in `agents-worker` (~270MB each; raise its memory limit with it) |
 | `MCP_BLOCKED_NETWORKS`            | *(empty)*            | Comma-separated CIDRs external MCP servers may never reach, on top of the built-in list (see Security notes) |

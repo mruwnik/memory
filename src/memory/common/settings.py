@@ -298,6 +298,13 @@ AGENT_CONTEXT_TRIM_AT_TOKENS = int(os.getenv("AGENT_CONTEXT_TRIM_AT_TOKENS", "10
 AGENT_CONTEXT_TRIM_TO_TOKENS = int(os.getenv("AGENT_CONTEXT_TRIM_TO_TOKENS", "60000"))
 AGENT_RUN_RETENTION_DAYS = int(os.getenv("AGENT_RUN_RETENTION_DAYS", "14"))
 AGENT_MAX_SPAWN_DEPTH = int(os.getenv("AGENT_MAX_SPAWN_DEPTH", "2"))
+# Runs placed on workers: how long a claim holds a run, and how often it may lapse.
+AGENT_WORK_LEASE_DEFAULT_SEC = int(os.getenv("AGENT_WORK_LEASE_DEFAULT_SEC", "600"))
+AGENT_WORK_LEASE_MIN_SEC = int(os.getenv("AGENT_WORK_LEASE_MIN_SEC", "30"))
+AGENT_WORK_LEASE_MAX_SEC = int(os.getenv("AGENT_WORK_LEASE_MAX_SEC", "3600"))
+AGENT_WORK_HOLD_MAX_SEC = int(os.getenv("AGENT_WORK_HOLD_MAX_SEC", "86400"))
+AGENT_WORK_MAX_LAPSES = int(os.getenv("AGENT_WORK_MAX_LAPSES", "3"))
+AGENT_WORK_MAX_RESULT_BYTES = int(os.getenv("AGENT_WORK_MAX_RESULT_BYTES", str(1024 * 1024)))
 
 
 # External MCP servers (registered per user, called by agent runs)

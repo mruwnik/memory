@@ -88,13 +88,26 @@ def ago(**delta) -> datetime:
         ),
         ({"status": "running", "started_at": timedelta(seconds=30)}, "running", ""),
         (
-            {"status": "pending", "created_at": timedelta(hours=1)},
+            {"status": "pending", "placed_at": timedelta(hours=1)},
             "failed",
             "queue is backed up",
         ),
         # A busy queue can hold runs for the longest run's duration.
-        ({"status": "pending", "created_at": timedelta(minutes=30)}, "pending", ""),
+        ({"status": "pending", "placed_at": timedelta(minutes=30)}, "pending", ""),
         ({"status": "pending"}, "pending", ""),
+        # Worker runs wait for a worker, however long; their leases govern running ones.
+        ({"status": "pending", "executor": "workers", "created_at": timedelta(days=3)}, "pending", ""),
+        ({"status": "running", "executor": "workers", "started_at": timedelta(hours=3)}, "running", ""),
+        # Moved to workers by the placement sweep instead.
+        (
+            {
+                "status": "pending",
+                "placed_at": timedelta(hours=1),
+                "spec": {"placement": "server_first", "fallback_after": 120},
+            },
+            "pending",
+            "",
+        ),
     ],
 )
 def test_sweep_fails_only_stuck_runs(

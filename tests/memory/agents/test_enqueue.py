@@ -72,7 +72,7 @@ def test_enqueue_inserts_pending_and_dispatches(
     )
 
     assert run.status == "pending"
-    assert run.spec == spec(max_output_tokens=16_000).model_dump(mode="json")
+    assert run.spec == spec().model_dump(mode="json")
     assert run.max_cost_usd == Decimal("2.00")
     assert run.provider_key_id == fake_providers.keys["anthropic"].id
     no_celery_dispatch.assert_called_once_with(RUN_AGENT, args=[run.id], task_id=run.id)
@@ -143,35 +143,6 @@ def test_run_cap_shrinks_to_what_is_left_in_the_day(
     )
 
     assert run.max_cost_usd == Decimal("0.25")
-
-
-@pytest.mark.parametrize(
-    "spent_today,explicit,expected",
-    [
-        ("0", None, 16_000),  # the default, under the 64000 model limit
-        ("5.99", None, 5_000),  # $0.01 left buys 5000 tokens at $2/MTok
-        ("5.99", 1_000, 1_000),  # an explicit value is kept
-    ],
-)
-def test_unset_max_output_tokens_resolves_into_the_snapshot(
-    db_session, regular_user, fake_providers, spent_today, explicit, expected
-):
-    spent(
-        db_session,
-        regular_user,
-        spent_today,
-        provider_key_id=fake_providers.keys["anthropic"].id,
-    )
-
-    run = enqueue_run(
-        db_session,
-        user_id=regular_user.id,
-        spec=spec(max_output_tokens=explicit),
-        input="hi",
-        trigger=MANUAL,
-    )
-
-    assert run.spec["max_output_tokens"] == expected
 
 
 @pytest.mark.parametrize(
@@ -604,3 +575,80 @@ def test_enqueue_refuses_tools_of_a_disabled_module(
         )
 
     assert db_session.query(AgentRun).count() == 0
+
+
+@pytest.mark.parametrize(
+    "placement,executor,dispatched,keyed",
+    [
+        ({"placement": "server_only"}, "server", True, True),
+        ({"placement": "server_first", "fallback_after": 10}, "server", True, True),
+        ({"placement": "runner_first", "fallback_after": 10}, "workers", False, True),
+        # Without a fallback the server never runs it, so needs no key or cap.
+        ({"placement": "runner_first"}, "workers", False, False),
+        ({"placement": "runner_only"}, "workers", False, False),
+    ],
+)
+def test_a_run_starts_on_the_side_its_placement_prefers(
+    db_session, regular_user, fake_providers, no_celery_dispatch, placement, executor, dispatched, keyed
+):
+    run = enqueue_run(
+        db_session, user_id=regular_user.id, spec=spec(**placement), input="hi", trigger=MANUAL
+    )
+
+    assert (run.status, run.executor) == ("pending", executor)
+    assert no_celery_dispatch.called is dispatched
+    assert (run.provider_key_id is not None) is keyed
+
+
+@pytest.mark.parametrize(
+    "placement",
+    [
+        {"placement": "server_only"},
+        {"placement": "server_first", "fallback_after": 10},
+        {"placement": "runner_first", "fallback_after": 10},
+    ],
+)
+def test_placements_that_may_use_the_server_need_a_key(
+    db_session, regular_user, no_celery_dispatch, placement
+):
+    with pytest.raises(SpecInvalid, match="key"):
+        enqueue_run(
+            db_session, user_id=regular_user.id, spec=spec(**placement), input="hi", trigger=MANUAL
+        )
+
+
+@pytest.mark.parametrize("placement", ["runner_first", "runner_only"])
+def test_worker_runs_start_without_a_key_or_a_live_worker(
+    db_session, regular_user, no_celery_dispatch, placement
+):
+    run = enqueue_run(
+        db_session, user_id=regular_user.id, spec=spec(placement=placement), input="hi", trigger=MANUAL
+    )
+
+    assert (run.status, run.max_cost_usd, run.provider_key_id) == ("pending", Decimal(0), None)
+    no_celery_dispatch.assert_not_called()
+
+
+def test_runs_started_by_runs_stay_on_the_server(
+    db_session, regular_user, fake_providers, no_celery_dispatch
+):
+    parent = AgentRun(
+        user_id=regular_user.id,
+        spec=SPEC,
+        input="x",
+        max_cost_usd=Decimal("1"),
+        trigger_kind="manual",
+        status="running",
+    )
+    db_session.add(parent)
+    db_session.commit()
+
+    with pytest.raises(SpecInvalid, match="runs started by runs execute on the server"):
+        enqueue_run(
+            db_session,
+            user_id=regular_user.id,
+            spec=spec(placement="runner_only"),
+            input="hi",
+            trigger=TriggerInfo(kind="agent"),
+            parent=parent,
+        )

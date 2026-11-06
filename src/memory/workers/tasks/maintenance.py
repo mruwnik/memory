@@ -26,7 +26,7 @@ from memory.common import (
 )
 from memory.agents import triggers
 from memory.agents.cancel import cancel_tree
-from memory.common.db.models.agents import MAX_RETENTION_DAYS, RunStatus
+from memory.common.db.models.agents import EXECUTOR_SERVER, MAX_RETENTION_DAYS, RunStatus
 from memory.common.db.models.beeper import BeeperChat
 from memory.common.db.models.discord import DiscordChannel
 from memory.common.db.models.slack import SlackChannel
@@ -1556,7 +1556,9 @@ PURGE_BATCH_SIZE = 1000
 
 @app.task(name=SWEEP_AGENT_RUNS)
 def sweep_agent_runs() -> dict[str, int]:
-    """Fail runs no worker will ever finish. Never re-runs them: tools have side effects."""
+    """Fail server runs no agents-worker will ever finish. Never re-runs them: tools have
+    side effects. Runs on workers wait for one (until retention) and are held by leases;
+    sweep_worker_runs handles them, and moves server_first runs with a fallback."""
     now = datetime.now(timezone.utc)
     timeout = func.coalesce(
         AgentRun.spec["timeout_sec"].as_integer(), settings.AGENT_MAX_TIMEOUT_SEC
@@ -1565,6 +1567,7 @@ def sweep_agent_runs() -> dict[str, int]:
         stale = (
             db.query(AgentRun)
             .filter(
+                AgentRun.executor == EXECUTOR_SERVER,
                 AgentRun.status == RunStatus.RUNNING.value,
                 AgentRun.started_at
                 + func.make_interval(0, 0, 0, 0, 0, 0, timeout + STUCK_RUN_GRACE_SEC)
@@ -1573,13 +1576,19 @@ def sweep_agent_runs() -> dict[str, int]:
             .with_for_update(skip_locked=True)
             .all()
         )
-        # A busy queue can hold a run for as long as the longest runs ahead of it.
+        # A busy queue can hold a run for as long as the longest runs ahead of it,
+        # timed from when it was placed on the server (a fallback may have moved it).
         orphaned = (
             db.query(AgentRun)
             .filter(
+                AgentRun.executor == EXECUTOR_SERVER,
                 AgentRun.status == RunStatus.PENDING.value,
-                AgentRun.created_at
+                AgentRun.placed_at
                 < now - timedelta(seconds=settings.AGENT_MAX_TIMEOUT_SEC + STUCK_RUN_GRACE_SEC),
+                or_(
+                    AgentRun.spec["placement"].astext.is_distinct_from("server_first"),
+                    AgentRun.spec["fallback_after"].astext.is_(None),
+                ),
             )
             .with_for_update(skip_locked=True)
             .all()

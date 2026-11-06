@@ -5,15 +5,26 @@ from datetime import datetime
 from memory.common.celery_app import app
 from memory.common.db.connection import DBSession
 from memory.common.db.models import AgentRun
-from memory.common.db.models.agents import TERMINAL_STATUSES, RunStatus
+from memory.common.db.models.agents import EXECUTOR_WORKERS, TERMINAL_STATUSES, RunStatus
 
 
 def cancel_tree(db: DBSession, run: AgentRun, now: datetime) -> None:
     """Cancel `run`, if still live, and every live run it started, at any depth.
 
-    Pending runs end at once; running ones stop at their next cancellation check.
+    Pending runs end at once, as do worker-held ones (nothing of ours is executing
+    them; the worker learns of it when it renews its lease); running ones stop at their
+    next cancellation check.
     """
-    if run.status == RunStatus.PENDING:
+    if run.executor == EXECUTOR_WORKERS and run.status not in TERMINAL_STATUSES:
+        run.cancel_requested_at = run.finished_at = now
+        run.status = RunStatus.CANCELLED.value
+        # A lapsed run is pending again, but its worker may still be executing it.
+        run.error = (
+            "cancelled while a worker held it"
+            if run.worker_user_id
+            else "cancelled before it started"
+        )
+    elif run.status == RunStatus.PENDING:
         # The run id is the Celery task id.
         app.control.revoke(run.id)
         # Also flagged, so a worker that already claimed it stops at its first check.
