@@ -713,7 +713,12 @@ def hold_ends(run: AgentRun) -> datetime:
 
 def leased_run(db: DBSession, run_id: str, lease_token: str, user_id: int) -> AgentRun:
     run = db.get(AgentRun, run_id, with_for_update=True)
-    if run is None or run.executor != EXECUTOR_WORKERS or run.lease_token is None:
+    if (
+        run is None
+        or run.user_id != user_id
+        or run.executor != EXECUTOR_WORKERS
+        or run.lease_token is None
+    ):
         raise ValueError(f"unknown run {run_id}")
     if run.worker_user_id != user_id or not secrets.compare_digest(run.lease_token, lease_token):
         raise ValueError("lease token does not match this run's current claim")
@@ -751,6 +756,7 @@ def take_next(
         while True:
             now = datetime.now(timezone.utc)
             claimable = (
+                AgentRun.user_id == user_id,
                 AgentRun.status == RunStatus.PENDING.value,
                 AgentRun.executor == EXECUTOR_WORKERS,
                 or_(
@@ -798,7 +804,7 @@ async def work_claim(
     run_id: str | None = None,
     lease_token: str | None = None,
 ) -> dict:
-    """Take the oldest run placed on workers whose requirements you meet, from any user,
+    """Take the oldest of your own runs placed on workers whose requirements you meet,
     to execute yourself with your own models and tools. Returns {"run": null} if none.
 
     `capabilities` declares what you have, as {"models": [...], "tools": ["server:tool",
@@ -807,14 +813,14 @@ async def work_claim(
     input, spec (system_prompt, model, tools, result_schema, limits, ...), a lease_token
     and lease_expires_at: finish it with agent_work_submit before the lease runs out
     (lease_sec, default AGENT_WORK_LEASE_DEFAULT_SEC, kept within
-    AGENT_WORK_LEASE_MIN_SEC..AGENT_WORK_LEASE_MAX_SEC), or it goes back for anyone to
-    claim; after AGENT_WORK_MAX_LAPSES lapses it fails. With wait > 0, blocks up to that
-    many seconds (at most AGENT_MAX_WAIT_SEC) for a run. `worker` labels you to the
-    run's owner (at most 200 characters).
+    AGENT_WORK_LEASE_MIN_SEC..AGENT_WORK_LEASE_MAX_SEC), or it goes back for your
+    workers to claim; after AGENT_WORK_MAX_LAPSES lapses it fails. With wait > 0, blocks up to that
+    many seconds (at most AGENT_MAX_WAIT_SEC) for a run. `worker` labels the run with
+    this worker (at most 200 characters).
 
     To renew a lease, call again with the run's `run_id` and `lease_token`: the lease
     is extended by lease_sec, but never past AGENT_WORK_HOLD_MAX_SEC from the run's
-    first claim, after which the run fails; "cancel_requested": true means its owner cancelled it,
+    first claim, after which the run fails; "cancel_requested": true means it was cancelled,
     so stop.
     """
     user_id = worker_caller()
@@ -889,13 +895,13 @@ async def work_submit(
     object matching the run's result_schema) or an `error` (at most 10000 characters)
     saying why it couldn't be done.
 
-    `lease_token` is the one agent_work_claim returned; it stops working once someone else
-    claims the run. A result that doesn't match keeps your lease, so fix it and resubmit.
+    `lease_token` is the one agent_work_claim returned; it stops working once another
+    worker claims the run. A result that doesn't match keeps your lease, so fix it and resubmit.
     Resubmitting the outcome you recorded returns it again; any other submit to a run
     that ended (cancelled, already answered, or failed by the server for lapsed or
     overlong leases) is refused, saying how it ended. `usage` optionally reports what you spent (input_tokens,
-    output_tokens, model, cost_usd): it is shown to the run's owner and never counted
-    against their budgets.
+    output_tokens, model, cost_usd): it is shown on the run and never counted against
+    your budgets.
     """
     user_id = worker_caller()
     if (result is None) == (error is None):

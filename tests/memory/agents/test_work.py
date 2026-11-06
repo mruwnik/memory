@@ -1,5 +1,5 @@
 # pyright: reportFunctionMemberAccess=false
-"""Runs placed on workers: claimed under a lease by anyone with the agents:work scope."""
+"""Runs placed on workers: claimed under a lease by their owner's agents:work credentials."""
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -30,22 +30,38 @@ SCHEMA = {
 }
 
 
+def work_session(db, user_id: int, token: str) -> UserSession:
+    session = UserSession(
+        token=token, user_id=user_id, expires_at=datetime.now() + timedelta(days=1)
+    )
+    db.add(session)
+    db.commit()
+    return session
+
+
 @pytest.fixture
-def worker_session(db_session):
+def worker_session(db_session, regular_user):
+    """The runs' owner, working on them from a worker."""
+    regular_user.scopes = [*regular_user.scopes, "agents:work"]
+    db_session.commit()
+    return work_session(db_session, regular_user.id, "worker-session-token")
+
+
+@pytest.fixture
+def second_worker_session(db_session, worker_session):
+    """Another worker of the same owner."""
+    return work_session(db_session, worker_session.user_id, "second-worker-session-token")
+
+
+@pytest.fixture
+def stranger_session(db_session):
     """Someone else, who may only work on runs."""
     user = HumanUser(
         name="Worker", email="worker@example.com", password_hash="x", scopes=["agents:work"]
     )
     db_session.add(user)
     db_session.commit()
-    session = UserSession(
-        token="worker-session-token",
-        user_id=user.id,
-        expires_at=datetime.now() + timedelta(days=1),
-    )
-    db_session.add(session)
-    db_session.commit()
-    return session
+    return work_session(db_session, user.id, "stranger-session-token")
 
 
 @pytest.fixture
@@ -92,7 +108,7 @@ async def submit(run_id: str, lease_token: str, **kwargs) -> dict:
 
 
 @pytest.mark.asyncio
-async def test_any_worker_claims_another_users_run_which_stays_its_producers(
+async def test_a_worker_claims_its_owners_run(
     db_session, regular_user, user_session, worker_session
 ):
     run_id = submit_run(db_session, regular_user)
@@ -119,6 +135,28 @@ async def test_any_worker_claims_another_users_run_which_stays_its_producers(
         seen = (await agent.wait.fn(run_id=run_id))["run"]
     assert (seen["worker_label"], seen["status"]) == ("laptop", "running")
     assert "lease_token" not in seen
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("other", ["stranger_session", "admin_session"])
+async def test_a_worker_never_sees_another_users_runs(
+    db_session, regular_user, worker_session, request, other
+):
+    run_id = submit_run(db_session, regular_user)
+    other_token = request.getfixturevalue(other).token
+
+    with mcp_auth_context(other_token):
+        unclaimed = (await claim())["run"]
+    with mcp_auth_context(worker_session.token):
+        lease_token = (await claim())["run"]["lease_token"]
+    with mcp_auth_context(other_token):
+        with pytest.raises(ValueError, match="unknown run"):
+            await claim(run_id=run_id, lease_token=lease_token)
+        with pytest.raises(ValueError, match="unknown run"):
+            await submit(run_id, lease_token, result="no")
+
+    assert unclaimed is None
+    assert stored(db_session, run_id).worker_user_id == worker_session.user_id
 
 
 @pytest.mark.asyncio
@@ -261,7 +299,7 @@ async def test_renewing_past_the_hold_cap_is_refused_and_fails_the_run(
 
 @pytest.mark.asyncio
 async def test_the_hold_cap_counts_from_the_runs_first_claim(
-    db_session, regular_user, worker_session, admin_session
+    db_session, regular_user, worker_session, second_worker_session
 ):
     run_id = submit_run(db_session, regular_user)
 
@@ -271,7 +309,7 @@ async def test_the_hold_cap_counts_from_the_runs_first_claim(
     first_claim = stored(db_session, run_id).started_at
     expire_lease(db_session, run_id)
     work.sweep_worker_runs()
-    with mcp_auth_context(admin_session.token):
+    with mcp_auth_context(second_worker_session.token):
         await claim()
 
     assert stored(db_session, run_id).started_at == first_claim
@@ -379,7 +417,7 @@ async def test_cancelling_a_lapsed_run_says_a_worker_held_it(
 
 @pytest.mark.asyncio
 async def test_a_lapsed_lease_lets_another_worker_claim(
-    db_session, regular_user, worker_session, admin_session
+    db_session, regular_user, worker_session, second_worker_session
 ):
     run_id = submit_run(db_session, regular_user)
 
@@ -387,7 +425,7 @@ async def test_a_lapsed_lease_lets_another_worker_claim(
         stale = (await claim(worker="a"))["run"]
     expire_lease(db_session, run_id)
     work.sweep_worker_runs()
-    with mcp_auth_context(admin_session.token):
+    with mcp_auth_context(second_worker_session.token):
         fresh = (await claim(worker="b"))["run"]
         done = await submit(run_id, fresh["lease_token"], result="no")
     with mcp_auth_context(worker_session.token):

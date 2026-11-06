@@ -105,11 +105,11 @@ class AgentRun(Base):
     agent: Mapped[str | None] = mapped_column(Text)
     spec: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     # Where the run executes: EXECUTOR_SERVER (the agents worker) or EXECUTOR_WORKERS
-    # (anyone with the agents:work scope claims it); a placement fallback moves it.
+    # (its owner's agents:work credentials claim it); a placement fallback moves it.
     executor: Mapped[str] = mapped_column(
         String(64), nullable=False, default=EXECUTOR_SERVER, server_default=EXECUTOR_SERVER
     )
-    # Who holds (or last held) the run's worker lease; the run stays its owner's.
+    # Who holds (or last held) the run's worker lease: always the run's owner.
     worker_user_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("users.id", ondelete="SET NULL")
     )

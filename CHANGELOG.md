@@ -22,6 +22,14 @@ a new, empty `## Unreleased` above it.
 
 ## Unreleased
 
+### Changes
+
+- Workers only see their own user's runs: `agent_work_claim` hands an
+  `agents:work` credential only runs its user owns (triggered and scheduled
+  runs belong to the trigger's or schedule's owner), and renewing or
+  submitting another user's run is refused as an unknown run. Admins get no
+  exception.
+
 ## v0.4.9 (2026-11-06)
 
 ### Changes

@@ -104,7 +104,7 @@ SCOPE_PROJECTS_WRITE = "projects:write"
 # AI
 SCOPE_CLAUDE_AI = "claudeai"
 SCOPE_AGENTS = "agents"  # define and run your own agents
-SCOPE_AGENTS_WORK = "agents:work"  # claim and answer anyone's runs placed on workers
+SCOPE_AGENTS_WORK = "agents:work"  # claim and answer your own runs placed on workers
 
 # ---------------------------------------------------------------------------
 # Metadata for UI display — grouped by category.
@@ -330,7 +330,7 @@ VALID_SCOPES: list[ScopeInfo] = [
     {
         "value": SCOPE_AGENTS_WORK,
         "label": "Agent worker",
-        "description": "Claim and answer any user's agent runs placed on workers",
+        "description": "Claim and answer your own agent runs placed on workers",
         "category": "ai",
     },
 ]
