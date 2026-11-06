@@ -2,17 +2,19 @@
 
 import logging
 from datetime import datetime, timezone
+from itertools import batched
 from typing import Any, cast
 
-from memory.common import qdrant
-from memory.common.celery_app import app
+from memory.common import qdrant, settings
+from memory.common.celery_app import SYNC_GOOGLE_DOC, SYNC_GOOGLE_FOLDER, app
 from memory.common.db.connection import make_session
-from memory.common.db.models import GoogleDoc
+from memory.common.db.models import GoogleDoc, JobStatus
 from memory.common.db.models.sources import GoogleAccount, GoogleFolder
 from memory.parsers.google_drive import (
     GoogleDriveClient,
     GoogleCredentials,
     GoogleFileData,
+    parse_google_date,
     refresh_credentials,
     _get_oauth_config,
 )
@@ -21,15 +23,13 @@ from memory.common.content_processing import (
     create_task_result,
     process_content_item,
 )
-from memory.common.jobs import tracked_task
+from memory.common.jobs import dispatch_job, get_job_by_external_id, killed_its_worker, tracked_task
 from memory.common.people import link_people
 
 logger = logging.getLogger(__name__)
 
-# Task name constants
-GOOGLE_ROOT = "memory.workers.tasks.google_drive"
-SYNC_GOOGLE_FOLDER = f"{GOOGLE_ROOT}.sync_google_folder"
-SYNC_GOOGLE_DOC = f"{GOOGLE_ROOT}.sync_google_doc"
+FOLDER_MIME = "application/vnd.google-apps.folder"
+DOC_SYNC_JOB = "sync_google_doc"
 
 
 def _build_credentials(account: GoogleAccount, session) -> GoogleCredentials:
@@ -40,37 +40,6 @@ def _build_credentials(account: GoogleAccount, session) -> GoogleCredentials:
         refresh_token=credentials.refresh_token,
         token_expires_at=credentials.expiry,
         scopes=list(credentials.scopes or []),
-    )
-
-
-def _serialize_file_data(data: GoogleFileData) -> dict[str, Any]:
-    """Serialize GoogleFileData for Celery task passing."""
-    return {
-        **data,
-        "modified_at": data["modified_at"].isoformat() if data["modified_at"] else None,
-        "created_at": data["created_at"].isoformat() if data["created_at"] else None,
-    }
-
-
-def _deserialize_file_data(data: dict[str, Any]) -> GoogleFileData:
-    """Deserialize file data from Celery task."""
-    from memory.parsers.google_drive import parse_google_date
-
-    return GoogleFileData(
-        file_id=data["file_id"],
-        title=data["title"],
-        mime_type=data["mime_type"],
-        original_mime_type=data["original_mime_type"],
-        folder_path=data["folder_path"],
-        owner=data["owner"],
-        last_modified_by=data["last_modified_by"],
-        modified_at=parse_google_date(data.get("modified_at")),
-        created_at=parse_google_date(data.get("created_at")),
-        content=data["content"],
-        content_hash=data["content_hash"],
-        size=data["size"],
-        word_count=data["word_count"],
-        shared_with=data.get("shared_with", []),
     )
 
 
@@ -174,35 +143,46 @@ def _update_existing_doc(
     return process_content_item(existing, session)
 
 
+def drive_client(session: Any, credentials: GoogleCredentials) -> GoogleDriveClient:
+    client_id, client_secret, token_uri = _get_oauth_config(session)
+    return GoogleDriveClient(
+        credentials,
+        client_id=client_id,
+        client_secret=client_secret,
+        token_uri=token_uri,
+    )
+
+
 @app.task(name=SYNC_GOOGLE_DOC)
 @tracked_task
 def sync_google_doc(
     folder_id: int,
-    file_data_serialized: dict[str, Any],
+    file_metadata: dict[str, Any],
+    folder_path: str | None,
 ) -> dict[str, Any]:
-    """Sync a single Google Drive document."""
-    file_data = _deserialize_file_data(file_data_serialized)
-    logger.info(f"Syncing Google Doc: {file_data['title']}")
-
+    """Download one Drive file, as listed by its folder's sync, and store it."""
     with make_session() as session:
         folder = session.get(GoogleFolder, folder_id)
-        if not folder:
+        if not folder or not folder.account:
             return {"status": "error", "error": "Folder not found"}
 
-        # Check for existing document by Google file ID
+        client = drive_client(session, _build_credentials(folder.account, session))
+        # A large download outlasts Postgres' idle_in_transaction_session_timeout.
+        session.commit()
+        file_data = client.fetch_file(file_metadata, folder_path)
+        if not file_data:
+            return {"status": "skipped", "error": "No text could be extracted"}
+
         existing = (
             session.query(GoogleDoc)
             .filter(GoogleDoc.google_file_id == file_data["file_id"])
             .first()
         )
-
         if existing:
             return _update_existing_doc(session, existing, folder, file_data)
 
-        # Create new document
         google_doc = _create_google_doc(folder, file_data)
 
-        # Link people who have access to this doc (shared_with + owner)
         # LIMITATION: Person associations are only set on document creation.
         # Users added to document permissions after initial sync won't be linked,
         # meaning person-filtered searches may miss content they should see.
@@ -215,10 +195,68 @@ def sync_google_doc(
         return process_content_item(google_doc, session)
 
 
+def stored_versions(session: Any, file_ids: list[str]) -> dict[str, datetime | None]:
+    """google_modified_at of the stored docs among file_ids."""
+    return {
+        file_id: modified
+        for batch in batched(file_ids, 1000)
+        for file_id, modified in session.query(GoogleDoc.google_file_id, GoogleDoc.google_modified_at)
+        .filter(GoogleDoc.google_file_id.in_(batch))
+        .all()
+    }
+
+
+def is_stored(stored: dict[str, datetime | None], meta: dict[str, Any]) -> bool:
+    stored_at = stored.get(meta["id"])
+    listed_at = parse_google_date(meta.get("modifiedTime"))
+    return bool(stored_at and listed_at and listed_at <= stored_at)
+
+
+def is_too_large(meta: dict[str, Any]) -> bool:
+    # Google-native files list no size; Drive caps their exports itself.
+    return int(meta.get("size") or 0) > settings.GOOGLE_DRIVE_MAX_FILE_BYTES
+
+
+def queue_doc_sync(
+    session: Any, folder_id: int, meta: dict[str, Any], folder_path: str | None, force_full: bool
+) -> bool:
+    """Queue a sync of this version of the file, unless one is queued, done, or keeps killing its worker.
+
+    A failed sync is queued again, so the next folder sync redoes it.
+    """
+    version = {"id": meta["id"], "modifiedTime": meta.get("modifiedTime")}
+    external_id = f"gdrive:{folder_id}:{version['id']}:{version['modifiedTime']}"
+    previous = get_job_by_external_id(session, external_id, DOC_SYNC_JOB)
+    previous_status = previous.status if previous else None
+    if previous_status in (JobStatus.PENDING.value, JobStatus.PROCESSING.value):
+        return False
+    if previous_status == JobStatus.COMPLETE.value and not force_full:
+        return False
+    if previous_status == JobStatus.FAILED.value and killed_its_worker(
+        session, DOC_SYNC_JOB, folder_id=folder_id, file_metadata=version
+    ):
+        logger.warning("Not queueing Drive file %s: it keeps killing its worker", version["id"])
+        return False
+
+    dispatch_job(
+        session,
+        job_type=DOC_SYNC_JOB,
+        task_name=SYNC_GOOGLE_DOC,
+        task_kwargs={"folder_id": folder_id, "file_metadata": meta, "folder_path": folder_path},
+        # A forced resync redoes completed versions, which their external_id would refuse.
+        external_id=None if force_full else external_id,
+    )
+    return True
+
+
 @app.task(name=SYNC_GOOGLE_FOLDER)
 @tracked_task
 def sync_google_folder(folder_id: int, force_full: bool = False) -> dict[str, Any]:
-    """Sync all documents in a Google Drive folder."""
+    """List a Drive folder and queue a sync_google_doc per file not stored at its listed version.
+
+    Each sync lists the whole folder and compares it with what is stored, so a
+    file whose doc sync failed is queued again by the next one.
+    """
     logger.info(f"Syncing Google folder {folder_id}")
 
     with make_session() as session:
@@ -231,9 +269,7 @@ def sync_google_folder(folder_id: int, force_full: bool = False) -> dict[str, An
             return {"status": "error", "error": "Account not found or inactive"}
 
         now = datetime.now(timezone.utc)
-        last_sync = cast(datetime | None, folder.last_sync_at)
 
-        # Build credentials (refresh if needed)
         try:
             credentials = _build_credentials(account, session)
         except Exception as e:
@@ -243,93 +279,42 @@ def sync_google_folder(folder_id: int, force_full: bool = False) -> dict[str, An
             session.commit()
             return {"status": "error", "error": f"Token refresh failed: {e}"}
 
-        # Determine sync window
-        since = None if force_full else last_sync
-
-        docs_synced = 0
-        task_ids = []
-        is_single_doc = False
-
         try:
-            # Get OAuth config for client
-            client_id, client_secret, token_uri = _get_oauth_config(session)
-            client = GoogleDriveClient(
-                credentials,
-                client_id=client_id,
-                client_secret=client_secret,
-                token_uri=token_uri,
-            )
-            # Listing and fetching a large folder outlasts Postgres'
-            # idle_in_transaction_session_timeout, which would kill the
-            # connection under an open transaction.
+            client = drive_client(session, credentials)
+            # Listing a large folder outlasts Postgres' idle_in_transaction_session_timeout,
+            # which would kill the connection under an open transaction.
             session.commit()
 
             google_id = cast(str, folder.folder_id)
-
-            # Check if this is a single document or a folder
             file_metadata = client.get_file_metadata(google_id)
-            is_folder = file_metadata.get("mimeType") == "application/vnd.google-apps.folder"
-            is_single_doc = not is_folder
-
-            if is_folder:
-                # It's a folder - list and sync all files inside
-                # Get excluded folder IDs
-                exclude_ids = set(cast(list[str], folder.exclude_folder_ids) or [])
-                if exclude_ids:
-                    logger.info(f"Excluding {len(exclude_ids)} folder(s) from sync")
-
-                for file_meta, file_folder_path in client.list_files_in_folder(
-                    google_id,
-                    recursive=cast(bool, folder.recursive),
-                    since=since,
-                    exclude_folder_ids=exclude_ids,
-                ):
-                    try:
-                        file_data = client.fetch_file(file_meta, file_folder_path)
-                        if file_data:
-                            serialized = _serialize_file_data(file_data)
-                            task = sync_google_doc.delay(folder.id, serialized)  # type: ignore[attr-defined]
-                            task_ids.append(task.id)
-                            docs_synced += 1
-                    except Exception as e:
-                        logger.error(f"Error fetching file {file_meta.get('id')}: {e}")
-                        continue
+            is_single_doc = file_metadata.get("mimeType") != FOLDER_MIME
+            if is_single_doc:
+                files = [(file_metadata, client.get_folder_path(google_id))]
             else:
-                # It's a single document - sync it directly
-                logger.info(f"Syncing single document: {file_metadata.get('name')}")
-                folder_path = client.get_folder_path(google_id)
+                files = list(
+                    client.list_files_in_folder(
+                        google_id,
+                        recursive=cast(bool, folder.recursive),
+                        exclude_folder_ids=set(cast(list[str], folder.exclude_folder_ids) or []),
+                    )
+                )
 
-                # Check if we need to sync based on modification time
-                if since and file_metadata.get("modifiedTime"):
-                    from memory.parsers.google_drive import parse_google_date
-                    modified_at = parse_google_date(file_metadata.get("modifiedTime"))
-                    if modified_at and modified_at <= since:
-                        logger.info("Document not modified since last sync, skipping")
-                        folder.last_sync_at = now
-                        folder.record_sync(None)
-                        session.commit()
-                        return {
-                            "status": "completed",
-                            "sync_type": "incremental",
-                            "folder_id": folder_id,
-                            "folder_name": folder.folder_name,
-                            "docs_synced": 0,
-                            "task_ids": [],
-                            "is_single_doc": True,
-                        }
+            too_large = [meta["id"] for meta, _ in files if is_too_large(meta)]
+            if too_large:
+                logger.warning(
+                    "Skipping %d Drive file(s) over %d bytes in folder %s: %s",
+                    len(too_large),
+                    settings.GOOGLE_DRIVE_MAX_FILE_BYTES,
+                    folder.id,
+                    too_large,
+                )
+            stored = {} if force_full else stored_versions(session, [meta["id"] for meta, _ in files])
+            docs_synced = sum(
+                queue_doc_sync(session, folder.id, meta, path, force_full)
+                for meta, path in files
+                if not is_too_large(meta) and not is_stored(stored, meta)
+            )
 
-                try:
-                    file_data = client.fetch_file(file_metadata, folder_path)
-                    if file_data:
-                        serialized = _serialize_file_data(file_data)
-                        task = sync_google_doc.delay(folder.id, serialized)  # type: ignore[attr-defined]
-                        task_ids.append(task.id)
-                        docs_synced = 1
-                except Exception as e:
-                    logger.error(f"Error fetching document {file_metadata.get('id')}: {e}")
-                    raise
-
-            # Update sync timestamps
             folder.last_sync_at = now
             folder.record_sync(None)
             account.last_sync_at = now
@@ -350,6 +335,6 @@ def sync_google_folder(folder_id: int, force_full: bool = False) -> dict[str, An
             "folder_id": folder_id,
             "folder_name": folder.folder_name,
             "docs_synced": docs_synced,
-            "task_ids": task_ids,
+            "too_large": len(too_large),
             "is_single_doc": is_single_doc,
         }

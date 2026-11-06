@@ -551,6 +551,8 @@ GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
 GOOGLE_REDIRECT_URI = os.getenv(
     "GOOGLE_REDIRECT_URI", f"{SERVER_URL}/auth/callback/google"
 )
+# Drive files listed as larger than this are not downloaded: one PDF is held in memory while its text is extracted.
+GOOGLE_DRIVE_MAX_FILE_BYTES = int(os.getenv("GOOGLE_DRIVE_MAX_FILE_BYTES", 50 * 1024 * 1024))
 
 # Orphan verification settings
 VERIFICATION_BATCH_SIZE = int(os.getenv("VERIFICATION_BATCH_SIZE", 100))

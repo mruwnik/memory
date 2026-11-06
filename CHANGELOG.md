@@ -69,6 +69,13 @@ a new, empty `## Unreleased` above it.
   mail's body no longer decodes its attachments. PDF pages are rendered no
   larger than the 2 MP an embedding uses.
 - Word documents are text-searchable page by page, as PDFs already were.
+- Large Google Drive folders finish syncing: the folder sync only lists files
+  and queues one job per new or changed file, which downloads and stores it, so
+  a first sync no longer hits the 1-hour task limit and starts over. A file
+  whose job failed is queued again by the next folder sync, and files that
+  failed to download before (including during an earlier interrupted sync) are
+  picked up.
+- Drive files larger than 50MB are skipped instead of being downloaded.
 
 ### Required env vars
 
@@ -123,6 +130,18 @@ None.
   attachment can take when embedded.
 - The ingest-hub container's memory limit rises from 512 MiB to 1 GiB: beat,
   the Discord collector and the Beeper collector together sat at its limit.
+- New optional setting `GOOGLE_DRIVE_MAX_FILE_BYTES` (default 52428800, 50MB):
+  Drive files listed as larger are not downloaded. Google Docs, Sheets and
+  Slides list no size and are not limited by it.
+- Each folder sync now lists the whole folder (metadata only, up to 1000 files
+  per Drive call) rather than only files modified since the last sync, and
+  compares it with the stored docs. Each queued file shows up as a
+  `sync_google_doc` job; a file whose job kills its worker 3 times is not
+  queued again until it changes. Folder `last_sync_at` no longer controls
+  which files are fetched.
+- `sync_google_doc` messages queued by the previous version have a different
+  signature and fail after the update; the next folder sync queues those files
+  again.
 
 ### Migrations
 

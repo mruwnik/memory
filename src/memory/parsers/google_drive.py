@@ -143,8 +143,7 @@ class GoogleDriveClient:
         self,
         folder_id: str,
         recursive: bool = True,
-        since: datetime | None = None,
-        page_size: int = 100,
+        page_size: int = 1000,
         exclude_folder_ids: set[str] | None = None,
         _current_path: str | None = None,
         _depth: int = 0,
@@ -154,7 +153,6 @@ class GoogleDriveClient:
         Args:
             folder_id: The Google Drive folder ID to list
             recursive: Whether to recurse into subfolders
-            since: Only return files modified after this time
             page_size: Number of files per API page
             exclude_folder_ids: Set of folder IDs to skip during recursive traversal
             _current_path: Internal param tracking the current folder path
@@ -188,9 +186,6 @@ class GoogleDriveClient:
             f"({mime_conditions} or mimeType='application/vnd.google-apps.folder')",
         ]
 
-        if since:
-            query_parts.append(f"modifiedTime > '{since.isoformat()}'")
-
         query = " and ".join(query_parts)
 
         page_token = None
@@ -217,7 +212,6 @@ class GoogleDriveClient:
                         yield from self.list_files_in_folder(
                             file["id"],
                             recursive=True,
-                            since=since,
                             exclude_folder_ids=exclude_folder_ids,
                             _current_path=subfolder_path,
                             _depth=_depth + 1,
@@ -250,7 +244,7 @@ class GoogleDriveClient:
 
         done = False
         while not done:
-            _, done = downloader.next_chunk()
+            _, done = downloader.next_chunk(num_retries=3)
 
         return buffer.getvalue()
 
