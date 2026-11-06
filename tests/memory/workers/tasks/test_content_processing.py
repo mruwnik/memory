@@ -765,7 +765,8 @@ def test_process_content_item(
 ):
     queued = []
     monkeypatch.setattr(
-        "memory.common.content_processing.queue_trigger_match", queued.append
+        "memory.common.content_processing.queue_trigger_match",
+        lambda item_id, changes=None: queued.append(item_id),
     )
     # Create a fresh mail message for each test to avoid fixture contamination
     mail_message = MailMessage(

@@ -392,7 +392,9 @@ def create_task_result(
     }
 
 
-def process_content_item(item: SourceItem, session) -> dict[str, Any]:
+def process_content_item(
+    item: SourceItem, session, changes: list[str] | None = None
+) -> dict[str, Any]:
     """
     Execute complete content processing workflow.
 
@@ -406,7 +408,7 @@ def process_content_item(item: SourceItem, session) -> dict[str, Any]:
     Args:
         item: SourceItem to process
         session: Database session for persistence
-        tags: Optional tags to associate with the item (currently unused)
+        changes: What changed, for trigger matching; an empty list queues none
 
     Returns:
         Task result dictionary with processing status and metadata
@@ -431,7 +433,8 @@ def process_content_item(item: SourceItem, session) -> dict[str, Any]:
         status = "skipped" if item.embed_status == "SKIPPED" else "failed"
         # Triggers match what was stored, embedded or not: "@bot hi" is too short to embed.
         session.commit()
-        queue_trigger_match(item.id)
+        if changes != []:
+            queue_trigger_match(item.id, changes=changes)
         return create_task_result(item, status, content_length=getattr(item, "size", 0))
 
     # Commit DB changes first to ensure chunks are persisted.
@@ -458,7 +461,8 @@ def process_content_item(item: SourceItem, session) -> dict[str, Any]:
         item.embed_failed(error_name(e))
         logger.exception("Failed to push embeddings to Qdrant")
     session.commit()
-    queue_trigger_match(item.id)
+    if changes != []:
+        queue_trigger_match(item.id, changes=changes)
 
     return create_task_result(item, status, content_length=getattr(item, "size", 0))
 

@@ -131,6 +131,7 @@ BACKUP_ALL = f"{BACKUP_ROOT}.backup_all"
 SYNC_GITHUB_REPO = f"{GITHUB_ROOT}.sync_github_repo"
 SYNC_GITHUB_ITEM = f"{GITHUB_ROOT}.sync_github_item"
 SYNC_GITHUB_PROJECTS = f"{GITHUB_ROOT}.sync_github_projects"
+REFETCH_GITHUB_ITEM = f"{GITHUB_ROOT}.refetch_github_item"
 
 # People tasks
 SYNC_PERSON_TIDBIT = f"{PEOPLE_ROOT}.sync_person_tidbit"

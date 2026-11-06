@@ -94,6 +94,9 @@ WHITELIST = {
     # webhook secret (HMAC of the body or a bearer token), checked inside
     # transcript_ingest.ingest_transcript; they have no session.
     "/transcripts/ingest/",
+    # GitHub webhooks, signed per account with its webhook secret and checked
+    # inside github_webhooks.handle_delivery.
+    "/github/webhook/",
     # Forgotten-password request and confirm: the caller is by definition
     # logged out; confirm is authorized by the signed reset token.
     "/auth/password-reset",

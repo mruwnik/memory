@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSources, GithubAccount, GithubProject, AvailableRepo, AvailableProject } from '@/hooks/useSources'
 import { TagsInput, PauseButton, ScheduleButton, SyncScheduleFields, StatusBadge, SyncButton, SyncFailingBadge, SyncFailure, formatRelativeTime } from '../shared'
-import { Badge, Button, Checkbox, ConfirmButton, EmptyState, ErrorState, Field, FormActions, Input, List, LoadingState, Modal, Notice, Row, Section, SubList, cx, useActionNotice, Fieldset, NewTabLink } from '@/components/shared/ui'
+import { Badge, Button, Checkbox, ConfirmButton, CopyButton, DetailList, EmptyState, ErrorState, Field, FormActions, Input, List, LoadingState, Modal, Notice, Row, Section, SubList, cx, useActionNotice, Fieldset, NewTabLink } from '@/components/shared/ui'
 import { useDebounce } from '@/hooks/useDebounce'
 import { useSourcesContext } from '../context'
 import { llmKeyLabel } from '../LLMKeyField'
@@ -19,6 +19,7 @@ export const GitHubPanel = () => {
   const [error, setError] = useState<string | null>(null)
   const [addingRepoTo, setAddingRepoTo] = useState<number | null>(null)
   const [addingProjectTo, setAddingProjectTo] = useState<number | null>(null)
+  const [webhookFor, setWebhookFor] = useState<GithubAccount | null>(null)
   const { run, notice } = useActionNotice()
 
   const loadData = useCallback(async () => {
@@ -114,7 +115,9 @@ export const GitHubPanel = () => {
                   account.auth_type === 'pat' ? 'Personal access token' : 'GitHub App',
                   account.verified_login ? `verified as ${account.verified_login}` : 'unverified',
                   `LLM: ${llmKeyLabel(account.llm_key)}`,
+                  account.webhook_secret_hint ? 'webhook set' : 'no webhook',
                 ]}
+                actions={<Button size="sm" onClick={() => setWebhookFor(account)}>Webhook</Button>}
               >
                 <SubList
                   title={`Repositories (${account.repos.length})`}
@@ -195,6 +198,10 @@ export const GitHubPanel = () => {
         )
       })()}
 
+      {webhookFor && (
+        <WebhookModal account={webhookFor} onClose={() => { setWebhookFor(null); loadData() }} />
+      )}
+
       {addingProjectTo && (
         <GitHubProjectForm
           accountId={addingProjectTo}
@@ -204,6 +211,59 @@ export const GitHubPanel = () => {
         />
       )}
     </Section>
+  )
+}
+
+const WEBHOOK_EVENTS = 'Pull requests, Pull request reviews, Pull request review comments, Issue comments, Issues, Check runs, Check suites, Statuses'
+
+const WebhookModal = ({ account, onClose }: { account: GithubAccount; onClose: () => void }) => {
+  const { generateGithubWebhookSecret, deleteGithubWebhookSecret } = useSources()
+  const [hint, setHint] = useState(account.webhook_secret_hint)
+  const [secret, setSecret] = useState<string | null>(null)
+  const { run, notice } = useActionNotice()
+
+  const generate = () => run(async () => {
+    const result = await generateGithubWebhookSecret(account.id)
+    setSecret(result.secret)
+    setHint(result.webhook_secret_hint)
+  })
+
+  const remove = () => run(async () => {
+    await deleteGithubWebhookSecret(account.id)
+    setSecret(null)
+    setHint(null)
+  })
+
+  return (
+    <Modal title={`Webhook for ${account.name}`} onClose={onClose}>
+      <div className="space-y-4">
+        {notice}
+        <p className="text-sm text-slate-600">
+          Add a webhook to each tracked repo (or its org) with this payload URL, content type
+          {' '}<code>application/json</code> and the secret, sending: {WEBHOOK_EVENTS}.
+          {' '}Changes then arrive within seconds; polling still fills any gaps.
+        </p>
+        <DetailList items={[
+          ['Payload URL', <span className="flex items-center gap-2"><code className="break-all">{account.webhook_url}</code><CopyButton text={account.webhook_url} /></span>],
+          ['Secret', hint ? `Set, ending in …${hint}` : 'Not set (deliveries are rejected)'],
+        ]} />
+        {secret && (
+          <Notice tone="success">
+            <p>Copy the secret now. It won't be shown again.</p>
+            <span className="flex items-center gap-2 mt-2">
+              <code className="break-all">{secret}</code><CopyButton text={secret} />
+            </span>
+          </Notice>
+        )}
+        <FormActions>
+          {hint && <ConfirmButton size="md" confirm="Remove the secret? Webhook deliveries will be rejected." confirmLabel="Remove" onConfirm={remove}>Remove secret</ConfirmButton>}
+          {hint
+            ? <ConfirmButton variant="secondary" size="md" confirm="Rotate the secret? Deliveries will be rejected until the hook uses the new one." confirmLabel="Rotate" onConfirm={generate}>Rotate secret</ConfirmButton>
+            : <Button variant="primary" onClick={generate}>Generate secret</Button>}
+          <Button onClick={onClose}>Done</Button>
+        </FormActions>
+      </div>
+    </Modal>
   )
 }
 

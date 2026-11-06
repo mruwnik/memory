@@ -156,6 +156,9 @@ class GithubIssueData(TypedDict):
     content_hash: str
     # PR-specific extended data (None for issues)
     pr_data: GithubPRDataDict | None
+    # PRs only: the head commit, and check name -> conclusion (else status) on it.
+    head_sha: NotRequired[str | None]
+    checks: NotRequired[dict[str, str] | None]
 
 
 def parse_github_date(date_str: str | None) -> datetime | None:

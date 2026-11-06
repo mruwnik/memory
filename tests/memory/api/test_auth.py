@@ -59,6 +59,8 @@ from memory.common.scopes import SCOPE_AGENTS
         # Transcript push ingest authenticates per source by HMAC/bearer
         # secret inside the endpoint.
         "/transcripts/ingest/7",
+        # GitHub webhooks are HMAC-signed per account.
+        "/github/webhook/3",
         # /register and /revoke are RFC 7591 / RFC 7009 endpoints exposed
         # at root by the MCP SDK. DCR clients have no credentials at
         # registration time by definition, so the middleware bypass is
@@ -103,6 +105,7 @@ def test_is_whitelisted_path_lets_real_routes_through(path):
         "/auth/password-resets",
         "/teams/1",
         "/calendar-accounts",
+        "/github/accounts/3/webhook-secret",
         "/google-drive/config",  # admin-gated; must NOT be whitelisted
         "/api/polls",  # the public list endpoint is /api/polls/respond, /api/polls itself is auth'd
         # Regression: ``/admin/statics/*`` was previously whitelisted for a

@@ -196,6 +196,8 @@ export interface GithubAccount {
   auth_type: 'pat' | 'app'
   has_access_token: boolean
   has_private_key: boolean
+  webhook_secret_hint: string | null
+  webhook_url: string
   app_id: number | null
   installation_id: number | null
   active: boolean
@@ -505,6 +507,12 @@ export interface TranscriptAccountUpdate {
   llm_key?: LLMKeyChoice
 }
 
+export interface GithubWebhookSecret {
+  secret: string
+  webhook_secret_hint: string
+  webhook_url: string
+}
+
 export interface TranscriptWebhookSecret {
   secret: string
   webhook_secret_hint: string
@@ -708,6 +716,18 @@ export const useSources = () => {
   const validateGithubAccount = useCallback(async (id: number): Promise<{ status: string; message: string }> => {
     const response = await apiCall(`/github/accounts/${id}/validate`, { method: 'POST' })
     if (!response.ok) throw await apiError(response, 'Failed to validate GitHub account')
+    return response.json()
+  }, [apiCall])
+
+  const generateGithubWebhookSecret = useCallback(async (id: number): Promise<GithubWebhookSecret> => {
+    const response = await apiCall(`/github/accounts/${id}/webhook-secret`, { method: 'POST' })
+    if (!response.ok) throw await apiError(response, 'Failed to generate webhook secret')
+    return response.json()
+  }, [apiCall])
+
+  const deleteGithubWebhookSecret = useCallback(async (id: number): Promise<GithubAccount> => {
+    const response = await apiCall(`/github/accounts/${id}/webhook-secret`, { method: 'DELETE' })
+    if (!response.ok) throw await apiError(response, 'Failed to remove webhook secret')
     return response.json()
   }, [apiCall])
 
@@ -1062,6 +1082,8 @@ export const useSources = () => {
     updateGithubAccount,
     deleteGithubAccount,
     validateGithubAccount,
+    generateGithubWebhookSecret,
+    deleteGithubWebhookSecret,
     listAvailableRepos,
     // GitHub Repos
     addGithubRepo,

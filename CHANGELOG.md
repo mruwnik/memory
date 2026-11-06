@@ -36,15 +36,28 @@ a new, empty `## Unreleased` above it.
 - `on_changes` limits an on_edit trigger to edits reporting given changes (edited, commits, comments, review, checks, state); a triggered run's `trigger_ref.changes` lists each item's changes, "new" for a first match.
 - Beeper messages match trigger `channel_ids` (their beeper_chat_id) and `exclude_authors` (sender id or name).
 - Posts by connected Slack apps' bot users never trigger agents, closing a loop for agents that post with a bot token.
+- GitHub webhooks: `POST /github/webhook/<account id>`, signed with a per-account secret generated under **Sources → GitHub → Webhook**. Each event refetches the issue or PR it names (debounced ~15s), and check/status events route to the PRs whose head is that commit. See README § GitHub webhooks.
+- GitHub PRs store their head commit and a summary of their checks. A GitHub item's trigger claim version now covers head commit, state, merge, checks and reviews (bare approvals included) as well as title and content, so each of those changes can fire an `on_edit` trigger.
+- GitHub syncs (webhook and polling) tell trigger matching what changed: `new`, `edited`, `commits`, `comments`, `review`, `checks`, `state`. Comments and reviews by the account's own login are not changes, and a sync with no such change queues no trigger matching.
+
+### Manual steps
+
+- To use webhooks: generate the secret on each GitHub account and add the hook on GitHub (payload URL, `application/json`, the secret; events Pull requests, Pull request reviews, Pull request review comments, Issue comments, Issues, Check runs, Check suites, Statuses).
+- Behind a reverse proxy, let `/github/webhook/` through to the api without a login.
 
 ### Other changes for operators
 
 - An existing trigger whose template contains a `{word}` that isn't a placeholder is refused the next time it is saved; its runs keep rendering it literally.
 - Slack bot users are recorded when a user next connects Slack; until each user reconnects, their app's bot posts aren't loop-protected and `mentions_me` doesn't see Slack mentions of it.
+- New endpoints: `POST`/`DELETE /github/accounts/{id}/webhook-secret` (the POST response is the only place the secret appears).
+- New Celery task `memory.workers.tasks.github.refetch_github_item` on the existing `github` queue.
+- Existing GitHub items' claim versions change shape (no backfill), but GitHub syncs only queue trigger matching when they report a change, and an item's first recorded head SHA or checks is not one. So `on_edit` triggers don't fire once per open PR after the deploy; an item's next real change fires once, as it should.
+- PR syncs (polling too) now also fetch the head commit's check rollup in the same GraphQL query.
 
 ### Migrations
 
 - `20261206_slack_bot_user`: adds nullable `slack_user_credentials.bot_user_id`. Fast.
+- `20261206_github_webhooks`: adds `github_accounts.webhook_secret_encrypted`, `github_repos.last_event_at`, `github_item.head_sha` and `github_item.checks`, and a partial index on `github_item (repo_id, head_sha)`. Nullable columns and a partial index over no rows yet: fast.
 
 ## v0.4.9 (2026-11-06)
 

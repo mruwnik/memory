@@ -11,6 +11,7 @@ happens on the agents queue, in memory.agents.fire.
 import email.utils
 import functools
 import hashlib
+import json
 import logging
 import re
 import signal
@@ -268,13 +269,31 @@ def item_text(item: SourceItem) -> str:
     return "\n".join(p for p in (item_title(item), item_body(item)) if p)
 
 
+def github_version_part(item: GithubItem) -> str:
+    reviews = item.pr_data.reviews if item.pr_data else None
+    return json.dumps(
+        {
+            "head_sha": item.head_sha,
+            "state": item.state,
+            "merged_at": item.merged_at.isoformat() if item.merged_at else None,
+            "checks": item.checks,
+            "reviews": sorted([r.get("id"), r.get("state")] for r in reviews or []),
+        },
+        sort_keys=True,
+    )
+
+
 def content_version(item: SourceItem) -> bytes:
     """What an edit changes, read off the item: not every ingester updates sha256 on an edit.
 
     Raw content counts as well as the body, as Slack edits leave resolved_content
     as it was. The migration that added claim versions backfills this in SQL.
+    GitHub items also count what their sync reports as changes beyond the
+    content (comments are in it): head commit, state, checks and reviews.
     """
     parts = (item_title(item) or "", item.content or "", item_body(item))
+    if isinstance(item, GithubItem):
+        parts += (github_version_part(item),)
     return hashlib.sha256("\x1f".join(parts).encode()).digest()
 
 

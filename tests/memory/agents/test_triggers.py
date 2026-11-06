@@ -32,6 +32,7 @@ from memory.common.db.models import (
     DiscordServer,
     DiscordUser,
     GithubItem,
+    GithubPRData,
     SlackChannel,
     SlackMessage,
     SlackWorkspace,
@@ -396,7 +397,10 @@ def test_a_short_message_mentioning_our_bot_fires(
     db_session, admin_user, client, no_celery_dispatch, monkeypatch, content, fires
 ):
     queued = []
-    monkeypatch.setattr("memory.common.content_processing.queue_trigger_match", queued.append)
+    monkeypatch.setattr(
+        "memory.common.content_processing.queue_trigger_match",
+        lambda item_id, changes=None: queued.append(item_id),
+    )
     trigger = make_trigger(
         db_session,
         make_definition(db_session, admin_user),
@@ -561,6 +565,25 @@ def test_content_versions_follow_what_an_agent_sees():
     assert content_version(post) == content_version(BlogPost(title="T", content="body"))
     assert content_version(post) != content_version(retitled)
     assert content_version(slack) != content_version(slack_edited)
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        {"head_sha": "b"},
+        {"state": "closed"},
+        {"merged_at": datetime(2024, 1, 2, tzinfo=timezone.utc)},
+        {"checks": {"tests": "success"}},
+        {"pr_data": GithubPRData(reviews=[{"id": 1, "state": "approved"}])},
+    ],
+)
+def test_content_version_counts_what_a_github_sync_reports(changed):
+    def pr(**overrides):
+        fields = {"title": "T", "content": "body", "head_sha": "a", "state": "open", "checks": {"tests": "failure"}}
+        return GithubItem(**{**fields, **overrides})
+
+    assert content_version(pr()) == content_version(pr())
+    assert content_version(pr()) != content_version(pr(**changed))
 
 
 @pytest.mark.parametrize("on_edit", [False, True])

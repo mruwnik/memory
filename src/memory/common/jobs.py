@@ -694,7 +694,8 @@ def tracked_task(
                 update_job(actual_job_id, lambda job: job.mark_complete())
                 raise
             except Exception as exc:
-                update_job(actual_job_id, lambda job: job.mark_failed(str(exc)[:500]))
+                error = str(exc)[:500]
+                update_job(actual_job_id, lambda job: job.mark_failed(error))
                 raise
 
             update_job(actual_job_id, lambda job: job.mark_complete(*result_link(result)))

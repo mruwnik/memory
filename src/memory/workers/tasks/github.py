@@ -1,11 +1,15 @@
 """Celery tasks for GitHub issue/PR syncing."""
 
 import logging
+from collections.abc import Collection
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
+import requests
+
 from memory.common.celery_app import (
     app,
+    REFETCH_GITHUB_ITEM,
     SYNC_GITHUB_REPO,
     SYNC_GITHUB_ITEM,
     SYNC_GITHUB_PROJECTS,
@@ -27,17 +31,105 @@ from memory.common.github import (
     GithubProjectData,
     GithubPRDataDict,
     extract_status_priority,
+    parse_github_date,
     serialize_issue_data,
 )
+from memory.common.github.refetch import refetch_started
 from memory.common.content_processing import (
     create_content_hash,
     delete_chunk_vectors,
     create_task_result,
     process_content_item,
+    queue_trigger_match,
 )
 from memory.common.jobs import tracked_task
 
 logger = logging.getLogger(__name__)
+
+# The order item_changes reports changes in.
+CHANGES = ("edited", "commits", "comments", "review", "checks", "state")
+
+
+def account_client(account: GithubAccount) -> GithubClient:
+    return GithubClient(
+        GithubCredentials(
+            auth_type=cast(str, account.auth_type),
+            access_token=cast(str | None, account.access_token),
+            app_id=cast(int | None, account.app_id),
+            installation_id=cast(int | None, account.installation_id),
+            private_key=cast(str | None, account.private_key),
+        )
+    )
+
+
+def own_logins(account: GithubAccount, client: GithubClient) -> set[str]:
+    """Logins the account itself posts as: its comments and reviews are not changes,
+    so an agent answering a PR doesn't trigger itself."""
+    logins = {account.verified_login} if account.verified_login else set()
+    if account.auth_type != "app":
+        return logins
+    try:
+        slug = client.get_app_installation().get("app_slug")
+    except requests.RequestException:
+        logger.warning("could not read the app slug of github account %s", account.id)
+        return logins
+    return logins | {f"{slug}[bot]"} if slug else logins
+
+
+def has_body(existing: GithubItem, body: str) -> bool:
+    """Whether the stored content, as _build_content laid it out, starts with this body."""
+    head = f"# {existing.title}\n\n{body}"
+    content = existing.content or ""
+    return content == head or content.startswith(head + "\n\n\n---\n")
+
+
+def item_changes(
+    existing: GithubItem | None, new: GithubIssueData, logins: Collection[str]
+) -> list[str]:
+    """What a sync of ``new`` changes about ``existing``, as trigger change tags.
+
+    A head SHA or check summary seen for the first time is not a change, so
+    items stored before they were recorded don't all fire on their next sync.
+    """
+    if existing is None:
+        return ["new"]
+
+    own = {login.removesuffix("[bot]") for login in logins}
+
+    def by_others(authors: list[str]) -> bool:
+        return any(a.removesuffix("[bot]") not in own for a in authors)
+
+    since = cast(datetime | None, existing.github_updated_at)
+    comment_authors = [
+        c["author"]
+        for c in new["comments"]
+        if since is None or (parse_github_date(c["created_at"]) or since) > since
+    ]
+    review_authors: list[str] = []
+    pr = new.get("pr_data")
+    if pr and existing.pr_data:
+        known_reviews = {r["id"] for r in existing.pr_data.reviews or []}
+        known_comments = {c["id"] for c in existing.pr_data.review_comments or []}
+        review_authors = [r["user"] for r in pr["reviews"] if r["id"] not in known_reviews]
+        comment_authors += [
+            c["user"] for c in pr["review_comments"] if c["id"] not in known_comments
+        ]
+
+    head_sha, checks = new.get("head_sha"), new.get("checks")
+    changed = {
+        "edited": existing.title != new["title"] or not has_body(existing, new["body"]),
+        "commits": existing.head_sha is not None
+        and head_sha is not None
+        and head_sha != existing.head_sha,
+        "comments": by_others(comment_authors),
+        "review": by_others(review_authors),
+        "checks": existing.checks is not None
+        and checks is not None
+        and checks != existing.checks,
+        "state": (existing.state, existing.merged_at, existing.closed_at)
+        != (new["state"], new["merged_at"], new["closed_at"]),
+    }
+    return [c for c in CHANGES if changed[c]]
 
 
 def close_open_repo_projects(session: Any, repo: GithubRepo) -> int:
@@ -210,6 +302,8 @@ def _create_github_item(
         tags=repo_tags + issue_data["labels"],
         size=len(content.encode("utf-8")),
         mime_type="text/markdown",
+        head_sha=issue_data.get("head_sha"),
+        checks=issue_data.get("checks"),
     )
 
     # Create PR data if this is a PR
@@ -254,10 +348,20 @@ def _update_existing_item(
     issue_data: GithubIssueData,
     milestone_id: int | None = None,
     project_id: int | None = None,
+    changes: list[str] | None = None,
 ) -> dict[str, Any]:
     """Update an existing GithubItem and reindex if content changed."""
+    changes = changes or []
+    existing.head_sha = issue_data.get("head_sha") or existing.head_sha  # type: ignore
+    new_checks = issue_data.get("checks")
+    if new_checks is not None:
+        existing.checks = new_checks  # type: ignore
+
     if not _needs_reindex(existing, issue_data):
-        return create_task_result(existing, "unchanged")
+        session.commit()
+        if changes:
+            queue_trigger_match(existing.id, changes=changes)
+        return create_task_result(existing, "updated" if changes else "unchanged")
 
     logger.debug(
         f"Content changed for {repo.repo_path}#{issue_data['number']}, reindexing"
@@ -336,13 +440,11 @@ def _update_existing_item(
     session.flush()
 
     # Re-embed and push to Qdrant
-    return process_content_item(existing, session)
+    return process_content_item(existing, session, changes=changes)
 
 
 def _deserialize_issue_data(data: dict[str, Any]) -> GithubIssueData:
     """Deserialize issue data from Celery task."""
-    from memory.common.github import parse_github_date
-
     # Reconstruct pr_data if present
     pr_data: GithubPRDataDict | None = None
     if data.get("pr_data"):
@@ -369,6 +471,8 @@ def _deserialize_issue_data(data: dict[str, Any]) -> GithubIssueData:
         project_fields=data.get("project_fields"),
         content_hash=data["content_hash"],
         pr_data=pr_data,
+        head_sha=data.get("head_sha"),
+        checks=data.get("checks"),
     )
 
 
@@ -502,9 +606,53 @@ def _apply_author_person(
 def sync_github_item(
     repo_id: int,
     issue_data_serialized: dict[str, Any],
+    own_logins: list[str] | None = None,
 ) -> dict[str, Any]:
     """Sync a single GitHub issue or PR."""
-    issue_data = _deserialize_issue_data(issue_data_serialized)
+    return sync_item(repo_id, _deserialize_issue_data(issue_data_serialized), own_logins or [])
+
+
+def matches_repo_filters(repo: GithubRepo, data: GithubIssueData) -> bool:
+    """Whether polling would have fetched this item: the state filter, and for issues the labels."""
+    labels = cast(list[str], repo.labels_filter) or []
+    if data["kind"] == "issue" and labels and not set(labels) & set(data["labels"]):
+        return False
+    return repo.state_filter in (None, "", "all", data["state"])
+
+
+@app.task(name=REFETCH_GITHUB_ITEM)
+@tracked_task
+def refetch_github_item(repo_id: int, number: int, kind: str) -> dict[str, Any]:
+    """Fetch and sync the one issue or PR a webhook event named."""
+    refetch_started(repo_id, number)
+    with make_session() as session:
+        repo = session.get(GithubRepo, repo_id)
+        account = repo.account if repo else None
+        if not repo or not repo.active or not account or not account.active:
+            return {"status": "error", "error": "Repo not found or inactive"}
+        if not (repo.track_prs if kind == "pr" else repo.track_issues):
+            return {"status": "skipped", "repo_id": repo_id, "number": number}
+
+        client = account_client(account)
+        owner, name = cast(str, repo.owner), cast(str, repo.name)
+        fetch = client.fetch_pr if kind == "pr" else client.fetch_issue
+        data = fetch(owner, name, number)
+        if data is None:
+            return {"status": "not_found", "repo_id": repo_id, "number": number}
+        if not matches_repo_filters(repo, data):
+            return {"status": "skipped", "repo_id": repo_id, "number": number}
+        if repo.track_project_fields:
+            fetch_fields = (
+                client.fetch_pr_project_fields if kind == "pr" else client.fetch_project_fields
+            )
+            data["project_fields"] = fetch_fields(owner, name, number)
+        logins = own_logins(account, client)
+    return sync_item(repo_id, data, logins)
+
+
+def sync_item(
+    repo_id: int, issue_data: GithubIssueData, logins: Collection[str]
+) -> dict[str, Any]:
     logger.debug(
         f"Syncing {issue_data['kind']} from repo {repo_id}: #{issue_data['number']}"
     )
@@ -515,17 +663,8 @@ def sync_github_item(
             return {"status": "error", "error": "Repo not found"}
 
         # Create GitHub client for milestone lookup if needed
-        client: GithubClient | None = None
         account = repo.account
-        if account and cast(bool, account.active):
-            credentials = GithubCredentials(
-                auth_type=cast(str, account.auth_type),
-                access_token=cast(str | None, account.access_token),
-                app_id=cast(int | None, account.app_id),
-                installation_id=cast(int | None, account.installation_id),
-                private_key=cast(str | None, account.private_key),
-            )
-            client = GithubClient(credentials)
+        client = account_client(account) if account and account.active else None
 
         # Look up milestone by number (fetches from GitHub if not in DB)
         milestone_id = _lookup_milestone_id(
@@ -549,16 +688,17 @@ def sync_github_item(
             .first()
         )
 
+        changes = item_changes(existing, issue_data, logins)
         if existing:
             _apply_author_person(session, existing, issue_data)
             return _update_existing_item(
-                session, existing, repo, issue_data, milestone_id, project_id
+                session, existing, repo, issue_data, milestone_id, project_id, changes
             )
 
         # Create new item
         github_item = _create_github_item(repo, issue_data, milestone_id, project_id)
         _apply_author_person(session, github_item, issue_data)
-        return process_content_item(github_item, session)
+        return process_content_item(github_item, session, changes=changes)
 
 
 @app.task(name=SYNC_GITHUB_REPO)
@@ -612,15 +752,7 @@ def sync_repo(repo_id: int, force_full: bool) -> dict[str, Any]:
             elif now - last_full_sync >= timedelta(minutes=full_sync_interval):
                 needs_full_sync = True
 
-        # Create GitHub client
-        credentials = GithubCredentials(
-            auth_type=cast(str, account.auth_type),
-            access_token=cast(str | None, account.access_token),
-            app_id=cast(int | None, account.app_id),
-            installation_id=cast(int | None, account.installation_id),
-            private_key=cast(str | None, account.private_key),
-        )
-        client = GithubClient(credentials)
+        client = account_client(account)
 
         owner = cast(str, repo.owner)
         name = cast(str, repo.name)
@@ -680,6 +812,7 @@ def sync_repo(repo_id: int, force_full: bool) -> dict[str, Any]:
         issues_synced = 0
         prs_synced = 0
         task_ids = []
+        logins = sorted(own_logins(account, client))
 
         # Sync issues
         if cast(bool, repo.track_issues):
@@ -691,7 +824,7 @@ def sync_repo(repo_id: int, force_full: bool) -> dict[str, Any]:
                     )
 
                 serialized = serialize_issue_data(issue_data)
-                task_id = sync_github_item.delay(repo.id, serialized)  # type: ignore[attr-defined]
+                task_id = sync_github_item.delay(repo.id, serialized, logins)  # type: ignore[attr-defined]
                 task_ids.append(task_id.id)
                 issues_synced += 1
 
@@ -705,7 +838,7 @@ def sync_repo(repo_id: int, force_full: bool) -> dict[str, Any]:
                     )
 
                 serialized = serialize_issue_data(pr_data)
-                task_id = sync_github_item.delay(repo.id, serialized)  # type: ignore[attr-defined]
+                task_id = sync_github_item.delay(repo.id, serialized, logins)  # type: ignore[attr-defined]
                 task_ids.append(task_id.id)
                 prs_synced += 1
 
@@ -808,15 +941,7 @@ def sync_github_projects(
         if not account or not cast(bool, account.active):
             return {"status": "error", "error": "Account not found or inactive"}
 
-        # Create GitHub client
-        credentials = GithubCredentials(
-            auth_type=cast(str, account.auth_type),
-            access_token=cast(str | None, account.access_token),
-            app_id=cast(int | None, account.app_id),
-            installation_id=cast(int | None, account.installation_id),
-            private_key=cast(str | None, account.private_key),
-        )
-        client = GithubClient(credentials)
+        client = account_client(account)
 
         projects_synced = 0
         project_ids = []

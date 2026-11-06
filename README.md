@@ -229,6 +229,14 @@ Fireflies only sends webhooks for meetings you organize. Meetings other people o
 
 Behind a reverse proxy, `/transcripts/ingest/` must reach the api without a login: it authenticates with the webhook signature, not a session.
 
+### GitHub webhooks
+
+Tracked repos are polled, but a webhook brings changes in within seconds and lets agent triggers fire on PR events (pushed commits, reviews, comments, finished checks). In **Sources → GitHub**, **Webhook** on the account row generates the secret (shown once) and shows the payload URL, `<SERVER_URL>/github/webhook/<account id>`. On each tracked repo (or its org) add a webhook with that payload URL, content type `application/json`, the secret, and these events: Pull requests, Pull request reviews, Pull request review comments, Issue comments, Issues, Check runs, Check suites, Statuses.
+
+A delivery only says what changed: the issue or PR it names is refetched from the GitHub API about 15 seconds later, so a burst of events costs one fetch. Check and status events go to the tracked PRs whose head is that commit. Deliveries for repos the account doesn't track are acknowledged and ignored, and a redelivered delivery id is ignored for 48 hours. Comments and reviews by the account's own login (its GitHub App bot, for app accounts) don't count as changes, so an agent replying on a PR doesn't trigger itself.
+
+Behind a reverse proxy, `/github/webhook/` must reach the api without a login: it authenticates with the signature.
+
 ### Discord integration
 
 Add a bot in **Sources → Discord** with its name and token (the application ID

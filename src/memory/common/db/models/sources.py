@@ -426,6 +426,24 @@ class GithubAccount(LLMKeyChoice, Base):
         else:
             self.private_key_encrypted = encrypt_value(value)
 
+    # Signs the account's webhook deliveries (X-Hub-Signature-256).
+    webhook_secret_encrypted: Mapped[bytes | None] = mapped_column(
+        LargeBinary, nullable=True
+    )
+
+    @property
+    def webhook_secret(self) -> str | None:
+        if self.webhook_secret_encrypted is None:
+            return None
+        return decrypt_value(self.webhook_secret_encrypted)
+
+    @webhook_secret.setter
+    def webhook_secret(self, value: str | None) -> None:
+        if value is None:
+            self.webhook_secret_encrypted = None
+        else:
+            self.webhook_secret_encrypted = encrypt_value(value)
+
     # Status
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     last_sync_at: Mapped[datetime | None] = mapped_column(
@@ -502,6 +520,10 @@ class GithubRepo(PolledSource, SyncStatusMixin, Base):
         Integer, nullable=False, server_default="1440"
     )  # Daily
     last_full_sync_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # When a signed webhook delivery for this repo last arrived.
+    last_event_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
 

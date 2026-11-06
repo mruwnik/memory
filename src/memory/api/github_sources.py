@@ -2,6 +2,7 @@
 
 import json
 import logging
+import secrets
 from datetime import datetime, timezone
 from typing import Literal, cast
 
@@ -95,6 +96,8 @@ class GithubAccountResponse(BaseModel):
     auth_type: str
     has_access_token: bool
     has_private_key: bool
+    webhook_secret_hint: str | None
+    webhook_url: str
     app_id: int | None
     installation_id: int | None
     active: bool
@@ -103,6 +106,12 @@ class GithubAccountResponse(BaseModel):
     updated_at: str
     repos: list[GithubRepoResponse]
     llm_key: LLMKeyView
+
+
+class WebhookSecretResponse(BaseModel):
+    secret: str
+    webhook_secret_hint: str
+    webhook_url: str
 
 
 # --- Repo Models ---
@@ -166,10 +175,15 @@ def repo_to_response(repo: GithubRepo) -> GithubRepoResponse:
     )
 
 
+def webhook_url(account_id: int) -> str:
+    return f"{settings.SERVER_URL}/github/webhook/{account_id}"
+
+
 def account_to_response(
     account: GithubAccount, db: Session, user: User
 ) -> GithubAccountResponse:
     """Convert a GithubAccount model to a response model."""
+    secret = account.webhook_secret
     return GithubAccountResponse(
         id=cast(int, account.id),
         name=cast(str, account.name),
@@ -177,6 +191,8 @@ def account_to_response(
         auth_type=cast(str, account.auth_type),
         has_access_token=bool(account.access_token),
         has_private_key=bool(account.private_key),
+        webhook_secret_hint=secret[-4:] if secret else None,
+        webhook_url=webhook_url(account.id),
         app_id=cast(int | None, account.app_id),
         installation_id=cast(int | None, account.installation_id),
         active=cast(bool, account.active),
@@ -354,6 +370,36 @@ def delete_account(
     db.commit()
 
     return {"status": "deleted"}
+
+
+@router.post("/accounts/{account_id}/webhook-secret")
+def generate_webhook_secret(
+    account_id: int,
+    user: User = Depends(get_interactive_user),
+    db: Session = Depends(get_session),
+) -> WebhookSecretResponse:
+    """Generate or rotate the webhook secret. The only response that contains it."""
+    account = get_user_account(db, GithubAccount, account_id, user)
+    secret = secrets.token_urlsafe(32)
+    account.webhook_secret = secret
+    db.commit()
+    return WebhookSecretResponse(
+        secret=secret, webhook_secret_hint=secret[-4:], webhook_url=webhook_url(account.id)
+    )
+
+
+@router.delete("/accounts/{account_id}/webhook-secret")
+def delete_webhook_secret(
+    account_id: int,
+    user: User = Depends(get_interactive_user),
+    db: Session = Depends(get_session),
+) -> GithubAccountResponse:
+    """Remove the webhook secret, which makes every delivery for the account fail."""
+    account = get_user_account(db, GithubAccount, account_id, user)
+    account.webhook_secret = None
+    db.commit()
+    db.refresh(account)
+    return account_to_response(account, db, user)
 
 
 @router.post("/accounts/{account_id}/validate")

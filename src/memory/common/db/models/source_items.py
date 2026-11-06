@@ -1471,6 +1471,9 @@ class GithubItem(SourceItem):
         nullable=True,
     )
     comment_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # PRs: the head commit and each check's conclusion (else status) on it.
+    head_sha: Mapped[str | None] = mapped_column(Text, nullable=True)
+    checks: Mapped[dict[str, str] | None] = mapped_column(JSONB, nullable=True)
 
     # Relationship to milestone/project
     # foreign_keys needed because SourceItem.project_id also references projects
@@ -1506,6 +1509,12 @@ class GithubItem(SourceItem):
         Index("gh_repo_id_idx", "repo_id"),
         Index("gh_milestone_id_idx", "milestone_id"),
         Index("gh_author_person_id_idx", "author_person_id"),
+        Index(
+            "gh_head_sha_idx",
+            "repo_id",
+            "head_sha",
+            postgresql_where="head_sha IS NOT NULL",
+        ),
     )
 
     @classmethod

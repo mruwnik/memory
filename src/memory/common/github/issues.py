@@ -105,6 +105,21 @@ class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
         additions
         deletions
         changedFiles
+        headRefOid
+        commits(last: 1) {
+          nodes {
+            commit {
+              statusCheckRollup {
+                contexts(first: 100) {
+                  nodes {
+                    ... on CheckRun { name status conclusion }
+                    ... on StatusContext { context state }
+                  }
+                }
+              }
+            }
+          }
+        }
         comments(first: 100) {
           nodes {
             databaseId
@@ -480,7 +495,59 @@ class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
             project_fields=None,
             content_hash=compute_content_hash(body, comments),
             pr_data=pr_data,
+            head_sha=pr.get("headRefOid"),
+            checks=self._parse_checks(pr),
         )
+
+    def _parse_checks(self, pr: dict[str, Any]) -> dict[str, str]:
+        commits = self._extract_nested(pr, "commits", "nodes", default=[])
+        if not commits:
+            return {}
+        contexts = self._extract_nested(
+            commits[-1], "commit", "statusCheckRollup", "contexts", "nodes", default=[]
+        )
+        checks = {}
+        for c in contexts:
+            if not c:
+                continue
+            name = c.get("name") or c.get("context")
+            outcome = c.get("conclusion") or c.get("status") or c.get("state")
+            if name and outcome:
+                checks[name] = outcome.lower()
+        return checks
+
+    def fetch_pr(self, owner: str, repo: str, number: int) -> GithubIssueData | None:
+        """Fetch one PR by number, parsed as fetch_prs parses each of its pages."""
+        pr = self._fetch_numbered(owner, repo, number, "pullRequest", self._PR_FRAGMENT)
+        return None if pr is None else self._parse_pr_graphql(owner, repo, pr)
+
+    def fetch_issue(self, owner: str, repo: str, number: int) -> GithubIssueData | None:
+        """Fetch one issue by number, parsed as fetch_issues parses each of its pages."""
+        issue = self._fetch_numbered(owner, repo, number, "issue", self._ISSUE_FRAGMENT)
+        return None if issue is None else self._parse_issue_graphql(issue)
+
+    def _fetch_numbered(
+        self, owner: str, repo: str, number: int, field: str, fragment: str
+    ) -> dict[str, Any] | None:
+        query = f"""
+        query($owner: String!, $repo: String!, $number: Int!) {{
+          repository(owner: $owner, name: $repo) {{
+            {field}(number: $number) {{
+              {fragment}
+            }}
+          }}
+        }}
+        """
+        data, errors = self._graphql(
+            query,
+            {"owner": owner, "repo": repo, "number": number},
+            operation_name=f"fetch_{field}({owner}/{repo}#{number})",
+            timeout=60,
+        )
+        if errors or data is None:
+            logger.warning(f"GraphQL fetch {field} #{number} failed: {errors}")
+            return None
+        return self._extract_nested(data, "repository", field)
 
     def _map_change_type(self, change_type: str) -> str:
         """Map GraphQL PullRequestFileChangeType to REST status."""

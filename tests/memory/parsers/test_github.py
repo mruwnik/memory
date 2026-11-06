@@ -652,6 +652,107 @@ def test_fetch_milestone_not_found():
     assert ms is None
 
 
+def pr_node(**overrides):
+    return {
+        "number": 7,
+        "title": "Add feature",
+        "body": "PR body",
+        "state": "OPEN",
+        "author": {"login": "contributor"},
+        "labels": {"nodes": []},
+        "assignees": {"nodes": []},
+        "milestone": None,
+        "createdAt": "2024-01-05T00:00:00Z",
+        "updatedAt": "2024-01-06T00:00:00Z",
+        "closedAt": None,
+        "mergedAt": None,
+        "additions": 1,
+        "deletions": 0,
+        "changedFiles": 1,
+        "headRefOid": "abc123",
+        "commits": {
+            "nodes": [
+                {
+                    "commit": {
+                        "statusCheckRollup": {
+                            "contexts": {
+                                "nodes": [
+                                    {"name": "tests", "status": "COMPLETED", "conclusion": "FAILURE"},
+                                    {"name": "lint", "status": "IN_PROGRESS", "conclusion": None},
+                                    {"context": "ci/legacy", "state": "SUCCESS"},
+                                ]
+                            }
+                        }
+                    }
+                }
+            ]
+        },
+        "comments": {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}},
+        "reviews": {"nodes": []},
+        "reviewThreads": {"nodes": []},
+        "files": {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}},
+        **overrides,
+    }
+
+
+@pytest.mark.parametrize(
+    "commits, checks",
+    [
+        (
+            pr_node()["commits"],
+            {"tests": "failure", "lint": "in_progress", "ci/legacy": "success"},
+        ),
+        ({"nodes": []}, {}),
+        ({"nodes": [{"commit": {"statusCheckRollup": None}}]}, {}),
+    ],
+)
+def test_fetch_pr_reads_head_sha_and_checks(commits, checks):
+    client = GithubClient(GithubCredentials(auth_type="pat", access_token="token"))
+    response = mock_graphql_response({"repository": {"pullRequest": pr_node(commits=commits)}})
+
+    with patch.object(requests.Session, "post", return_value=response), patch.object(
+        requests.Session, "get", return_value=mock_rest_response()
+    ):
+        pr = client.fetch_pr("owner", "repo", 7)
+
+    assert pr is not None
+    assert (pr["number"], pr.get("head_sha"), pr.get("checks")) == (7, "abc123", checks)
+
+
+def test_fetch_issue_by_number():
+    client = GithubClient(GithubCredentials(auth_type="pat", access_token="token"))
+    issue = {
+        "number": 3,
+        "title": "Bug",
+        "body": "Broken",
+        "state": "OPEN",
+        "author": {"login": "reporter"},
+        "labels": {"nodes": []},
+        "assignees": {"nodes": []},
+        "milestone": None,
+        "createdAt": "2024-01-01T00:00:00Z",
+        "updatedAt": "2024-01-02T00:00:00Z",
+        "closedAt": None,
+        "comments": {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}},
+    }
+    response = mock_graphql_response({"repository": {"issue": issue}})
+
+    with patch.object(requests.Session, "post", return_value=response):
+        fetched = client.fetch_issue("owner", "repo", 3)
+
+    assert fetched is not None
+    assert (fetched["kind"], fetched["number"], fetched["title"]) == ("issue", 3, "Bug")
+
+
+@pytest.mark.parametrize("method, field", [("fetch_pr", "pullRequest"), ("fetch_issue", "issue")])
+def test_fetch_single_item_missing_returns_none(method, field):
+    client = GithubClient(GithubCredentials(auth_type="pat", access_token="token"))
+    response = mock_graphql_response({"repository": {field: None}})
+
+    with patch.object(requests.Session, "post", return_value=response):
+        assert getattr(client, method)("owner", "repo", 99) is None
+
+
 # =============================================================================
 # Tests for fetch_pr_diff (REST - requires special Accept header)
 # =============================================================================
