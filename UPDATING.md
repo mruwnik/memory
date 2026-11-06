@@ -389,16 +389,18 @@ stay stopped.
   Instances update on their own schedule and may jump many releases at once.
   `alembic upgrade head` has to be able to walk from any released revision to
   head.
-- Every release gets a CHANGELOG.md entry. List new required env vars, manual
-  steps (including any Postgres image change), slow migrations and post-deploy
-  commands. Post-deploy commands must be safe to re-run.
+- Every release gets a CHANGELOG.md entry. List its user-visible changes, new
+  required env vars, manual steps (including any Postgres image change), slow
+  migrations and post-deploy commands. Post-deploy commands must be safe to
+  re-run. Add to `## Unreleased` as changes land on master.
 - Tag releases as `vMAJOR.MINOR.PATCH`. `update.sh` picks the newest `v*` tag,
   and `update_available` compares tags numerically.
 - Cut a release with `tools/release.sh [--push] vX.Y.Z`. It needs a clean
   checkout of master, a `## vX.Y.Z` section in CHANGELOG.md (rename
-  `Unreleased`) and passing tests, then creates an SSH-signed annotated tag
-  (`SIGNING_KEY` or git's `user.signingkey`). It pushes master and the tag only
-  with `--push`. The default test command is the venv's
+  `Unreleased`) with a non-empty Changes list, and passing tests, then creates
+  an SSH-signed annotated tag (`SIGNING_KEY` or git's `user.signingkey`) whose
+  message is `Release vX.Y.Z` followed by that CHANGELOG section. It pushes
+  master and the tag only with `--push`. The default test command is the venv's
   `pytest --run-slow -n 3 --dist loadfile`; local master must equal
   `$REMOTE/master`.
 

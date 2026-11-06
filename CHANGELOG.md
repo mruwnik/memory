@@ -1,18 +1,31 @@
 # Changelog
 
-Each release lists what an operator must do to update. See [UPDATING.md](UPDATING.md)
-for the procedure. Use these sections in every entry, writing "None" when a
-section has nothing in it:
+Each release lists what changed and what an operator must do to update. See
+[UPDATING.md](UPDATING.md) for the procedure. Use these sections in every
+entry, writing "None" when a section has nothing in it:
 
+- **Changes**: user-visible features, fixes and removals, one line each where
+  possible. Never "None": `tools/release.sh` refuses a release without one,
+  and the entry becomes the release tag's message.
 - **Required env vars**: new settings without which the api/workers refuse to start.
 - **Manual steps**: anything `tools/update.sh` doesn't do, e.g. a Postgres
   image change (major versions need a dump and restore, not just a new image).
 - **Other changes for operators**: new optional settings, changed defaults,
-  removed features, Qdrant changes.
+  removed settings, endpoints or scripts operators call, resource and runtime
+  notes, Qdrant changes.
 - **Migrations**: new alembic revisions; flag any that are slow or lock large tables.
 - **Post-deploy commands**: run after the update, in order. Each must be safe to re-run.
 
-## v0.4.8 (2026-11-06)
+Changes on master collect under `## Unreleased` at the top, in the same
+sections. Cutting a release renames it to `## vX.Y.Z (YYYY-MM-DD)` and starts
+a new, empty `## Unreleased` above it.
+
+## Unreleased
+
+### Changes
+
+- Workers may report a run's cost as zero, as one on a flat-rate subscription
+  honestly does.
 
 ### Required env vars
 
@@ -24,11 +37,39 @@ None.
 
 ### Other changes for operators
 
+None.
+
+### Migrations
+
+None.
+
+### Post-deploy commands
+
+None.
+
+## v0.4.8 (2026-11-06)
+
+### Changes
+
 - OAuth client registration accepts the claude.ai, claude.com, ChatGPT and
-  Grok connector callbacks by default. Entries for them added to the redirect
-  allowlist by hand can be removed.
+  Grok connector callbacks by default.
 - The Slack app wizard can go back to earlier steps. An app goes live on the
   first event that ingests something; step 6 still shows when that happened.
+- Agent runs can be placed on external workers, which claim matching runs with
+  `agent_work_claim` and report back with `agent_work_submit`.
+
+### Required env vars
+
+None.
+
+### Manual steps
+
+None.
+
+### Other changes for operators
+
+- Redirect allowlist entries added by hand for the claude.ai, claude.com,
+  ChatGPT and Grok connector callbacks can be removed.
 - Agent runs can be placed on external workers: an agent's `placement`
   (`server_only`, the default; `runner_only`; `server_first`; `runner_first`),
   `fallback_after` and `requires` decide who runs it. Users or API keys with
@@ -54,6 +95,14 @@ None.
 
 ## v0.4.7 (2026-11-06)
 
+### Changes
+
+- Deleting a Discord bot that has collected messages no longer fails with a
+  500; its messages are kept with no bot.
+- Slack apps whose workspace was disconnected are listed on the Slack tab, to
+  reconnect or delete. They were hidden before, while still blocking a new
+  app with the same client ID.
+
 ### Required env vars
 
 None.
@@ -64,11 +113,7 @@ None.
 
 ### Other changes for operators
 
-- Deleting a Discord bot that has collected messages no longer fails with a
-  500; its messages are kept with no bot.
-- Slack apps whose workspace was disconnected are listed on the Slack tab, to
-  reconnect or delete. They were hidden before, while still blocking a new
-  app with the same client ID.
+None.
 
 ### Migrations
 
@@ -82,6 +127,13 @@ None. Instances updating from before v0.4.5 still run v0.4.5's post-deploy
 command.
 
 ## v0.4.6 (2026-11-05)
+
+### Changes
+
+- ingest-hub starts again on appliance checkouts that v0.4.5's update left
+  crash-looping.
+- A transcript account's webhook dialog generates a secret when it opens on
+  an account that has none, instead of showing "Not set".
 
 ### Required env vars
 
@@ -98,8 +150,6 @@ None.
   v0.4.5 ingest-hub crash-looped ("could not read config file") and the
   update failed its containers-stay-up check after the stack was already on
   v0.4.5. Updating to v0.4.6 fixes it and clears the failed-update marker.
-- A transcript account's webhook dialog generates a secret when it opens on
-  an account that has none, instead of showing "Not set".
 
 ### Migrations
 
@@ -112,6 +162,49 @@ command.
 
 ## v0.4.5 (2026-11-05)
 
+### Changes
+
+- Deleting an email account (its mail and attachments), book, Slack channel or
+  workspace, forum post or Claude session deletes the source items and chunks
+  under it. It used to leave them behind, and search then failed on every
+  query that hit one.
+- Search skips an item it can't load (logged at WARNING with its id) instead
+  of failing.
+- Discord gateway bots apply deletes and edits of older messages, and record
+  servers they join after connecting. The daily catch-up deletes stored
+  messages that are gone from the channel's recent window, and a channel's
+  backfill stops once its collection is paused.
+- Reactions a gateway bot sees only apply to messages its owner's bots stored,
+  as webhook deliveries already did; a reaction on another owner's message is
+  dropped.
+- A bot leaving a server hands it to another of the same owner's bots still
+  in it, else leaves it with no owning bot. The next bot to claim it then
+  takes it with the project and sensitivity reset to defaults, so another
+  owner never inherits its access settings.
+- Each Discord bot gets its own card in Sources, listing only the servers it
+  is in; Slack workspaces get the same layout.
+- The `discord_list_channels` MCP tool's `collect_messages` is the channel's
+  own setting (null when it inherits the server's); the value in effect is in
+  the new `effective_collect` field.
+- Beeper: memory collects the messages of the networks connected to a Beeper
+  account, signed in through a Beeper Server. New MCP tool `beeper_list_chats`.
+  Search, `core_list_items` and `core_count_items` take `network` and `chat`
+  filters for Beeper messages, and the `channel` and `author` scopes match
+  Beeper chats and senders.
+- Agent ingest trigger filters take `exclude_channel_ids` (Discord or Slack
+  channel ids whose items, threads included, never match). It doesn't count as
+  narrowing a filter on its own.
+- Memory MCP tools that only read carry `readOnlyHint`, so `agent_catalog`
+  reports them as `read_only` and creating a trigger or agent no longer warns
+  about them.
+- Discord, Slack and Beeper search results are titled by sender and channel
+  (`alice in #general`, `[Slack] #general — alice`) in the web UI instead of
+  "Untitled".
+- Beeper message text that is HTML (Matrix formatted bodies, e.g. bridged
+  Slack mentions) is stored as plain text, mentions as `@Name`. Bridged
+  "… has joined/left the channel" notices aren't stored, as the Slack
+  integration already skips them.
+
 ### Required env vars
 
 None.
@@ -122,34 +215,14 @@ None.
 
 ### Other changes for operators
 
-- Deleting an email account (its mail and attachments), book, Slack channel or
-  workspace, forum post or Claude session now deletes the source items and
-  chunks under it. Their Qdrant vectors stay until the next scheduled
-  `clean_all_collections` run; search drops them meanwhile. It used to delete
-  only the subclass rows and leave their source items, chunks and vectors
-  behind; search then failed on every query that hit one. The trigger runs one
-  DELETE per row at commit, so deleting an account with very many items (say
-  100k emails) makes for a long commit; raise the client's statement timeout
-  if one times out.
-- Search skips an item it can't load (logged at WARNING with its id) instead
-  of failing.
-- Discord gateway bots now apply deletes and edits of older messages, and
-  record servers they join after connecting. Bots on a custom API URL no
-  longer request member lists at startup. The daily catch-up deletes stored
-  messages that are gone from the channel's recent window, and a channel's
-  backfill stops once its collection is paused. The collector's
-  `POST /refresh_metadata` is now `POST /refresh_metadata/{bot_id}` and
-  refreshes only that bot.
-- Reactions a gateway bot sees now only apply to messages its owner's bots
-  stored, as webhook deliveries already did; a reaction on another owner's
-  message is dropped.
-- A bot leaving a server hands it to another of the same owner's bots still
-  in it, else leaves it with no owning bot. The next bot to claim it then
-  takes it with the project and sensitivity reset to defaults, so another
-  owner never inherits its access settings.
-- The `discord_list_channels` MCP tool's `collect_messages` is now the
-  channel's own setting (null when it inherits the server's); the value in
-  effect is in the new `effective_collect` field.
+- Deleted sources' Qdrant vectors stay until the next scheduled
+  `clean_all_collections` run; search drops them meanwhile. The deletion
+  trigger runs one DELETE per row at commit, so deleting an account with very
+  many items (say 100k emails) makes for a long commit; raise the client's
+  statement timeout if one times out.
+- Discord bots on a custom API URL no longer request member lists at startup.
+  The collector's `POST /refresh_metadata` is now
+  `POST /refresh_metadata/{bot_id}` and refreshes only that bot.
 - Beeper: users sign a Beeper account in through a Beeper Server at
   `/beeper/*`, and memory collects the messages of the networks connected to
   it in the Beeper app (see the README's Beeper section). Beeper Server is
@@ -172,27 +245,12 @@ None.
   60), `BEEPER_RECONCILE_INTERVAL` (how often collected chats are re-read,
   seconds, default 6 hours), `BEEPER_SYNC_MAX_MESSAGES_PER_RUN` (default
   2000), `BEEPER_ATTACHMENT_MAX_BYTES` (default 50 MiB) and
-  `BEEPER_STORAGE_DIR`. New MCP tool `beeper_list_chats` behind the new
-  `beeper` scope. Search, `core_list_items` and `core_count_items` take
-  `network` and `chat` filters for Beeper messages, and the `channel` and
-  `author` scopes match Beeper chats and senders. Qdrant collections get a new
-  `beeper_chat_id` payload index, created on startup.
-- Agent ingest trigger filters take `exclude_channel_ids` (Discord or Slack
-  channel ids whose items, threads included, never match). It doesn't count as
-  narrowing a filter on its own. Discord threads now record their parent
-  channel (`discord_channels.parent_id`); threads stored before this release
-  get it from the next daily catch-up's thread listing, and until then their
-  messages match even when the parent is excluded.
-- Memory MCP tools that only read now carry `readOnlyHint`, so `agent_catalog`
-  reports them as `read_only` and creating a trigger or agent no longer warns
-  about them.
-- Discord, Slack and Beeper search results are titled by sender and channel
-  (`alice in #general`, `[Slack] #general — alice`) in the web UI instead of
-  "Untitled".
-- Beeper message text that is HTML (Matrix formatted bodies, e.g. bridged
-  Slack mentions) is stored as plain text, mentions as `@Name`. Bridged
-  "… has joined/left the channel" notices aren't stored, as the Slack
-  integration already skips them.
+  `BEEPER_STORAGE_DIR`. Its MCP tool needs the new `beeper` scope. Qdrant
+  collections get a new `beeper_chat_id` payload index, created on startup.
+- Discord threads now record their parent channel
+  (`discord_channels.parent_id`); threads stored before this release get it
+  from the next daily catch-up's thread listing, and until then their messages
+  match a trigger even when the parent is excluded.
 
 ### Migrations
 
@@ -222,6 +280,25 @@ docker compose exec -T worker python - --wait maintenance delete-orphaned-source
 
 ## v0.4.4 (2026-11-05)
 
+### Changes
+
+- The web UI is served at the root: `/sources` instead of `/ui/sources`; `/ui`
+  links redirect there.
+- REST endpoints that shared a path with a UI page moved under `/api`
+  (`/api/settings`, `/api/users`, `/api/jobs`, …).
+- OAuth sign-in works on an api run on a host whose clock isn't UTC; it used to
+  reject every authorization code as expired.
+- Discord bots need a token and choose real-time delivery: WebSocket gateway
+  (the default) or webhook.
+- Discord bots send messages, DMs and reactions through the REST API at their
+  API base URL, and a gateway bot with a custom API base URL takes its gateway
+  from there too.
+- A Discord bot whose login is refused waits for a settings change, or a pause
+  and resume, instead of retrying; a crashed one backs off up to an hour.
+- The ingest hub re-reads the bot list every minute, so adding, pausing or
+  switching a bot no longer needs a restart.
+- Signed-in browsers keep refreshing their login across the move to the root.
+
 ### Required env vars
 
 None.
@@ -245,8 +322,6 @@ named API paths to the api must now forward everything.
   need the new paths: meeting ingest clients poll job status at
   `/api/jobs/{id}` or `/api/jobs/external/{external_id}`. `GET /users/{id}` is
   gone.
-- OAuth sign-in works on an api run on a host whose clock isn't UTC; it used to
-  reject every authorization code as expired.
 - The setup token log line now points at `/setup`.
 - Every Discord bot needs its token, and chooses its real-time delivery:
   WebSocket gateway (the default) or webhook. Bots that had a public key keep
@@ -264,8 +339,6 @@ named API paths to the api must now forward everything.
   A bot whose login Discord refuses waits for a settings change, or a pause
   and resume, instead of retrying; one missing privileged intents retries
   hourly; a crashed one backs off from a minute up to an hour.
-- The ingest hub re-reads the bot list every minute, so adding, pausing or
-  switching a bot no longer needs a restart.
 
 ### Migrations
 
@@ -277,6 +350,26 @@ bots. Fast.
 None.
 
 ## v0.4.3 (2026-11-05)
+
+### Changes
+
+- Discord bots can receive messages by webhook, now the default for new bots.
+  Several users can add the same Discord application, and the same Slack
+  client ID.
+- Deleted Discord messages are removed.
+- Pushed Slack and Discord events only change rows their sender's bots or apps
+  own.
+- Slack apps and Discord bots can point at Slack- or Discord-compatible servers,
+  such as a chat proxy.
+- The Discord backfill runs daily and re-reads the last 2 days of every
+  collected channel, storing missed messages and edits.
+- Reactions on Slack and Discord messages are stored per user and kept in step
+  with each add and remove.
+- Parallel Postgres `VACUUM` and index builds no longer fail with "could not
+  resize shared memory segment".
+- Removed: the Claude Code containers runner (`containers_*` tools, `/claude`
+  routes, scheduled Claude sessions, environments, configuration snapshots and
+  saved GitHub tokens). The Claude Code session archive stays.
 
 ### Required env vars
 
@@ -414,6 +507,39 @@ instead.
 
 ## v0.4.2 (2026-11-04)
 
+### Changes
+
+- Search runs the query-analysis LLM only for queries that mention a date or
+  time (a year, month, weekday, "yesterday", "last 3 weeks", "upcoming"...);
+  others are searched as typed, which is faster and ranks better.
+- A search returns `limit` distinct items with up to 3 matching chunks each, so
+  one long item no longer fills the results on its own; with `useScores` the
+  LLM scores each item's best chunk only.
+- Titles recalled by query analysis are matched in the database rather than
+  among an arbitrary 200 items, and also match reports, tasks, calendar events
+  and observations.
+- The reranker sees each chunk's item title above its text (chunks rarely
+  repeat it), which ranks slightly better.
+- Keyword (BM25) search works again.
+- Memory's own LLM calls on Anthropic keys cache the system prompt, so
+  repeated search and summary calls read it from the cache instead of writing
+  a new entry each time.
+- Oversized chunk images embed instead of failing and leaving copies behind.
+- Fireflies meetings arrive by webhook, with a daily catch-up poll. Adding a
+  Fireflies account in the UI generates its webhook secret and shows the setup
+  steps.
+- A Fireflies resend (`reprocessed_at` on `meeting.transcribed` or
+  `meeting.summarized`) with a changed transcript replaces the stored meeting
+  and reruns extraction instead of being ignored; its `pending` action items
+  are recreated and the rest kept, detached.
+- A Fireflies webhook and the poll ingesting the same meeting at once no longer
+  fails one of them, and a successful webhook fetch clears the account's
+  earlier sync error.
+- Emails whose Message-ID is already stored (GitHub re-sends notifications
+  under the same Message-ID with a changed body) count as already ingested.
+  They no longer fail in `email.process_message` and get queued again on every
+  sync.
+
 ### Required env vars
 
 None.
@@ -438,26 +564,11 @@ unauthenticated.
 
 ### Other changes for operators
 
-Search runs the query-analysis LLM only for queries that mention a date or
-time (a year, month, weekday, "yesterday", "last 3 weeks", "upcoming"...);
-others are searched as typed, which is faster and ranks better. A search
-returns `limit` distinct items with up to 3 matching chunks each, so one long
-item no longer fills the results on its own; with `useScores` the LLM scores
-each item's best chunk only. Titles recalled by query analysis are matched in
-the database rather than among an arbitrary 200 items, and now also match
-reports, tasks, calendar events and observations. The reranker sees each
-chunk's item title above its text (chunks rarely repeat it), which ranks
-slightly better.
-
 Keyword (BM25) search works again: `chunk.search_vector` is filled from the
 first 500k characters of chunk content (200k when that would pass Postgres's
 1MB tsvector limit) by a trigger, and GIN-indexed. Until the
 backfill below finishes, keyword search only finds chunks written after the
 update.
-
-Memory's own LLM calls on Anthropic keys now cache the system prompt, so
-repeated search and summary calls read it from the cache instead of writing a
-new entry each time.
 
 New chunk images (`files/chunks/`) are saved as WebP, downscaled to at most 2
 megapixels (the most voyage-multimodal-3 uses) and 16383 pixels a side. Images
@@ -470,17 +581,7 @@ day old. Existing referenced images are left as they are.
 `TRANSCRIPTS_SYNC_INTERVAL` is removed (it is ignored if still set): the
 Fireflies catch-up poll runs daily at 05:10 UTC and walks the last 14 days with
 pagination. The weekly 365-day rescan is gone; **Full rescan** on an account
-still runs it on demand. Adding a Fireflies account in the UI generates its
-webhook secret and shows the setup steps. A Fireflies resend (`reprocessed_at`
-on `meeting.transcribed` or `meeting.summarized`) with a changed transcript now
-replaces the stored meeting and reruns extraction instead of being ignored;
-its `pending` action items are recreated and the rest kept, detached. A webhook and the poll ingesting the same
-meeting at once no longer fails one of them, and a successful webhook fetch
-clears the account's earlier sync error.
-
-Emails whose Message-ID is already stored (GitHub re-sends notifications under
-the same Message-ID with a changed body) now count as already ingested. They no
-longer fail in `email.process_message` and get queued again on every sync.
+still runs it on demand.
 
 The hourly `refresh_metric_summaries` task and its `METRICS_SUMMARY_REFRESH_MINUTE`
 setting are removed. Nothing read the `metric_summaries` view.
@@ -528,6 +629,29 @@ docker compose exec -T worker python - --wait maintenance clean-chunk-images < t
 
 ## v0.4.1 (2026-10-29)
 
+### Changes
+
+- Email senders and subjects are stored decoded (`Karolina Walęcik <k@far.ai>`,
+  not `=?UTF-8?Q?...?=`). Email attachments are no longer tagged with their
+  sender, and mail Qdrant payloads no longer copy the sender and recipients
+  into `tags`: filter by `sender`/`recipients` instead.
+- Search and fetch show a mail's body, not its raw RFC822 source.
+- `notes_upsert` refuses filenames that don't end in `.md`, that have a hidden
+  (dot-prefixed) segment, or that are absolute paths outside the notes folder;
+  it no longer appends `.md` or re-roots absolute paths under the notes
+  folder. Vault syncs skip hidden folders such as `.obsidian/`, and
+  `notes_note_files` no longer lists them.
+- Meeting action items resolve relative due dates against the meeting date
+  instead of inventing absolute ones.
+- Discord channel tools only reach channels in the servers of the caller's
+  bots (admins see all).
+- The Telemetry page becomes Usage, with LLM spend charts across memory's own
+  calls, agent runs and Claude Code, and an admin-only audit log.
+- Spend on memory's own LLM calls (summaries, search steps, meeting
+  extraction, session summaries) records the user it was spent for, the model
+  and the tokens. Deleting a provider key or a user keeps that spend as
+  history; spend on a deleted key no longer counts toward any daily cap.
+
 ### Required env vars
 
 None.
@@ -538,26 +662,10 @@ None.
 
 ### Other changes for operators
 
-Email senders and subjects are stored decoded (`Karolina Walęcik <k@far.ai>`,
-not `=?UTF-8?Q?...?=`). Email attachments are no longer tagged with their
-sender, and mail Qdrant payloads no longer copy the sender and recipients into
-`tags`: filter by `sender`/`recipients` instead.
-
-`notes_upsert` refuses filenames that don't end in `.md`, that have a hidden
-(dot-prefixed) segment, or that are absolute paths outside the notes folder; it
-no longer appends `.md` or re-roots absolute paths under the notes folder. Vault
-syncs skip hidden folders such as `.obsidian/`, and `notes_note_files` no longer
-lists them.
-
 Audit records (MCP mutating calls, settings changes and restarts) moved from
 `telemetry_events` to a new admin-only `audit_events` table, readable at
 `GET /audit`. They no longer show in `/telemetry/raw`, survive deleting their
 user (the actor's email is kept), and OTLP ingest drops events with audit names.
-
-Spend on memory's own LLM calls (summaries, search steps, meeting extraction,
-session summaries) now records the user it was spent for, the model and the
-tokens. Deleting a provider key or a user keeps that spend as history; spend on
-a deleted key no longer counts toward any daily cap.
 
 The telemetry read endpoints moved under `/usage`: `/telemetry/raw`,
 `/telemetry/metrics`, `/telemetry/sessions` and `/telemetry/api-keys` are now
@@ -627,6 +735,47 @@ docker compose exec -T worker python - --wait maintenance cleanup-junk-notes < t
 
 ## v0.4.0 (2026-10-28)
 
+### Changes
+
+- Admins can set another user's timezone from the Edit user dialog in User
+  management.
+- The Telemetry page's "Token usage by tool" chart reads only
+  `tool.token.usage` telemetry, like the rest of the page. It no longer falls
+  back to re-parsing every stored session transcript when that window has no
+  such events, which made the page slow and showed tool data while every other
+  panel was empty.
+- Session uploads that resend events the server already has no longer count
+  their tool calls again; tool totals recorded before this release may be
+  inflated.
+- LessWrong comments are ingested and searchable, and the LessWrong sync is
+  configured from the Forums tab (admin only) instead of code defaults.
+  Comments carry their post's tags plus `comment`, so a tag filter can find
+  them.
+- Search takes an `exclude_tags` filter (MCP `search` and the search page's
+  "Exclude tags" picker) that leaves out items carrying any of those tags,
+  e.g. `["comment"]` for LessWrong posts without their comments.
+- Polled sources (RSS feeds, email, GitHub, Google Drive, calendars, LessWrong)
+  each sync on their own "Sync every" interval, edited on their Sources tab.
+- RSS feeds have a "Wait before ingesting" delay (default 0): a new entry is
+  fetched once that long has passed since it was published, e.g. for blogs
+  whose paywall lifts after a few days. LessWrong has the same setting, seeded
+  with the 8 hours it previously waited.
+- API keys, login sessions, OAuth tokens and poll edit tokens are stored
+  hashed. A key is shown only when it is created, and users list, create and
+  revoke their own keys in Settings.
+- An API key's scopes are capped by its user's, and work it sets up to run
+  later acts with the key's scopes.
+- Agent runs expire after their retention unless starred.
+- `agent_run` takes the agent to run as a single `agent` argument: a
+  definition's id or name, a prebuilt agent's slug (`fact-check`), a system
+  agent's slug (`system:summarise`, ...) or an inline spec. Its
+  `definition_id` and `spec` arguments are gone; MCP clients passing them must
+  switch to `agent`. `agent_upsert` and inline specs accept `provider_key` as a
+  key name as well as an id.
+- Agents can start, wait for and cancel child runs.
+- Scheduled Claude sessions accept the form's SSH key and dev channels choices.
+- Removed: the Secrets page and `/secrets` API, with every stored secret.
+
 ### Required env vars
 
 None.
@@ -641,15 +790,6 @@ finished more than 14 days ago: star the ones you want to keep before updating.
 
 ### Other changes for operators
 
-Admins can set another user's timezone from the Edit user dialog in User management.
-
-The Telemetry page's "Token usage by tool" chart reads only `tool.token.usage`
-telemetry, like the rest of the page. It no longer falls back to re-parsing every
-stored session transcript when that window has no such events, which made the
-page slow and showed tool data while every other panel was empty.
-Session uploads that resend events the server already has no longer count
-their tool calls again; tool totals recorded before this release may be inflated.
-
 People now record who created them and whether that was ingest or an admin. A
 new user is linked to an existing Person with their email only if ingest or an
 admin made it; one a non-admin made is passed over, and when several Persons
@@ -657,10 +797,6 @@ share an email, ingest prefers the one linked to a user, then one ingest or an
 admin made. People that existed before this release count as made by ingest, so
 if a non-admin may have planted one with someone's email, check it before
 creating that user.
-
-LessWrong comments are now ingested and searchable, and the LessWrong sync is
-configured from the Forums tab (admin only) instead of code defaults.
-Comments carry their post's tags plus `comment`, so a tag filter can find them.
 
 An API key's scopes are now capped by its user's: a key never carries a scope
 its user lacks (e.g. `*` minted for a non-admin, or kept after a demotion). A key
@@ -674,10 +810,6 @@ items that key may read. Scheduled Claude sessions set up through a key without
 them with `ssh_key_id` set to a key of the owner's, or with `use_ssh_key` false.
 `/auth/me` reports the credential's scopes, and `/setup/status` gives source
 counts and MCP clients only to a login session.
-
-Search takes an `exclude_tags` filter (MCP `search` and the search page's
-"Exclude tags" picker) that leaves out items carrying any of those tags, e.g.
-`["comment"]` for LessWrong posts without their comments.
 
 `LESSWRONG_SYNC_INTERVAL` is no longer read. The migration copies it into the
 new settings row (`0` there leaves the scheduled sync off), so keep it set until
@@ -700,11 +832,6 @@ accounts set to sync every 15 minutes under the default 1-hour
 `CALENDAR_SYNC_INTERVAL` become 60; lower them on the Calendar tab if wanted.
 Turn a source's scheduled sync off with its pause button (the Forums tab's
 "Sync on a schedule" for LessWrong).
-
-RSS feeds have a "Wait before ingesting" delay (default 0): a new entry is
-fetched once that long has passed since it was published, e.g. for blogs whose
-paywall lifts after a few days. LessWrong has the same setting, seeded with the
-8 hours it previously waited.
 
 The first syncs fetch the comments with karma 5 or more on each post from the
 last year that has any, 200 posts per run by default, so expect extra LessWrong
@@ -756,13 +883,6 @@ This replaces `AGENT_STEP_RETENTION_DAYS`, which is no longer read
 first nightly purge after the update deletes every unstarred run that finished
 more than 14 days ago; star the ones you want to keep before updating.
 
-`agent_run` takes the agent to run as a single `agent` argument: a definition's
-id or name, a prebuilt agent's slug (`fact-check`), a system agent's slug
-(`system:summarise`, ...) or an inline spec. Its `definition_id` and `spec`
-arguments are gone; MCP clients passing them must switch to `agent`.
-`agent_upsert` and inline specs accept `provider_key` as a key name as well as
-an id.
-
 Agents can start runs: a spec that lists `agent_run` (and `agent_wait`,
 `agent_cancel` to follow and stop its children) may submit runs. A child gets at
 most its parent's scopes and tools and is capped by what the parent has left of
@@ -812,6 +932,11 @@ None.
 
 ## v0.3.3 (2026-10-28)
 
+### Changes
+
+- The nightly Qdrant snapshot no longer gets Qdrant OOM-killed once the vectors
+  pass about 1.5 GB.
+
 ### Required env vars
 
 None.
@@ -836,6 +961,19 @@ None.
 
 ## v0.3.2 (2026-10-26)
 
+### Changes
+
+- Admins can set and clear shared LLM default keys on the keys page, one per
+  provider. System agents fall back to them when a user has no usable personal
+  default; usage shares the key's daily cap, and custom agent runs still
+  require personal keys. Existing keys remain personal-only.
+- Deleting a user cleans up their source accounts and OAuth refresh tokens
+  instead of failing on database ownership constraints.
+- The notes sync interval is set under Sources → Notes instead of Server
+  settings.
+- Removed: sharing a Discord bot with other users. Bots belong to their
+  registrant.
+
 ### Required env vars
 
 None.
@@ -845,12 +983,6 @@ None.
 None.
 
 ### Other changes for operators
-
-Admins can opt an LLM provider key into being the shared default for system-agent
-calls when a user has no personal default. Existing keys remain personal-only.
-
-User deletion now cleans up owned source accounts and OAuth refresh tokens without
-failing on database ownership constraints. No migration is required.
 
 The notes sync interval is now configured under Sources → Notes instead of Server
 settings. Existing values and environment overrides are preserved.
@@ -876,6 +1008,10 @@ None.
 
 ## v0.3.1 (2026-10-26)
 
+### Changes
+
+- GitHub App repository sync works in the worker image again.
+
 ### Required env vars
 
 None.
@@ -900,6 +1036,23 @@ None.
 
 ## v0.3.0 (2026-10-26)
 
+### Changes
+
+- Slack workspaces with a verified Events setup ingest from pushed events, with
+  a daily history reconciliation instead of polling.
+- Search unwraps the server's result list correctly, displaying individual
+  matches and accurate counts instead of one empty "Untitled" result. Relevant
+  sections display the text returned by the search service.
+- Job dispatch, retries, and reingestion commit their pending record and task
+  ID before publishing to Celery. Fast workers can now update job status
+  reliably, avoiding completed Notes syncs remaining marked as queued.
+- Calendar events can be refreshed after ingestion.
+- Discord channel lists send the supported server filter, fixing the
+  unexpected server_id argument error when expanding a server in Sources.
+- Google account setup includes expandable step-by-step instructions for
+  project configuration, API enablement, OAuth consent, and downloading the
+  credentials JSON.
+
 ### Required env vars
 
 None.
@@ -917,13 +1070,6 @@ None.
   keeping rate-limit waits out of other ingestion. Custom worker deployments must
   consume the new `slack-sync` queue. Already queued tasks stay on their original queue.
 
-- Search unwraps the server's result list correctly, displaying individual
-  matches and accurate counts instead of one empty "Untitled" result. Relevant
-  sections display the text returned by the search service.
-- Job dispatch, retries, and reingestion commit their pending record and task ID
-  before publishing to Celery. Fast workers can now update job status reliably,
-  avoiding completed Notes syncs remaining marked as queued.
-
 ### Migrations
 
 - `20261109_slack_reconcile`: adds the per-workspace background sweep interval.
@@ -933,6 +1079,18 @@ None.
 None.
 
 ## v0.2.6 (2026-10-26)
+
+### Changes
+
+- Notes initialization adopts the remote's existing history and default branch
+  before committing local notes. Overlapping local files are preserved and
+  reported so setup can be retried after reconciliation.
+- Notes sync distinguishes unrelated histories, rejected write access, branch
+  rules, and concurrent remote changes in its failure messages.
+- GitHub account setup shows instructions for the selected authentication
+  method, including read permissions and installation repository access.
+- Manage repos offers Refresh from GitHub to bypass cached discovery after
+  installation permissions or repository access change.
 
 ### Required env vars
 
@@ -945,25 +1103,7 @@ reconciliation; the update does not rewrite either history.
 
 ### Other changes for operators
 
-Admins can set and clear shared LLM defaults on the keys page. System agents
-fall back to these keys when no usable personal default exists. Usage shares
-the selected key’s daily cap; custom agent runs still require personal keys.
-
-Discord channel lists send the supported server filter, fixing the unexpected
-server_id argument error when expanding a server in Sources.
-
-Google account setup includes expandable step-by-step instructions for project
-configuration, API enablement, OAuth consent, and downloading the credentials JSON.
-
-- Notes initialization adopts the remote's existing history and default branch
-  before committing local notes. Overlapping local files are preserved and
-  reported so setup can be retried after reconciliation.
-- Notes sync distinguishes unrelated histories, rejected write access, branch
-  rules, and concurrent remote changes in its failure messages.
-- GitHub account setup shows instructions for the selected authentication
-  method, including read permissions and installation repository access.
-- Manage repos offers Refresh from GitHub to bypass cached discovery after
-  installation permissions or repository access change.
+None.
 
 ### Migrations
 
@@ -975,6 +1115,16 @@ None.
 
 ## v0.2.5 (2026-10-26)
 
+### Changes
+
+- Google Calendar fetch and queue failures appear on the calendar account
+  instead of being reported as successful empty syncs.
+- Gmail source settings fetch available labels and allow selecting folders to
+  sync. Multiple labels sync their combined messages without duplicates. Empty
+  selections retain the existing INBOX default. Gmail listing failures surface
+  as sync errors and stop deletion tracking instead of treating failed
+  listings as empty.
+
 ### Required env vars
 
 None.
@@ -985,13 +1135,7 @@ None.
 
 ### Other changes for operators
 
-- Google Calendar fetch and queue failures now appear on the calendar account
-  instead of being reported as successful empty syncs.
-
-Gmail source settings fetch available labels and allow selecting folders to sync.
-Multiple labels sync their combined messages without duplicates. Empty selections
-retain the existing INBOX default. Gmail listing failures now surface as sync
-errors and stop deletion tracking instead of treating failed listings as empty.
+None.
 
 ### Migrations
 
@@ -1002,6 +1146,12 @@ None.
 None.
 
 ## v0.2.4 (2026-10-25)
+
+### Changes
+
+- The frontend image builds again: release sources include the Secrets page,
+  which v0.2.3 left out.
+- EC2 updates no longer fail on a user-owned maintenance lock.
 
 ### Required env vars
 
@@ -1035,6 +1185,27 @@ None. AWS bootstrap and nightly updates apply the host configuration automatical
 
 ## v0.2.3 (2026-10-25)
 
+### Changes
+
+- Ingestion overview has a dedicated page at `/ui/ingestion`, linked from the
+  sidebar and dashboard.
+- SSH keys has a dedicated page under System operations (`/ui/ssh-keys`), to
+  import, generate, replace and delete personal and instance keys. Existing
+  Sources links redirect to it.
+- Notes SSH sync uses those keys, and can probe an SSH server and show its
+  host-key fingerprints for explicit confirmation.
+- The dashboard shows access-scoped ingested item totals, indexing status,
+  additions in the last 24 hours, and counts by content type.
+- Secrets has its own page at `/ui/secrets`; old Sources links redirect there.
+- Search filters load correctly when there are no searchable tags.
+- GitHub App authentication encodes the JWT issuer as a string, fixing
+  “Issuer (iss) must be a string” errors when managing or syncing
+  repositories.
+- Qdrant no longer stops accepting connections during heavy ingestion.
+- Security: credential management needs an interactive login, API keys are
+  checked against their own scopes, IMAP verifies TLS, ingestion downloads
+  refuse non-public addresses, and snapshot uploads are size-capped.
+
 ### Required env vars
 
 None.
@@ -1048,33 +1219,15 @@ For Notes SSH sync using an operator-mounted key, import that key in System oper
 - Qdrant's open-file limit is raised to 65536. Under Docker's default of 1024,
   ingestion exhausted it and qdrant stopped accepting connections. Takes effect when
   `docker compose up -d` recreates the qdrant container.
-- Ingestion overview now also has a dedicated page at `/ui/ingestion`, linked
-  from the sidebar and dashboard.
-
-- SSH keys has a dedicated page under System operations (`/ui/ssh-keys`).
-  Existing Sources links redirect to it.
-
-- The dashboard shows access-scoped ingested item totals, indexing status,
-  additions in the last 24 hours, and counts by content type.
-
 - Notes can probe an SSH server and show its host-key fingerprints for explicit
   confirmation. Manual host-key entry is under Advanced. The API image includes
   `openssh-client`; rebuild it to enable probing. Probing does not authenticate or
   save trust until confirmed.
-
-- Secrets has its own page at `/ui/secrets`; old Sources links redirect there.
-
-- Search filters load correctly when there are no searchable tags.
-
-- GitHub App authentication now encodes the JWT issuer as a string, fixing
-  “Issuer (iss) must be a string” errors when managing or syncing repositories.
-
 - System operations → SSH keys manages encrypted personal and instance SSH identities:
   import a private key (including passphrase-protected files), generate, replace,
   delete, or choose a container default. Notes selects an accessible personal or instance key and stores
   remote-bound host trust separately. Claude sessions and MCP public-key discovery
   use the shared table. Private keys are write-only. Notes no longer falls back to operator-mounted keys. Requires the existing `SECRETS_ENCRYPTION_KEY`.
-
 - A `SERVER_URL` change no longer needs an image rebuild: the web UI uses
   same-origin URLs instead of a baked-in host.
 - The server's own `SERVER_URL` origin is now always allowed as an OAuth redirect
@@ -1107,6 +1260,32 @@ For Notes SSH sync using an operator-mounted key, import that key in System oper
 None.
 
 ## v0.2.2 (2026-10-25)
+
+### Changes
+
+- Notes Git credentials are read fresh and bound to the selected repository,
+  preventing token leakage while queued remote changes and worker caches
+  differ. Restricted API keys no longer inherit their owner's admin access
+  when reading the Notes source configuration or note count.
+- Admins can change the Notes vault's remote and branch from Sources, with
+  explicit confirmation before uploading history to a new destination. Remote
+  changes clear the saved token unless a replacement is supplied.
+- Creating People with email, Slack, GitHub or Discord identity fields requires
+  admin rights, matching the restriction on editing those fields. Ambiguous
+  name and email matches no longer select an arbitrary Person.
+- Identical agent observations from different users retain separate copies.
+  Repeated submissions still reuse the same user's existing observation,
+  including observations stored before this fix. Previously discarded
+  submissions must be submitted again; their content cannot be recovered from
+  the deduplicated row.
+- Note submissions that match another user's stored content enforce ownership
+  before returning duplicate metadata or recreating a missing vault file.
+- A new EC2 instance is claimed in the web UI with the setup token instead of
+  creating the first user itself.
+- EC2 installs: SSM runs produce output, re-running a failed first install
+  picks up fixes, the whole stack starts, and images live on the data volume.
+- `tools/install.sh` and `tools/update.sh` pin `COMPOSE_PROJECT_NAME`, so a
+  checkout reached by another path keeps its stack.
 
 ### Required env vars
 
@@ -1142,23 +1321,8 @@ None.
 
 ### Other changes for operators
 
-- Notes Git credentials are read fresh and bound to the selected repository,
-  preventing token leakage while queued remote changes and worker caches differ.
-  Restricted API keys no longer inherit their owner's admin access when reading
-  the Notes source configuration or note count.
-- Admins can change the Notes vault's remote and branch from Sources, with
-  explicit confirmation before uploading history to a new destination. Remote
-  changes clear the saved token unless a replacement is supplied; an
-  operator-configured token must be removed before changing the remote.
-- Creating People with email, Slack, GitHub or Discord identity fields now
-  requires admin rights, matching the restriction on editing those fields.
-  Ambiguous name and email matches no longer select an arbitrary Person.
-- Identical agent observations from different users now retain separate copies.
-  Repeated submissions still reuse the same user's existing observation, including
-  observations stored before this fix. Previously discarded submissions must be
-  submitted again; their content cannot be recovered from the deduplicated row.
-- Note submissions that match another user's stored content now enforce ownership
-  before returning duplicate metadata or recreating a missing vault file.
+- An operator-configured Notes token (`NOTES_GIT_TOKEN`) must be removed
+  before changing the vault's remote from Sources.
 - EC2: the nightly update prunes build cache older than a week. It leaves
   images alone; `disk-cleanup` prunes those.
 - EC2, instances created from this release on: `sudo memory-bootstrap` runs
@@ -1193,6 +1357,11 @@ None.
 
 ## v0.2.1 (2026-10-25)
 
+### Changes
+
+- The api image contains `tools/add_user.py`, so `tools/install.sh` and the
+  EC2 bootstrap can create the first admin. v0.2.0 failed at that step.
+
 ### Required env vars
 
 None.
@@ -1203,8 +1372,7 @@ None.
 
 ### Other changes for operators
 
-- The api image now contains `tools/add_user.py`, so `tools/install.sh` and the
-  EC2 bootstrap can create the first admin. v0.2.0 failed at that step.
+None.
 
 ### Migrations
 
@@ -1215,6 +1383,28 @@ None.
 None.
 
 ## v0.2.0 (2026-10-25)
+
+### Changes
+
+- Optional modules (Claude containers, multiple users, teams), off by default
+  and switched on the Server settings page.
+- First-run setup wizard at `/ui/setup`.
+- Every LLM call runs a system agent on a user's own Anthropic or OpenAI key;
+  the server's LLM keys are gone.
+- Agents: definitions, runs, schedules, ingest triggers and external MCP
+  servers, run by a new `agents-worker`.
+- Notes are a Sources tab, with git sync set up in the UI.
+- Transcript accounts accept pushed transcripts, and a push-only `generic`
+  provider needs no API key.
+- Password reset by emailed link.
+- Per-user timezones; cron schedules follow their owner's local time.
+- Search returns each item's summary; HyDE is off by default.
+- Synced items are readable by the owner of their account, and meetings by
+  their transcript account's project.
+- Signed release tags, repair scripts in `tools/ops/`, key rotation and an EC2
+  bootstrap.
+- Removed: the Check queue, one-time API keys, the GitHub MCP server, the
+  Discord management tools, and team sync with Discord roles and GitHub teams.
 
 ### Required env vars
 
