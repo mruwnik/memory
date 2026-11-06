@@ -21,6 +21,7 @@ SAMPLE_FULL_TRANSCRIPT = {
     "title": "Test Meeting",
     "dateString": "2026-04-29T15:15:00.000Z",
     "duration": 30.0,
+    "cal_id": "evt-1",
     "meeting_attendees": [
         {"email": "daniel@equistamp.com"},
         {"email": "chris@equistamp.com"},
@@ -123,6 +124,7 @@ def test_dispatch_transcript_passes_account_id_and_tags(
     assert kwargs["tags"] == ["team-equistamp"]
     assert kwargs["source_tool"] == "fireflies"
     assert kwargs["external_id"] == "01TESTNEW0000000000000"
+    assert kwargs["calendar_event_uid"] == "evt-1"
     assert kwargs["attendee_emails"] == [
         "daniel@equistamp.com",
         "chris@equistamp.com",
@@ -233,6 +235,43 @@ def test_fireflies_walk_skips_known_external_ids(
 
     assert count == 1
     fake_client.get_transcript.assert_called_once_with("01NEW")
+
+
+@pytest.mark.parametrize(
+    "stub, fetched",
+    [
+        ({"cal_id": "evt-1", "title": "Other title"}, []),
+        ({"title": "Existing 01KNOWN", "participants": ["Ann@example.com,bo@example.com"]}, []),
+        ({"title": "Existing 01KNOWN", "participants": ["bo@example.com"]}, ["01DUP"]),
+        # The owner is in every call they record.
+        ({"title": "Existing 01KNOWN", "participants": ["regular@example.com", "bo@example.com"]}, ["01DUP"]),
+        # Restarted after the stored recording ended.
+        ({"cal_id": "evt-1", "dateString": "2026-04-01T17:01:00.000Z"}, ["01DUP"]),
+    ],
+)
+def test_fireflies_walk_skips_second_recordings_of_stored_calls(
+    db_session, transcript_account, patch_send_task, stub, fetched
+):
+    stored = _add_meeting(db_session, transcript_account.id, datetime(2026, 4, 1, 16, 30, tzinfo=timezone.utc), "01KNOWN")
+    stored.source_tool = "fireflies"
+    stored.calendar_event_uid = "evt-1"
+    stored.duration_minutes = 30
+    stored.people = [
+        Person(identifier="ann", display_name="Ann", contact_info={"email": "ann@example.com"}),
+        Person(identifier="reg", display_name="Reg", contact_info={"email": "regular@example.com"}),
+    ]
+    db_session.commit()
+
+    fake_client = MagicMock()
+    fake_client.list_transcripts.return_value = [
+        {"id": "01DUP", "dateString": "2026-04-01T16:30:14.000Z", "duration": 20.0, **stub},
+    ]
+    fake_client.get_transcript.side_effect = lambda mid: _build_full_transcript(mid, "2026-04-01T16:30:14.000Z")
+
+    with patch("memory.workers.tasks.transcripts.FirefliesClient", return_value=fake_client):
+        transcripts.fireflies_walk(transcript_account, db_session, floor=datetime(2026, 3, 1, tzinfo=timezone.utc))
+
+    assert [c.args[0] for c in fake_client.get_transcript.call_args_list] == fetched
 
 
 def test_known_external_ids_is_global(

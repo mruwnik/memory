@@ -37,15 +37,20 @@ FIREFLIES_GRAPHQL_URL = "https://api.fireflies.ai/graphql"
 DEFAULT_PAGE_LIMIT = 50
 
 # Fields to request when listing transcripts. Keep small — we only need to
-# decide whether to fetch the full transcript next; the prefilter uses `id`
-# and the rare logging path reads `dateString`. ``meeting_attendees`` /
-# ``participants`` are deliberately omitted so list pages stay light on
-# rescans (5000-item potential).
+# decide whether to fetch the full transcript next: the prefilter skips ids
+# already stored and second recordings of a stored call, which it recognises by
+# `dateString` and `duration` together with `cal_id`, else `title` and the
+# `participants` emails.
+# ``meeting_attendees`` is omitted so list pages stay light on rescans
+# (5000-item potential).
 LIST_FIELDS = """
     id
     title
     date
     dateString
+    duration
+    cal_id
+    participants
 """
 
 # Fields to request when fetching a single transcript for ingestion.
@@ -56,6 +61,7 @@ TRANSCRIPT_FIELDS = """
     dateString
     duration
     transcript_url
+    cal_id
     organizer_email
     participants
     meeting_attendees {
@@ -265,4 +271,5 @@ def build_meeting_kwargs(transcript: dict) -> dict[str, Any]:
         "attendee_emails": emails,
         "source_tool": "fireflies",
         "external_id": transcript.get("id"),
+        "calendar_event_uid": transcript.get("cal_id"),
     }

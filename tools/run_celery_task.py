@@ -54,6 +54,7 @@ from memory.common.celery_app import (
     BACKFILL_SEARCH_VECTORS,
     CLEAN_MAIL_HEADERS,
     CLEANUP_JUNK_NOTES,
+    DEDUPE_MEETINGS,
     DELETE_ORPHANED_SOURCE_ITEMS,
     TRACK_GIT_CHANGES,
     BACKUP_PATH,
@@ -87,6 +88,7 @@ TASK_MAPPINGS = {
         "delete_orphaned_source_items": DELETE_ORPHANED_SOURCE_ITEMS,
         "backfill_search_vectors": BACKFILL_SEARCH_VECTORS,
         "cleanup_junk_notes": CLEANUP_JUNK_NOTES,
+        "dedupe_meetings": DEDUPE_MEETINGS,
     },
     "blogs": {
         "sync_webpage": SYNC_WEBPAGE,
@@ -422,6 +424,14 @@ def maintenance_reconcile_access_control(ctx, rewrite_payloads):
 def maintenance_cleanup_junk_notes(ctx, dry_run):
     """Remove junk notes (hidden paths, non-markdown copies) and notes whose file is gone."""
     execute_task(ctx, "maintenance", "cleanup_junk_notes", dry_run=dry_run)
+
+
+@maintenance.command("dedupe-meetings")
+@click.option("--dry-run", is_flag=True, help="Only list what would be removed")
+@click.pass_context
+def maintenance_dedupe_meetings(ctx, dry_run):
+    """Remove second recordings of a call, keeping the worked-on or fullest copy."""
+    execute_task(ctx, "maintenance", "dedupe_meetings", dry_run=dry_run)
 
 
 @maintenance.command("reingest-chunk")

@@ -1,12 +1,16 @@
 """Celery tasks for meeting transcript processing."""
 
 import hashlib
+import itertools
 import logging
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from dateutil import parser as date_parser
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import defer, selectinload
 
 from memory.agents.call import LLMError, run_agent_sync
 from memory.agents.provider_keys import Credential, credential, ingest_key, ingest_user
@@ -15,23 +19,43 @@ from memory.common import embedding
 from memory.common import jobs as job_utils
 from memory.common.llms import PROVIDER_ERRORS
 from memory.common.db.connection import DBSession, make_session
-from memory.common.db.models import Task
+from memory.common.db.models import Person, Task, TranscriptAccount, User
 from memory.common.db.models.source_items import Meeting
-from memory.common.celery_app import app, PROCESS_MEETING, REPROCESS_MEETING, CLEANUP_STUCK_MEETINGS
+from memory.common.celery_app import (
+    app,
+    CLEANUP_STUCK_MEETINGS,
+    DEDUPE_MEETINGS,
+    PROCESS_MEETING,
+    REPROCESS_MEETING,
+)
 from memory.common.content_processing import (
     clear_item_chunks,
     process_content_item,
     safe_task_execution,
 )
-from memory.common.db.models import Person
+from memory.common.jobs import tracked_task
 from memory.common.people import (
+    contact_values,
     find_or_create_person,
     find_person_by_email,
     find_person_by_name,
     make_identifier,
 )
+from memory.workers.verification import delete_orphaned_item
 
 logger = logging.getLogger(__name__)
+
+# A meeting whose processing was lost once and is being run again; losing it
+# again marks it failed, so a meeting that kills its worker isn't rerun forever.
+RETRYING = "retrying"
+
+
+def mark_in_flight(meeting: Meeting, status: str) -> None:
+    """Restart the clock cleanup_stuck_meetings judges a run lost by."""
+    meeting.extraction_status = status
+    # extraction_status is on the meeting table, so changing it alone never
+    # fires source_item's updated_at onupdate.
+    meeting.updated_at = func.now()
 
 MAX_DUE_DATE_HORIZON = timedelta(days=2 * 365)
 # A UTC meeting time can be a day ahead of the local date the attendees named.
@@ -485,6 +509,7 @@ def create_meeting_record(
     transcript_account_id: int | None = None,
     creator_id: int | None = None,
     attendee_pairs: list[tuple[str, str]] | None = None,
+    calendar_event_uid: str | None = None,
 ) -> Meeting:
     """Create a new Meeting record from the provided data."""
     full_transcript = meeting_content(transcript, attendee_names, attendee_emails, attendee_pairs)
@@ -494,6 +519,7 @@ def create_meeting_record(
         duration_minutes=duration_minutes,
         source_tool=source_tool,
         external_id=external_id,
+        calendar_event_uid=calendar_event_uid,
         content=full_transcript,
         sha256=hashlib.sha256(full_transcript.encode()).digest(),
         tags=["meeting"] + (tags or []),
@@ -507,12 +533,13 @@ def create_meeting_record(
     return meeting
 
 
-def prepare_meeting_for_reingest(session: DBSession, item_id: int) -> Meeting | None:
+def prepare_meeting_for_reingest(session: DBSession, item_id: int, retry: bool = False) -> Meeting | None:
     """
     Fetch an existing meeting and clear its chunks/tasks for reprocessing.
 
     Clears chunks and action item tasks but leaves people relationships intact
-    (they're still valuable and will be re-linked during processing).
+    (they're still valuable and will be re-linked during processing). A
+    `retry` is cleanup_stuck_meetings rerunning a lost run, and isn't rerun again.
     """
     meeting = session.get(Meeting, item_id)
     if not meeting:
@@ -520,6 +547,9 @@ def prepare_meeting_for_reingest(session: DBSession, item_id: int) -> Meeting | 
 
     chunks_deleted = clear_item_chunks(meeting, session)
     tasks_detached = detach_meeting_tasks(session, meeting)
+    # Committed with the cleared chunks before the LLM call, so a worker lost
+    # mid-call leaves it for cleanup_stuck_meetings rather than looking done.
+    mark_in_flight(meeting, RETRYING if retry else "processing")
     logger.info(
         f"Prepared meeting {item_id} for reingest: "
         f"cleared {chunks_deleted} chunks, detached {tasks_detached} tasks"
@@ -539,8 +569,8 @@ def execute_meeting_processing(
     Run the full processing pipeline on a meeting.
 
     This is the shared processing step for both ingest and reingest:
-    1. Extract summary, notes, and action items via LLM
-    2. Link attendees to Person records
+    1. Link attendees to Person records
+    2. Extract summary, notes, and action items via LLM
     3. Generate embeddings
 
     Args:
@@ -553,6 +583,19 @@ def execute_meeting_processing(
         Dict with processing results
     """
     try:
+        attendee_result = {"linked": 0, "created": 0, "skipped": []}
+        if attendee_names or attendee_emails or attendee_pairs:
+            attendee_result = link_attendees(
+                session,
+                meeting,
+                attendee_names=attendee_names or [],
+                attendee_emails=attendee_emails or [],
+                attendee_pairs=attendee_pairs or [],
+            )
+        # Before the slow LLM call: releases the ingest's call locks, and keeps
+        # the attendees a second recording is matched by even if extraction fails.
+        session.commit()
+
         extract_result = extract_and_update_meeting(session, meeting)
 
         # Bail out early if extraction itself failed — don't proceed to
@@ -568,16 +611,6 @@ def execute_meeting_processing(
                 "meeting_id": meeting.id,
                 "external_id": meeting.external_id,
             }
-
-        attendee_result = {"linked": 0, "created": 0, "skipped": []}
-        if attendee_names or attendee_emails or attendee_pairs:
-            attendee_result = link_attendees(
-                session,
-                meeting,
-                attendee_names=attendee_names or [],
-                attendee_emails=attendee_emails or [],
-                attendee_pairs=attendee_pairs or [],
-            )
 
         session.commit()
         session.refresh(meeting)
@@ -624,6 +657,167 @@ def execute_meeting_processing(
         return {"status": "error", "error": str(e), "meeting_id": meeting.id}
 
 
+# Two notetakers in one call record nearly the same stretch of it; a recording
+# restarted after a drop, or the next meeting under the same title, barely
+# overlaps the first.
+MIN_SHARED_FRACTION = 0.5
+# Without a duration, only recordings starting this close are one call.
+SAME_START_WINDOW = timedelta(minutes=5)
+# How far back to look for a stored recording that may overlap a new one.
+LONGEST_CALL = timedelta(days=1)
+
+
+@dataclass(frozen=True)
+class Call:
+    """What tells two recordings of one call from two meetings."""
+
+    start: datetime | None
+    duration: timedelta | None
+    calendar_event_uid: str | None
+    title: str
+    emails: frozenset[str]
+
+    @property
+    def reach(self) -> datetime | None:
+        """The latest start a recording of this call can have."""
+        if self.start is None:
+            return None
+        return self.start + max(self.duration or timedelta(0), SAME_START_WINDOW)
+
+
+def normalised_emails(emails: Iterable[str | None]) -> frozenset[str]:
+    # Fireflies sometimes joins several addresses with commas in one entry.
+    return frozenset(
+        part.strip().lower() for email in emails for part in (email or "").split(",") if part.strip()
+    )
+
+
+def make_call(
+    start: datetime | None,
+    duration_minutes: float | None,
+    calendar_event_uid: str | None,
+    title: str | None,
+    emails: Iterable[str | None],
+) -> Call:
+    if start is not None and start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    return Call(
+        start=start,
+        duration=timedelta(minutes=duration_minutes) if duration_minutes else None,
+        calendar_event_uid=calendar_event_uid or None,
+        title=" ".join((title or "").casefold().split()),
+        emails=normalised_emails(emails),
+    )
+
+
+def overlapping(a: Call, b: Call) -> bool:
+    if a.start is None or b.start is None:
+        return False
+    if not (a.duration and b.duration):
+        return abs(a.start - b.start) <= SAME_START_WINDOW
+    shared = min(a.start + a.duration, b.start + b.duration) - max(a.start, b.start)
+    return shared >= min(a.duration, b.duration) * MIN_SHARED_FRACTION
+
+
+def same_call(a: Call, b: Call, owner_emails: frozenset[str]) -> bool:
+    """Calendar ids aren't shared across calendar providers, so differing ids
+    don't rule out one call; title and a guest still match it. The owner is in
+    every call they record, so their addresses don't count as a guest."""
+    if not overlapping(a, b):
+        return False
+    if a.calendar_event_uid and a.calendar_event_uid == b.calendar_event_uid:
+        return True
+    return bool(a.title) and a.title == b.title and bool((a.emails & b.emails) - owner_emails)
+
+
+def owner_emails(session: DBSession, user_id: int) -> frozenset[str]:
+    user = session.get(User, user_id)
+    if user is None:
+        return frozenset()
+    person_emails = contact_values((user.person.contact_info or {}).get("email")) if user.person else []
+    return normalised_emails([user.email, *person_emails])
+
+
+def stored_call(meeting: Meeting) -> Call:
+    return make_call(
+        meeting.meeting_date,
+        meeting.duration_minutes,
+        meeting.calendar_event_uid,
+        meeting.title,
+        (email for person in meeting.people for email in contact_values((person.contact_info or {}).get("email"))),
+    )
+
+
+def meeting_owner():
+    """A synced meeting's creator is filled from its account's owner only once processed."""
+    return func.coalesce(Meeting.creator_id, TranscriptAccount.user_id)
+
+
+def owned_meetings(session: DBSession):
+    return session.query(Meeting).outerjoin(
+        TranscriptAccount, Meeting.transcript_account_id == TranscriptAccount.id
+    )
+
+
+def find_recorded_call(session: DBSession, owner_id: int, source_tool: str, call: Call) -> Meeting | None:
+    """The owner's stored meeting from `source_tool` that recorded `call`, if any."""
+    if call.start is None or call.reach is None:
+        return None
+    candidates = (
+        owned_meetings(session)
+        .filter(
+            meeting_owner() == owner_id,
+            Meeting.source_tool == source_tool,
+            Meeting.meeting_date.between(call.start - LONGEST_CALL, call.reach),
+        )
+        .options(defer(Meeting.content), selectinload(Meeting.people))
+        .order_by(Meeting.id)
+    )
+    ignored = owner_emails(session, owner_id)
+    return next((m for m in candidates if same_call(call, stored_call(m), ignored)), None)
+
+
+def earlier_recording(
+    session: DBSession,
+    source_tool: str | None,
+    creator_id: int | None,
+    transcript_account_id: int | None,
+    call: Call,
+) -> Meeting | None:
+    """The stored meeting `call` is a second recording of, for the same owner only.
+
+    Takes locks held until the session commits: two recordings of a call that
+    arrive together would otherwise both find nothing stored and both be kept.
+    """
+    account = transcript_account_id and session.get(TranscriptAccount, transcript_account_id)
+    owner_id = creator_id if creator_id is not None else account and account.user_id
+    if not owner_id or not source_tool or call.start is None:
+        return None
+    # Sorted, so two ingests needing the same pair of locks take them in one order.
+    keys = sorted(
+        key
+        for key in (
+            call.calendar_event_uid and f"cal:{call.calendar_event_uid}",
+            call.title and f"title:{call.title}",
+        )
+        if key
+    )
+    for key in keys:
+        lock_key = func.hashtextextended(f"meeting_call:{owner_id}:{source_tool}:{key}", 0)
+        session.execute(select(func.pg_advisory_xact_lock(lock_key)))
+    return find_recorded_call(session, owner_id, source_tool, call)
+
+
+def recording_exists(
+    session: DBSession, recorded: Meeting, external_id: str | None, job_id: int | None
+) -> dict:
+    logger.info(f"Meeting {external_id} is another recording of meeting {recorded.id}")
+    if job_id:
+        job_utils.complete_job(session, job_id, result_id=recorded.id, result_type="Meeting")
+        session.commit()
+    return {"status": "duplicate", "meeting_id": recorded.id, "external_id": external_id}
+
+
 def find_meeting(session: DBSession, external_id: str | None) -> Meeting | None:
     if not external_id:
         return None
@@ -655,9 +849,13 @@ def process_meeting(
     creator_id: int | None = None,
     attendee_pairs: list[tuple[str, str]] | None = None,
     replace: bool = False,
+    calendar_event_uid: str | None = None,
 ):
     """
     Process a new meeting transcript.
+
+    A second recording of a call its owner already has from the same tool
+    (see ``same_call``) is not stored.
 
     Creates meeting record, extracts summary/notes/action items via LLM,
     links attendees to Person records, and generates embeddings.
@@ -675,6 +873,7 @@ def process_meeting(
         creator_id: Uploader; synced meetings inherit their account's owner
         attendee_pairs: (email, name) pairs known to belong to one attendee
         replace: Overwrite and reprocess a meeting already stored under external_id
+        calendar_event_uid: The source's id for the calendar event occurrence
     """
     logger.info(f"Processing new meeting (external_id={external_id}, job_id={job_id})")
 
@@ -701,10 +900,28 @@ def process_meeting(
             meeting.title = title
             meeting.meeting_date = parse_date(meeting_date)
             meeting.duration_minutes = duration_minutes
-            meeting.extraction_status = "processing"
             session.flush()
+        elif existing and existing.extraction_status == "processing":
+            # A worker lost mid-extraction had its task redelivered. Nothing
+            # past the pre-LLM commit was kept, so this reruns from there.
+            meeting = existing
+            mark_in_flight(meeting, RETRYING)
         elif existing:
             return meeting_exists(session, existing, job_id)
+        elif recorded := earlier_recording(
+            session,
+            source_tool,
+            creator_id,
+            transcript_account_id,
+            make_call(
+                parse_date(meeting_date),
+                duration_minutes,
+                calendar_event_uid,
+                title,
+                [*(attendee_emails or []), *(email for email, _ in attendee_pairs or [])],
+            ),
+        ):
+            return recording_exists(session, recorded, external_id, job_id)
         else:
             try:
                 meeting = create_meeting_record(
@@ -721,6 +938,7 @@ def process_meeting(
                     transcript_account_id=transcript_account_id,
                     creator_id=creator_id,
                     attendee_pairs=attendee_pairs,
+                    calendar_event_uid=calendar_event_uid,
                 )
             except IntegrityError:
                 # Lost a race with another ingest of the same meeting (webhook
@@ -745,6 +963,7 @@ def process_meeting(
 def reprocess_meeting(
     item_id: int,
     job_id: int | None = None,
+    retry: bool = False,
 ):
     """
     Reprocess an existing meeting.
@@ -755,6 +974,7 @@ def reprocess_meeting(
     Args:
         item_id: ID of the meeting to reprocess
         job_id: Optional job ID for status tracking
+        retry: Rerunning a run cleanup_stuck_meetings found lost
     """
     logger.info(f"Reprocessing meeting {item_id} (job_id={job_id})")
 
@@ -763,7 +983,7 @@ def reprocess_meeting(
             job_utils.start_job(session, job_id)
             session.commit()
 
-        meeting = prepare_meeting_for_reingest(session, item_id)
+        meeting = prepare_meeting_for_reingest(session, item_id, retry=retry)
         if not meeting:
             error = f"Meeting {item_id} not found"
             if job_id:
@@ -786,40 +1006,127 @@ STUCK_MEETING_TIMEOUT_HOURS = 1
 @app.task(name=CLEANUP_STUCK_MEETINGS)
 @safe_task_execution
 def cleanup_stuck_meetings() -> dict:
-    """
-    Reset meetings stuck in 'processing' status due to worker crashes.
-
-    This task should be run periodically (e.g., every hour) to clean up
-    meetings that got stuck when a worker crashed mid-processing.
-
-    Returns:
-        dict with count of reset meetings
-    """
+    """Rerun once the meetings whose extraction a lost worker left unfinished,
+    and mark failed those already rerun once. A `pending` meeting is one an
+    older release's cleanup reset and never reran."""
     cutoff = datetime.now(timezone.utc) - timedelta(hours=STUCK_MEETING_TIMEOUT_HOURS)
 
     with make_session() as session:
-        # Find meetings that have been 'processing' for too long
-        stuck_meetings = (
+        stuck = (
             session.query(Meeting)
             .filter(
-                Meeting.extraction_status == "processing",
+                Meeting.extraction_status.in_(("pending", "processing", RETRYING)),
                 Meeting.updated_at < cutoff,
             )
             .all()
         )
-
-        count = 0
-        for meeting in stuck_meetings:
-            logger.warning(
-                f"Resetting stuck meeting {meeting.id} "
-                f"(stuck since {meeting.updated_at})"
-            )
-            meeting.extraction_status = "pending"
-            count += 1
-
+        retried = [m.id for m in stuck if m.extraction_status != RETRYING]
+        failed = [m.id for m in stuck if m.extraction_status == RETRYING]
+        for meeting in stuck:
+            if meeting.id in failed:
+                meeting.extraction_status = "failed"
+                continue
+            mark_in_flight(meeting, RETRYING)
         session.commit()
 
-        if count > 0:
-            logger.info(f"Reset {count} stuck meetings")
+    for item_id in retried:
+        app.send_task(REPROCESS_MEETING, kwargs={"item_id": item_id, "retry": True})
+    if stuck:
+        logger.warning(f"Stuck meetings: retrying {retried}, gave up on {failed}")
+    return {"retried": retried, "failed": failed}
 
-        return {"reset_count": count}
+
+def recording_groups(meetings: Iterable[Meeting], owner_emails: frozenset[str]) -> list[list[Meeting]]:
+    """Group one owner's meetings from one tool, sorted by date, into
+    recordings of one call. Each member is the same call as every other, so a
+    run of overlapping meetings doesn't chain into one group."""
+    groups: list[list[tuple[Meeting, Call]]] = []
+    open_groups: list[list[tuple[Meeting, Call]]] = []
+    for meeting in meetings:
+        call = stored_call(meeting)
+        open_groups = [g for g in open_groups if all(c.reach and call.start and c.reach >= call.start for _, c in g)]
+        group = next((g for g in open_groups if all(same_call(call, c, owner_emails) for _, c in g)), None)
+        if group is None:
+            group = []
+            open_groups.append(group)
+            groups.append(group)
+        group.append((meeting, call))
+    return [[meeting for meeting, _ in group] for group in groups if len(group) > 1]
+
+
+def drop_recording(session: DBSession, meeting: Meeting) -> None:
+    """Delete a meeting, its vectors and its untouched tasks; tasks someone
+    started or finished are detached and kept."""
+    untouched = (
+        session.query(Task)
+        .filter(Task.source_item_id == meeting.id, Task.status.in_(UNTOUCHED_TASK_STATUSES))
+        .all()
+    )
+    for task in untouched:
+        delete_orphaned_item(task, session)
+    session.flush()
+    detach_meeting_tasks(session, meeting)
+    delete_orphaned_item(meeting, session)
+
+
+@app.task(name=DEDUPE_MEETINGS)
+@tracked_task
+def dedupe_meetings(dry_run: bool = False) -> dict:
+    """Delete second recordings of a call (see ``same_call``). Keeps the copy
+    whose tasks someone worked on, so those don't sit beside pending copies of
+    themselves, else one whose processing finished, else the longest
+    transcript, else the earliest stored. Safe to re-run."""
+    with make_session() as session:
+        rows = (
+            owned_meetings(session)
+            .add_columns(meeting_owner(), func.length(Meeting.content))
+            .filter(
+                meeting_owner().isnot(None),
+                Meeting.source_tool.isnot(None),
+                Meeting.meeting_date.isnot(None),
+            )
+            .options(defer(Meeting.content), selectinload(Meeting.people))
+            .order_by(meeting_owner(), Meeting.source_tool, Meeting.meeting_date, Meeting.id)
+            .all()
+        )
+        lengths = {meeting.id: length or 0 for meeting, _, length in rows}
+        worked_on = set(
+            session.scalars(
+                select(Task.source_item_id)
+                .join(Meeting, Meeting.id == Task.source_item_id)
+                .where(Task.status.not_in(UNTOUCHED_TASK_STATUSES))
+                .distinct()
+            )
+        )
+        groups = [
+            group
+            for (owner_id, _), owned in itertools.groupby(rows, key=lambda row: (row[1], row[0].source_tool))
+            for group in recording_groups((meeting for meeting, *_ in owned), owner_emails(session, owner_id))
+        ]
+        plan = [
+            (keeper, [m for m in group if m is not keeper])
+            for group in groups
+            for keeper in [
+                max(
+                    group,
+                    key=lambda m: (
+                        m.id in worked_on,
+                        m.extraction_status in ("complete", "skipped"),
+                        lengths[m.id],
+                        -m.id,
+                    ),
+                )
+            ]
+        ]
+        result = {
+            "dry_run": dry_run,
+            "groups": [{"keep": keeper.id, "delete": [m.id for m in dropped]} for keeper, dropped in plan],
+        }
+        if dry_run:
+            return result
+        for _, dropped in plan:
+            for meeting in dropped:
+                drop_recording(session, meeting)
+            session.commit()
+    logger.info("Deleted %d second recordings of calls", sum(len(d) for _, d in plan))
+    return result

@@ -140,6 +140,7 @@ SYNC_CALENDAR_EVENT = f"{CALENDAR_ROOT}.sync_calendar_event"
 PROCESS_MEETING = f"{MEETINGS_ROOT}.process_meeting"
 REPROCESS_MEETING = f"{MEETINGS_ROOT}.reprocess_meeting"
 CLEANUP_STUCK_MEETINGS = f"{MEETINGS_ROOT}.cleanup_stuck_meetings"
+DEDUPE_MEETINGS = f"{MEETINGS_ROOT}.dedupe_meetings"
 
 # Transcript provider sync tasks (Fireflies, Granola, ...)
 SYNC_ALL_TRANSCRIPT_ACCOUNTS = f"{TRANSCRIPTS_ROOT}.sync_all_transcript_accounts"
@@ -343,6 +344,7 @@ app.conf.update(
             "queue": f"{settings.CELERY_QUEUE_PREFIX}-maintenance"
         },
         CLEANUP_JUNK_NOTES: {"queue": f"{settings.CELERY_QUEUE_PREFIX}-maintenance"},
+        DEDUPE_MEETINGS: {"queue": f"{settings.CELERY_QUEUE_PREFIX}-maintenance"},
         f"{NOTES_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-notes"},
         f"{OBSERVATIONS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-notes"},
         f"{PHOTO_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-photos"},

@@ -2,13 +2,14 @@
 
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
-from unittest.mock import patch
+from datetime import datetime, timedelta, timezone
+from unittest.mock import call, patch
 
 import anthropic
 import fakeredis
 import httpx2
 import pytest
+from sqlalchemy import update
 
 from memory.agents import triggers
 from memory.agents.triggers import IngestConfig
@@ -24,7 +25,8 @@ from memory.common.db.models import (
     TranscriptAccount,
 )
 from memory.common.db.models.source_items import Meeting
-from memory.common.db.models.source_item import Chunk
+from memory.common.celery_app import REPROCESS_MEETING
+from memory.common.db.models.source_item import Chunk, SourceItem
 from memory.workers.tasks import meetings
 from memory.common.content_processing import create_content_hash
 from memory.common.people import find_or_create_person, make_identifier
@@ -1116,6 +1118,156 @@ def test_process_meeting_losing_an_insert_race_returns_exists(
     assert mock_make_session.query(Meeting).count() == 1
 
 
+class WorkerKilled(BaseException):
+    """A worker SIGKILLed, OOMed or past its hard time limit stops with no
+    handler running; a BaseException skips them all the same way."""
+
+
+def killed_mid_extraction():
+    return patch.object(meetings, "call_extraction_llm", side_effect=WorkerKilled)
+
+
+@pytest.mark.parametrize("stored_before, replace", [([], False), (["Ann: The first draft."], True)])
+def test_a_meeting_whose_worker_died_mid_extraction_is_processed_when_redelivered(
+    scripted_llm, llm_key, regular_user, sample_extraction_response, sample_transcript, mock_make_session, qdrant,
+    stored_before, replace,
+):
+    scripted_llm.script = [submitted(sample_extraction_response) for _ in range(len(stored_before) + 1)]
+    for transcript in stored_before:
+        meetings.process_meeting(creator_id=regular_user.id, transcript=transcript, external_id="ff-1")
+    ingest = {"creator_id": regular_user.id, "transcript": sample_transcript, "external_id": "ff-1", "replace": replace}
+    with killed_mid_extraction(), pytest.raises(WorkerKilled):
+        meetings.process_meeting(**ingest)
+    mock_make_session.rollback()
+
+    result = meetings.process_meeting(**ingest)
+
+    meeting = mock_make_session.get(Meeting, result["meeting_id"])
+    tasks = mock_make_session.query(Task).filter(Task.source_item_id == meeting.id).count()
+    assert (result["status"], meeting.extraction_status, meeting.content, tasks) == (
+        "success", "complete", sample_transcript, 3
+    )
+    assert mock_make_session.query(Meeting).count() == 1
+
+
+@pytest.mark.parametrize("status", ["retrying", "failed", "extracted", "complete", "skipped"])
+def test_a_redelivered_ingest_reruns_only_a_first_attempt_that_died(
+    status, scripted_llm, regular_user, sample_transcript, mock_make_session, qdrant
+):
+    """A second loss is left to cleanup_stuck_meetings to give up on, and a failure stays failed."""
+    meeting = meeting_for(mock_make_session, regular_user.id)
+    meeting.external_id, meeting.extraction_status = "ff-1", status
+    mock_make_session.commit()
+
+    result = meetings.process_meeting(creator_id=regular_user.id, transcript=sample_transcript, external_id="ff-1")
+
+    assert result == {"status": "exists", "meeting_id": meeting.id, "external_id": "ff-1"}
+    assert (meeting.extraction_status, scripted_llm.requests) == (status, [])
+
+
+@pytest.mark.parametrize("retry, kept", [(False, "processing"), (True, "retrying")])
+def test_a_reprocess_lost_mid_extraction_leaves_the_meeting_stuck_for_cleanup(
+    retry, kept, llm_key, regular_user, mock_make_session, qdrant
+):
+    meeting = meeting_for(mock_make_session, regular_user.id)
+    meeting.extraction_status = "complete"
+    mock_make_session.commit()
+
+    with killed_mid_extraction(), pytest.raises(WorkerKilled):
+        meetings.reprocess_meeting(item_id=meeting.id, retry=retry)
+    mock_make_session.rollback()
+
+    assert mock_make_session.get(Meeting, meeting.id).extraction_status == kept
+
+
+def backdate(session, meeting: Meeting, hours: int) -> None:
+    session.execute(
+        update(SourceItem)
+        .where(SourceItem.id == meeting.id)
+        .values(updated_at=datetime.now(timezone.utc) - timedelta(hours=hours, minutes=1))
+    )
+    session.commit()
+
+
+def reprocesses_sent(dispatch) -> list:
+    return [c for c in dispatch.call_args_list if c.args == (REPROCESS_MEETING,)]
+
+
+@pytest.mark.parametrize(
+    "status, hours_ago, after, retried",
+    [
+        ("processing", 2, "retrying", True),
+        ("pending", 2, "retrying", True),
+        ("retrying", 2, "failed", False),
+        ("processing", 0, "processing", False),
+        ("pending", 0, "pending", False),
+        ("failed", 2, "failed", False),
+    ],
+)
+def test_cleanup_stuck_meetings_retries_a_lost_meeting_once(
+    status, hours_ago, after, retried, db_session, regular_user, no_celery_dispatch
+):
+    meeting = meeting_for(db_session, regular_user.id)
+    meeting.extraction_status = status
+    db_session.commit()
+    backdate(db_session, meeting, hours_ago)
+
+    meetings.cleanup_stuck_meetings()
+
+    db_session.refresh(meeting)
+    assert meeting.extraction_status == after
+    assert reprocesses_sent(no_celery_dispatch) == [
+        call(REPROCESS_MEETING, kwargs={"item_id": meeting.id, "retry": True})
+    ] * retried
+
+
+@pytest.mark.parametrize(
+    "status, rerun, in_flight",
+    [
+        ("complete", lambda m, user: meetings.reprocess_meeting(item_id=m.id), "processing"),
+        (
+            "processing",
+            lambda m, user: meetings.process_meeting(creator_id=user.id, transcript="Bo: hi", external_id="ff-1"),
+            "retrying",
+        ),
+    ],
+)
+def test_cleanup_stuck_meetings_leaves_a_run_started_on_an_old_meeting(
+    status, rerun, in_flight, llm_key, regular_user, mock_make_session, qdrant, no_celery_dispatch
+):
+    meeting = meeting_for(mock_make_session, regular_user.id)
+    meeting.external_id, meeting.extraction_status = "ff-1", status
+    mock_make_session.commit()
+    backdate(mock_make_session, meeting, 2)
+    with killed_mid_extraction(), pytest.raises(WorkerKilled):
+        rerun(meeting, regular_user)
+    mock_make_session.rollback()
+
+    meetings.cleanup_stuck_meetings()
+
+    mock_make_session.refresh(meeting)
+    assert (meeting.extraction_status, reprocesses_sent(no_celery_dispatch)) == (in_flight, [])
+
+
+def test_cleanup_stuck_meetings_leaves_the_rerun_it_started(
+    llm_key, regular_user, mock_make_session, qdrant, no_celery_dispatch
+):
+    meeting = meeting_for(mock_make_session, regular_user.id)
+    meeting.extraction_status = "processing"
+    mock_make_session.commit()
+    backdate(mock_make_session, meeting, 2)
+    meetings.cleanup_stuck_meetings()
+    [sent] = reprocesses_sent(no_celery_dispatch)
+    with killed_mid_extraction(), pytest.raises(WorkerKilled):
+        meetings.reprocess_meeting(**sent.kwargs["kwargs"])
+    mock_make_session.rollback()
+
+    meetings.cleanup_stuck_meetings()
+
+    mock_make_session.refresh(meeting)
+    assert (meeting.extraction_status, len(reprocesses_sent(no_celery_dispatch))) == ("retrying", 1)
+
+
 def test_process_meeting_replace_updates_the_stored_meeting(
     scripted_llm, llm_key, regular_user, sample_extraction_response, sample_transcript, mock_make_session, qdrant
 ):
@@ -1459,3 +1611,231 @@ def test_process_meeting_empty_attendees_no_prefix(
     meeting = mock_make_session.query(Meeting).first()
     assert meeting is not None
     assert meeting.content == transcript
+
+# ============================================================================
+# Two recordings of one call
+# ============================================================================
+
+
+CALL_START = datetime(2026, 11, 5, 16, 30, tzinfo=timezone.utc)
+
+
+def at(minutes: float) -> str:
+    return (CALL_START + timedelta(minutes=minutes)).isoformat()
+
+
+LATER = at(0.25)
+
+
+def fireflies_account(db, user):
+    account = TranscriptAccount(user_id=user.id, name=f"FF {user.id}", provider="fireflies")
+    account.api_key = "k"
+    db.add(account)
+    db.commit()
+    return account
+
+
+def ingest_call(account, external_id, **overrides):
+    return meetings.process_meeting(**{
+        "transcript": f"Dan: Let's ship release {external_id}.",
+        "title": "Weekly sync",
+        "meeting_date": at(0),
+        "duration_minutes": 30,
+        "attendee_emails": ["regular@example.com", "chris@example.com"],
+        "source_tool": "fireflies",
+        "external_id": external_id,
+        "transcript_account_id": account.id,
+        "calendar_event_uid": "evt-1",
+        **overrides,
+    })
+
+
+@pytest.mark.parametrize(
+    "first, second",
+    [
+        # Same calendar occurrence: titles and attendee lists may differ per notetaker.
+        ({}, {"meeting_date": LATER, "title": "Notetaker: weekly", "attendee_emails": ["x@other.com"]}),
+        # Same call even though the calendar ids are not shared.
+        ({}, {"meeting_date": LATER, "calendar_event_uid": "evt-2", "attendee_emails": ["chris@example.com"]}),
+        ({}, {"meeting_date": LATER, "calendar_event_uid": None, "title": "  weekly   SYNC"}),
+        ({"calendar_event_uid": None}, {"meeting_date": LATER, "attendee_emails": ["CHRIS@example.com"]}),
+        # A notetaker that joined late recorded part of the same call.
+        ({}, {"meeting_date": at(20), "duration_minutes": 10}),
+        ({"duration_minutes": None}, {"meeting_date": at(4)}),
+    ],
+)
+def test_a_second_recording_of_a_call_is_not_ingested(
+    scripted_llm, llm_key, regular_user, sample_extraction_response, mock_make_session, qdrant, first, second
+):
+    scripted_llm.script = [submitted(sample_extraction_response)]
+    account = fireflies_account(mock_make_session, regular_user)
+    kept = ingest_call(account, "ff-1", **first)
+
+    result = ingest_call(account, "ff-2", **second)
+
+    assert result == {"status": "duplicate", "meeting_id": kept["meeting_id"], "external_id": "ff-2"}
+    assert [m.id for m in mock_make_session.query(Meeting)] == [kept["meeting_id"]]
+    assert {t.source_item_id for t in mock_make_session.query(Task)} == {kept["meeting_id"]}
+    assert len(scripted_llm.requests) == 1
+
+
+@pytest.mark.parametrize(
+    "first, second",
+    [
+        ({}, {"calendar_event_uid": "evt-2", "title": "Hiring sync"}),
+        ({}, {"calendar_event_uid": None, "attendee_emails": ["x@other.com"]}),
+        # The owner is in every call they record, so sharing only them says nothing.
+        (
+            {"calendar_event_uid": None, "attendee_emails": ["regular@example.com", "ann@x.com"]},
+            {"calendar_event_uid": None, "meeting_date": at(5), "attendee_emails": ["Regular@example.com", "bo@x.com"]},
+        ),
+        # A recording restarted after the notetaker dropped holds the rest of the call.
+        ({"duration_minutes": 3}, {"meeting_date": at(6), "duration_minutes": 50}),
+        ({"calendar_event_uid": None}, {"calendar_event_uid": None, "meeting_date": at(30)}),
+        ({"duration_minutes": None}, {"meeting_date": at(6)}),
+    ],
+)
+def test_different_meetings_at_similar_times_are_both_ingested(regular_user, mock_make_session, qdrant, first, second):
+    account = fireflies_account(mock_make_session, regular_user)
+    ingest_call(account, "ff-1", **first)
+
+    result = ingest_call(account, "ff-2", **second)
+
+    assert result["status"] == "success"
+    assert mock_make_session.query(Meeting).count() == 2
+
+
+def test_another_users_recording_of_the_same_call_is_ingested(regular_user, admin_user, mock_make_session, qdrant):
+    ingest_call(fireflies_account(mock_make_session, regular_user), "ff-1")
+
+    result = ingest_call(fireflies_account(mock_make_session, admin_user), "ff-2")
+
+    assert result["status"] == "success"
+    assert mock_make_session.query(Meeting).count() == 2
+
+
+def test_a_call_whose_extraction_failed_still_recognises_its_second_recording(
+    scripted_llm, llm_key, regular_user, mock_make_session, qdrant
+):
+    scripted_llm.script = [connection_dropped]
+    account = fireflies_account(mock_make_session, regular_user)
+    first = ingest_call(account, "ff-1", calendar_event_uid=None)
+
+    result = ingest_call(account, "ff-2", calendar_event_uid=None, meeting_date=LATER)
+
+    assert first["status"] == "error"
+    assert result == {"status": "duplicate", "meeting_id": first["meeting_id"], "external_id": "ff-2"}
+
+
+def stored_call(db, account, people, *, content, minutes=0.0, duration=30, title="Weekly sync", statuses=("pending", "done")):
+    meeting = Meeting(
+        title=title,
+        content=content,
+        sha256=unique_sha256(content),
+        modality="meeting",
+        meeting_date=CALL_START + timedelta(minutes=minutes),
+        duration_minutes=duration,
+        source_tool="fireflies",
+        transcript_account=account,
+        people=list(people),
+    )
+    meeting.chunks = [_make_mock_chunk(0)]
+    db.add_all([
+        meeting,
+        *(
+            Task(task_title=f"{status} task", sha256=unique_sha256(status), status=status, source_item=meeting)
+            for status in statuses
+        ),
+    ])
+    db.commit()
+    return meeting
+
+
+@pytest.fixture
+def duplicated_call(mock_make_session, regular_user, admin_user, request):
+    db = mock_make_session
+    dan = Person(identifier="dan", display_name="Dan", contact_info={"email": "dan@example.com"}, user_id=regular_user.id)
+    chris = Person(identifier="chris", display_name="Chris", contact_info={"email": ["chris@example.com"]})
+    eve = Person(identifier="eve", display_name="Eve", contact_info={"email": "eve@example.com"})
+    account = fireflies_account(db, regular_user)
+    (first_content, first_statuses), (second_content, second_statuses) = request.param
+    copies = [
+        stored_call(db, account, [dan, chris], content=first_content, statuses=first_statuses),
+        stored_call(db, account, [chris], content=second_content, minutes=0.25, statuses=second_statuses),
+    ]
+    bystanders = [
+        stored_call(db, account, [dan, chris], content="other", title="Hiring sync"),
+        # Shares only the owner with the copies.
+        stored_call(db, account, [dan, eve], content="eve's call", minutes=1),
+        # Starts after the copies end.
+        stored_call(db, account, [chris], content="next call", minutes=31),
+        stored_call(db, fireflies_account(db, admin_user), [dan, chris], content=first_content),
+    ]
+    return copies, bystanders
+
+
+WORKED_ON = ("pending", "done")
+
+
+@pytest.mark.parametrize(
+    "duplicated_call", [(("Dan: hi", WORKED_ON), ("Dan: hi. Chris: let's ship it.", WORKED_ON))], indirect=True
+)
+def test_dedupe_meetings_deletes_second_recordings(duplicated_call, mock_make_session, qdrant):
+    copies, bystanders = duplicated_call
+    keeper, dropped = copies[1], copies[0]
+    ids = {"keeper": keeper.id, "dropped": dropped.id}
+    done_task = mock_make_session.query(Task.id).filter(Task.source_item_id == dropped.id, Task.status == "done").scalar()
+
+    result = meetings.dedupe_meetings()
+
+    db = mock_make_session
+    db.expire_all()
+    assert result["groups"] == [{"keep": ids["keeper"], "delete": [ids["dropped"]]}]
+    assert {m.id for m in db.query(Meeting)} == {ids["keeper"], *(b.id for b in bystanders)}
+    assert db.query(Chunk).filter(Chunk.source_id == ids["dropped"]).count() == 0
+    assert {(t.task_title, t.source_item_id) for t in db.query(Task) if t.source_item_id in (ids["dropped"], None)} == {
+        ("done task", None)
+    }
+    assert db.get(Task, done_task) is not None
+
+
+@pytest.mark.parametrize(
+    "duplicated_call, processed, kept",
+    [
+        ((("Dan: hi", WORKED_ON), ("Dan: hi. Chris: let's ship it.", WORKED_ON)), [], 1),
+        ((("Dan: hi", WORKED_ON), ("Dan: yo", WORKED_ON)), [], 0),
+        # Tasks someone worked on stay beside their meeting rather than a pending copy of them.
+        ((("Dan: hi", WORKED_ON), ("Dan: hi. Chris: let's ship it.", ("pending",))), [], 0),
+        ((("Dan: hi", ("pending",)), ("Dan: hi. Chris: let's ship it.", WORKED_ON)), [0], 1),
+        # A summary and embeddings beat a longer transcript that has neither.
+        ((("Dan: hi", WORKED_ON), ("Dan: hi. Chris: let's ship it.", WORKED_ON)), [0], 0),
+    ],
+    indirect=["duplicated_call"],
+)
+def test_dedupe_meetings_dry_run_picks_the_keeper_and_changes_nothing(
+    duplicated_call, processed, kept, mock_make_session, qdrant
+):
+    copies, _ = duplicated_call
+    for i in processed:
+        copies[i].extraction_status = "complete"
+    mock_make_session.commit()
+    before = (mock_make_session.query(Meeting).count(), mock_make_session.query(Task).count())
+
+    result = meetings.dedupe_meetings(dry_run=True)
+
+    assert result["groups"] == [{"keep": copies[kept].id, "delete": [copies[1 - kept].id]}]
+    assert (mock_make_session.query(Meeting).count(), mock_make_session.query(Task).count()) == before
+
+
+def test_dedupe_meetings_groups_only_recordings_that_overlap_each_other(mock_make_session, regular_user, qdrant):
+    db = mock_make_session
+    chris = Person(identifier="chris", display_name="Chris", contact_info={"email": "chris@example.com"})
+    account = fireflies_account(db, regular_user)
+    first, second, _ = (
+        stored_call(db, account, [chris], content=f"copy {i}", minutes=start, duration=60)
+        for i, start in enumerate((0, 20, 40))
+    )
+
+    result = meetings.dedupe_meetings(dry_run=True)
+
+    assert result["groups"] == [{"keep": first.id, "delete": [second.id]}]

@@ -33,6 +33,16 @@ a new, empty `## Unreleased` above it.
 - Google Drive folders whose sync takes over a minute (every first sync of a
   large folder) no longer fail with "transaction has been rolled back"; a
   folder's sync errors are recorded on it again.
+- A second recording of a call its owner already has (say a colleague's
+  Fireflies notetaker and yours both joined) is no longer stored, extracted or
+  turned into tasks. Two recordings are one call when at least half of the
+  shorter one overlaps the other (start within 5 minutes when a duration is
+  unknown) and they share the calendar event, or the title and an attendee
+  other than the owner. A recording restarted after a drop is kept.
+- A meeting whose worker died mid-extraction is rerun once, when its task is
+  redelivered or by the hourly stuck-meeting cleanup; if that run is lost too,
+  it is marked failed instead of sitting unextracted. Meetings an earlier
+  cleanup left `pending` get the same single rerun.
 
 ### Required env vars
 
@@ -48,11 +58,21 @@ None.
 
 ### Migrations
 
-None.
+- `20261204_meeting_cal_event_uid`: adds the nullable `meeting.calendar_event_uid`
+  column (the calendar event occurrence a meeting recorded). Fast.
 
 ### Post-deploy commands
 
-None.
+Delete the second recordings of calls stored before this release, with their
+vectors and their pending tasks; tasks someone started or finished are kept,
+detached from the meeting. Each call keeps the copy whose tasks someone
+worked on, else one whose processing finished, else the one with the longest
+transcript. Check the list with `--dry-run` first. Safe to re-run:
+
+```bash
+docker compose exec -T worker python - --wait maintenance dedupe-meetings --dry-run < tools/run_celery_task.py
+docker compose exec -T worker python - --wait maintenance dedupe-meetings < tools/run_celery_task.py
+```
 
 ## v0.4.8 (2026-11-06)
 

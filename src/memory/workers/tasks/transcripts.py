@@ -7,9 +7,9 @@ dispatches process_meeting for any transcript not yet stored, which covers
 other people's meetings and missed webhooks. The manual full rescan walks
 ``TRANSCRIPTS_RESCAN_LOOKBACK_DAYS`` the same way.
 
-Stubs whose ``external_id`` already exists in the DB are skipped before the
-heavyweight ``get_transcript`` fetch, so a steady-state walk is mostly
-list-page calls.
+Stubs whose ``external_id`` already exists in the DB, and second recordings
+of a call the account's owner already has, are skipped before the heavyweight
+``get_transcript`` fetch, so a steady-state walk is mostly list-page calls.
 """
 
 import logging
@@ -36,6 +36,7 @@ from memory.parsers.fireflies import (
     FirefliesError,
     build_meeting_kwargs,
 )
+from memory.workers.tasks.meetings import find_recorded_call, make_call, parse_date
 
 logger = logging.getLogger(__name__)
 
@@ -132,9 +133,9 @@ def dispatch_unseen(
     account: TranscriptAccount,
     db: DBSession,
 ) -> int:
-    """Pre-filter against existing external_ids, then fetch + dispatch each
-    unseen stub. Avoids wasted `get_transcript` calls on items we already
-    have. Returns count of successful dispatches.
+    """Pre-filter against existing external_ids and calls already recorded,
+    then fetch + dispatch each unseen stub. Avoids wasted `get_transcript`
+    calls on items we already have. Returns count of successful dispatches.
     """
     stub_ids = [s["id"] for s in stubs if s.get("id")]
     already = known_external_ids(db, stub_ids)
@@ -143,6 +144,15 @@ def dispatch_unseen(
     for stub in stubs:
         sid = stub.get("id")
         if not sid or sid in already:
+            continue
+        call = make_call(
+            parse_date(stub.get("dateString")),
+            stub.get("duration"),
+            stub.get("cal_id"),
+            stub.get("title"),
+            stub.get("participants") or [],
+        )
+        if find_recorded_call(db, account.user_id, "fireflies", call):
             continue
         full = client.get_transcript(sid)
         if not full:

@@ -2282,7 +2282,7 @@ class MeetingPayload(SourceItemPayload):
     source_tool: Annotated[str | None, "Tool that generated the transcript (fireflies, granola, etc.)"]
     summary: Annotated[str | None, "LLM-generated summary of the meeting"]
     notes: Annotated[str | None, "LLM-extracted key points and decisions"]
-    extraction_status: Annotated[str, "Status of LLM extraction: pending, processing, complete, skipped, failed"]
+    extraction_status: Annotated[str, "Status of LLM extraction: pending, processing, retrying, extracted, complete, skipped, failed"]
     # Note: 'people' is inherited from SourceItemPayload - for Meeting, it contains attendee IDs
     task_ids: Annotated[list[int], "IDs of Task records extracted from this meeting"]
     calendar_event_id: Annotated[int | None, "ID of linked CalendarEvent if available"]
@@ -2303,6 +2303,9 @@ class Meeting(SourceItem):
     duration_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_tool: Mapped[str | None] = mapped_column(Text, nullable=True)  # "fireflies", "granola", etc.
     external_id: Mapped[str | None] = mapped_column(Text, nullable=True)  # Dedup key from source (unique via partial index)
+    # The source's id for the calendar event occurrence (Fireflies `cal_id`): two
+    # notetakers on one call give two transcripts but the same occurrence.
+    calendar_event_uid: Mapped[str | None] = mapped_column(Text, nullable=True)
     calendar_event_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("calendar_event.id", ondelete="SET NULL"), nullable=True
     )
