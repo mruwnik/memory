@@ -19,8 +19,8 @@ from memory.common import embedding
 from memory.common import jobs as job_utils
 from memory.common.llms import PROVIDER_ERRORS
 from memory.common.db.connection import DBSession, make_session
-from memory.common.db.models import Person, Task, TranscriptAccount, User
-from memory.common.db.models.source_items import Meeting
+from memory.common.db.models import CalendarAccount, JobStatus, JobType, PendingJob, Person, Task, TranscriptAccount, User
+from memory.common.db.models.source_items import CalendarEvent, Meeting
 from memory.common.celery_app import (
     app,
     CLEANUP_STUCK_MEETINGS,
@@ -442,16 +442,15 @@ def extract_and_update_meeting(session: DBSession, meeting: Meeting) -> dict:
     """
     Run LLM extraction on a meeting and update it with extracted data.
 
-    A meeting no key pays for is kept with extraction "skipped". Returns dict
+    Leaves the meeting's in-flight status for the caller to finish, so a worker
+    lost before the meeting is stored leaves it for cleanup_stuck_meetings. A
+    meeting no key pays for is not extracted. Returns dict
     with extraction results including summary_length, notes_length,
     tasks_created, or error info on failure.
     """
     found = ingest_key(session, meeting, MEETING_EXTRACT)
     if found is None:
-        meeting.extraction_status = "skipped"
         return {"status": "skipped"}
-    meeting.extraction_status = "processing"
-    session.flush()
 
     try:
         extracted = call_extraction_llm(
@@ -467,7 +466,6 @@ def extract_and_update_meeting(session: DBSession, meeting: Meeting) -> dict:
     created_tasks = create_action_item_tasks(
         session, meeting, extracted.get("action_items", [])
     )
-    meeting.extraction_status = "extracted"
     logger.info(f"Created {len(created_tasks)} tasks from meeting {meeting.id}")
 
     return {
@@ -514,6 +512,7 @@ def create_meeting_record(
     """Create a new Meeting record from the provided data."""
     full_transcript = meeting_content(transcript, attendee_names, attendee_emails, attendee_pairs)
     meeting = Meeting(
+        size=len(full_transcript.encode()),
         title=title,
         meeting_date=parse_date(meeting_date),
         duration_minutes=duration_minutes,
@@ -557,6 +556,24 @@ def prepare_meeting_for_reingest(session: DBSession, item_id: int, retry: bool =
     return meeting
 
 
+def calendar_event_for(session: DBSession, meeting: Meeting) -> CalendarEvent | None:
+    """The meeting owner's calendar event it recorded. A recurring event's
+    occurrences can share one uid, so the one starting nearest the meeting."""
+    owner_id = meeting.resolve_creator_id()
+    if not meeting.calendar_event_uid or owner_id is None:
+        return None
+    events = (
+        session.query(CalendarEvent)
+        .join(CalendarAccount, CalendarEvent.calendar_account_id == CalendarAccount.id)
+        .filter(CalendarEvent.external_id == meeting.calendar_event_uid, CalendarAccount.user_id == owner_id)
+        .all()
+    )
+    held_at = meeting.meeting_date
+    if held_at is None:
+        return next(iter(events), None)
+    return min(events, key=lambda event: abs(event.start_time - held_at), default=None)
+
+
 def execute_meeting_processing(
     session: DBSession,
     meeting: Meeting,
@@ -582,6 +599,7 @@ def execute_meeting_processing(
     Returns:
         Dict with processing results
     """
+    extract_result = None
     try:
         attendee_result = {"linked": 0, "created": 0, "skipped": []}
         if attendee_names or attendee_emails or attendee_pairs:
@@ -592,6 +610,7 @@ def execute_meeting_processing(
                 attendee_emails=attendee_emails or [],
                 attendee_pairs=attendee_pairs or [],
             )
+        meeting.calendar_event = meeting.calendar_event or calendar_event_for(session, meeting)
         # Before the slow LLM call: releases the ingest's call locks, and keeps
         # the attendees a second recording is matched by even if extraction fails.
         session.commit()
@@ -644,11 +663,9 @@ def execute_meeting_processing(
 
     except Exception as e:
         logger.exception(f"Failed to process meeting {meeting.id}: {e}")
-        # Only mark as "failed" if extraction itself failed (status still "processing")
-        # If status is "extracted", extraction succeeded but embedding failed - preserve that
-        if meeting.extraction_status == "processing":
-            meeting.extraction_status = "failed"
-        # If "extracted", leave it so we know extraction worked but embedding didn't
+        # "extracted": extraction worked, but the meeting wasn't stored.
+        outcome = (extract_result or {}).get("status", "")
+        meeting.extraction_status = {"success": "extracted", "skipped": "skipped"}.get(outcome, "failed")
         # Tasks would point at a meeting search can't return; reprocessing recreates them.
         delete_meeting_tasks(session, meeting)
         if job_id:
@@ -885,27 +902,26 @@ def process_meeting(
         existing = find_meeting(session, external_id)
         content = meeting_content(transcript, attendee_names, attendee_emails, attendee_pairs)
         sha256 = hashlib.sha256(content.encode()).digest()
-        if (
+        replacing = bool(
             existing
             and replace
             and existing.sha256 != sha256
             and existing.transcript_account_id == transcript_account_id
-        ):
+        )
+        # "processing": a worker lost mid-run had its task redelivered.
+        if existing and (replacing or existing.extraction_status == "processing"):
             delete_meeting_tasks(session, existing, statuses=UNTOUCHED_TASK_STATUSES)
             session.flush()
-            prepare_meeting_for_reingest(session, existing.id)
+            prepare_meeting_for_reingest(session, existing.id, retry=not replacing)
             meeting = existing
-            meeting.content = content
-            meeting.sha256 = sha256
-            meeting.title = title
-            meeting.meeting_date = parse_date(meeting_date)
-            meeting.duration_minutes = duration_minutes
+            if replacing:
+                meeting.content = content
+                meeting.sha256 = sha256
+                meeting.size = len(content.encode())
+                meeting.title = title
+                meeting.meeting_date = parse_date(meeting_date)
+                meeting.duration_minutes = duration_minutes
             session.flush()
-        elif existing and existing.extraction_status == "processing":
-            # A worker lost mid-extraction had its task redelivered. Nothing
-            # past the pre-LLM commit was kept, so this reruns from there.
-            meeting = existing
-            mark_in_flight(meeting, RETRYING)
         elif existing:
             return meeting_exists(session, existing, job_id)
         elif recorded := earlier_recording(
@@ -999,6 +1015,22 @@ def reprocess_meeting(
         return execute_meeting_processing(session, meeting, attendee_names, job_id)
 
 
+def open_job(session: DBSession, meeting: Meeting) -> PendingJob | None:
+    """The unfinished job that brought the meeting in, so its rerun closes it."""
+    if not meeting.external_id:
+        return None
+    return (
+        session.query(PendingJob)
+        .filter(
+            PendingJob.job_type == JobType.MEETING.value,
+            PendingJob.external_id == meeting.external_id,
+            PendingJob.status.in_((JobStatus.PENDING.value, JobStatus.PROCESSING.value)),
+        )
+        .order_by(PendingJob.id.desc())
+        .first()
+    )
+
+
 # Timeout for stuck meetings (1 hour - if processing takes longer, something is wrong)
 STUCK_MEETING_TIMEOUT_HOURS = 1
 
@@ -1022,15 +1054,22 @@ def cleanup_stuck_meetings() -> dict:
         )
         retried = [m.id for m in stuck if m.extraction_status != RETRYING]
         failed = [m.id for m in stuck if m.extraction_status == RETRYING]
+        jobs = {m.id: open_job(session, m) for m in stuck}
         for meeting in stuck:
             if meeting.id in failed:
                 meeting.extraction_status = "failed"
+                if job := jobs[meeting.id]:
+                    job.mark_failed("Worker lost twice while processing the meeting")
                 continue
             mark_in_flight(meeting, RETRYING)
         session.commit()
+        job_ids = {item_id: job.id for item_id, job in jobs.items() if job}
 
     for item_id in retried:
-        app.send_task(REPROCESS_MEETING, kwargs={"item_id": item_id, "retry": True})
+        kwargs = {"item_id": item_id, "retry": True}
+        if item_id in job_ids:
+            kwargs["job_id"] = job_ids[item_id]
+        app.send_task(REPROCESS_MEETING, kwargs=kwargs)
     if stuck:
         logger.warning(f"Stuck meetings: retrying {retried}, gave up on {failed}")
     return {"retried": retried, "failed": failed}

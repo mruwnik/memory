@@ -18,7 +18,12 @@ from memory.common.access_control import user_can_access
 from memory.common.db.models import (
     AgentDefinition,
     AgentTrigger,
+    CalendarAccount,
+    CalendarEvent,
     HumanUser,
+    JobStatus,
+    JobType,
+    PendingJob,
     Person,
     Project,
     Task,
@@ -833,7 +838,7 @@ def test_meetings_without_a_key_are_kept_unextracted(db_session, regular_user, s
 
     result = meetings.extract_and_update_meeting(db_session, meeting)
 
-    assert (result["status"], meeting.extraction_status, scripted_llm.requests) == ("skipped", "skipped", [])
+    assert (result["status"], meeting.summary, scripted_llm.requests) == ("skipped", None, [])
 
 
 @pytest.mark.parametrize("failure", [key_rejected, connection_dropped])
@@ -927,6 +932,7 @@ def test_process_meeting_success(
     assert meeting.title == "Q1 Planning"
     assert meeting.summary == sample_extraction_response["summary"]
     assert meeting.extraction_status == "complete"
+    assert meeting.size == len(meeting.content.encode())
 
 
 def test_synced_meeting_visible_to_account_owner_not_to_non_member(
@@ -1127,16 +1133,21 @@ def killed_mid_extraction():
     return patch.object(meetings, "call_extraction_llm", side_effect=WorkerKilled)
 
 
+def killed_mid_embedding():
+    return patch.object(meetings, "process_content_item", side_effect=WorkerKilled)
+
+
+@pytest.mark.parametrize("killed, runs", [(killed_mid_extraction, 0), (killed_mid_embedding, 1)])
 @pytest.mark.parametrize("stored_before, replace", [([], False), (["Ann: The first draft."], True)])
-def test_a_meeting_whose_worker_died_mid_extraction_is_processed_when_redelivered(
+def test_a_meeting_whose_worker_died_mid_run_is_processed_when_redelivered(
     scripted_llm, llm_key, regular_user, sample_extraction_response, sample_transcript, mock_make_session, qdrant,
-    stored_before, replace,
+    stored_before, replace, killed, runs,
 ):
-    scripted_llm.script = [submitted(sample_extraction_response) for _ in range(len(stored_before) + 1)]
+    scripted_llm.script = [submitted(sample_extraction_response) for _ in range(len(stored_before) + runs + 1)]
     for transcript in stored_before:
         meetings.process_meeting(creator_id=regular_user.id, transcript=transcript, external_id="ff-1")
     ingest = {"creator_id": regular_user.id, "transcript": sample_transcript, "external_id": "ff-1", "replace": replace}
-    with killed_mid_extraction(), pytest.raises(WorkerKilled):
+    with killed(), pytest.raises(WorkerKilled):
         meetings.process_meeting(**ingest)
     mock_make_session.rollback()
 
@@ -1165,15 +1176,17 @@ def test_a_redelivered_ingest_reruns_only_a_first_attempt_that_died(
     assert (meeting.extraction_status, scripted_llm.requests) == (status, [])
 
 
+@pytest.mark.parametrize("killed", [killed_mid_extraction, killed_mid_embedding])
 @pytest.mark.parametrize("retry, kept", [(False, "processing"), (True, "retrying")])
-def test_a_reprocess_lost_mid_extraction_leaves_the_meeting_stuck_for_cleanup(
-    retry, kept, llm_key, regular_user, mock_make_session, qdrant
+def test_a_reprocess_lost_mid_run_leaves_the_meeting_stuck_for_cleanup(
+    retry, kept, killed, scripted_llm, llm_key, regular_user, mock_make_session, qdrant
 ):
+    scripted_llm.script = [submitted(EXTRACTED)]
     meeting = meeting_for(mock_make_session, regular_user.id)
     meeting.extraction_status = "complete"
     mock_make_session.commit()
 
-    with killed_mid_extraction(), pytest.raises(WorkerKilled):
+    with killed(), pytest.raises(WorkerKilled):
         meetings.reprocess_meeting(item_id=meeting.id, retry=retry)
     mock_make_session.rollback()
 
@@ -1268,6 +1281,44 @@ def test_cleanup_stuck_meetings_leaves_the_rerun_it_started(
     assert (meeting.extraction_status, len(reprocesses_sent(no_celery_dispatch))) == ("retrying", 1)
 
 
+def open_job(db, external_id):
+    job = PendingJob(job_type=JobType.MEETING.value, external_id=external_id, status=JobStatus.PROCESSING.value)
+    db.add(job)
+    db.commit()
+    return job
+
+
+def test_cleanup_stuck_meetings_reruns_a_lost_meeting_under_its_job(
+    scripted_llm, llm_key, regular_user, mock_make_session, qdrant, no_celery_dispatch
+):
+    scripted_llm.script = [submitted(EXTRACTED)]
+    meeting = meeting_for(mock_make_session, regular_user.id)
+    meeting.external_id, meeting.extraction_status = "ff-1", "processing"
+    job = open_job(mock_make_session, "ff-1")
+    backdate(mock_make_session, meeting, 2)
+
+    meetings.cleanup_stuck_meetings()
+    [sent] = reprocesses_sent(no_celery_dispatch)
+    meetings.reprocess_meeting(**sent.kwargs["kwargs"])
+
+    mock_make_session.refresh(job)
+    assert (job.status, job.result_id, meeting.extraction_status) == ("complete", meeting.id, "complete")
+
+
+def test_cleanup_stuck_meetings_fails_the_job_of_a_meeting_it_gives_up_on(
+    regular_user, db_session, no_celery_dispatch
+):
+    meeting = meeting_for(db_session, regular_user.id)
+    meeting.external_id, meeting.extraction_status = "ff-1", "retrying"
+    job = open_job(db_session, "ff-1")
+    backdate(db_session, meeting, 2)
+
+    meetings.cleanup_stuck_meetings()
+
+    db_session.refresh(job)
+    assert (job.status, meeting.extraction_status) == ("failed", "failed")
+
+
 def test_process_meeting_replace_updates_the_stored_meeting(
     scripted_llm, llm_key, regular_user, sample_extraction_response, sample_transcript, mock_make_session, qdrant
 ):
@@ -1291,6 +1342,7 @@ def test_process_meeting_replace_updates_the_stored_meeting(
     assert (meeting.title, meeting.duration_minutes) == ("Final", 42)
     assert meeting.content == "Ann: The corrected transcript."
     assert meeting.sha256 == create_content_hash("Ann: The corrected transcript.")
+    assert meeting.size == len("Ann: The corrected transcript.")
     assert mock_make_session.query(Meeting).count() == 1
 
 
@@ -1648,6 +1700,33 @@ def ingest_call(account, external_id, **overrides):
         "calendar_event_uid": "evt-1",
         **overrides,
     })
+
+
+def calendar_event(db, user, uid, start):
+    account = CalendarAccount(user_id=user.id, name=f"Cal {user.id}", calendar_type="caldav")
+    event = CalendarEvent(
+        modality="calendar",
+        sha256=unique_sha256("cal"),
+        event_title="Weekly sync",
+        start_time=start,
+        calendar_account=account,
+        external_id=uid,
+    )
+    db.add(event)
+    db.commit()
+    return event
+
+
+def test_a_meeting_is_linked_to_its_owners_calendar_event(regular_user, admin_user, mock_make_session, qdrant):
+    """A recurring event's occurrences can share one uid; the one nearest the meeting is it."""
+    db = mock_make_session
+    ours = [calendar_event(db, regular_user, "evt-1", CALL_START + timedelta(days=days)) for days in (-7, 0, 7)]
+    calendar_event(db, admin_user, "evt-1", CALL_START)
+    calendar_event(db, regular_user, "evt-2", CALL_START)
+
+    result = ingest_call(fireflies_account(db, regular_user), "ff-1", meeting_date=at(2))
+
+    assert db.get(Meeting, result["meeting_id"]).calendar_event_id == ours[1].id
 
 
 @pytest.mark.parametrize(
