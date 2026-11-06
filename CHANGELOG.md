@@ -22,6 +22,8 @@ a new, empty `## Unreleased` above it.
 
 ## Unreleased
 
+## v0.4.9 (2026-11-06)
+
 ### Changes
 
 - Workers may report a run's cost as zero, as one on a flat-rate subscription
