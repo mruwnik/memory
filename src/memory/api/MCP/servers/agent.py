@@ -16,7 +16,7 @@ import time
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Annotated, Any
 
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_access_token
@@ -59,7 +59,6 @@ from memory.agents.spec import (
     MAX_NAME_CHARS,
     MAX_TEXT_CHARS,
     AgentSpec,
-    Money,
     Placement,
     Requirements,
     external_tool_name,
@@ -652,7 +651,8 @@ class WorkerUsage(BaseModel):
     input_tokens: NonNegativeInt | None = None
     output_tokens: NonNegativeInt | None = None
     model: str | None = Field(default=None, max_length=200)
-    cost_usd: Money | None = None
+    # Zero is honest for a worker on a flat-rate subscription.
+    cost_usd: Annotated[Decimal, Field(ge=0, max_digits=12, decimal_places=6)] | None = None
 
 
 # Candidates read per query while looking for a run the worker can take.

@@ -477,6 +477,7 @@ async def test_submitting_to_a_run_the_server_ended_is_refused(
         ({"result": "x" * (settings.AGENT_WORK_MAX_RESULT_BYTES + 1)}, "result is larger"),
         ({"error": "x" * (agent.MAX_WORKER_ERROR_CHARS + 1)}, "error is longer"),
         ({"result": "x", "usage": {"cost_usd": 0.1234567}}, "decimal places"),
+        ({"result": "x", "usage": {"cost_usd": -1}}, "cost_usd"),
     ],
 )
 async def test_submit_rejects(db_session, regular_user, worker_session, kwargs, expected):
@@ -489,17 +490,18 @@ async def test_submit_rejects(db_session, regular_user, worker_session, kwargs, 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cost, shown", [(5.25, "5.25"), (0, "0")])
 async def test_worker_reported_usage_is_shown_but_never_charged(
-    db_session, regular_user, worker_session
+    db_session, regular_user, worker_session, cost, shown
 ):
-    usage = {"input_tokens": 1200, "output_tokens": 300, "model": "claude-x", "cost_usd": 5.25}
+    usage = {"input_tokens": 1200, "output_tokens": 300, "model": "claude-x", "cost_usd": cost}
     run_id = submit_run(db_session, regular_user)
 
     with mcp_auth_context(worker_session.token):
         token = (await claim())["run"]["lease_token"]
         done = await submit(run_id, token, result="ok", usage=usage)
 
-    assert done["worker_usage"] == usage | {"cost_usd": "5.25"}
+    assert done["worker_usage"] == usage | {"cost_usd": shown}
     assert (done["cost_usd"], done["usage"]) == ("0.000000", {})
     assert spent_last_24h(db_session, AgentRun.user_id == regular_user.id) == 0
 
