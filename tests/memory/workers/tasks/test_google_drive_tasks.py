@@ -1,7 +1,9 @@
 """Tests for Google Drive syncing tasks."""
 
-import pytest
+import time
 from datetime import datetime, timezone
+
+import pytest
 from unittest.mock import Mock, patch
 
 from memory.common.db.models import GoogleDoc
@@ -318,3 +320,65 @@ def test_sync_google_folder_records_failure_on_the_folder(
     assert drive_folder.sync_error == "<HttpError 404 File not found>"
     assert drive_folder.sync_failing_since is not None
     assert drive_folder.account.sync_error is None
+
+
+FOLDER_MIME = "application/vnd.google-apps.folder"
+DOC_MIME = "application/vnd.google-apps.document"
+
+
+def slow(result=None, error=None):
+    """A Drive call that outlasts the patched idle-in-transaction timeout."""
+
+    def call(*_args, **_kwargs):
+        time.sleep(0.5)
+        if error:
+            raise error
+        return result
+
+    return call
+
+
+@pytest.fixture
+def short_idle_timeout(monkeypatch):
+    monkeypatch.setattr(db_connection, "IDLE_IN_TRANSACTION_TIMEOUT_MS", 100)
+
+
+@pytest.mark.transactional_db
+@pytest.mark.parametrize("mime_type", [FOLDER_MIME, DOC_MIME])
+@patch("memory.workers.tasks.google_drive._get_oauth_config", return_value=("id", "secret", "uri"))
+@patch("memory.workers.tasks.google_drive._build_credentials")
+@patch("memory.workers.tasks.google_drive.GoogleDriveClient")
+def test_sync_google_folder_completes_when_drive_outlasts_idle_timeout(
+    mock_client_class, _creds, _oauth, mime_type, short_idle_timeout, drive_folder, db_session
+):
+    client = mock_client_class.return_value
+    client.get_file_metadata.return_value = {"id": "gone", "mimeType": mime_type}
+    client.list_files_in_folder.return_value = [({"id": "f1"}, "/Drive")]
+    client.get_folder_path.return_value = "/Drive"
+    client.fetch_file.side_effect = slow(result=None)
+
+    result = sync_google_folder(drive_folder.id)
+    db_session.expire_all()
+
+    assert result["status"] == "completed"
+    assert drive_folder.last_sync_at is not None
+    assert drive_folder.sync_error is None
+
+
+@pytest.mark.transactional_db
+@patch("memory.workers.tasks.google_drive._get_oauth_config", return_value=("id", "secret", "uri"))
+@patch("memory.workers.tasks.google_drive._build_credentials")
+@patch("memory.workers.tasks.google_drive.GoogleDriveClient")
+def test_sync_google_folder_records_failure_after_idle_timeout(
+    mock_client_class, _creds, _oauth, short_idle_timeout, drive_folder, db_session
+):
+    mock_client_class.return_value.get_file_metadata.side_effect = slow(
+        error=Exception("<HttpError 500 Backend Error>")
+    )
+
+    with pytest.raises(Exception, match="Backend Error"):
+        sync_google_folder(drive_folder.id)
+    db_session.expire_all()
+
+    assert drive_folder.sync_error == "<HttpError 500 Backend Error>"
+    assert drive_folder.sync_failing_since is not None

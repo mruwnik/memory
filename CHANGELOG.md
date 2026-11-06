@@ -30,6 +30,9 @@ a new, empty `## Unreleased` above it.
   a 403, and sees only `agent_work_claim` and `agent_work_submit`; it no longer
   needs `read`, which would open the owner's knowledge base to the worker.
   `meta_get_current_time` now needs `read` like every other tool.
+- Google Drive folders whose sync takes over a minute (every first sync of a
+  large folder) no longer fail with "transaction has been rolled back"; a
+  folder's sync errors are recorded on it again.
 
 ### Required env vars
 

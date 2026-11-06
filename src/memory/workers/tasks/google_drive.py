@@ -237,6 +237,7 @@ def sync_google_folder(folder_id: int, force_full: bool = False) -> dict[str, An
         try:
             credentials = _build_credentials(account, session)
         except Exception as e:
+            session.rollback()
             account.record_sync(e)
             account.active = False  # Disable until re-auth
             session.commit()
@@ -258,6 +259,10 @@ def sync_google_folder(folder_id: int, force_full: bool = False) -> dict[str, An
                 client_secret=client_secret,
                 token_uri=token_uri,
             )
+            # Listing and fetching a large folder outlasts Postgres'
+            # idle_in_transaction_session_timeout, which would kill the
+            # connection under an open transaction.
+            session.commit()
 
             google_id = cast(str, folder.folder_id)
 
@@ -332,6 +337,7 @@ def sync_google_folder(folder_id: int, force_full: bool = False) -> dict[str, An
             session.commit()
 
         except Exception as e:
+            session.rollback()
             # On the folder, so one missing folder neither hides behind nor
             # overwrites the status of the account's other folders.
             folder.record_sync(e)
