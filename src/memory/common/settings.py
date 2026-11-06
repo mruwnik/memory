@@ -516,6 +516,12 @@ SLACK_SYNC_INTERVAL = int(os.getenv("SLACK_SYNC_INTERVAL", 3600))  # seconds (1 
 # history and reads the threads whose latest reply isn't stored. 0 turns it off.
 SLACK_THREAD_LOOKBACK_DAYS = float(os.getenv("SLACK_THREAD_LOOKBACK_DAYS", 14))
 
+# A source whose push channel (GitHub webhooks, Slack events) delivered an event
+# within PUSH_STALE_HOURS is only polled every PUSH_GAP_FILL_MINUTES (or its own
+# interval, if longer) to catch missed events; one gone quiet is polled normally.
+PUSH_GAP_FILL_MINUTES = int(os.getenv("PUSH_GAP_FILL_MINUTES", 720))
+PUSH_STALE_HOURS = int(os.getenv("PUSH_STALE_HOURS", 24))
+
 # Extra https origins (e.g. https://chat.example.com) that non-admin users may
 # point Slack apps' OAuth/Web API URLs and Discord bots' REST URL at. Slack's
 # and Discord's own origins are always allowed.

@@ -120,3 +120,28 @@ def test_the_forum_sync_is_queued_when_due(db_session, send_task, queued_minutes
     sync_schedule.sync_due_sources()
 
     assert queued(send_task, SYNC_LESSWRONG) == expected
+
+
+@pytest.mark.parametrize(
+    "event_hours_ago, check_interval, queued_minutes_ago, expected",
+    [
+        (1, 60, 120, False),
+        (1, 60, 721, True),
+        (1, 24 * 60, 721, False),
+        (30, 60, 61, True),
+        (None, 60, 61, True),
+    ],
+)
+def test_a_repo_receiving_webhooks_is_only_gap_filled(
+    db_session, test_user, send_task, event_hours_ago, check_interval, queued_minutes_ago, expected
+):
+    source, _ = repo(test_user)
+    source.check_interval = check_interval
+    source.sync_queued_at = minutes_ago(queued_minutes_ago)
+    source.last_event_at = minutes_ago(None if event_hours_ago is None else event_hours_ago * 60)
+    db_session.add(source)
+    db_session.commit()
+
+    sync_schedule.sync_due_sources()
+
+    assert (queued(send_task, SYNC_GITHUB_REPO) == [[source.id]]) is expected

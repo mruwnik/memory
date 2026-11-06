@@ -39,6 +39,8 @@ a new, empty `## Unreleased` above it.
 - GitHub webhooks: `POST /github/webhook/<account id>`, signed with a per-account secret generated under **Sources → GitHub → Webhook**. Each event refetches the issue or PR it names (debounced ~15s), and check/status events route to the PRs whose head is that commit. See README § GitHub webhooks.
 - GitHub PRs store their head commit and a summary of their checks. A GitHub item's trigger claim version now covers head commit, state, merge, checks and reviews (bare approvals included) as well as title and content, so each of those changes can fire an `on_edit` trigger.
 - GitHub syncs (webhook and polling) tell trigger matching what changed: `new`, `edited`, `commits`, `comments`, `review`, `checks`, `state`. Comments and reviews by the account's own login are not changes, and a sync with no such change queues no trigger matching.
+- Sources with a working push channel are polled only as a gap-filler: a GitHub repo whose webhook delivered an event within `PUSH_STALE_HOURS` is synced every `max(check_interval, PUSH_GAP_FILL_MINUTES)`; once events stop it returns to its own `check_interval`.
+- Slack workspaces switch to their background-sweep frequency only while every polling app has received an event within `PUSH_STALE_HOURS` (previously: whenever the app's setup reached "live", even if delivery later broke).
 
 ### Manual steps
 
@@ -53,6 +55,7 @@ a new, empty `## Unreleased` above it.
 - New Celery task `memory.workers.tasks.github.refetch_github_item` on the existing `github` queue.
 - Existing GitHub items' claim versions change shape (no backfill), but GitHub syncs only queue trigger matching when they report a change, and an item's first recorded head SHA or checks is not one. So `on_edit` triggers don't fire once per open PR after the deploy; an item's next real change fires once, as it should.
 - PR syncs (polling too) now also fetch the head commit's check rollup in the same GraphQL query.
+- New optional settings: `PUSH_GAP_FILL_MINUTES` (default 720) and `PUSH_STALE_HOURS` (default 24).
 
 ### Migrations
 

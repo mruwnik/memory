@@ -325,7 +325,7 @@ const WorkspaceRow = ({
       </Field>
       <Hint>
         Verified events ingest new messages as they arrive. This sweep checks enabled channels for history and missed messages.
-        Until all connected polling apps have verified events, the existing polling frequency is used.
+        Until every connected polling app has received an event in the last day, the existing polling frequency is used.
         Events only cover channels accessible to the subscribed bot or user. Sync now runs a sweep immediately.
         {workspace.effective_sync_interval_seconds != null && ` Current scheduled interval: ${Math.round(workspace.effective_sync_interval_seconds / 60)} minutes.`}
       </Hint>

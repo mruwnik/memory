@@ -523,8 +523,9 @@ NOW = datetime.now(timezone.utc)
     ],
 )
 def test_workspace_flags_a_stale_sync(
-    client, db_session, user, slack_workspace, slack_credentials, last_sync_at, collect, stale
+    client, db_session, user, slack_app, slack_workspace, slack_credentials, last_sync_at, collect, stale
 ):
+    slack_app.last_event_at = NOW
     slack_workspace.collect_messages = collect
     slack_workspace.last_sync_at = last_sync_at
     db_session.commit()

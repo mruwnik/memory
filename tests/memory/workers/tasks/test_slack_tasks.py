@@ -1041,21 +1041,22 @@ def test_sync_all_skips_without_warning_when_nothing_is_wrong(
     assert [r for r in caplog.records if r.levelno == logging.WARNING] == []
 
 
-@pytest.mark.parametrize("state,age_hours,interval,expected", [
-    ("live", 2, 86400, 0),
-    ("live", 25, 86400, 1),
-    ("live", 7, 21600, 1),
-    ("live", 2, 21600, 0),
-    ("draft", 2, 86400, 1),
-    ("degraded", 2, 86400, 1),
+@pytest.mark.parametrize("event_hours_ago,age_hours,interval,expected", [
+    (1, 2, 86400, 0),
+    (1, 25, 86400, 1),
+    (1, 13, 43200, 1),
+    (1, 2, 43200, 0),
+    (30, 1, 86400, 1),
+    (None, 1, 86400, 1),
 ])
 @patch("memory.workers.tasks.slack.app")
 def test_event_reconciliation_cadence(
     mock_app, db_session, slack_app, slack_workspace, slack_credentials,
-    state, age_hours, interval, expected,
+    event_hours_ago, age_hours, interval, expected,
 ):
-    slack_app.setup_state = state
-    slack_workspace.last_sync_at = datetime.now(timezone.utc) - timedelta(hours=age_hours)
+    now = datetime.now(timezone.utc)
+    slack_app.last_event_at = None if event_hours_ago is None else now - timedelta(hours=event_hours_ago)
+    slack_workspace.last_sync_at = now - timedelta(hours=age_hours)
     slack_workspace.event_reconcile_interval_seconds = interval
     db_session.commit()
 
@@ -1068,10 +1069,11 @@ def test_event_reconciliation_cadence(
 def test_mixed_apps_keep_polling(db_session, slack_app, slack_workspace):
     from memory.common.slack import workspace_sync_interval
 
-    draft = SlackApp(client_id="draft.app", name="Draft", setup_state="draft")
-    db_session.add(draft)
+    slack_app.last_event_at = datetime.now(timezone.utc)
+    silent = SlackApp(client_id="silent.app", name="Silent", setup_state="live")
+    db_session.add(silent)
     db_session.commit()
-    assert workspace_sync_interval(db_session, slack_workspace, [slack_app.id, draft.id]) == slack_workspace.sync_interval_seconds
+    assert workspace_sync_interval(db_session, slack_workspace, [slack_app.id, silent.id]) == slack_workspace.sync_interval_seconds
 
 
 def test_history_routing_is_isolated_from_events():

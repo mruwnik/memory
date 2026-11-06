@@ -8,11 +8,13 @@ import asyncio
 import logging
 import time
 from collections.abc import Iterator
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
 from sqlalchemy.orm import object_session
 
+from memory.common import settings
 from memory.common.db.connection import DBSession
 from memory.common.db.models.slack import (
     DEFAULT_SLACK_API_BASE_URL,
@@ -106,14 +108,15 @@ def workspace_poll_plan(db: DBSession, workspace_id: str) -> tuple[list[int], li
 
 
 def workspace_sync_interval(db: DBSession, workspace: SlackWorkspace, app_ids: list[int]) -> int:
-    """Use slow reconciliation only when every polling app has verified events.
+    """Use slow reconciliation only while every polling app is receiving events.
 
-    Mixed installations keep the polling cadence so an app without event
-    coverage does not lose its fallback. First-time imports are scheduled
-    regardless of this interval by the caller.
+    An app with no event within PUSH_STALE_HOURS (never set up, or its
+    delivery broke) keeps the polling cadence as its fallback. First-time
+    imports are scheduled regardless of this interval by the caller.
     """
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=settings.PUSH_STALE_HOURS)
     apps = [db.get(SlackApp, app_id) for app_id in app_ids]
-    if apps and all(app is not None and app.setup_state == "live" for app in apps):
+    if apps and all(app and app.last_event_at and app.last_event_at > cutoff for app in apps):
         return workspace.event_reconcile_interval_seconds
     return workspace.sync_interval_seconds
 
