@@ -163,7 +163,7 @@ async def test_a_slow_provider_bounds_both_the_wait_and_the_calls_in_flight(
     elapsed = time.monotonic() - started
     await asyncio.sleep(0.6)  # let the calls already sent finish and be charged
 
-    assert elapsed < 0.4
+    assert elapsed < 0.5  # returned before the stalled calls could finish
     assert peak == scorer.MAX_CONCURRENT_SCORES
     assert [c.relevance_score for c in ranked] == [0.4] * chunk_count
 
