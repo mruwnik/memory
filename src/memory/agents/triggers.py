@@ -19,11 +19,12 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
-from typing import Annotated, Any, Collection, Iterable, Literal
+from typing import Annotated, Any, Collection, Iterable, Literal, cast
 
 import redis
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from sqlalchemy import and_, exists, func, or_, select
+from celery.exceptions import SoftTimeLimitExceeded
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from sqlalchemy import and_, exists, func, or_, select, update
 from sqlalchemy.orm import aliased
 
 from memory.common import settings
@@ -36,7 +37,7 @@ from memory.common.access_control import (
     get_user_project_roles,
     has_admin_scope,
 )
-from memory.common.celery_app import FIRE_TRIGGER, MATCH_INGEST_TRIGGERS, app
+from memory.common.celery_app import FIRE_TRIGGER, app
 from memory.common.collections import SESSION_COLLECTIONS
 from memory.common.scopes import SCOPE_ADMIN, SCOPE_AGENTS, SCOPE_READ
 from memory.common.db.connection import DBSession, make_session
@@ -50,6 +51,7 @@ from memory.common.db.models import (
     Comic,
     DiscordBot,
     DiscordMessage,
+    Event,
     ForumComment,
     ForumPost,
     GithubItem,
@@ -58,6 +60,7 @@ from memory.common.db.models import (
     SourceItem,
     User,
 )
+from memory.common.db.models.events import ITEM, REMOVED
 from memory.common.db.models.slack import SlackUserCredentials
 
 logger = logging.getLogger(__name__)
@@ -77,9 +80,13 @@ BUFFER_TTL_SEC = 86_400
 # happens soon after ingest, so claims older than this are purged; items older
 # than this never match as new ones, so the purge can't let one fire again.
 MATCH_RETENTION = timedelta(days=30)
+ROUTE_BATCH_SIZE = 100
+# A run takes no more batches after this; the next beat carries on.
+ROUTE_RUN_SECONDS = 30
+ROUTER_LOCK_KEY = 0x6576656E7473  # "events"
 
 FilterValues = Annotated[list[str], Field(max_length=MAX_FILTER_VALUES)]
-# What changed about an item, as ingesters report it to queue_trigger_match.
+# What changed about an item, as ingesters report it in its event.
 Change = Literal["new", "edited", "commits", "comments", "review", "checks", "state"]
 # Discord <@123> / <@!123>, Slack <@U123> / <@U123|name>.
 MENTION = re.compile(r"<@!?(\w+)(?:\|[^>]*)?>")
@@ -551,7 +558,8 @@ def claim(
     on_edit: bool,
     changes: list[str] | None = None,
 ) -> Delivery | None:
-    """Record that trigger_id matched this version of item_id; None if it may not.
+    """Record, uncommitted, that trigger_id matched this version of item_id; None
+    if it may not.
 
     Items are reprocessed (re-embeds, upstream edits, re-syncs), and each pass
     re-runs matching, so a version claims at most once.
@@ -561,10 +569,9 @@ def claim(
     db.execute(select(func.pg_advisory_xact_lock(lock_key)))
     seen = item_claims(db, item_id).get(trigger_id, set())
     if not may_claim(seen, version, fresh=fresh, on_edit=on_edit):
-        db.commit()
         return None
     db.add(AgentTriggerMatch(trigger_id=trigger_id, item_id=item_id, content_hash=version))
-    db.commit()
+    db.flush()
     return Delivery(
         item_id, version.hex(), edited=bool(seen), changes=delivered_changes(bool(seen), changes)
     )
@@ -579,15 +586,6 @@ def item_claims(db: DBSession, item_id: int) -> dict[int, set[bytes]]:
     for tid, version in db.execute(query):
         claims.setdefault(tid, set()).add(bytes(version))
     return claims
-
-
-def unclaim(db: DBSession, trigger_id: int, item_id: int, version: bytes) -> None:
-    db.query(AgentTriggerMatch).filter(
-        AgentTriggerMatch.trigger_id == trigger_id,
-        AgentTriggerMatch.item_id == item_id,
-        AgentTriggerMatch.content_hash == version,
-    ).delete()
-    db.commit()
 
 
 def purge_matches(db: DBSession, older_than: timedelta) -> int:
@@ -619,70 +617,194 @@ def purge_matches(db: DBSession, older_than: timedelta) -> int:
     return deleted
 
 
+def purge_events(db: DBSession, older_than: timedelta) -> int:
+    """Forget events routed more than `older_than` ago."""
+    cutoff = datetime.now(timezone.utc) - older_than
+    deleted = db.query(Event).filter(Event.routed_at < cutoff).delete(synchronize_session=False)
+    db.commit()
+    return deleted
+
+
 def dispatch(trigger_id: int, deliveries: list[Delivery]) -> None:
     app.send_task(FIRE_TRIGGER, args=[trigger_id, [d.encode() for d in deliveries]])
 
 
-def match_ingest_triggers(
-    item_id: int, client: redis.Redis | None = None, changes: list[str] | None = None
-) -> list[int]:
-    """Route one stored item to every enabled ingest trigger it matches.
+@dataclass(frozen=True)
+class Claimed:
+    event_id: int
+    trigger_id: int
+    delivery: Delivery
+    batch: Batch | None
 
-    `changes` are the Change tags its ingester reported. Returns the matching
-    trigger ids. Per-item triggers fire now; batch triggers buffer the item for
-    the sweep.
-    """
-    with make_session() as db:
-        item = db.get(SourceItem, item_id)
-        if item is None:
-            return []
-        triggers = enabled_ingest_triggers(db)
-        if not triggers:
-            return []
-        facts = item_facts(item)
-        version = content_version(item)
-        # Settles most reprocesses before the costlier checks; claim() re-checks under its lock.
-        claims = item_claims(db, item_id)
-        oldest = datetime.now(timezone.utc) - MATCH_RETENTION
-        matched = []
-        for trigger in triggers:
+
+@dataclass(frozen=True)
+class LiveTrigger:
+    """An enabled ingest trigger with what matching needs, loaded once per batch."""
+
+    trigger: AgentTrigger
+    config: IngestConfig
+    # The owner's bots (for mentions_me) and own authors (never matched).
+    bots: frozenset[str]
+    own: frozenset[str]
+    # The batch's items the trigger may read.
+    readable: frozenset[int]
+
+
+def live_triggers(db: DBSession, item_ids: list[int]) -> list[LiveTrigger]:
+    """The enabled ingest triggers that can match, skipping any whose config no
+    longer validates."""
+    per_owner: dict[int, tuple[frozenset[str], frozenset[str]]] = {}
+    live = []
+    for trigger in enabled_ingest_triggers(db):
+        try:
             config = IngestConfig.model_validate(trigger.config)
-            # Triggers react to new items, not to the backlog that predates them.
-            fresh = item.inserted_at is not None and item.inserted_at >= max(
-                trigger.active_since, oldest
-            )
-            refires = config.refires(changes)
-            if not may_claim(claims.get(trigger.id, set()), version, fresh=fresh, on_edit=refires):
-                continue
-            owner = db.get(User, trigger.user_id)
-            if owner is None:
-                continue
-            mine = owner_bots(db, owner.id) if config.filter.mentions_me else frozenset()
-            if not matches(config.filter, facts, mine):
-                continue
-            if facts.authors & own_authors(db, owner.id):
-                continue
-            # Validity is left to the fire, which trips the breaker if the key is gone.
-            key = db.get(APIKey, trigger.api_key_id) if trigger.api_key_id else None
-            if not accessible_ids(db, owner, key, [item_id]):
-                continue
-            delivery = claim(
-                db, trigger.id, item_id, version, fresh=fresh, on_edit=refires, changes=changes
-            )
-            if delivery is None:
-                continue
+        except ValidationError:
+            logger.warning("skipping ingest trigger %s: its config is invalid", trigger.id)
+            continue
+        owner = db.get(User, trigger.user_id)
+        if owner is None:
+            continue
+        if owner.id not in per_owner:
+            per_owner[owner.id] = (owner_bots(db, owner.id), own_authors(db, owner.id))
+        bots, own = per_owner[owner.id]
+        # Validity is left to the fire, which trips the breaker if the key is gone.
+        key = db.get(APIKey, trigger.api_key_id) if trigger.api_key_id else None
+        readable = frozenset(accessible_ids(db, owner, key, item_ids))
+        live.append(LiveTrigger(trigger, config, bots, own, readable))
+    return live
+
+
+def match_item(db: DBSession, live: list[LiveTrigger], event: Event) -> list[Claimed]:
+    """Claim, uncommitted, the event's item for every trigger it matches."""
+    item_id = cast(int, event.item_id)
+    item = db.get(SourceItem, item_id)
+    if item is None:
+        return []
+    facts = item_facts(item)
+    version = content_version(item)
+    # Settles most reprocesses before the costlier checks; claim() re-checks under its lock.
+    claims = item_claims(db, item_id)
+    oldest = datetime.now(timezone.utc) - MATCH_RETENTION
+    claimed = []
+    for t in live:
+        trigger, config = t.trigger, t.config
+        # Triggers react to new items, not to the backlog that predates them.
+        fresh = item.inserted_at is not None and item.inserted_at >= max(
+            trigger.active_since, oldest
+        )
+        refires = config.refires(event.changes)
+        if not may_claim(claims.get(trigger.id, set()), version, fresh=fresh, on_edit=refires):
+            continue
+        mine = t.bots if config.filter.mentions_me else frozenset()
+        if not matches(config.filter, facts, mine):
+            continue
+        if facts.authors & t.own or item_id not in t.readable:
+            continue
+        delivery = claim(
+            db, trigger.id, item_id, version, fresh=fresh, on_edit=refires, changes=event.changes
+        )
+        if delivery is None:
+            continue
+        batch = config.delivery if isinstance(config.delivery, Batch) else None
+        claimed.append(Claimed(event.id, trigger.id, delivery, batch))
+    return claimed
+
+
+def deliver(db: DBSession, client: redis.Redis | None, claimed: Claimed) -> bool:
+    """Fire a per-item claim now or buffer a batch one for the sweep."""
+    try:
+        if claimed.batch is None:
+            dispatch(claimed.trigger_id, [claimed.delivery])
+        else:
+            buffer_item(client or buffer_client(), claimed.trigger_id, claimed.batch, claimed.delivery)
+    except SoftTimeLimitExceeded:
+        raise
+    except Exception:
+        d = claimed.delivery
+        logger.exception("could not deliver item %s to trigger %s", d.item_id, claimed.trigger_id)
+        # Unclaimed and pending again, so the next run retries it; the other
+        # triggers' claims keep them from matching it twice.
+        db.query(AgentTriggerMatch).filter(
+            AgentTriggerMatch.trigger_id == claimed.trigger_id,
+            AgentTriggerMatch.item_id == d.item_id,
+            AgentTriggerMatch.content_hash == bytes.fromhex(d.version),
+        ).delete()
+        db.query(Event).filter(Event.id == claimed.event_id).update({"routed_at": None})
+        db.commit()
+        return False
+    return True
+
+
+def matchable(event: Event) -> bool:
+    return event.kind == ITEM and event.action != REMOVED
+
+
+def route_batch(db: DBSession, after_id: int) -> tuple[int | None, list[Claimed]]:
+    """Route, uncommitted, the next pending events after `after_id`; returns the
+    last event id taken (None when none were pending) and the claims made."""
+    pending = (
+        select(Event)
+        .where(Event.routed_at.is_(None), Event.id > after_id)
+        .order_by(Event.id)
+        .limit(ROUTE_BATCH_SIZE)
+        .with_for_update(skip_locked=True)
+    )
+    if not any_ingest_trigger(db):
+        routed = (
+            update(Event)
+            .where(Event.id.in_(pending.with_only_columns(Event.id).scalar_subquery()))
+            .values(routed_at=func.now())
+            .returning(Event.id)
+            .cte("routed")
+        )
+        return db.scalar(select(func.max(routed.c.id))), []
+    events = db.scalars(pending).all()
+    if not events:
+        return None, []
+    live = live_triggers(db, [cast(int, e.item_id) for e in events if matchable(e)])
+    now = datetime.now(timezone.utc)
+    claimed = []
+    for ev in events:
+        if matchable(ev):
             try:
-                if isinstance(config.delivery, Batch):
-                    buffer_item(client or buffer_client(), trigger.id, config.delivery, delivery)
-                else:
-                    dispatch(trigger.id, [delivery])
-            except Exception:
-                # Unclaim, so a reprocess can match it again once Redis or the broker is back.
-                logger.exception("could not deliver item %s to trigger %s", item_id, trigger.id)
-                unclaim(db, trigger.id, item_id, version)
-                continue
-            matched.append(trigger.id)
-        return matched
+                with db.begin_nested():
+                    claimed += match_item(db, live, ev)
+            except SoftTimeLimitExceeded:
+                raise
+            except Exception as e:
+                ev.attempts += 1
+                if ev.attempts < settings.EVENT_MAX_ATTEMPTS:
+                    logger.warning("could not route event %s, attempt %d", ev.id, ev.attempts, exc_info=True)
+                    continue
+                ev.error = type(e).__name__
+                logger.exception("giving up on routing event %s after %d attempts", ev.id, ev.attempts)
+        ev.routed_at = now
+    return events[-1].id, claimed
+
+
+def route_events(client: redis.Redis | None = None) -> list[int]:
+    """Route pending events to the triggers they match, for up to
+    ROUTE_RUN_SECONDS; returns the trigger id of each delivery made, in event order.
+
+    Claims commit with the events they route, so a lost run leaves its events
+    pending for the next one; deliveries go out only after that commit.
+    """
+    delivered = []
+    last_id = 0
+    deadline = time.monotonic() + ROUTE_RUN_SECONDS
+    while True:
+        with make_session() as db:
+            # One router at a time: two would lock claim keys in clashing orders.
+            if not db.scalar(select(func.pg_try_advisory_xact_lock(ROUTER_LOCK_KEY))):
+                return delivered
+            taken, claimed = route_batch(db, last_id)
+            if taken is None:
+                return delivered
+            db.commit()
+            delivered += [c.trigger_id for c in claimed if deliver(db, client, c)]
+        last_id = taken
+        if time.monotonic() >= deadline:
+            return delivered
 
 
 def sweep_trigger_buffers(client: redis.Redis | None = None) -> dict[int, int]:
@@ -704,19 +826,3 @@ def sweep_trigger_buffers(client: redis.Redis | None = None) -> dict[int, int]:
         if batches:
             fired[trigger_id] = len(batches)
     return fired
-
-
-def queue_trigger_match(item_id: int, changes: list[str] | None = None) -> None:
-    """Hand a stored item to trigger matching without ever failing ingestion.
-
-    `changes`: Change tags saying what an update changed. on_changes filters
-    edits by them, and runs see them in their trigger ref.
-    """
-    try:
-        with make_session() as db:
-            if not any_ingest_trigger(db):
-                return
-        app.send_task(MATCH_INGEST_TRIGGERS, args=[item_id, changes])
-    except Exception:
-        logger.exception("could not queue trigger matching for item %s", item_id)
-

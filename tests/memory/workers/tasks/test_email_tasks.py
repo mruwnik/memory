@@ -36,6 +36,7 @@ from memory.workers.tasks.email import (
     sync_account,
     sync_gmail_messages,
 )
+from tests.conftest import item_events
 from tests.providers.gmail_provider import FakeGmailService
 from sqlalchemy.exc import OperationalError, PendingRollbackError
 
@@ -332,12 +333,7 @@ def test_process_message_stores_account_and_uid(db_session, test_email_account, 
     assert mail_message.imap_uid == "12345"
 
 
-def test_stored_mail_is_offered_to_agent_triggers(
-    db_session, test_email_account, qdrant, monkeypatch
-):
-    queued = []
-    monkeypatch.setattr("memory.workers.tasks.email.queue_trigger_match", queued.append)
-
+def test_stored_mail_is_offered_to_agent_triggers(db_session, test_email_account, qdrant):
     res = run_process_message(
         account_id=test_email_account.id,
         message_id="777",
@@ -345,7 +341,7 @@ def test_stored_mail_is_offered_to_agent_triggers(
         raw_email=SIMPLE_EMAIL_RAW,
     )
 
-    assert queued == [res["mail_message_id"]]
+    assert item_events(db_session) == [(res["mail_message_id"], "added", None)]
 
 
 def test_spool_file_removed_after_processing(db_session, test_email_account, qdrant):

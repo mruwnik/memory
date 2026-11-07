@@ -49,7 +49,7 @@ from memory.workers.tasks.maintenance import (
     _payloads_equal,
 )
 from memory.common.db.models.source_item import MAX_EMBED_ATTEMPTS
-from tests.conftest import unique_sha256
+from tests.conftest import item_events, unique_sha256
 import memory.workers.tasks.maintenance as maintenance_module
 
 from memory.common.db.models import (
@@ -2262,6 +2262,7 @@ def test_delete_orphaned_source_items_removes_rows_and_vectors(db_session, qdran
     remaining = db_session.scalars(text("SELECT id FROM source_item")).all()
     assert remaining == [posts["kept"][0]]
     assert set(qd.get_payloads(qdrant, "blog", chunk_ids)) == {posts["kept"][1]}
+    assert item_events(db_session) == [(posts["orphan"][0], "removed", None)]
 
 
 def test_clean_mail_headers_decodes_rows_and_strips_address_tags(db_session, qdrant):

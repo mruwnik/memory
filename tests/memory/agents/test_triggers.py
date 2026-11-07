@@ -21,7 +21,7 @@ from memory.agents.triggers import (
     matches,
     regex_search,
 )
-from memory.common.celery_app import FIRE_TRIGGER, MATCH_INGEST_TRIGGERS
+from memory.common.celery_app import FIRE_TRIGGER
 from memory.common.db.models import (
     AgentDefinition,
     AgentTrigger,
@@ -42,7 +42,7 @@ from memory.common.db.models import (
 )
 from memory.common.db.models.slack import SlackApp, SlackUserCredentials
 from memory.common.content_processing import process_content_item
-from tests.conftest import unique_sha256
+from tests.conftest import route_item, unique_sha256
 
 SPEC = {"system_prompt": "x", "model": "anthropic/m", "reasoning": "high"}
 TRIGGER_NAMES = (f"t{i}" for i in itertools.count())
@@ -346,7 +346,7 @@ def test_per_item_triggers_fire_at_once(
     make_trigger(db_session, d, filter={"tags_any": ["other"]})
     post = blog_post(db_session)
 
-    matched = triggers.match_ingest_triggers(post.id, client)
+    matched = route_item(db_session, post.id, client)
 
     assert matched == [on.id]
     no_celery_dispatch.assert_called_once_with(
@@ -371,9 +371,7 @@ def test_triggers_without_a_definition_are_not_matched_yet(
     db_session.commit()
     post = blog_post(db_session)
 
-    triggers.queue_trigger_match(post.id)
-
-    assert triggers.match_ingest_triggers(post.id, client) == []
+    assert route_item(db_session, post.id, client) == []
     no_celery_dispatch.assert_not_called()
 
 
@@ -416,7 +414,7 @@ def test_items_the_owner_cannot_read_never_match(
     make_trigger(db_session, d)
     post = blog_post(db_session, project_id=None)
 
-    assert triggers.match_ingest_triggers(post.id, client) == []
+    assert route_item(db_session, post.id, client) == []
     no_celery_dispatch.assert_not_called()
 
 
@@ -465,18 +463,13 @@ def test_our_own_discord_bots_never_trigger(
     make_trigger(db_session, make_definition(db_session, admin_user))
     message = discord_message(db_session, author_id, bot_token)
 
-    assert bool(triggers.match_ingest_triggers(message.id, client)) is fires
+    assert bool(route_item(db_session, message.id, client)) is fires
 
 
 @pytest.mark.parametrize("content,fires", [("<@200>", True), ("hi", False)])
 def test_a_short_message_mentioning_our_bot_fires(
-    db_session, admin_user, client, no_celery_dispatch, monkeypatch, content, fires
+    db_session, admin_user, client, no_celery_dispatch, content, fires
 ):
-    queued = []
-    monkeypatch.setattr(
-        "memory.common.content_processing.queue_trigger_match",
-        lambda item_id, changes=None: queued.append(item_id),
-    )
     trigger = make_trigger(
         db_session,
         make_definition(db_session, admin_user),
@@ -488,9 +481,7 @@ def test_a_short_message_mentioning_our_bot_fires(
     process_content_item(message, db_session)
 
     assert message.embed_status == "SKIPPED"
-    assert [triggers.match_ingest_triggers(i, client) for i in queued] == [
-        [trigger.id] if fires else []
-    ]
+    assert triggers.route_events(client) == ([trigger.id] if fires else [])
 
 
 def slack_message(db, owner, author_id):
@@ -535,7 +526,7 @@ def test_the_owners_slack_integration_and_bot_users_never_trigger(
     make_trigger(db_session, make_definition(db_session, admin_user))
     message = slack_message(db_session, admin_user, author_id)
 
-    assert bool(triggers.match_ingest_triggers(message.id, client)) is fires
+    assert bool(route_item(db_session, message.id, client)) is fires
 
 
 def test_batch_triggers_buffer_until_the_window_closes(
@@ -548,7 +539,7 @@ def test_batch_triggers_buffer_until_the_window_closes(
     )
     posts = [blog_post(db_session) for _ in range(3)]
     for post in posts:
-        triggers.match_ingest_triggers(post.id, client)
+        route_item(db_session, post.id, client)
 
     early = triggers.sweep_trigger_buffers(client)
     backdate(client, trigger.id)
@@ -572,7 +563,7 @@ def test_a_full_batch_fires_before_its_window(
     )
     posts = [blog_post(db_session) for _ in range(5)]
     for post in posts:
-        triggers.match_ingest_triggers(post.id, client)
+        route_item(db_session, post.id, client)
 
     fired = triggers.sweep_trigger_buffers(client)
 
@@ -582,25 +573,6 @@ def test_a_full_batch_fires_before_its_window(
         [posts[2].id, posts[3].id],
     ]
     assert client.zcard(triggers.buffer_key(trigger.id)) == 1
-
-
-def test_matching_is_queued_only_when_an_ingest_trigger_exists(
-    db_session, admin_user, no_celery_dispatch
-):
-    triggers.queue_trigger_match(1)
-    make_trigger(db_session, make_definition(db_session, admin_user))
-    triggers.queue_trigger_match(2, ["commits"])
-
-    no_celery_dispatch.assert_called_once_with(MATCH_INGEST_TRIGGERS, args=[2, ["commits"]])
-
-
-def test_queueing_a_match_never_raises(monkeypatch):
-    def broken(*args, **kwargs):
-        raise RuntimeError("db down")
-
-    monkeypatch.setattr(triggers, "make_session", broken)
-
-    triggers.queue_trigger_match(1)
 
 
 def test_dedupe_keys_ignore_order_and_change_with_the_claimed_version():
@@ -677,8 +649,8 @@ def test_reprocessing_a_matched_item_matches_nothing(
     )
     post = blog_post(db_session)
 
-    first = triggers.match_ingest_triggers(post.id, client)
-    again = triggers.match_ingest_triggers(post.id, client)
+    first = route_item(db_session, post.id, client)
+    again = route_item(db_session, post.id, client)
 
     assert (first, again) == ([trigger.id], [])
     assert no_celery_dispatch.call_count + client.zcard(triggers.buffer_key(trigger.id)) == 1
@@ -697,10 +669,10 @@ def test_an_edit_fires_again_only_with_on_edit(
     make_trigger(db_session, make_definition(db_session, admin_user), on_edit=on_edit)
     post = blog_post(db_session)
 
-    triggers.match_ingest_triggers(post.id, client)
+    route_item(db_session, post.id, client)
     edit(db_session, post)
-    triggers.match_ingest_triggers(post.id, client)
-    triggers.match_ingest_triggers(post.id, client)
+    route_item(db_session, post.id, client)
+    route_item(db_session, post.id, client)
 
     assert no_celery_dispatch.call_count == runs
     assert db_session.query(AgentTriggerMatch).count() == runs
@@ -714,11 +686,11 @@ def test_on_changes_limits_which_edits_fire(
     )
     post = blog_post(db_session)
 
-    new = triggers.match_ingest_triggers(post.id, client, changes=["state"])
+    new = route_item(db_session, post.id, client, changes=["state"])
     edit(db_session, post)
-    commented = triggers.match_ingest_triggers(post.id, client, changes=["comments"])
-    unknown = triggers.match_ingest_triggers(post.id, client)
-    pushed = triggers.match_ingest_triggers(post.id, client, changes=["comments", "commits"])
+    commented = route_item(db_session, post.id, client, changes=["comments"])
+    unknown = route_item(db_session, post.id, client)
+    pushed = route_item(db_session, post.id, client, changes=["comments", "commits"])
 
     assert (new, commented, unknown, pushed) == ([trigger.id], [], [], [trigger.id])
     assert [
@@ -737,9 +709,9 @@ def test_a_batch_buffers_each_version_of_an_item_edited_while_buffered(
     )
     post = blog_post(db_session)
 
-    first = triggers.match_ingest_triggers(post.id, client)
+    first = route_item(db_session, post.id, client)
     edit(db_session, post)
-    edited = triggers.match_ingest_triggers(post.id, client)
+    edited = route_item(db_session, post.id, client)
 
     assert (first, edited) == ([trigger.id], [trigger.id])
     assert [
@@ -757,10 +729,10 @@ def test_items_stored_before_the_trigger_was_active_never_match(
     )
     old = blog_post(db_session, inserted_at=trigger.active_since - timedelta(minutes=1))
 
-    before = triggers.match_ingest_triggers(old.id, client)
+    before = route_item(db_session, old.id, client)
     edit(db_session, old)
 
-    assert (before, triggers.match_ingest_triggers(old.id, client)) == ([], [])
+    assert (before, route_item(db_session, old.id, client)) == ([], [])
 
 
 def test_an_edit_to_an_item_matched_long_ago_still_fires(
@@ -782,10 +754,10 @@ def test_an_edit_to_an_item_matched_long_ago_still_fires(
     )
     db_session.commit()
 
-    unchanged = triggers.match_ingest_triggers(post.id, client)
+    unchanged = route_item(db_session, post.id, client)
     edit(db_session, post)
 
-    assert (unchanged, triggers.match_ingest_triggers(post.id, client)) == ([], [trigger.id])
+    assert (unchanged, route_item(db_session, post.id, client)) == ([], [trigger.id])
 
 
 def test_a_delivery_failure_unclaims_and_spares_the_other_triggers(
@@ -802,7 +774,7 @@ def test_a_delivery_failure_unclaims_and_spares_the_other_triggers(
 
     no_celery_dispatch.side_effect = broker_down_for_the_first
 
-    assert triggers.match_ingest_triggers(post.id, client) == [healthy.id]
+    assert route_item(db_session, post.id, client) == [healthy.id]
     assert [
         m.trigger_id for m in db_session.query(AgentTriggerMatch).filter_by(item_id=post.id)
     ] == [healthy.id]
@@ -857,4 +829,4 @@ def test_items_older_than_claim_retention_never_match(
         inserted_at=datetime.now(timezone.utc) - triggers.MATCH_RETENTION - timedelta(hours=1),
     )
 
-    assert triggers.match_ingest_triggers(old.id, client) == []
+    assert route_item(db_session, old.id, client) == []

@@ -359,7 +359,7 @@ chat, chat type and sender. Search them with `core_search`, narrowed with the
 python tools/run_celery_task.py <queue> <task-name> [args]
 ```
 
-Queues live in `src/memory/common/celery_app.py` (`task_routes`) and the full set is enumerated in `docker-compose.yaml` (the worker's `QUEUES` env var). At time of writing: `backfill, backup, blogs, calendar, comic, custom, discord, ebooks, email, forums, github, google, maintenance, meetings, notes, people, photos, reports, scheduler, slack, slack-sync, verification`.
+Queues live in `src/memory/common/celery_app.py` (`task_routes`) and the full set is enumerated in `docker-compose.yaml` (the workers' `QUEUES` env vars). At time of writing: `backfill, backup, blogs, calendar, comic, custom, discord, ebooks, email, forums, github, google, maintenance, meetings, notes, people, photos, reports, scheduler, slack, slack-sync, verification`.
 
 ## MCP client library for HTML reports
 

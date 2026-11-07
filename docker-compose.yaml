@@ -305,7 +305,7 @@ services:
           memory: 512M
     environment:
       <<: *worker-env
-      QUEUES: "backfill,backup,blogs,calendar,comic,custom,discord,ebooks,email,forums,github,google,maintenance,meetings,notes,people,photos,reports,scheduler,slack,verification"
+      QUEUES: "backfill,backup,blogs,calendar,comic,custom,discord,ebooks,email,forums,github,google,maintenance,meetings,notes,people,photos,reports,slack,verification"
       CUSTOM_TASKS_DIR: ${CUSTOM_TASKS_DIR:+/app/custom_tasks}
     volumes:
       - ./memory_files:/app/memory_files:rw
@@ -326,6 +326,20 @@ services:
       CONCURRENCY: "1"
     volumes:
       - ./memory_files:/app/memory_files:rw
+
+  # Light periodic work only (event routing, due syncs, scheduled tasks), so
+  # long ingest tasks on the main worker can't delay routing chat events.
+  scheduler-worker:
+    <<: *worker-base
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 1G
+    environment:
+      <<: *worker-env
+      QUEUES: "scheduler"
+      CONCURRENCY: "1"
 
   # Agent runs call memory's MCP tools in-process, so this image installs the
   # API package on top of the worker deps. It uses the prefork pool: the

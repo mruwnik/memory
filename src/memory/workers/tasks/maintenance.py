@@ -27,6 +27,7 @@ from memory.common import (
 from memory.agents import triggers
 from memory.agents.cancel import cancel_tree
 from memory.common.db.models.agents import EXECUTOR_SERVER, MAX_RETENTION_DAYS, RunStatus
+from memory.common.db.models.events import ITEM, REMOVED
 from memory.common.db.models.beeper import BeeperChat
 from memory.common.db.models.discord import DiscordChannel
 from memory.common.db.models.slack import SlackChannel
@@ -40,8 +41,8 @@ from memory.common.celery_app import (
     CLEANUP_EXPIRED_SESSIONS,
     DELETE_ORPHANED_SOURCE_ITEMS,
     PURGE_AGENT_RUNS,
+    ROUTE_EVENTS,
     SWEEP_AGENT_RUNS,
-    MATCH_INGEST_TRIGGERS,
     SWEEP_TRIGGER_BUFFERS,
     CLEANUP_OLD_CLAUDE_SESSIONS,
     CLEANUP_OLD_DONE_ONEOFF_TASKS,
@@ -72,6 +73,7 @@ from memory.common.db.models import (
     AuditEvent,
     Chunk,
     CodingProject,
+    Event,
     JobStatus,
     LLMSpend,
     PendingJob,
@@ -1288,12 +1290,14 @@ def delete_orphaned_source_items(batch_size: int = 1000) -> dict[str, str | int]
             for chunk_id, collection in chunks:
                 by_collection[collection].append(str(chunk_id))
             delete_vectors(by_collection)
-            result = session.execute(
+            ids = session.scalars(
                 delete(SourceItem)
                 .where(SourceItem.id.in_(batch))
+                .returning(SourceItem.id)
                 .execution_options(synchronize_session=False)
-            )
-            deleted += cast(CursorResult, result).rowcount
+            ).all()
+            session.add_all(Event(kind=ITEM, action=REMOVED, item_id=i) for i in ids)
+            deleted += len(ids)
             session.commit()
     logger.info("Deleted %d orphaned source items", deleted)
     return {"status": "success", "deleted": deleted}
@@ -1673,7 +1677,7 @@ def fold_into_spend(runs):
 def purge_agent_runs() -> dict[str, int]:
     """Delete runs (with their transcripts) past their agent's retention_days, else
     AGENT_RUN_RETENTION_DAYS, unless they or a run that started them are starred,
-    keeping their cost and tokens in llm_spend; and old trigger match claims."""
+    keeping their cost and tokens in llm_spend; old trigger match claims; and old routed events."""
     retention = func.least(
         func.coalesce(
             AgentRun.spec["retention_days"].as_integer(), settings.AGENT_RUN_RETENTION_DAYS
@@ -1722,13 +1726,14 @@ def purge_agent_runs() -> dict[str, int]:
     logger.info("purged %d agent runs", purged)
     with make_session() as db:
         claims = triggers.purge_matches(db, triggers.MATCH_RETENTION)
-    return {"purged_runs": purged, "purged_trigger_matches": claims}
+        events = triggers.purge_events(db, timedelta(days=settings.EVENT_RETENTION_DAYS))
+    return {"purged_runs": purged, "purged_trigger_matches": claims, "purged_events": events}
 
 
-@app.task(name=MATCH_INGEST_TRIGGERS)
-def match_ingest_triggers(item_id: int, changes: list[str] | None = None) -> list[int]:
-    """Start or buffer agent runs for every ingest trigger a stored item matches."""
-    return triggers.match_ingest_triggers(item_id, changes=changes)
+@app.task(name=ROUTE_EVENTS)
+def route_events() -> dict[str, int]:
+    """Start or buffer agent runs for every ingest trigger a pending event matches."""
+    return {"delivered": len(triggers.route_events())}
 
 
 @app.task(name=SWEEP_TRIGGER_BUFFERS)

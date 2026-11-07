@@ -16,10 +16,9 @@ from typing import Any, Callable, Iterable, Sequence, TypeVar, cast
 
 from celery.exceptions import Retry, TaskPredicate
 from sqlalchemy import or_
-from memory.agents.triggers import queue_trigger_match
 from memory.common import embedding, qdrant
 from memory.common.access_control import apply_access_filter_to_query, uploader_access_filter
-from memory.common.db.models import SourceItem, Chunk
+from memory.common.db.models import SourceItem, Chunk, item_event
 from memory.common.discord import notify_task_failure
 from memory.common.metrics import record_metric
 
@@ -399,8 +398,9 @@ def process_content_item(
     Execute complete content processing workflow.
 
     Performs the full pipeline for processing a content item:
-    1. Add to database session, flush to get ID, and resolve inherited
-       access control (so payloads and trigger matching see it)
+    1. Add to database session, flush to get ID, resolve inherited
+       access control (so payloads and trigger matching see it), and write
+       the item's event
     2. Generate embeddings and chunks
     3. Push embeddings to Qdrant vector store
     4. Commit transaction and return result
@@ -408,7 +408,7 @@ def process_content_item(
     Args:
         item: SourceItem to process
         session: Database session for persistence
-        changes: What changed, for trigger matching; an empty list queues none
+        changes: What changed, for trigger matching; an empty list writes no event
 
     Returns:
         Task result dictionary with processing status and metadata
@@ -422,6 +422,8 @@ def process_content_item(
     session.add(item)
     session.flush()
     item.apply_inherited_access_control()
+    if changes != []:
+        session.add(item_event(session, item, changes))
 
     # Embedding API calls can outlast Postgres' idle_in_transaction_session_timeout,
     # which would kill the connection under the item, so commit before them.
@@ -431,10 +433,7 @@ def process_content_item(
     if not chunks_count:
         # Reflect actual embed_status in task result
         status = "skipped" if item.embed_status == "SKIPPED" else "failed"
-        # Triggers match what was stored, embedded or not: "@bot hi" is too short to embed.
         session.commit()
-        if changes != []:
-            queue_trigger_match(item.id, changes=changes)
         return create_task_result(item, status, content_length=getattr(item, "size", 0))
 
     # Commit DB changes first to ensure chunks are persisted.
@@ -461,8 +460,6 @@ def process_content_item(
         item.embed_failed(error_name(e))
         logger.exception("Failed to push embeddings to Qdrant")
     session.commit()
-    if changes != []:
-        queue_trigger_match(item.id, changes=changes)
 
     return create_task_result(item, status, content_length=getattr(item, "size", 0))
 

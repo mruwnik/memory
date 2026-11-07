@@ -1021,14 +1021,13 @@ def test_owner_trigger_fires_for_synced_meeting_before_any_reconcile(
     db.add(trigger)
     db.commit()
 
-    result = meetings.process_meeting(
+    meetings.process_meeting(
         transcript=sample_transcript,
         external_id="synced-trigger",
         transcript_account_id=account.id,
     )
 
-    matched = triggers.match_ingest_triggers(result["meeting_id"], fakeredis.FakeRedis())
-    assert matched == [trigger.id]
+    assert triggers.route_events(fakeredis.FakeRedis()) == [trigger.id]
 
 
 def test_detached_tasks_keep_their_resolved_access_control(db_session, regular_user):

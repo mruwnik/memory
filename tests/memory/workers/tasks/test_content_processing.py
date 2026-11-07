@@ -27,6 +27,7 @@ from memory.common.content_processing import (
     safe_task_execution,
     by_collection,
 )
+from tests.conftest import item_events
 
 
 @pytest.fixture
@@ -757,17 +758,11 @@ def test_process_content_item(
     db_session,
     qdrant,
     mock_uuid4,
-    monkeypatch,
     embedding_return,
     qdrant_error,
     expected_status,
     expected_embed_status,
 ):
-    queued = []
-    monkeypatch.setattr(
-        "memory.common.content_processing.queue_trigger_match",
-        lambda item_id, changes=None: queued.append(item_id),
-    )
     # Create a fresh mail message for each test to avoid fixture contamination
     mail_message = MailMessage(
         sha256=b"test_hash" + bytes(24),
@@ -817,7 +812,7 @@ def test_process_content_item(
     db_item = db_session.query(MailMessage).filter_by(id=mail_message.id).first()
     assert db_item is not None
     assert str(db_item.embed_status) == expected_embed_status
-    assert queued == [mail_message.id]
+    assert item_events(db_session) == [(mail_message.id, "added", None)]
 
 
 @pytest.mark.parametrize(

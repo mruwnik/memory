@@ -8,11 +8,10 @@ from typing import Generator, cast
 
 from sqlalchemy.exc import IntegrityError
 
-from memory.agents.triggers import queue_trigger_match
 from memory.common import settings
 from memory.common.celery_app import PROCESS_EMAIL, SYNC_ACCOUNT, app
 from memory.common.db.connection import DBSession, make_session
-from memory.common.db.models import EmailAccount, MailMessage
+from memory.common.db.models import EmailAccount, MailMessage, item_event
 from memory.common.db.models.source_item import clean_filename
 from memory.common.email_sender import PASSWORD_RESET_HEADER, PASSWORD_RESET_SUBJECT
 from memory.common.redis_lock import Lock, distributed_lock
@@ -166,10 +165,10 @@ def store_email_message(
             db.flush()
             for item in [mail_message, *mail_message.attachments]:
                 item.apply_inherited_access_control()
+            db.add(item_event(db, mail_message, None))
             vectorize_email(mail_message)
 
             db.commit()
-            queue_trigger_match(mail_message.id)
 
             logger.debug(f"Stored embedding for message {mail_message.message_id}")
 

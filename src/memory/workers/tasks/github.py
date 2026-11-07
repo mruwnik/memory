@@ -25,6 +25,7 @@ from memory.common.db.models import (
     GithubPRData,
     GithubProject,
     Project,
+    item_event,
 )
 from memory.common.db.models.sources import (
     GithubAccount,
@@ -55,7 +56,6 @@ from memory.common.content_processing import (
     delete_chunk_vectors,
     create_task_result,
     process_content_item,
-    queue_trigger_match,
 )
 from memory.common.jobs import tracked_task
 from memory.common.push_health import GITHUB_PUSH_STATUSES, push_overdue, record_push_miss
@@ -372,9 +372,9 @@ def _update_existing_item(
         existing.checks = new_checks  # type: ignore
 
     if not _needs_reindex(existing, issue_data):
-        session.commit()
         if changes:
-            queue_trigger_match(existing.id, changes=changes)
+            session.add(item_event(session, existing, changes))
+        session.commit()
         return create_task_result(existing, "updated" if changes else "unchanged")
 
     logger.debug(

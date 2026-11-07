@@ -6,7 +6,6 @@ import fakeredis
 import pytest
 
 from memory.agents import triggers
-from memory.common.celery_app import MATCH_INGEST_TRIGGERS
 from memory.common.db.models import (
     AgentDefinition,
     AgentTrigger,
@@ -19,6 +18,7 @@ from memory.common.db.models import (
     Person,
 )
 from memory.workers.tasks import discord
+from tests.conftest import item_events
 
 
 @pytest.fixture
@@ -278,15 +278,12 @@ def test_an_edited_message_refires_an_on_edit_trigger(
     client = fakeredis.FakeRedis()
 
     discord.add_discord_message(**sample_message_data)
-    [stored] = no_celery_dispatch.call_args_list
-    [item_id, _] = stored.kwargs["args"]
-    first = triggers.match_ingest_triggers(item_id, client)
-    no_celery_dispatch.reset_mock()
+    first = triggers.route_events(client)
     edit(sample_message_data)
-    queued = no_celery_dispatch.call_args_list
+    [(item_id, _, _), edited] = item_events(db_session)
 
-    assert [(c.args[0], c.kwargs["args"]) for c in queued] == [(MATCH_INGEST_TRIGGERS, [item_id, None])]
-    assert (first, triggers.match_ingest_triggers(item_id, client)) == ([trigger.id], [trigger.id])
+    assert edited == (item_id, "changed", None)
+    assert (first, triggers.route_events(client)) == ([trigger.id], [trigger.id])
 
 
 def test_edit_discord_message_not_found(db_session):

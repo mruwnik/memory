@@ -416,6 +416,8 @@ TASK_RESULT_RETENTION_DAYS = int(os.getenv("TASK_RESULT_RETENTION_DAYS", 7))
 # Finished jobs are what clients poll and what external_id idempotency checks
 # match; a month outlasts any realistic retry or status lookup.
 PENDING_JOB_RETENTION_DAYS = int(os.getenv("PENDING_JOB_RETENTION_DAYS", 30))
+EVENT_RETENTION_DAYS = int(os.getenv("EVENT_RETENTION_DAYS", 30))
+EVENT_MAX_ATTEMPTS = int(os.getenv("EVENT_MAX_ATTEMPTS", 5))
 # Days of telemetry_events and llm_spend rows kept for the usage page.
 USAGE_RETENTION_DAYS = int(os.getenv("USAGE_RETENTION_DAYS", 365))
 AUDIT_RETENTION_DAYS = int(os.getenv("AUDIT_RETENTION_DAYS", 730))

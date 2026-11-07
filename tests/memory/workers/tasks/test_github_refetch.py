@@ -8,7 +8,7 @@ import requests
 
 from memory.common.celery_app import SEND_NOTIFICATION
 from memory.common.db import connection as db_connection
-from memory.common.db.models import GithubItem, User
+from memory.common.db.models import Event, GithubItem, User
 from memory.common.db.models.sources import GithubAccount, GithubRepo
 from memory.common.github import (
     GithubComment,
@@ -19,6 +19,7 @@ from memory.common.github import (
 )
 from memory.common.github.refetch import queue_refetch
 from memory.workers.tasks import github
+from tests.conftest import item_events
 
 OWN = "memory-bot"
 
@@ -229,13 +230,13 @@ def github_serves():
         p.stop()
 
 
-@pytest.fixture
-def trigger_matches():
-    queued = Mock()
-    with patch("memory.common.content_processing.queue_trigger_match", queued), patch(
-        "memory.workers.tasks.github.queue_trigger_match", queued
-    ):
-        yield queued
+def forget_events(db):
+    db.query(Event).delete()
+    db.commit()
+
+
+def changes_reported(db):
+    return [(item_id, changes) for item_id, _, changes in item_events(db)]
 
 
 def stored(db_session) -> GithubItem:
@@ -243,10 +244,10 @@ def stored(db_session) -> GithubItem:
     return db_session.query(GithubItem).filter_by(repo_path="testorg/testrepo", number=7).one()
 
 
-def test_refetch_after_synchronize_reports_commits(db_session, repo, qdrant, github_serves, trigger_matches):
+def test_refetch_after_synchronize_reports_commits(db_session, repo, qdrant, github_serves):
     github_serves(pr_node("a" * 40))
     github.refetch_github_item(repo.id, 7, "pr")
-    trigger_matches.reset_mock()
+    forget_events(db_session)
 
     queue_refetch(repo.id, 7, "pr")
     post = github_serves(pr_node("b" * 40, updated="2024-01-07T00:00:00Z"))
@@ -256,26 +257,26 @@ def test_refetch_after_synchronize_reports_commits(db_session, repo, qdrant, git
     assert post.call_count == 1
     assert result["status"] == "processed"
     assert item.head_sha == "b" * 40
-    trigger_matches.assert_called_once_with(item.id, changes=["commits"])
+    assert changes_reported(db_session) == [(item.id, ["commits"])]
     assert queue_refetch(repo.id, 7, "pr")  # the run cleared its debounce mark
 
 
-def test_refetch_ignores_own_comment(db_session, repo, qdrant, github_serves, trigger_matches):
+def test_refetch_ignores_own_comment(db_session, repo, qdrant, github_serves):
     github_serves(pr_node("a" * 40))
     github.refetch_github_item(repo.id, 7, "pr")
-    trigger_matches.reset_mock()
+    forget_events(db_session)
 
     github_serves(pr_node("a" * 40, updated=LATER, comments=[(OWN, LATER)]))
     github.refetch_github_item(repo.id, 7, "pr")
 
     assert stored(db_session).comment_count == 1
-    trigger_matches.assert_not_called()
+    assert changes_reported(db_session) == []
 
 
-def test_refetch_reports_checks_without_reembedding(db_session, repo, qdrant, github_serves, trigger_matches):
+def test_refetch_reports_checks_without_reembedding(db_session, repo, qdrant, github_serves):
     github_serves(pr_node("a" * 40, checks={"tests": "failure"}))
     github.refetch_github_item(repo.id, 7, "pr")
-    trigger_matches.reset_mock()
+    forget_events(db_session)
 
     github_serves(pr_node("a" * 40, checks={"tests": "success"}))
     result = github.refetch_github_item(repo.id, 7, "pr")
@@ -283,7 +284,7 @@ def test_refetch_reports_checks_without_reembedding(db_session, repo, qdrant, gi
     item = stored(db_session)
     assert result["status"] == "updated"
     assert item.checks == {"tests": "success"}
-    trigger_matches.assert_called_once_with(item.id, changes=["checks"])
+    assert changes_reported(db_session) == [(item.id, ["checks"])]
 
 
 def branch_context(base: str, head_repo: str, review_commits=()) -> dict:
@@ -299,7 +300,7 @@ def branch_context(base: str, head_repo: str, review_commits=()) -> dict:
     }
 
 
-def test_refetch_stores_branch_context_and_reviewed_commits(db_session, repo, qdrant, github_serves, trigger_matches):
+def test_refetch_stores_branch_context_and_reviewed_commits(db_session, repo, qdrant, github_serves):
     github_serves(pr_node("a" * 40) | branch_context("base1", "fork/testrepo"))
     github.refetch_github_item(repo.id, 7, "pr")
     first = stored(db_session)
@@ -314,7 +315,7 @@ def test_refetch_stores_branch_context_and_reviewed_commits(db_session, repo, qd
     assert [r["commit_oid"] for r in item.pr_data.reviews or []] == ["a" * 40]
 
 
-def test_refetch_forgets_the_head_repo_of_a_deleted_fork(db_session, repo, qdrant, github_serves, trigger_matches):
+def test_refetch_forgets_the_head_repo_of_a_deleted_fork(db_session, repo, qdrant, github_serves):
     github_serves(pr_node("a" * 40) | branch_context("base1", "fork/testrepo"))
     github.refetch_github_item(repo.id, 7, "pr")
 
@@ -325,7 +326,7 @@ def test_refetch_forgets_the_head_repo_of_a_deleted_fork(db_session, repo, qdran
     assert (item.base_sha, item.head_ref, item.head_repo) == ("base1", "feature", None)
 
 
-def test_refetch_skips_untracked_kind(db_session, repo, github_serves, trigger_matches):
+def test_refetch_skips_untracked_kind(db_session, repo, github_serves):
     repo.track_prs = False
     db_session.commit()
     post = github_serves(pr_node("a" * 40))
@@ -334,7 +335,7 @@ def test_refetch_skips_untracked_kind(db_session, repo, github_serves, trigger_m
 
     assert result["status"] == "skipped"
     assert post.call_count == 0
-    trigger_matches.assert_not_called()
+    assert changes_reported(db_session) == []
 
 
 # --- Polls that find what the webhook should have delivered ---
@@ -360,7 +361,7 @@ def notifications(no_celery_dispatch) -> list:
 
 
 def test_poll_finding_an_unpushed_change_marks_the_repo_and_notifies_once(
-    db_session, hooked_repo, qdrant, trigger_matches, no_celery_dispatch
+    db_session, hooked_repo, qdrant, no_celery_dispatch
 ):
     github.sync_item(hooked_repo.id, pr_data(github_updated_at=ago(90)), {OWN})  # pushed
 
@@ -379,7 +380,7 @@ def test_poll_finding_an_unpushed_change_marks_the_repo_and_notifies_once(
     assert len(notifications(no_celery_dispatch)) == 1
 
 
-def test_poll_finding_an_unpushed_new_item_marks_the_repo(db_session, hooked_repo, qdrant, trigger_matches):
+def test_poll_finding_an_unpushed_new_item_marks_the_repo(db_session, hooked_repo, qdrant):
     poll(hooked_repo, github_updated_at=ago(30))
 
     db_session.refresh(hooked_repo)
@@ -396,7 +397,7 @@ def test_poll_finding_an_unpushed_new_item_marks_the_repo(db_session, hooked_rep
     ],
 )
 def test_poll_changes_push_cannot_have_missed_leave_the_repo_unmarked(
-    db_session, hooked_repo, qdrant, trigger_matches, no_celery_dispatch, repo_fields, updated_minutes_ago
+    db_session, hooked_repo, qdrant, no_celery_dispatch, repo_fields, updated_minutes_ago
 ):
     for field, value in repo_fields.items():
         setattr(hooked_repo, field, value)
@@ -418,7 +419,7 @@ def test_poll_changes_push_cannot_have_missed_leave_the_repo_unmarked(
     ],
 )
 def test_syncs_that_show_no_missed_push_leave_the_repo_unmarked(
-    db_session, hooked_repo, qdrant, trigger_matches, polled, changed
+    db_session, hooked_repo, qdrant, polled, changed
 ):
     github.sync_item(hooked_repo.id, pr_data(github_updated_at=ago(90)), {OWN})
 

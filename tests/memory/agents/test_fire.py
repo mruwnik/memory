@@ -23,7 +23,7 @@ from memory.common.db.models.sources import (
     project_teams,
     team_members,
 )
-from tests.conftest import unique_sha256
+from tests.conftest import route_item, unique_sha256
 
 SPEC = {"system_prompt": "x", "model": "anthropic/m", "reasoning": "high"}
 CONFIG = {
@@ -143,11 +143,11 @@ def test_an_edit_starts_a_run_labelled_by_what_the_agent_saw_before(
     setup(db_session, admin_user, config=CONFIG | {"delivery": delivery, "on_edit": True})
     item = post(db_session, "A")
 
-    triggers.match_ingest_triggers(item.id, client)
+    route_item(db_session, item.id, client)
     fire_dispatched(no_celery_dispatch)
     item.content = "body, edited"
     db_session.commit()
-    triggers.match_ingest_triggers(item.id, client)
+    route_item(db_session, item.id, client)
     window_closed = time.time() + 120
     with monkeypatch.context() as m:
         m.setattr(time, "time", lambda: window_closed)
@@ -167,10 +167,10 @@ def test_the_changes_that_matched_reach_the_runs_trigger_ref(
     setup(db_session, admin_user, config=CONFIG | {"on_edit": True})
     item = post(db_session, "A")
 
-    triggers.match_ingest_triggers(item.id, client)
+    route_item(db_session, item.id, client)
     item.content = "body, pushed"
     db_session.commit()
-    triggers.match_ingest_triggers(item.id, client, changes=["commits"])
+    route_item(db_session, item.id, client, changes=["commits"])
     fire_dispatched(no_celery_dispatch)
 
     refs = sorted(run.trigger_ref["changes"][str(item.id)] for run in db_session.query(AgentRun))
@@ -251,7 +251,7 @@ def test_a_trigger_reads_items_with_its_keys_scopes(
 
     fired = [fire_trigger(trigger.id, claimed(i)) is not None for i in items]
     matched = [
-        triggers.match_ingest_triggers(i.id, fakeredis.FakeRedis()) == [trigger.id]
+        route_item(db_session, i.id, fakeredis.FakeRedis()) == [trigger.id]
         for i in items
     ]
 

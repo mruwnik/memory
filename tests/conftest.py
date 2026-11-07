@@ -21,9 +21,9 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 from testcontainers.community.qdrant import QdrantContainer
 
-from memory.agents import call
+from memory.agents import call, triggers
 from memory.common import instance_settings, metrics, module_settings, qdrant as qdrant_module, settings, summarizer
-from memory.common.db.models import LLMProviderKey, SourceItem
+from memory.common.db.models import Event, LLMProviderKey, SourceItem
 from memory.common.llms import registry
 from tests.memory.agents.fakes import FakeAnthropic, FakeOpenAI, ScriptedProvider
 from tests.providers.email_provider import MockEmailProvider
@@ -1143,6 +1143,20 @@ def make_source_item(db_session, n: int, **overrides) -> SourceItem:
     db_session.commit()
     db_session.refresh(item)
     return item
+
+
+def item_events(db) -> list[tuple[int | None, str | None, list[str] | None]]:
+    """(item_id, action, changes) of every event, oldest first."""
+    db.expire_all()
+    return [(e.item_id, e.action, e.changes) for e in db.query(Event).order_by(Event.id)]
+
+
+def route_item(db, item_id: int, client, changes: list[str] | None = None) -> list[int]:
+    """Write an event for the item, as its ingester would, and route it; returns
+    the trigger ids it was delivered to."""
+    db.add(Event(kind="item", action="changed", item_id=item_id, changes=changes))
+    db.commit()
+    return triggers.route_events(client)
 
 
 @pytest.fixture

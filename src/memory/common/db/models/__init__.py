@@ -116,6 +116,7 @@ from memory.common.db.models.agents import (
     RunStatus,
     TERMINAL_STATUSES,
 )
+from memory.common.db.models.events import Event, item_event
 from memory.common.db.models.users import (
     User,
     HumanUser,
@@ -207,6 +208,8 @@ __all__ = [
     "AgentRunStep",
     "AgentTrigger",
     "AgentTriggerMatch",
+    "Event",
+    "item_event",
     "RunStatus",
     "TERMINAL_STATUSES",
     "Base",
