@@ -60,7 +60,12 @@ def delete_unlisted(
 
 
 def queue_messages(
-    access: BotAccess, messages: list[dict], server_id: int | None, celery_app, is_edit: bool
+    access: BotAccess,
+    messages: list[dict],
+    server_id: int | None,
+    celery_app,
+    is_edit: bool,
+    backfill: bool = False,
 ) -> None:
     with make_session() as session:
         for message in messages:
@@ -73,7 +78,8 @@ def queue_messages(
             ADD_DISCORD_MESSAGE,
             kwargs=discord_events.message_task_kwargs(
                 message | {"guild_id": server_id}, access.bot_id, is_edit
-            ),
+            )
+            | {"backfill": backfill},
         )
 
 
@@ -88,10 +94,12 @@ async def crawl(
     stop_at: int | None = None,
     is_edit: bool = False,
     seen: set[int] | None = None,
+    backfill: bool = False,
 ) -> tuple[int, int | None, bool]:
     """Queue messages newest-first from ``before`` (the newest if None) until
     ``stop_at``, the start of the channel, or the budget. ``is_edit`` rewrites
-    stored messages whose content changed. The ids queued are added to ``seen``.
+    stored messages whose content changed; ``backfill`` marks them history. The
+    ids queued are added to ``seen``.
 
     Returns (processed, oldest id fetched, reached the end).
     """
@@ -101,7 +109,7 @@ async def crawl(
         page = await rest.messages(channel_id, before=before)
         fresh = [m for m in page if stop_at is None or int(m["id"]) > stop_at]
         taken = fresh[: budget - processed]
-        queue_messages(access, taken, server_id, celery_app, is_edit)
+        queue_messages(access, taken, server_id, celery_app, is_edit, backfill)
         processed += len(taken)
         if seen is not None:
             seen.update(int(m["id"]) for m in taken)
@@ -167,7 +175,7 @@ async def backfill_channel_messages(
                 before_id = low
             count, oldest_seen, reached_start = await crawl(
                 rest, access, channel_id, server_id, celery_app,
-                max_messages, before=before_id,
+                max_messages, before=before_id, backfill=True,
             )
             processed += count
             oldest_seen = oldest_seen or before_id

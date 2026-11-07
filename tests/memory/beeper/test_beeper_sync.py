@@ -10,6 +10,7 @@ from memory.common import settings
 from memory.common.celery_app import SYNC_BEEPER_ACCOUNT, SYNC_BEEPER_CHAT
 from memory.common.db.models import beeper as beeper_models
 from memory.common.db.models import BeeperAccount, BeeperChat, BeeperNetwork, BeeperParticipant
+from memory.common.db.models.events import Event
 from memory.common.db.models.source_items import BeeperMessage
 from memory.common.db.models.sources import Project
 from memory.workers.tasks import beeper as tasks
@@ -103,6 +104,25 @@ def test_a_chat_is_backfilled_to_the_start_of_its_history(db_session, fake_beepe
     assert {m.creator_id for m in messages.values()} == {beeper_account.created_by_user_id}
     db_session.refresh(chat)
     assert chat.backfill_done is True
+
+
+def test_only_history_from_before_a_chat_was_first_seen_is_a_backfill(
+    db_session, fake_beeper, beeper_account, qdrant
+):
+    fake_beeper.add_chat(CHAT)
+    fake_beeper.add_message(CHAT, "old", "said long before the chat was first seen", timestamp="2026-01-01T10:00:00.000Z")
+    # The message whose arrival made the chat known.
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    fake_beeper.add_message(CHAT, "new", "the first message of a new conversation", timestamp=now)
+    chat = collected_chat(db_session, fake_beeper, beeper_account)
+
+    tasks.sync_beeper_chat(chat.id)
+
+    messages = stored(db_session)
+    backfill = {
+        e.item_id: e.backfill for e in db_session.query(Event).filter(Event.action == "added")
+    }
+    assert {m: backfill[messages[m].id] for m in ("old", "new")} == {"old": True, "new": False}
 
 
 def countdowns(mock) -> list[int]:

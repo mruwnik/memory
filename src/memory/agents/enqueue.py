@@ -1,5 +1,6 @@
 """The one way any trigger starts an agent run."""
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -34,6 +35,7 @@ from memory.common.db.models import (
     AgentDefinition,
     AgentRun,
     AgentTrigger,
+    AgentTriggerMatch,
     APIKey,
     ExternalMCPServer,
     LLMProviderKey,
@@ -197,6 +199,7 @@ def enqueue_run(
     agent: str | None = None,
     api_key: APIKey | None = None,
     parent: AgentRun | None = None,
+    deliveries: Sequence[AgentTriggerMatch] = (),
 ) -> AgentRun:
     """Validate, cap, insert a pending run and dispatch it.
 
@@ -210,6 +213,9 @@ def enqueue_run(
     A `parent` run's child gets at most its scopes and tools, one more level of
     depth, and a cap no larger than what the parent has left (half of it, unless the
     child's spec sets max_cost_usd), which it holds until it finishes.
+
+    `deliveries`, the trigger's claims the run is for, are linked to a new run in
+    its transaction.
     """
     if len(input) > MAX_TEXT_CHARS:
         raise ValueError(f"input is longer than {MAX_TEXT_CHARS} characters")
@@ -232,7 +238,8 @@ def enqueue_run(
     subscription = (
         None
         if trigger.trigger_id is None
-        else db.get(AgentTrigger, trigger.trigger_id, with_for_update=True)
+        # NO KEY UPDATE, as triggers.lock_trigger: claims being inserted hold key-share locks on it.
+        else db.get(AgentTrigger, trigger.trigger_id, with_for_update={"key_share": True})
     )
     if trigger.trigger_id is not None and subscription is None:
         raise ValueError(f"unknown trigger {trigger.trigger_id}")
@@ -270,6 +277,8 @@ def enqueue_run(
         executor=EXECUTOR_SERVER if starts_on_server(spec) else EXECUTOR_WORKERS,
     )
     db.add(run)
+    for d in deliveries:
+        d.run = run
     db.commit()
     if run.executor == EXECUTOR_SERVER:
         dispatch(run.id)

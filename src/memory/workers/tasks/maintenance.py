@@ -43,7 +43,7 @@ from memory.common.celery_app import (
     PURGE_AGENT_RUNS,
     ROUTE_EVENTS,
     SWEEP_AGENT_RUNS,
-    SWEEP_TRIGGER_BUFFERS,
+    SWEEP_TRIGGER_DELIVERIES,
     CLEANUP_OLD_CLAUDE_SESSIONS,
     CLEANUP_OLD_DONE_ONEOFF_TASKS,
     CLEANUP_OLD_TASK_EXECUTIONS,
@@ -1732,11 +1732,11 @@ def purge_agent_runs() -> dict[str, int]:
 
 @app.task(name=ROUTE_EVENTS)
 def route_events() -> dict[str, int]:
-    """Start or buffer agent runs for every ingest trigger a pending event matches."""
+    """Write a delivery for every ingest trigger a pending event matches, and send the per-item ones."""
     return {"delivered": len(triggers.route_events())}
 
 
-@app.task(name=SWEEP_TRIGGER_BUFFERS)
-def sweep_trigger_buffers() -> dict[int, int]:
-    """Fire the batch ingest triggers whose window has closed or buffer is full."""
-    return triggers.sweep_trigger_buffers()
+@app.task(name=SWEEP_TRIGGER_DELIVERIES)
+def sweep_trigger_deliveries() -> dict[str, int]:
+    """Send trigger deliveries that are due or were lost, and end stale or excess ones."""
+    return triggers.sweep_deliveries()

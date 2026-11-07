@@ -54,12 +54,13 @@ def safe_process_discord_message(
     *,
     message_id: int,
     operation: str,
+    backfill: bool = False,
 ) -> dict[str, Any]:
     """``process_content_item``, treating a lost insert race as the message
     already being stored. The IntegrityError text holds the row's content, so
     only ids are logged."""
     try:
-        return process_content_item(message, session)
+        return process_content_item(message, session, backfill=backfill)
     except sqlalchemy_exc.IntegrityError:
         session.rollback()
         logger.info("Discord message %s already stored while %s it", message_id, operation)
@@ -147,12 +148,14 @@ def add_discord_message(
     reactions: Reactions | None = None,
     is_edit: bool = False,
     link_by_username: bool = True,
+    backfill: bool = False,
 ) -> dict[str, Any]:
     """
     Add a Discord message to the database and queue for embedding.
 
     ``link_by_username`` is off for pushed messages, whose author names are
-    only as trustworthy as the pushing bot's owner.
+    only as trustworthy as the pushing bot's owner. ``backfill`` marks history
+    read below what was stored, which triggers don't react to.
     """
     logger.debug(f"Adding Discord message {message_id}")
 
@@ -206,6 +209,7 @@ def add_discord_message(
                 session,
                 message_id=message_id,
                 operation="editing",
+                backfill=backfill,
             )
 
         # Create new message
@@ -244,6 +248,7 @@ def add_discord_message(
             session,
             message_id=message_id,
             operation="adding",
+            backfill=backfill,
         )
 
 

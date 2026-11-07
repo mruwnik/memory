@@ -34,6 +34,10 @@ class CapExceeded(ValueError):
     pass
 
 
+class RateExceeded(CapExceeded):
+    pass
+
+
 def effective_cap(ceiling: Decimal, *values: Decimal | None) -> Decimal:
     """Strictest wins; unset values don't participate."""
     return min([ceiling, *(v for v in values if v is not None)])
@@ -239,14 +243,14 @@ def resolve_run_cap(
 def check_hourly_rate(
     db: DBSession, of: ColumnElement[bool], rate: int | None, what: str, knob: str
 ) -> None:
-    """CapExceeded once the runs matching `of` have reached `rate` (or the global ceiling) this hour."""
+    """RateExceeded once the runs matching `of` have reached `rate` (or the global ceiling) this hour."""
     limit = min(settings.AGENT_MAX_RUNS_PER_HOUR, rate or settings.AGENT_MAX_RUNS_PER_HOUR)
     since = datetime.now(timezone.utc) - timedelta(hours=1)
     started = (
         db.query(func.count(AgentRun.id)).filter(of, AgentRun.created_at > since).scalar()
     )
     if started >= limit:
-        raise CapExceeded(
+        raise RateExceeded(
             f"{what} rate: {started} runs in the last hour, limit {limit} "
             f"({knob} / AGENT_MAX_RUNS_PER_HOUR); try again later or raise it"
         )

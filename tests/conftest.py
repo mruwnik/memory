@@ -1151,12 +1151,12 @@ def item_events(db) -> list[tuple[int | None, str | None, list[str] | None]]:
     return [(e.item_id, e.action, e.changes) for e in db.query(Event).order_by(Event.id)]
 
 
-def route_item(db, item_id: int, client, changes: list[str] | None = None) -> list[int]:
+def route_item(db, item_id: int, changes: list[str] | None = None, **event) -> list[int]:
     """Write an event for the item, as its ingester would, and route it; returns
     the trigger ids it was delivered to."""
-    db.add(Event(kind="item", action="changed", item_id=item_id, changes=changes))
+    db.add(Event(kind="item", action="changed", item_id=item_id, changes=changes, **event))
     db.commit()
-    return triggers.route_events(client)
+    return triggers.route_events()
 
 
 @pytest.fixture

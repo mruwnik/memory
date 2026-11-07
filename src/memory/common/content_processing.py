@@ -392,7 +392,7 @@ def create_task_result(
 
 
 def process_content_item(
-    item: SourceItem, session, changes: list[str] | None = None
+    item: SourceItem, session, changes: list[str] | None = None, backfill: bool = False
 ) -> dict[str, Any]:
     """
     Execute complete content processing workflow.
@@ -409,6 +409,7 @@ def process_content_item(
         item: SourceItem to process
         session: Database session for persistence
         changes: What changed, for trigger matching; an empty list writes no event
+        backfill: A history import stored the item, which triggers don't react to
 
     Returns:
         Task result dictionary with processing status and metadata
@@ -423,7 +424,7 @@ def process_content_item(
     session.flush()
     item.apply_inherited_access_control()
     if changes != []:
-        session.add(item_event(session, item, changes))
+        session.add(item_event(session, item, changes, backfill))
 
     # Embedding API calls can outlast Postgres' idle_in_transaction_session_timeout,
     # which would kill the connection under the item, so commit before them.

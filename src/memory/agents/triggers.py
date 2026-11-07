@@ -1,5 +1,3 @@
-# redis-py types replies as sync|async unions.
-# pyright: reportOperatorIssue=false, reportIndexIssue=false
 """Ingest triggers: deterministic filters over newly stored items.
 
 Matching runs on the maintenance queue, so this module must stay importable
@@ -9,8 +7,8 @@ happens on the agents queue, in memory.agents.fire.
 """
 
 import email.utils
-import functools
 import hashlib
+import itertools
 import json
 import logging
 import re
@@ -21,10 +19,9 @@ from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 from typing import Annotated, Any, Collection, Iterable, Literal, cast
 
-import redis
 from celery.exceptions import SoftTimeLimitExceeded
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
-from sqlalchemy import and_, exists, func, or_, select, update
+from sqlalchemy import case, exists, func, or_, select, update
 from sqlalchemy.orm import aliased
 
 from memory.common import settings
@@ -39,6 +36,7 @@ from memory.common.access_control import (
 )
 from memory.common.celery_app import FIRE_TRIGGER, app
 from memory.common.collections import SESSION_COLLECTIONS
+from memory.common.notify import notify_user_now
 from memory.common.scopes import SCOPE_ADMIN, SCOPE_AGENTS, SCOPE_READ
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import (
@@ -75,7 +73,6 @@ REGEX_TIMEOUT_SEC = 0.1
 MAX_TEMPLATE_CHARS = 20_000
 ITEMS_PLACEHOLDER = "{items}"
 DEFAULT_TEMPLATE = f"New items matched this trigger:\n\n{ITEMS_PLACEHOLDER}"
-BUFFER_TTL_SEC = 86_400
 # Reprocessing that would re-match an item (re-syncs, upstream edits) mostly
 # happens soon after ingest, so claims older than this are purged; items older
 # than this never match as new ones, so the purge can't let one fire again.
@@ -83,11 +80,56 @@ MATCH_RETENTION = timedelta(days=30)
 ROUTE_BATCH_SIZE = 100
 # A run takes no more batches after this; the next beat carries on.
 ROUTE_RUN_SECONDS = 30
+# The part of a run routing pending events may use before replays get the rest.
+ROUTE_PENDING_SHARE = 2 / 3
 ROUTER_LOCK_KEY = 0x6576656E7473  # "events"
+SWEEP_LOCK_KEY = 0x64656C6976657279  # "delivery"
+# Every delivery ends in one of these; skipped:<reason> says why nothing ran.
+PENDING, DONE, FAILED, EXPIRED = "pending", "done", "failed", "expired"
+SKIPPED_INACCESSIBLE = "skipped:inaccessible"
+SKIPPED_DISABLED = "skipped:disabled"
+SHED_RATE = "skipped:shed:rate"
+SHED_BUDGET = "skipped:shed:budget"
+SHED_BACKLOG = "skipped:shed:backlog"
+# A delivery still pending this long after it was sent is sent again, and each
+# resend waits twice as long as the one before, so a backlogged agents queue
+# doesn't fill with copies of what it already holds.
+DISPATCH_GRACE = timedelta(minutes=2)
+MAX_RESEND_DOUBLINGS = 12
+# Deliveries a cap stops wait this long; any it stops again are shed.
+THROTTLE_WINDOW = timedelta(hours=1)
+# An episode ends after this long with nothing held back: longer than a deferral,
+# so the shedding of what one burst deferred is the same episode.
+THROTTLE_EPISODE = 2 * THROTTLE_WINDOW
+# Replays overlap the trip and the resume by this much: a router batch can be in
+# flight at either end, and version dedupe makes the overlap harmless.
+REPLAY_MARGIN = timedelta(minutes=1)
+# Deliveries pending this long (their trigger disabled, or firing down) end.
+DELIVERY_MAX_AGE = timedelta(days=7)
+# trigger.state keys.
+THROTTLED, RESUME = "throttled", "resume"
 
 FilterValues = Annotated[list[str], Field(max_length=MAX_FILTER_VALUES)]
 # What changed about an item, as ingesters report it in its event.
-Change = Literal["new", "edited", "commits", "comments", "review", "checks", "state"]
+Change = Literal[
+    "new",
+    "edited",
+    "commits",
+    "comments",
+    "review",
+    "checks",
+    "checks_complete",
+    "state",
+    "labels",
+    "assignees",
+    "draft",
+    # Meeting action items (which share "assignees" and "state").
+    "title",
+    "due",
+    "priority",
+]
+# Changes that are news about an item: they make one the trigger never saw match.
+NEWS: frozenset[Change] = frozenset({"commits", "comments", "review", "checks_complete", "state"})
 # Discord <@123> / <@!123>, Slack <@U123> / <@U123|name>.
 MENTION = re.compile(r"<@!?(\w+)(?:\|[^>]*)?>")
 
@@ -206,6 +248,12 @@ class IngestConfig(BaseModel):
             raise ValueError("on_changes needs on_edit: only edits are filtered by change")
         return self
 
+    def reacts_to(self, changes: list[str] | None) -> bool:
+        """Whether reported `changes` are news about an item this trigger never saw."""
+        news = NEWS & set(changes or [])
+        wanted = set(self.on_changes)
+        return bool(news) and (not wanted or bool(wanted & news))
+
     def refires(self, changes: list[str] | None) -> bool:
         """Whether an edit reporting `changes` fires again; an unreported edit is "edited"."""
         wanted = set(self.on_changes)
@@ -285,6 +333,9 @@ def github_version_part(item: GithubItem) -> str:
             "merged_at": item.merged_at.isoformat() if item.merged_at else None,
             "checks": item.checks,
             "reviews": sorted([r.get("id"), r.get("state")] for r in reviews or []),
+            "labels": sorted(item.labels or []),
+            "assignees": sorted(item.assignees or []),
+            "draft": item.draft,
         },
         sort_keys=True,
     )
@@ -296,7 +347,8 @@ def content_version(item: SourceItem) -> bytes:
     Raw content counts as well as the body, as Slack edits leave resolved_content
     as it was. The migration that added claim versions backfills this in SQL.
     GitHub items also count what their sync reports as changes beyond the
-    content (comments are in it): head commit, state, checks and reviews.
+    content (comments are in it): head commit, state, checks, reviews, labels,
+    assignees and draft.
     """
     parts = (item_title(item) or "", item.content or "", item_body(item))
     if isinstance(item, GithubItem):
@@ -412,6 +464,14 @@ def owner_bots(db: DBSession, owner_id: int) -> frozenset[str]:
     return lowered([*discord, *slack])
 
 
+def lock_trigger(db: DBSession, trigger_id: int) -> AgentTrigger | None:
+    """The trigger, freshly read and locked against other writers. FOR NO KEY UPDATE,
+    so the key-share locks that inserting its claims takes don't wait on it, or it on them."""
+    return db.get(
+        AgentTrigger, trigger_id, with_for_update={"key_share": True}, populate_existing=True
+    )
+
+
 def trigger_key(db: DBSession, trigger: AgentTrigger, owner: User) -> APIKey | None:
     """The API key a trigger acts through; raises PrincipalRevoked once it can't."""
     if trigger.via_api_key and trigger.api_key_id is None:
@@ -456,89 +516,48 @@ def any_ingest_trigger(db: DBSession) -> bool:
     return db.query(exists().where(*LIVE_INGEST)).scalar()
 
 
-@functools.cache
-def buffer_client() -> redis.Redis:
-    return redis.from_url(settings.REDIS_URL)
+def delivery_ref(item_id: int, version: bytes) -> str:
+    """How FIRE_TRIGGER names a delivery."""
+    return f"{item_id}:{version.hex()}"
 
 
-def buffer_key(trigger_id: int) -> str:
-    return f"agents:trigger:{trigger_id}:buf"
+def parse_ref(ref: str) -> tuple[int, bytes]:
+    # Fires sent before deliveries were rows carry more fields, which go unused.
+    item_id, version = ref.split(":")[:2]
+    return int(item_id), bytes.fromhex(version)
 
 
-@dataclass(frozen=True)
-class Delivery:
-    """A claimed version of an item on its way to a run, as buffers and FIRE_TRIGGER carry it."""
-
-    item_id: int
-    version: str
-    # The trigger had already matched an earlier version.
-    edited: bool
-    # Sorted Change tags, from delivered_changes.
-    changes: tuple[str, ...] = ()
-
-    def encode(self) -> str:
-        return f"{self.item_id}:{self.version}:{int(self.edited)}:{','.join(self.changes)}"
-
-    @classmethod
-    def decode(cls, raw: str) -> "Delivery":
-        item_id, version, edited, *changes = raw.split(":")
-        tags = tuple(changes[0].split(",")) if changes and changes[0] else ()
-        return cls(int(item_id), version, edited == "1", tags)
-
-
-def delivered_changes(edited: bool, changes: list[str] | None) -> tuple[str, ...]:
+def delivered_changes(edited: bool, changes: list[str] | None) -> list[str]:
     """A first match is always "new"; an edit that reports no changes is "edited"."""
     tags = set(changes or [])
     if not edited:
         tags.add("new")
-    return tuple(sorted(tags or {"edited"}))
+    return sorted(tags or {"edited"})
 
 
-def changes_by_item(deliveries: list[Delivery]) -> dict[str, list[str]]:
+def changes_by_item(deliveries: list[AgentTriggerMatch]) -> dict[str, list[str]]:
     """Every change delivered for each item, keyed by its id as a string (a JSON key).
 
-    An item whose first version is among the deliveries is just "new": the run is
-    the agent's first sight of it, so later edits in the same batch aren't changes.
+    An item whose first version is among the deliveries has that first match's
+    changes ("new", and any news it was matched for): the run is the agent's first
+    sight of it, so later edits in the same batch aren't changes.
     """
+    first_seen = {str(d.item_id) for d in deliveries if not d.edited}
     merged: dict[str, set[str]] = {}
     for d in deliveries:
-        merged.setdefault(str(d.item_id), set()).update(d.changes)
-    first_seen = {str(d.item_id) for d in deliveries if not d.edited}
-    return {item_id: ["new"] if item_id in first_seen else sorted(tags) for item_id, tags in merged.items()}
+        if not (d.edited and str(d.item_id) in first_seen):
+            merged.setdefault(str(d.item_id), set()).update(d.changes)
+    return {item_id: sorted(tags) for item_id, tags in merged.items()}
 
 
-def dedupe_key(trigger_id: int, deliveries: list[Delivery]) -> str:
+def dedupe_key(trigger_id: int, deliveries: list[AgentTriggerMatch]) -> str:
     """Keyed on the claimed versions, so an edit's run isn't taken for a redelivery
     and a redelivery after an edit isn't taken for a new run."""
-    versions = sorted(f"{d.item_id}:{d.version[:16]}" for d in deliveries)
+    versions = sorted(f"{d.item_id}:{bytes(d.content_hash).hex()[:16]}" for d in deliveries)
     if len(versions) == 1:
         return f"{trigger_id}:{versions[0]}"
     digest = hashlib.sha256(",".join(versions).encode()).hexdigest()
     return f"{trigger_id}:batch:{digest[:32]}"
-
-
-def buffer_item(client: redis.Redis, trigger_id: int, batch: Batch, delivery: Delivery) -> None:
-    key = buffer_key(trigger_id)
-    client.zadd(key, {delivery.encode(): time.time()}, nx=True)
-    # Backstop for buffers of triggers deleted or disabled while holding items.
-    client.expire(key, batch.window_sec + BUFFER_TTL_SEC)
-
-
-def pop_due_batches(
-    client: redis.Redis, trigger_id: int, batch: Batch, now: float
-) -> list[list[Delivery]]:
-    key = buffer_key(trigger_id)
-    batches = []
-    while oldest := client.zrange(key, 0, 0, withscores=True):
-        full = client.zcard(key) >= batch.max_items
-        if not full and now - oldest[0][1] < batch.window_sec:
-            break
-        pipe = client.pipeline(transaction=True)
-        pipe.zrange(key, 0, batch.max_items - 1)
-        pipe.zremrangebyrank(key, 0, batch.max_items - 1)
-        ids, _ = pipe.execute()
-        batches.append([Delivery.decode(i.decode()) for i in ids])
-    return batches
 
 
 def may_claim(seen: Collection[bytes], version: bytes, *, fresh: bool, on_edit: bool) -> bool:
@@ -557,9 +576,10 @@ def claim(
     fresh: bool,
     on_edit: bool,
     changes: list[str] | None = None,
-) -> Delivery | None:
-    """Record, uncommitted, that trigger_id matched this version of item_id; None
-    if it may not.
+    sent: bool = False,
+) -> AgentTriggerMatch | None:
+    """Record, uncommitted, that trigger_id matched this version of item_id, as a
+    pending delivery (`sent`: about to be sent to FIRE_TRIGGER); None if it may not.
 
     Items are reprocessed (re-embeds, upstream edits, re-syncs), and each pass
     re-runs matching, so a version claims at most once.
@@ -570,11 +590,18 @@ def claim(
     seen = item_claims(db, item_id).get(trigger_id, set())
     if not may_claim(seen, version, fresh=fresh, on_edit=on_edit):
         return None
-    db.add(AgentTriggerMatch(trigger_id=trigger_id, item_id=item_id, content_hash=version))
-    db.flush()
-    return Delivery(
-        item_id, version.hex(), edited=bool(seen), changes=delivered_changes(bool(seen), changes)
+    match = AgentTriggerMatch(
+        trigger_id=trigger_id,
+        item_id=item_id,
+        content_hash=version,
+        edited=bool(seen),
+        changes=delivered_changes(bool(seen), changes),
+        dispatched_at=datetime.now(timezone.utc) if sent else None,
+        sends=int(sent),
     )
+    db.add(match)
+    db.flush()
+    return match
 
 
 def item_claims(db: DBSession, item_id: int) -> dict[int, set[bytes]]:
@@ -589,12 +616,8 @@ def item_claims(db: DBSession, item_id: int) -> dict[int, set[bytes]]:
 
 
 def purge_matches(db: DBSession, older_than: timedelta) -> int:
-    """Forget claims older than `older_than`, except each item's newest under an
-    on_edit trigger: that one tells its next reprocess from an edit.
-
-    Only a newer claim that is itself past the cutoff supersedes one: a young claim
-    may yet be unclaimed by a failed delivery, which would leave the item no claims.
-    """
+    """Forget ended claims older than `older_than`, except each item's newest under
+    an on_edit trigger: that one tells its next reprocess from an edit."""
     cutoff = datetime.now(timezone.utc) - older_than
     newer = aliased(AgentTriggerMatch)
     on_edit_triggers = select(AgentTrigger.id).where(
@@ -603,12 +626,13 @@ def purge_matches(db: DBSession, older_than: timedelta) -> int:
     superseded = exists().where(
         newer.trigger_id == AgentTriggerMatch.trigger_id,
         newer.item_id == AgentTriggerMatch.item_id,
-        and_(newer.created_at > AgentTriggerMatch.created_at, newer.created_at < cutoff),
+        newer.created_at > AgentTriggerMatch.created_at,
     )
     deleted = (
         db.query(AgentTriggerMatch)
         .filter(
             AgentTriggerMatch.created_at < cutoff,
+            AgentTriggerMatch.status != PENDING,
             or_(AgentTriggerMatch.trigger_id.not_in(on_edit_triggers), superseded),
         )
         .delete(synchronize_session=False)
@@ -625,16 +649,22 @@ def purge_events(db: DBSession, older_than: timedelta) -> int:
     return deleted
 
 
-def dispatch(trigger_id: int, deliveries: list[Delivery]) -> None:
-    app.send_task(FIRE_TRIGGER, args=[trigger_id, [d.encode() for d in deliveries]])
+def send(trigger_id: int, refs: list[str]) -> None:
+    """Hand deliveries to FIRE_TRIGGER; the sweep resends any that don't arrive."""
+    try:
+        app.send_task(FIRE_TRIGGER, args=[trigger_id, refs])
+    except SoftTimeLimitExceeded:
+        raise
+    except Exception:
+        logger.exception("could not send deliveries to trigger %s", trigger_id)
 
 
 @dataclass(frozen=True)
 class Claimed:
-    event_id: int
     trigger_id: int
-    delivery: Delivery
-    batch: Batch | None
+    ref: str
+    # Batch members wait for the sweep; per-item deliveries are sent at once.
+    batched: bool
 
 
 @dataclass(frozen=True)
@@ -650,12 +680,14 @@ class LiveTrigger:
     readable: frozenset[int]
 
 
-def live_triggers(db: DBSession, item_ids: list[int]) -> list[LiveTrigger]:
-    """The enabled ingest triggers that can match, skipping any whose config no
-    longer validates."""
+def live_triggers(
+    db: DBSession, item_ids: list[int], candidates: list[AgentTrigger] | None = None
+) -> list[LiveTrigger]:
+    """The enabled ingest triggers (or `candidates`) that can match, skipping any
+    whose config no longer validates."""
     per_owner: dict[int, tuple[frozenset[str], frozenset[str]]] = {}
     live = []
-    for trigger in enabled_ingest_triggers(db):
+    for trigger in enabled_ingest_triggers(db) if candidates is None else candidates:
         try:
             config = IngestConfig.model_validate(trigger.config)
         except ValidationError:
@@ -674,8 +706,12 @@ def live_triggers(db: DBSession, item_ids: list[int]) -> list[LiveTrigger]:
     return live
 
 
-def match_item(db: DBSession, live: list[LiveTrigger], event: Event) -> list[Claimed]:
-    """Claim, uncommitted, the event's item for every trigger it matches."""
+def match_item(
+    db: DBSession, live: list[LiveTrigger], event: Event, replay: bool = False
+) -> list[Claimed]:
+    """Claim, uncommitted, the event's item for every trigger it matches. A
+    `replay` is of an event routed while the trigger was tripped, which it would
+    have seen, however old."""
     item_id = cast(int, event.item_id)
     item = db.get(SourceItem, item_id)
     if item is None:
@@ -685,12 +721,18 @@ def match_item(db: DBSession, live: list[LiveTrigger], event: Event) -> list[Cla
     # Settles most reprocesses before the costlier checks; claim() re-checks under its lock.
     claims = item_claims(db, item_id)
     oldest = datetime.now(timezone.utc) - MATCH_RETENTION
+    inserted = item.inserted_at
     claimed = []
     for t in live:
         trigger, config = t.trigger, t.config
-        # Triggers react to new items, not to the backlog that predates them.
-        fresh = item.inserted_at is not None and item.inserted_at >= max(
-            trigger.active_since, oldest
+        if event.created_at < trigger.active_since and not replay:
+            continue
+        # Triggers react to new items and to news about older ones, not to the
+        # backlog that predates them.
+        fresh = (
+            inserted is not None
+            and inserted >= oldest
+            and (inserted >= trigger.active_since or config.reacts_to(event.changes))
         )
         refires = config.refires(event.changes)
         if not may_claim(claims.get(trigger.id, set()), version, fresh=fresh, on_edit=refires):
@@ -700,43 +742,25 @@ def match_item(db: DBSession, live: list[LiveTrigger], event: Event) -> list[Cla
             continue
         if facts.authors & t.own or item_id not in t.readable:
             continue
-        delivery = claim(
-            db, trigger.id, item_id, version, fresh=fresh, on_edit=refires, changes=event.changes
+        batched = isinstance(config.delivery, Batch)
+        match = claim(
+            db,
+            trigger.id,
+            item_id,
+            version,
+            fresh=fresh,
+            on_edit=refires,
+            changes=event.changes,
+            sent=not batched,
         )
-        if delivery is None:
-            continue
-        batch = config.delivery if isinstance(config.delivery, Batch) else None
-        claimed.append(Claimed(event.id, trigger.id, delivery, batch))
+        if match is not None:
+            claimed.append(Claimed(trigger.id, delivery_ref(item_id, version), batched))
     return claimed
 
 
-def deliver(db: DBSession, client: redis.Redis | None, claimed: Claimed) -> bool:
-    """Fire a per-item claim now or buffer a batch one for the sweep."""
-    try:
-        if claimed.batch is None:
-            dispatch(claimed.trigger_id, [claimed.delivery])
-        else:
-            buffer_item(client or buffer_client(), claimed.trigger_id, claimed.batch, claimed.delivery)
-    except SoftTimeLimitExceeded:
-        raise
-    except Exception:
-        d = claimed.delivery
-        logger.exception("could not deliver item %s to trigger %s", d.item_id, claimed.trigger_id)
-        # Unclaimed and pending again, so the next run retries it; the other
-        # triggers' claims keep them from matching it twice.
-        db.query(AgentTriggerMatch).filter(
-            AgentTriggerMatch.trigger_id == claimed.trigger_id,
-            AgentTriggerMatch.item_id == d.item_id,
-            AgentTriggerMatch.content_hash == bytes.fromhex(d.version),
-        ).delete()
-        db.query(Event).filter(Event.id == claimed.event_id).update({"routed_at": None})
-        db.commit()
-        return False
-    return True
-
-
 def matchable(event: Event) -> bool:
-    return event.kind == ITEM and event.action != REMOVED
+    """Backfills and imports bring in the past, which triggers don't react to."""
+    return event.kind == ITEM and event.action != REMOVED and not event.backfill
 
 
 def route_batch(db: DBSession, after_id: int) -> tuple[int | None, list[Claimed]]:
@@ -782,47 +806,283 @@ def route_batch(db: DBSession, after_id: int) -> tuple[int | None, list[Claimed]
     return events[-1].id, claimed
 
 
-def route_events(client: redis.Redis | None = None) -> list[int]:
-    """Route pending events to the triggers they match, for up to
-    ROUTE_RUN_SECONDS; returns the trigger id of each delivery made, in event order.
+def replay_batch(db: DBSession, from_id: int) -> tuple[int | None, list[Claimed]]:
+    """Route, uncommitted, the next events that the first resuming trigger from
+    `from_id` on missed while tripped, to it alone; returns where the next call
+    starts, or None when no trigger is resuming. An event that fails is retried by
+    a later run, up to EVENT_MAX_ATTEMPTS."""
+    trigger = db.scalars(
+        select(AgentTrigger)
+        .where(*LIVE_INGEST, AgentTrigger.id >= from_id, AgentTrigger.state.has_key(RESUME))
+        .order_by(AgentTrigger.id)
+        .limit(1)
+        .with_for_update(key_share=True)
+    ).first()
+    if trigger is None:
+        return None, []
+    cursor = trigger.state[RESUME]
+    events = db.scalars(
+        missed_events(cursor).where(Event.id > cursor["after"]).order_by(Event.id).limit(ROUTE_BATCH_SIZE)
+    ).all()
+    if not events:
+        trigger.state = {k: v for k, v in trigger.state.items() if k != RESUME}
+        return trigger.id, []
+    live = live_triggers(db, [cast(int, e.item_id) for e in events if matchable(e)], [trigger])
+    claimed, after, next_from = [], cursor["after"], trigger.id
+    for ev in events:
+        if matchable(ev):
+            try:
+                with db.begin_nested():
+                    claimed += match_item(db, live, ev, replay=True)
+            except SoftTimeLimitExceeded:
+                raise
+            except Exception as e:
+                ev.attempts += 1
+                if ev.attempts < settings.EVENT_MAX_ATTEMPTS:
+                    logger.warning("could not replay event %s to trigger %s", ev.id, trigger.id, exc_info=True)
+                    # The next run retries it; this one moves on to other triggers.
+                    next_from = trigger.id + 1
+                    break
+                ev.error = type(e).__name__
+                logger.exception("giving up on replaying event %s to trigger %s", ev.id, trigger.id)
+        after = ev.id
+    trigger.state = trigger.state | {RESUME: cursor | {"after": after}}
+    return next_from, claimed
 
-    Claims commit with the events they route, so a lost run leaves its events
-    pending for the next one; deliveries go out only after that commit.
+
+def route_events() -> list[int]:
+    """Route pending events to the triggers they match, then replay to resumed
+    triggers what they missed, for up to ROUTE_RUN_SECONDS; returns the trigger id
+    of each delivery written, in order.
+
+    Deliveries commit with the events they route and are sent after that commit;
+    the sweep resends any whose send was lost.
     """
     delivered = []
-    last_id = 0
-    deadline = time.monotonic() + ROUTE_RUN_SECONDS
-    while True:
-        with make_session() as db:
-            # One router at a time: two would lock claim keys in clashing orders.
-            if not db.scalar(select(func.pg_try_advisory_xact_lock(ROUTER_LOCK_KEY))):
-                return delivered
-            taken, claimed = route_batch(db, last_id)
+    started = time.monotonic()
+    shares = ((route_batch, ROUTE_PENDING_SHARE), (replay_batch, 1))
+    for route, share in shares:
+        deadline = started + ROUTE_RUN_SECONDS * share
+        cursor = 0
+        while True:
+            with make_session() as db:
+                # One router at a time: two would lock claim keys in clashing orders.
+                if not db.scalar(select(func.pg_try_advisory_xact_lock(ROUTER_LOCK_KEY))):
+                    return delivered
+                taken, claimed = route(db, cursor)
+                db.commit()
+            for c in claimed:
+                if not c.batched:
+                    send(c.trigger_id, [c.ref])
+            delivered += [c.trigger_id for c in claimed]
             if taken is None:
-                return delivered
-            db.commit()
-            delivered += [c.trigger_id for c in claimed if deliver(db, client, c)]
-        last_id = taken
-        if time.monotonic() >= deadline:
-            return delivered
+                break
+            cursor = taken
+            if time.monotonic() >= deadline:
+                break
+    return delivered
 
 
-def sweep_trigger_buffers(client: redis.Redis | None = None) -> dict[int, int]:
-    """Fire every batch that is due; returns batches fired per trigger."""
-    client = client or buffer_client()
-    now = time.time()
-    fired = {}
+def tripped_at(trigger: AgentTrigger) -> datetime | None:
+    tripped = (trigger.state or {}).get("tripped")
+    return datetime.fromisoformat(tripped["at"]) if tripped else None
+
+
+def missed_events(cursor: dict[str, Any]):
+    return select(Event).where(
+        Event.routed_at >= datetime.fromisoformat(cursor["from"]),
+        Event.routed_at < datetime.fromisoformat(cursor["to"]),
+    )
+
+
+def resume_from_trip(db: DBSession, trigger: AgentTrigger) -> None:
+    """Have the router replay to a tripped trigger the events routed while it was
+    tripped (those still kept, EVENT_RETENTION_DAYS), so it carries on as if it
+    never had; its active_since stays as it was. A replay still under way is
+    extended to now."""
+    since = tripped_at(trigger)
+    if since is None:
+        raise ValueError("only a tripped trigger can resume from when it tripped")
+    to = (datetime.now(timezone.utc) + REPLAY_MARGIN).isoformat()
+    state = trigger.state or {}
+    if RESUME in state:
+        trigger.state = state | {RESUME: state[RESUME] | {"to": to}}
+        return
+    cursor = {"from": (since - REPLAY_MARGIN).isoformat(), "to": to}
+    first = db.scalar(missed_events(cursor).with_only_columns(func.min(Event.id)))
+    trigger.state = state | {RESUME: cursor | {"after": (first or 1) - 1}}
+
+
+def tell_owner(db: DBSession, owner: User, subject: str, message: str) -> None:
+    try:
+        notify_user_now(db, owner, subject=subject, message=message)
+    except Exception:
+        logger.exception("could not notify user %s", owner.id)
+
+
+def episode_over(state: dict[str, Any], now: datetime) -> bool:
+    """Whether a throttling episode ended: nothing held back for THROTTLE_EPISODE."""
+    throttle = state.get(THROTTLED)
+    return throttle is None or datetime.fromisoformat(throttle["last"]) < now - THROTTLE_EPISODE
+
+
+def throttled(trigger: AgentTrigger, reason: str) -> bool:
+    """Record on the locked trigger that a cap held its deliveries back; whether
+    that starts an episode, which its owner hears about once."""
+    now = datetime.now(timezone.utc)
+    state = trigger.state or {}
+    new = episode_over(state, now)
+    since = now.isoformat() if new else state[THROTTLED]["since"]
+    trigger.state = state | {THROTTLED: {"reason": reason, "since": since, "last": now.isoformat()}}
+    if new:
+        logger.warning("agent trigger %s is throttled", trigger.id)
+    return new
+
+
+def tell_throttled(db: DBSession, trigger: AgentTrigger, reason: str) -> None:
+    owner = db.get(User, trigger.user_id)
+    if owner is None:
+        return
+    tell_owner(
+        db,
+        owner,
+        subject=f"Agent trigger throttled: {trigger.name}",
+        message=(
+            f"Trigger {trigger.id} is over a limit: {reason}\n"
+            "Its deliveries wait up to an hour, and any still over it then are dropped. "
+            "It keeps running; this is the only notice until it has gone two hours "
+            "without being held back."
+        ),
+    )
+
+
+def expire_deliveries(db: DBSession, now: datetime) -> int:
+    """End, uncommitted, deliveries pending past DELIVERY_MAX_AGE."""
+    expired = db.execute(
+        update(AgentTriggerMatch)
+        .where(
+            AgentTriggerMatch.trigger_id == AgentTrigger.id,
+            AgentTriggerMatch.status == PENDING,
+            AgentTriggerMatch.created_at < now - DELIVERY_MAX_AGE,
+        )
+        .values(status=case((AgentTrigger.enabled, EXPIRED), else_=SKIPPED_DISABLED))
+        .returning(AgentTriggerMatch.item_id)
+    )
+    return len(expired.all())
+
+
+def shed_backlog(db: DBSession, trigger: AgentTrigger) -> int:
+    """Shed, uncommitted, the oldest of the trigger's pending deliveries beyond its backlog_max."""
+    if trigger.backlog_max is None:
+        return 0
+    excess = db.scalars(
+        select(AgentTriggerMatch)
+        .where(AgentTriggerMatch.trigger_id == trigger.id, AgentTriggerMatch.status == PENDING)
+        .order_by(AgentTriggerMatch.created_at.desc(), AgentTriggerMatch.item_id.desc())
+        .offset(trigger.backlog_max)
+        .with_for_update()
+    ).all()
+    for m in excess:
+        m.status = SHED_BACKLOG
+    return len(excess)
+
+
+def due_batches(
+    pending: list[AgentTriggerMatch], batch: Batch, now: datetime
+) -> list[list[AgentTriggerMatch]]:
+    """`pending` (oldest first) cut into the batches due now: full ones, then the
+    rest once its oldest has waited window_sec or it holds a deferral now due."""
+    window = timedelta(seconds=batch.window_sec)
+    batches = []
+    while pending:
+        due = (
+            len(pending) >= batch.max_items
+            or pending[0].created_at <= now - window
+            or any(m.not_before is not None for m in pending)
+        )
+        if not due:
+            break
+        batches.append(pending[: batch.max_items])
+        pending = pending[batch.max_items :]
+    return batches
+
+
+def resend_due(m: AgentTriggerMatch, now: datetime) -> bool:
+    if m.dispatched_at is None:
+        return True
+    doublings = min(max(m.sends - 1, 0), MAX_RESEND_DOUBLINGS)
+    return m.dispatched_at <= now - DISPATCH_GRACE * 2**doublings
+
+
+def due_sends(db: DBSession, trigger: AgentTrigger, now: datetime) -> list[list[str]]:
+    """Mark sent, uncommitted, the trigger's deliveries due now, and return them as
+    FIRE_TRIGGER's refs, one list per run."""
+    try:
+        delivery = IngestConfig.model_validate(trigger.config).delivery
+    except ValidationError:
+        logger.warning("not sending deliveries of trigger %s: its config is invalid", trigger.id)
+        return []
+    pending = db.scalars(
+        select(AgentTriggerMatch)
+        .where(
+            AgentTriggerMatch.trigger_id == trigger.id,
+            AgentTriggerMatch.status == PENDING,
+            or_(AgentTriggerMatch.not_before.is_(None), AgentTriggerMatch.not_before <= now),
+            or_(
+                AgentTriggerMatch.dispatched_at.is_(None),
+                AgentTriggerMatch.dispatched_at <= now - DISPATCH_GRACE,
+            ),
+        )
+        .order_by(AgentTriggerMatch.created_at, AgentTriggerMatch.item_id)
+    ).all()
+    pending = [m for m in pending if resend_due(m, now)]
+    groups = (
+        due_batches(pending, delivery, now)
+        if isinstance(delivery, Batch)
+        else [[m] for m in pending]
+    )
+    for m in itertools.chain.from_iterable(groups):
+        m.dispatched_at, m.sends = now, m.sends + 1
+    return [[delivery_ref(m.item_id, m.content_hash) for m in group] for group in groups]
+
+
+def sweep_deliveries() -> dict[str, int]:
+    """End deliveries pending past DELIVERY_MAX_AGE, shed backlogs over backlog_max,
+    and send what is due: per-item deliveries still pending DISPATCH_GRACE (doubling
+    with each resend) after they were sent (a crash after routing, a lost message), deferrals whose wait is
+    over, and batches whose window closed or that are full. A disabled trigger's
+    deliveries wait for it."""
+    now = datetime.now(timezone.utc)
+    sends: list[tuple[int, list[str]]] = []
+    shed = 0
     with make_session() as db:
-        configs = {
-            t.id: IngestConfig.model_validate(t.config).delivery
-            for t in enabled_ingest_triggers(db)
-        }
-    for trigger_id, delivery in configs.items():
-        if not isinstance(delivery, Batch):
-            continue
-        batches = pop_due_batches(client, trigger_id, delivery, now)
-        for deliveries in batches:
-            dispatch(trigger_id, deliveries)
-        if batches:
-            fired[trigger_id] = len(batches)
-    return fired
+        if not db.scalar(select(func.pg_try_advisory_xact_lock(SWEEP_LOCK_KEY))):
+            return {"expired": 0, "shed": 0, "sent": 0}
+        # Triggers first, the order fire_trigger locks in.
+        has_pending = exists().where(
+            AgentTriggerMatch.trigger_id == AgentTrigger.id, AgentTriggerMatch.status == PENDING
+        )
+        waiting = db.scalars(
+            select(AgentTrigger)
+            .where(has_pending)
+            .order_by(AgentTrigger.id)
+            .with_for_update(key_share=True)
+        ).all()
+        expired = expire_deliveries(db, now)
+        newly_throttled: list[tuple[AgentTrigger, str]] = []
+        for trigger in waiting:
+            if not (trigger.kind == INGEST and trigger.enabled and trigger.definition_id):
+                continue
+            if n := shed_backlog(db, trigger):
+                logger.warning("agent trigger %s shed %d deliveries over its backlog", trigger.id, n)
+                reason = f"more than {trigger.backlog_max} deliveries waiting"
+                if throttled(trigger, reason):
+                    newly_throttled.append((trigger, reason))
+            shed += n
+            sends += [(trigger.id, refs) for refs in due_sends(db, trigger, now)]
+        db.commit()
+        for trigger, reason in newly_throttled:
+            tell_throttled(db, trigger, reason)
+    for trigger_id, refs in sends:
+        send(trigger_id, refs)
+    return {"expired": expired, "shed": shed, "sent": len(sends)}

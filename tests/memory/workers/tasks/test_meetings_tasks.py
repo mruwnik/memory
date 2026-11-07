@@ -6,7 +6,6 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import call, patch
 
 import anthropic
-import fakeredis
 import httpx2
 import pytest
 from sqlalchemy import update
@@ -1081,7 +1080,7 @@ def test_owner_trigger_fires_for_synced_meeting_before_any_reconcile(
         transcript_account_id=account.id,
     )
 
-    assert triggers.route_events(fakeredis.FakeRedis()) == [trigger.id]
+    assert triggers.route_events() == [trigger.id]
 
 
 def test_detached_tasks_keep_their_resolved_access_control(db_session, regular_user):
@@ -1408,7 +1407,7 @@ def test_rerunning_a_meeting_keeps_the_task_ids_of_unchanged_action_items(
     draft, coordinate, _ = sample_extraction_response["action_items"]
     revised = sample_extraction_response | {
         "action_items": [
-            draft | {"priority": "low"},
+            draft | {"priority": "low", "assignee": "Dana"},
             coordinate | {"description": "coordinate  with QA team."},
             {"description": "Book the launch room", "priority": "high"},
         ]
@@ -1416,6 +1415,8 @@ def test_rerunning_a_meeting_keeps_the_task_ids_of_unchanged_action_items(
     scripted_llm.script = [submitted(sample_extraction_response), submitted(revised)]
     first = meetings.process_meeting(creator_id=regular_user.id, transcript=sample_transcript, external_id="ff-1")
     before = {t.task_title: t.id for t in mock_make_session.query(Task)}
+    mock_make_session.add(Person(identifier="dana", display_name="Dana"))
+    mock_make_session.commit()
 
     meetings.reprocess_meeting(item_id=first["meeting_id"])
 
@@ -1426,7 +1427,7 @@ def test_rerunning_a_meeting_keeps_the_task_ids_of_unchanged_action_items(
     assert after["Book the launch room"][0] not in before.values()
     changed = mock_make_session.query(Event).filter(Event.action == "changed", Event.item_id.in_(before.values()))
     assert {(e.item_id, tuple(e.changes)) for e in changed} == {
-        (before["Draft API proposal"], ("priority",)),
+        (before["Draft API proposal"], ("priority", "assignees")),
         (before["Coordinate with QA team"], ("title",)),
     }
 

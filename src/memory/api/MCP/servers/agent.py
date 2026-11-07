@@ -73,11 +73,11 @@ from memory.agents.system import SYSTEM_AGENTS, SystemAgent
 from memory.agents.trigger_input import check_template
 from memory.agents.triggers import (
     INGEST,
-    Batch,
+    RESUME,
+    THROTTLED,
     IngestConfig,
     PerItem,
-    buffer_client,
-    buffer_key,
+    resume_from_trip,
     source_types,
 )
 from memory.agents.work import HELD_OUT
@@ -350,8 +350,6 @@ async def delete(definition_id: int) -> dict:
         ]
         db.query(AgentTrigger).filter(AgentTrigger.id.in_(trigger_ids)).delete()
         db.delete(definition)
-    for trigger_id in trigger_ids:
-        drop_buffer(trigger_id)
     return {"deleted": definition_id}
 
 
@@ -1025,15 +1023,6 @@ def trigger_name(db: DBSession, user_id: int, name: str, trigger_id: int) -> str
     return name
 
 
-def drop_buffer(trigger_id: int) -> None:
-    """Forget batched matches, so a re-enabled trigger doesn't fire stale ones."""
-    try:
-        buffer_client().delete(buffer_key(trigger_id))
-    except Exception:
-        # The buffer expires on its own; this only speeds that up.
-        logger.warning("could not clear the buffer of trigger %s", trigger_id)
-
-
 @agent_mcp.tool()
 @visible_when(require_scopes(SCOPE_AGENTS))
 async def trigger_upsert(
@@ -1043,12 +1032,15 @@ async def trigger_upsert(
     trigger_id: int | None = None,
     name: str | None = None,
     max_per_hour: int | None = None,
+    backlog_max: int | None = None,
+    resume: bool = False,
 ) -> dict:
     """Create or update an ingest trigger: run one of your definitions when newly stored items match.
 
     name: unique among your triggers; defaults to "trigger-<id>". max_per_hour: the
     most runs this trigger starts in an hour (default AGENT_MAX_RUNS_PER_HOUR), on
-    top of the definition's own max_runs_per_hour. Omitted on update, both are kept.
+    top of the definition's own max_runs_per_hour. backlog_max: the most matches
+    waiting to run; beyond it the oldest are dropped. Omitted on update, these are kept.
 
     config: {"filter": {source_types, tags_any, channel_ids, exclude_channel_ids,
     text_contains, regex, exclude_authors, repos, mentions_me}, "delivery": {"mode": "per_item"} or {"mode": "batch",
@@ -1060,7 +1052,10 @@ async def trigger_upsert(
     case-insensitive. mentions_me: true matches Discord and Slack messages that
     @-mention one of your Discord bots or your Slack app's bot user. Every stored
     item is matched, however short. Only items stored since it was last enabled
-    match, each at most once, and only if you can read them.
+    match, each at most once, and only if you can read them; so does an older item
+    once its sync reports news about it (commits, comments, review, checks_complete
+    or state; with on_changes, one of those it names). Labels, assignees, draft,
+    checks and plain edits aren't news.
 
     Template placeholders: {items} renders each item with its type, id, changes, url
     and its type's ids (repo/number, Slack channel_id/ts/thread_ts, Discord
@@ -1074,16 +1069,23 @@ async def trigger_upsert(
     title or text changes (its changes then say "edited"); reprocessing
     unchanged content never does. Edits to items it never matched don't fire.
     "on_changes" (needs on_edit) limits that to edits reporting one of: "edited",
-    "commits", "comments", "review", "checks", "state"; an edit that reports
+    "commits", "comments", "review", "checks", "checks_complete", "state", "labels",
+    "assignees", "draft", or for meeting tasks "title", "due", "priority"
+    (tasks also report "assignees" and "state"); an edit that reports
     nothing counts as "edited". The run's trigger_ref.changes lists each item's
     changes, with "new" for a first match.
 
     Loop protection: posts by our own Discord bots, by connected Slack apps' bot
     users and by your Slack user never match. An on_edit agent that edits the
     item it was given re-fires itself, and anything else an agent writes that
-    gets ingested again (email, GitHub, Beeper) is only stopped by the caps: a trigger that hits
-    one (the definition's max_runs_per_hour or a daily cost pool) disables itself
-    and notifies you; enabling it again clears that. The response's `warnings`
+    gets ingested again (email, GitHub, Beeper) is only stopped by the caps. Over a
+    cap (max_per_hour, the definition's max_runs_per_hour or a daily cost pool), a
+    match waits an hour and is dropped if still over; you're notified once per
+    episode, which ends after two hours with nothing held back. A trigger whose
+    credentials or definition stop working disables itself and notifies you;
+    enabling it again clears that, and with resume=true (and enabled=true) it also
+    gets the matches it missed while disabled (as far back as events are kept),
+    as if it had never stopped, instead of starting from now. The response's `warnings`
     lists the definition's tools that write or reach outside memory, which a
     trigger exposes to whatever content arrives.
 
@@ -1099,6 +1101,8 @@ async def trigger_upsert(
         return pause_trigger(trigger_id, user_id)
     if max_per_hour is not None and max_per_hour < 1:
         raise ValueError("max_per_hour must be at least 1")
+    if backlog_max is not None and backlog_max < 1:
+        raise ValueError("backlog_max must be at least 1")
     if name is not None and DEFAULT_TRIGGER_NAME.fullmatch(name.strip()):
         raise ValueError('names like "trigger-<number>" are reserved for default names')
     token, _ = caller_token()
@@ -1123,11 +1127,10 @@ async def trigger_upsert(
             raise ValueError("this trigger is bound to another credential")
         was_enabled = existing is not None and existing.enabled
         will_be_enabled = was_enabled if enabled is None and existing else enabled is not False
+        if resume and not will_be_enabled:
+            raise ValueError("resume only applies when enabling a tripped trigger: pass enabled=true")
         if will_be_enabled and not was_enabled:
             check_trigger_cap(db, user_id, exclude_id=trigger_id)
-        was_batched = existing is not None and isinstance(
-            IngestConfig.model_validate(existing.config).delivery, Batch
-        )
         trigger = existing or AgentTrigger(
             id=next_trigger_id(db), user_id=user_id, kind=INGEST, state={}
         )
@@ -1136,6 +1139,8 @@ async def trigger_upsert(
             trigger.name = trigger_name(db, user_id, default if name is None else name, trigger.id)
         if max_per_hour is not None:
             trigger.max_per_hour = max_per_hour
+        if backlog_max is not None:
+            trigger.backlog_max = backlog_max
         db.add(trigger)
         trigger.definition_id = definition.id
         trigger.handler = {"agent": definition.id}
@@ -1144,21 +1149,21 @@ async def trigger_upsert(
             trigger.api_key_id, trigger.via_api_key = (key.id, True) if key else (None, False)
         trigger.enabled = will_be_enabled
         if will_be_enabled and not was_enabled:
-            # The database clock, which also stamps items' inserted_at.
-            trigger.active_since = func.now()
-            trigger.state = {k: v for k, v in (trigger.state or {}).items() if k != "tripped"}
+            if resume:
+                resume_from_trip(db, trigger)
+            else:
+                # The database clock, which also stamps items' inserted_at.
+                trigger.active_since = func.now()
+            # A replay left from an earlier resume would deliver what "from now" skips.
+            stale = {"tripped", THROTTLED} | (set() if resume else {RESUME})
+            trigger.state = {k: v for k, v in (trigger.state or {}).items() if k not in stale}
         try:
             db.flush()
         except IntegrityError as e:
             if "agent_triggers_user_name_key" not in str(e.orig):
                 raise
             raise ValueError(f"you already have a trigger named '{trigger.name}'") from e
-        stale_buffer = was_batched and (not will_be_enabled or parsed.delivery.mode != "batch")
-        saved_id = trigger.id
-        result = trigger.serialize() | {"warnings": await exposure_warnings(spec)}
-    if stale_buffer:
-        drop_buffer(saved_id)
-    return result
+        return trigger.serialize() | {"warnings": await exposure_warnings(spec)}
 
 
 def pause_trigger(trigger_id: int, user_id: int) -> dict:
@@ -1167,9 +1172,7 @@ def pause_trigger(trigger_id: int, user_id: int) -> dict:
         trigger = owned_trigger(db, trigger_id, user_id)
         trigger.enabled = False
         db.flush()
-        result = trigger.serialize()
-    drop_buffer(trigger_id)
-    return result
+        return trigger.serialize()
 
 
 @agent_mcp.tool(annotations=READ_ONLY)
@@ -1195,7 +1198,6 @@ async def trigger_delete(trigger_id: int) -> dict:
     user_id, _ = caller()
     with make_session() as db:
         db.delete(owned_trigger(db, trigger_id, user_id))
-    drop_buffer(trigger_id)
     return {"deleted": trigger_id}
 
 

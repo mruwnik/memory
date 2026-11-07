@@ -7,7 +7,7 @@ Cursors are saved after each stored page, so a run cut short resumes there.
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
 from pydantic import ValidationError
@@ -28,6 +28,9 @@ Stop = Literal["end", "budget", "stalled"]
 # What store_message did that is news; Server rewrites unrelated fields
 # (``seen``) on every read, so a page that only repeats isn't progress.
 CHANGES = frozenset({"added", "edited", "updated", "deleted"})
+# History reads store messages from this long before a chat was first seen as
+# live ones: the message that made a new conversation known is among them.
+LIVE_BEFORE_FIRST_SEEN = timedelta(hours=1)
 
 
 def skipped(reason: str, **extra: Any) -> dict[str, Any]:
@@ -94,16 +97,23 @@ async def store_messages(
     chat_pk: int,
     messages: list[beeper.Message],
     event_ids: dict[str, str] | None = None,
+    history: bool = False,
 ) -> list[str]:
     """Store each message as listed, with the Matrix event ids known for them;
-    returns what was done to each."""
+    returns what was done to each. Read as ``history``, the ones from before the
+    chat was first seen are backfills."""
     results = []
     for message in messages:
         images = [] if message.is_deleted else await fetch_images(client, chat_pk, message)
         with make_session() as session:
             chat = session.get_one(BeeperChat, chat_pk)
             event_id = (event_ids or {}).get(message.id)
-            results.append(ingest.store_message(session, chat, message, images, event_id))
+            backfill = (
+                history
+                and chat.created_at is not None
+                and message.timestamp < chat.created_at - LIVE_BEFORE_FIRST_SEEN
+            )
+            results.append(ingest.store_message(session, chat, message, images, event_id, backfill))
     return results
 
 
@@ -148,7 +158,7 @@ async def crawl(
             return processed, changed, "end"
         if not page.items and page.has_more:
             return processed, changed, "stalled"
-        results = await store_messages(client, chat_pk, page.items)
+        results = await store_messages(client, chat_pk, page.items, history=direction == "before")
         processed += len(page.items)
         changed += sum(result in CHANGES for result in results)
         moved = page.newest_cursor if direction == "after" else page.oldest_cursor
@@ -185,7 +195,7 @@ async def sync_chat(chat_pk: int, budget: int, retry_stopped: bool = False) -> d
         if newest is None:
             # First read: the latest page sets both cursors.
             page = await client.messages(chat_id)
-            await store_messages(client, chat_pk, page.items)
+            await store_messages(client, chat_pk, page.items, history=True)
             processed, caught_up = len(page.items), True
             save_cursor(chat_pk, "after", page.newest_cursor, reached_end=True)
             save_cursor(chat_pk, "before", page.oldest_cursor, reached_end=not page.has_more)

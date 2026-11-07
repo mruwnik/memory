@@ -5,14 +5,12 @@ from datetime import timedelta
 from datetime import datetime, timezone
 from typing import Any
 
-import fakeredis
 import pytest
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 
 from memory.agents import triggers
 from memory.agents.triggers import (
-    Delivery,
     IngestConfig,
     IngestFilter,
     ItemFacts,
@@ -46,26 +44,6 @@ from tests.conftest import route_item, unique_sha256
 
 SPEC = {"system_prompt": "x", "model": "anthropic/m", "reasoning": "high"}
 TRIGGER_NAMES = (f"t{i}" for i in itertools.count())
-
-
-@pytest.fixture
-def client():
-    return fakeredis.FakeRedis()
-
-
-def backdate(client, trigger_id):
-    """Make every buffered item look as if it arrived two minutes earlier.
-
-    Shifting keeps arrival order: equal scores sort by member, i.e. by the
-    item id as a string.
-    """
-    key = triggers.buffer_key(trigger_id)
-    buffered = client.zrange(key, 0, -1, withscores=True)
-    client.zadd(key, {m: score - 120 for m, score in buffered})
-
-
-def delivered_ids(call):
-    return [Delivery.decode(d).item_id for d in call.kwargs["args"][1]]
 
 
 def facts(**overrides):
@@ -102,6 +80,18 @@ def facts(**overrides):
 def test_config_validation_names_the_problem(config, expected):
     with pytest.raises(ValidationError, match=expected):
         IngestConfig.model_validate(config)
+
+
+@pytest.mark.parametrize(
+    "change",
+    ["labels", "assignees", "draft", "checks_complete", "title", "due", "priority", "state"],
+)
+def test_on_changes_can_name_what_syncs_report(change):
+    config = IngestConfig.model_validate(
+        {"filter": {"tags_any": ["x"]}, "on_edit": True, "on_changes": [change]}
+    )
+
+    assert config.refires([change]) is True
 
 
 @pytest.mark.parametrize(
@@ -338,7 +328,7 @@ def blog_post(db, tags=("ai",), project_id=None, inserted_at=None):
 
 
 def test_per_item_triggers_fire_at_once(
-    db_session, admin_user, client, no_celery_dispatch
+    db_session, admin_user, no_celery_dispatch
 ):
     d = make_definition(db_session, admin_user)
     on = make_trigger(db_session, d)
@@ -346,18 +336,18 @@ def test_per_item_triggers_fire_at_once(
     make_trigger(db_session, d, filter={"tags_any": ["other"]})
     post = blog_post(db_session)
 
-    matched = route_item(db_session, post.id, client)
+    matched = route_item(db_session, post.id)
 
     assert matched == [on.id]
     no_celery_dispatch.assert_called_once_with(
         FIRE_TRIGGER,
-        args=[on.id, [Delivery(post.id, content_version(post).hex(), False, ("new",)).encode()]],
+        args=[on.id, [f"{post.id}:{content_version(post).hex()}"]],
     )
 
 
 @pytest.mark.parametrize("handler", [{"queue": "inbox"}, {"agent": "fact-check"}])
 def test_triggers_without_a_definition_are_not_matched_yet(
-    db_session, admin_user, client, no_celery_dispatch, handler
+    db_session, admin_user, no_celery_dispatch, handler
 ):
     db_session.add(
         AgentTrigger(
@@ -371,7 +361,7 @@ def test_triggers_without_a_definition_are_not_matched_yet(
     db_session.commit()
     post = blog_post(db_session)
 
-    assert route_item(db_session, post.id, client) == []
+    assert route_item(db_session, post.id) == []
     no_celery_dispatch.assert_not_called()
 
 
@@ -408,13 +398,13 @@ def test_a_triggers_handler_must_agree_with_its_definition(
 
 
 def test_items_the_owner_cannot_read_never_match(
-    db_session, regular_user, client, no_celery_dispatch
+    db_session, regular_user, no_celery_dispatch
 ):
     d = make_definition(db_session, regular_user)
     make_trigger(db_session, d)
     post = blog_post(db_session, project_id=None)
 
-    assert route_item(db_session, post.id, client) == []
+    assert route_item(db_session, post.id) == []
     no_celery_dispatch.assert_not_called()
 
 
@@ -456,19 +446,19 @@ def discord_message(db, author_id, bot_token="tok", content="ai news", owner=Non
     [(100, "tok", True), (200, "tok", False), (200, None, True)],
 )
 def test_our_own_discord_bots_never_trigger(
-    db_session, admin_user, client, no_celery_dispatch, author_id, bot_token, fires
+    db_session, admin_user, no_celery_dispatch, author_id, bot_token, fires
 ):
     """Only bots that authenticate with a token are known to post as their
     application id; a token-less row's id is just what its owner typed."""
     make_trigger(db_session, make_definition(db_session, admin_user))
     message = discord_message(db_session, author_id, bot_token)
 
-    assert bool(route_item(db_session, message.id, client)) is fires
+    assert bool(route_item(db_session, message.id)) is fires
 
 
 @pytest.mark.parametrize("content,fires", [("<@200>", True), ("hi", False)])
 def test_a_short_message_mentioning_our_bot_fires(
-    db_session, admin_user, client, no_celery_dispatch, content, fires
+    db_session, admin_user, no_celery_dispatch, content, fires
 ):
     trigger = make_trigger(
         db_session,
@@ -481,7 +471,7 @@ def test_a_short_message_mentioning_our_bot_fires(
     process_content_item(message, db_session)
 
     assert message.embed_status == "SKIPPED"
-    assert triggers.route_events(client) == ([trigger.id] if fires else [])
+    assert triggers.route_events() == ([trigger.id] if fires else [])
 
 
 def slack_message(db, owner, author_id):
@@ -521,64 +511,24 @@ def slack_message(db, owner, author_id):
     "author_id,fires", [("U_OTHER", True), ("U_OWNER", False), ("U_BOT", False)]
 )
 def test_the_owners_slack_integration_and_bot_users_never_trigger(
-    db_session, admin_user, client, no_celery_dispatch, author_id, fires
+    db_session, admin_user, no_celery_dispatch, author_id, fires
 ):
     make_trigger(db_session, make_definition(db_session, admin_user))
     message = slack_message(db_session, admin_user, author_id)
 
-    assert bool(route_item(db_session, message.id, client)) is fires
+    assert bool(route_item(db_session, message.id)) is fires
 
 
-def test_batch_triggers_buffer_until_the_window_closes(
-    db_session, admin_user, client, no_celery_dispatch
-):
-    trigger = make_trigger(
-        db_session,
-        make_definition(db_session, admin_user),
-        delivery={"mode": "batch", "window_sec": 60, "max_items": 10},
+def delivery(item_id, version, edited=False, changes=()):
+    return AgentTriggerMatch(
+        item_id=item_id, content_hash=version, edited=edited, changes=list(changes)
     )
-    posts = [blog_post(db_session) for _ in range(3)]
-    for post in posts:
-        route_item(db_session, post.id, client)
-
-    early = triggers.sweep_trigger_buffers(client)
-    backdate(client, trigger.id)
-    due = triggers.sweep_trigger_buffers(client)
-
-    [fired] = no_celery_dispatch.call_args_list
-    assert (early, due) == ({}, {trigger.id: 1})
-    assert fired.args == (FIRE_TRIGGER,)
-    assert fired.kwargs["args"][0] == trigger.id
-    assert delivered_ids(fired) == [p.id for p in posts]
-    assert client.zcard(triggers.buffer_key(trigger.id)) == 0
-
-
-def test_a_full_batch_fires_before_its_window(
-    db_session, admin_user, client, no_celery_dispatch
-):
-    trigger = make_trigger(
-        db_session,
-        make_definition(db_session, admin_user),
-        delivery={"mode": "batch", "window_sec": 3600, "max_items": 2},
-    )
-    posts = [blog_post(db_session) for _ in range(5)]
-    for post in posts:
-        route_item(db_session, post.id, client)
-
-    fired = triggers.sweep_trigger_buffers(client)
-
-    assert fired == {trigger.id: 2}
-    assert [delivered_ids(c) for c in no_celery_dispatch.call_args_list] == [
-        [posts[0].id, posts[1].id],
-        [posts[2].id, posts[3].id],
-    ]
-    assert client.zcard(triggers.buffer_key(trigger.id)) == 1
 
 
 def test_dedupe_keys_ignore_order_and_change_with_the_claimed_version():
-    a = Delivery(1, "01" * 32, False)
-    b = Delivery(5, "05" * 32, False)
-    b_edited = Delivery(5, "06" * 32, True)
+    a = delivery(1, b"\x01" * 32)
+    b = delivery(5, b"\x05" * 32)
+    b_edited = delivery(5, b"\x06" * 32, edited=True)
 
     assert triggers.dedupe_key(3, [b, a]) == triggers.dedupe_key(3, [a, b])
     assert triggers.dedupe_key(3, [b]) == f"3:5:{'05' * 8}"
@@ -589,13 +539,18 @@ def test_dedupe_keys_ignore_order_and_change_with_the_claimed_version():
     "deliveries,expected",
     [
         (
-            [Delivery(1, "a", False, ("new",)), Delivery(2, "b", True, ("commits",))],
+            [delivery(1, b"a", changes=["new"]), delivery(2, b"b", True, ["commits"])],
             {"1": ["new"], "2": ["commits"]},
         ),
         # Buffered fresh, then edited before the batch went out: the run is its first sight.
         (
-            [Delivery(1, "a", False, ("new",)), Delivery(1, "b", True, ("comments", "edited"))],
+            [delivery(1, b"a", changes=["new"]), delivery(1, b"b", True, ["comments", "edited"])],
             {"1": ["new"]},
+        ),
+        # Never seen, matched for the news its sync reported.
+        (
+            [delivery(1, b"a", changes=["commits", "new"]), delivery(1, b"b", True, ["comments"])],
+            {"1": ["commits", "new"]},
         ),
     ],
 )
@@ -615,6 +570,20 @@ def test_content_versions_follow_what_an_agent_sees():
     assert content_version(slack) != content_version(slack_edited)
 
 
+def pr(**overrides):
+    fields = {
+        "title": "T",
+        "content": "body",
+        "head_sha": "a",
+        "state": "open",
+        "checks": {"tests": "failure"},
+        "labels": ["bug"],
+        "assignees": ["bo"],
+        "draft": False,
+    }
+    return GithubPR(**{**fields, **overrides})
+
+
 @pytest.mark.parametrize(
     "changed",
     [
@@ -623,15 +592,20 @@ def test_content_versions_follow_what_an_agent_sees():
         {"merged_at": datetime(2024, 1, 2, tzinfo=timezone.utc)},
         {"checks": {"tests": "success"}},
         {"pr_data": GithubPRData(reviews=[{"id": 1, "state": "approved"}])},
+        {"labels": ["bug", "urgent"]},
+        {"assignees": ["al"]},
+        {"draft": True},
     ],
 )
 def test_content_version_counts_what_a_github_sync_reports(changed):
-    def pr(**overrides):
-        fields = {"title": "T", "content": "body", "head_sha": "a", "state": "open", "checks": {"tests": "failure"}}
-        return GithubPR(**{**fields, **overrides})
-
     assert content_version(pr()) == content_version(pr())
     assert content_version(pr()) != content_version(pr(**changed))
+
+
+def test_content_version_ignores_label_and_assignee_order():
+    assert content_version(pr(labels=["urgent", "bug"], assignees=["bo", "al"])) == content_version(
+        pr(labels=["bug", "urgent"], assignees=["al", "bo"])
+    )
 
 
 @pytest.mark.parametrize("on_edit", [False, True])
@@ -639,7 +613,7 @@ def test_content_version_counts_what_a_github_sync_reports(changed):
     "delivery", [{"mode": "per_item"}, {"mode": "batch", "window_sec": 60, "max_items": 10}]
 )
 def test_reprocessing_a_matched_item_matches_nothing(
-    db_session, admin_user, client, no_celery_dispatch, delivery, on_edit
+    db_session, admin_user, no_celery_dispatch, delivery, on_edit
 ):
     trigger = make_trigger(
         db_session,
@@ -649,11 +623,11 @@ def test_reprocessing_a_matched_item_matches_nothing(
     )
     post = blog_post(db_session)
 
-    first = route_item(db_session, post.id, client)
-    again = route_item(db_session, post.id, client)
+    first = route_item(db_session, post.id)
+    again = route_item(db_session, post.id)
 
     assert (first, again) == ([trigger.id], [])
-    assert no_celery_dispatch.call_count + client.zcard(triggers.buffer_key(trigger.id)) == 1
+    assert db_session.query(AgentTriggerMatch).count() == 1
 
 
 def edit(db, item):
@@ -664,42 +638,43 @@ def edit(db, item):
 
 @pytest.mark.parametrize("on_edit,runs", [(False, 1), (True, 2)])
 def test_an_edit_fires_again_only_with_on_edit(
-    db_session, admin_user, client, no_celery_dispatch, on_edit, runs
+    db_session, admin_user, no_celery_dispatch, on_edit, runs
 ):
     make_trigger(db_session, make_definition(db_session, admin_user), on_edit=on_edit)
     post = blog_post(db_session)
 
-    route_item(db_session, post.id, client)
+    route_item(db_session, post.id)
     edit(db_session, post)
-    route_item(db_session, post.id, client)
-    route_item(db_session, post.id, client)
+    route_item(db_session, post.id)
+    route_item(db_session, post.id)
 
     assert no_celery_dispatch.call_count == runs
     assert db_session.query(AgentTriggerMatch).count() == runs
 
 
 def test_on_changes_limits_which_edits_fire(
-    db_session, admin_user, client, no_celery_dispatch
+    db_session, admin_user, no_celery_dispatch
 ):
     trigger = make_trigger(
         db_session, make_definition(db_session, admin_user), on_edit=True, on_changes=["commits"]
     )
     post = blog_post(db_session)
 
-    new = route_item(db_session, post.id, client, changes=["state"])
+    new = route_item(db_session, post.id, changes=["state"])
     edit(db_session, post)
-    commented = route_item(db_session, post.id, client, changes=["comments"])
-    unknown = route_item(db_session, post.id, client)
-    pushed = route_item(db_session, post.id, client, changes=["comments", "commits"])
+    commented = route_item(db_session, post.id, changes=["comments"])
+    unknown = route_item(db_session, post.id)
+    pushed = route_item(db_session, post.id, changes=["comments", "commits"])
 
     assert (new, commented, unknown, pushed) == ([trigger.id], [], [], [trigger.id])
-    assert [
-        Delivery.decode(c.kwargs["args"][1][0]).changes for c in no_celery_dispatch.call_args_list
-    ] == [("new", "state"), ("comments", "commits")]
+    assert sorted(m.changes for m in db_session.query(AgentTriggerMatch)) == [
+        ["comments", "commits"],
+        ["new", "state"],
+    ]
 
 
-def test_a_batch_buffers_each_version_of_an_item_edited_while_buffered(
-    db_session, admin_user, client, no_celery_dispatch
+def test_a_batch_holds_each_version_of_an_item_edited_while_waiting(
+    db_session, admin_user, no_celery_dispatch
 ):
     trigger = make_trigger(
         db_session,
@@ -709,34 +684,31 @@ def test_a_batch_buffers_each_version_of_an_item_edited_while_buffered(
     )
     post = blog_post(db_session)
 
-    first = route_item(db_session, post.id, client)
+    first = route_item(db_session, post.id)
     edit(db_session, post)
-    edited = route_item(db_session, post.id, client)
+    edited = route_item(db_session, post.id)
 
     assert (first, edited) == ([trigger.id], [trigger.id])
-    assert [
-        Delivery.decode(m.decode()).edited
-        for m in client.zrange(triggers.buffer_key(trigger.id), 0, -1)
-    ] == [False, True]
+    assert sorted(m.edited for m in db_session.query(AgentTriggerMatch)) == [False, True]
 
 
 @pytest.mark.parametrize("on_edit", [False, True])
 def test_items_stored_before_the_trigger_was_active_never_match(
-    db_session, admin_user, client, no_celery_dispatch, on_edit
+    db_session, admin_user, no_celery_dispatch, on_edit
 ):
     trigger = make_trigger(
         db_session, make_definition(db_session, admin_user), on_edit=on_edit
     )
     old = blog_post(db_session, inserted_at=trigger.active_since - timedelta(minutes=1))
 
-    before = route_item(db_session, old.id, client)
+    before = route_item(db_session, old.id)
     edit(db_session, old)
 
-    assert (before, route_item(db_session, old.id, client)) == ([], [])
+    assert (before, route_item(db_session, old.id)) == ([], [])
 
 
 def test_an_edit_to_an_item_matched_long_ago_still_fires(
-    db_session, admin_user, client, no_celery_dispatch
+    db_session, admin_user, no_celery_dispatch
 ):
     long_ago = datetime.now(timezone.utc) - timedelta(days=60)
     trigger = make_trigger(
@@ -754,61 +726,40 @@ def test_an_edit_to_an_item_matched_long_ago_still_fires(
     )
     db_session.commit()
 
-    unchanged = route_item(db_session, post.id, client)
+    unchanged = route_item(db_session, post.id)
     edit(db_session, post)
 
-    assert (unchanged, route_item(db_session, post.id, client)) == ([], [trigger.id])
-
-
-def test_a_delivery_failure_unclaims_and_spares_the_other_triggers(
-    db_session, admin_user, client, no_celery_dispatch
-):
-    d = make_definition(db_session, admin_user)
-    broken = make_trigger(db_session, d)
-    healthy = make_trigger(db_session, d)
-    post = blog_post(db_session)
-
-    def broker_down_for_the_first(name, args):
-        if args[0] == broken.id:
-            raise ConnectionError("broker down")
-
-    no_celery_dispatch.side_effect = broker_down_for_the_first
-
-    assert route_item(db_session, post.id, client) == [healthy.id]
-    assert [
-        m.trigger_id for m in db_session.query(AgentTriggerMatch).filter_by(item_id=post.id)
-    ] == [healthy.id]
+    assert (unchanged, route_item(db_session, post.id)) == ([], [trigger.id])
 
 
 @pytest.mark.parametrize(
     "on_edit,kept",
     [
-        (False, {b"fresh", b"racing new"}),
-        # An old claim goes once a newer one is itself old: a claim that young may
-        # still be unclaimed by a failed delivery, leaving its item no claims at all.
-        (True, {b"fresh", b"stale newest", b"racing old", b"racing new"}),
+        (False, {b"fresh", b"edited new", b"pending"}),
+        (True, {b"fresh", b"stale newest", b"edited new", b"pending"}),
     ],
 )
-def test_old_claims_are_purged_but_on_edit_keeps_each_items_newest(
-    db_session, admin_user, client, on_edit, kept
+def test_old_claims_are_purged_but_on_edit_keeps_each_items_newest_and_pending_stay(
+    db_session, admin_user, on_edit, kept
 ):
     trigger = make_trigger(
         db_session, make_definition(db_session, admin_user), on_edit=on_edit
     )
-    fresh, stale, racing = blog_post(db_session), blog_post(db_session), blog_post(db_session)
+    fresh, stale, edited, stuck = (blog_post(db_session) for _ in range(4))
     now = datetime.now(timezone.utc)
     claims = [
-        (fresh, b"fresh", now),
-        (stale, b"stale oldest", now - timedelta(days=40)),
-        (stale, b"stale newest", now - timedelta(days=31)),
-        (racing, b"racing old", now - timedelta(days=40)),
-        (racing, b"racing new", now),
+        (fresh, b"fresh", now, "done"),
+        (stale, b"stale oldest", now - timedelta(days=40), "done"),
+        (stale, b"stale newest", now - timedelta(days=31), "skipped:inaccessible"),
+        (edited, b"edited old", now - timedelta(days=40), "done"),
+        (edited, b"edited new", now, "done"),
+        (stuck, b"pending", now - timedelta(days=40), "pending"),
     ]
     db_session.add_all(
         AgentTriggerMatch(
-            trigger_id=trigger.id, item_id=item.id, content_hash=version, created_at=at
+            trigger_id=trigger.id, item_id=item.id, content_hash=version, created_at=at, status=status
         )
-        for item, version, at in claims
+        for item, version, at, status in claims
     )
     db_session.commit()
 
@@ -819,7 +770,7 @@ def test_old_claims_are_purged_but_on_edit_keeps_each_items_newest(
 
 
 def test_items_older_than_claim_retention_never_match(
-    db_session, admin_user, client, no_celery_dispatch
+    db_session, admin_user, no_celery_dispatch
 ):
     trigger = make_trigger(db_session, make_definition(db_session, admin_user))
     trigger.active_since = datetime.now(timezone.utc) - timedelta(days=60)
@@ -829,4 +780,4 @@ def test_items_older_than_claim_retention_never_match(
         inserted_at=datetime.now(timezone.utc) - triggers.MATCH_RETENTION - timedelta(hours=1),
     )
 
-    assert route_item(db_session, old.id, client) == []
+    assert route_item(db_session, old.id) == []

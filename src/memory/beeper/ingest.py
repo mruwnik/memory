@@ -352,9 +352,15 @@ UPDATES = ("edited_at", "reactions", "attachments")
 
 
 def store_message(
-    session: DBSession, chat: BeeperChat, message: beeper.Message, images: list[str], event_id: str | None = None
+    session: DBSession,
+    chat: BeeperChat,
+    message: beeper.Message,
+    images: list[str],
+    event_id: str | None = None,
+    backfill: bool = False,
 ) -> str:
-    """Store, edit or delete one message as Server now lists it; returns what was done.
+    """Store, edit or delete one message as Server now lists it; returns what was
+    done. ``backfill`` marks it history, which triggers don't react to.
 
     A REACTION row is never stored: its parent lists the reactions, and only
     which message it reacts to is kept. Hidden rows (state events) aren't stored either.
@@ -373,7 +379,7 @@ def store_message(
     fields = message_fields(message, images)
     stored = find_message(session, chat.id, message.id, event_id)
     if stored is None:
-        added = add_message(session, chat, message, content, fields, event_id)
+        added = add_message(session, chat, message, content, fields, event_id, backfill)
         if added is not None:
             return added
         stored = find_message(session, chat.id, message.id, event_id)
@@ -392,7 +398,7 @@ def store_message(
         return "updated" if updated else "unchanged"
     stored.content = content
     clear_item_chunks(stored, session)
-    process_content_item(stored, session)
+    process_content_item(stored, session, backfill=backfill)
     return "edited"
 
 
@@ -403,6 +409,7 @@ def add_message(
     content: str,
     fields: dict[str, Any],
     event_id: str | None,
+    backfill: bool = False,
 ) -> str | None:
     """Insert a new message; None when another worker stored it first."""
     item = BeeperMessage(
@@ -425,5 +432,5 @@ def add_message(
     # The sha256 check drops an item another worker already committed.
     if item not in session:
         return None
-    process_content_item(item, session)
+    process_content_item(item, session, backfill=backfill)
     return "added"

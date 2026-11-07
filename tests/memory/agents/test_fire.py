@@ -1,18 +1,17 @@
-import time
-from decimal import Decimal
+from datetime import timedelta
 
-import fakeredis
 import pytest
 
 from memory.agents import triggers
 from memory.agents.fire import fire_trigger, trip
-from memory.agents.triggers import Delivery, content_version
+from memory.agents.triggers import content_version
 from memory.common import settings
-from memory.common.celery_app import RUN_AGENT, SEND_NOTIFICATION
+from memory.common.celery_app import FIRE_TRIGGER, RUN_AGENT, SEND_NOTIFICATION
 from memory.common.db.models import (
     AgentDefinition,
     AgentRun,
     AgentTrigger,
+    AgentTriggerMatch,
     APIKey,
     BlogPost,
 )
@@ -73,8 +72,8 @@ def post(db, title="Post", project_id=None, creator_id=None):
 
 
 def fire_dispatched(dispatch):
-    """Run the FIRE_TRIGGER tasks matching dispatched since the last call."""
-    fires = [c.kwargs["args"] for c in dispatch.call_args_list]
+    """Run the FIRE_TRIGGER tasks dispatched since the last call."""
+    fires = [c.kwargs["args"] for c in dispatch.call_args_list if c.args[0] == FIRE_TRIGGER]
     for args in fires:
         fire_trigger(*args)
     dispatch.reset_mock()
@@ -89,8 +88,16 @@ def rendered(p, change="new", body="body"):
     )
 
 
-def claimed(*items):
-    return [Delivery(i.id, content_version(i).hex(), False, ("new",)).encode() for i in items]
+def claimed(db, trigger, *items):
+    """Pending deliveries of `items` to the trigger, as the router writes them."""
+    db.add_all(
+        AgentTriggerMatch(
+            trigger_id=trigger.id, item_id=i.id, content_hash=content_version(i), changes=["new"]
+        )
+        for i in items
+    )
+    db.commit()
+    return [f"{i.id}:{content_version(i).hex()}" for i in items]
 
 
 def test_a_fire_starts_one_run_with_the_rendered_input(
@@ -98,7 +105,7 @@ def test_a_fire_starts_one_run_with_the_rendered_input(
 ):
     trigger = setup(db_session, admin_user)
     a, b = post(db_session, "A"), post(db_session, "B")
-    deliveries = claimed(b, a)
+    deliveries = claimed(db_session, trigger, b, a)
 
     run_id = fire_trigger(trigger.id, deliveries)
     a.content, a.sha256 = "edited after the claim", unique_sha256("edited")
@@ -107,7 +114,7 @@ def test_a_fire_starts_one_run_with_the_rendered_input(
 
     run = db_session.get(AgentRun, run_id)
     assert run is not None
-    assert redelivered == run_id
+    assert redelivered is None
     assert (run.trigger_kind, run.trigger_ref, run.definition_id, run.trigger_id) == (
         "ingest",
         {
@@ -137,21 +144,20 @@ def test_a_fire_starts_one_run_with_the_rendered_input(
     ],
 )
 def test_an_edit_starts_a_run_labelled_by_what_the_agent_saw_before(
-    db_session, admin_user, fake_providers, admin_keys, no_celery_dispatch, monkeypatch, delivery, inputs
+    db_session, admin_user, fake_providers, admin_keys, no_celery_dispatch, delivery, inputs
 ):
-    client = fakeredis.FakeRedis()
-    setup(db_session, admin_user, config=CONFIG | {"delivery": delivery, "on_edit": True})
+    trigger = setup(db_session, admin_user, config=CONFIG | {"delivery": delivery, "on_edit": True})
     item = post(db_session, "A")
 
-    route_item(db_session, item.id, client)
+    route_item(db_session, item.id)
     fire_dispatched(no_celery_dispatch)
     item.content = "body, edited"
     db_session.commit()
-    route_item(db_session, item.id, client)
-    window_closed = time.time() + 120
-    with monkeypatch.context() as m:
-        m.setattr(time, "time", lambda: window_closed)
-        triggers.sweep_trigger_buffers(client)
+    route_item(db_session, item.id)
+    for m in db_session.query(AgentTriggerMatch).filter_by(trigger_id=trigger.id):
+        m.created_at -= timedelta(minutes=2)
+    db_session.commit()
+    triggers.sweep_deliveries()
     fire_dispatched(no_celery_dispatch)
 
     # Every run in a test shares one transaction, so created_at can't order them.
@@ -163,14 +169,13 @@ def test_an_edit_starts_a_run_labelled_by_what_the_agent_saw_before(
 def test_the_changes_that_matched_reach_the_runs_trigger_ref(
     db_session, admin_user, fake_providers, admin_keys, no_celery_dispatch
 ):
-    client = fakeredis.FakeRedis()
     setup(db_session, admin_user, config=CONFIG | {"on_edit": True})
     item = post(db_session, "A")
 
-    route_item(db_session, item.id, client)
+    route_item(db_session, item.id)
     item.content = "body, pushed"
     db_session.commit()
-    route_item(db_session, item.id, client, changes=["commits"])
+    route_item(db_session, item.id, changes=["commits"])
     fire_dispatched(no_celery_dispatch)
 
     refs = sorted(run.trigger_ref["changes"][str(item.id)] for run in db_session.query(AgentRun))
@@ -180,15 +185,24 @@ def test_the_changes_that_matched_reach_the_runs_trigger_ref(
 def test_disabled_triggers_and_unreadable_items_start_nothing(
     db_session, admin_user, regular_user, fake_providers
 ):
+    regular_user.scopes = ["agents", "read"]
     off = setup(db_session, admin_user, enabled=False)
     theirs = setup(db_session, regular_user)
     hidden = post(db_session, project_id=None)
 
-    assert (fire_trigger(off.id, claimed(hidden)), fire_trigger(theirs.id, claimed(hidden))) == (
-        None,
-        None,
+    fired = (
+        fire_trigger(off.id, claimed(db_session, off, hidden)),
+        fire_trigger(theirs.id, claimed(db_session, theirs, hidden)),
     )
+
+    db_session.expire_all()
+    assert fired == (None, None)
     assert db_session.query(AgentRun).count() == 0
+    # A disabled trigger's deliveries wait for it to be enabled again.
+    assert [
+        db_session.get(AgentTriggerMatch, (t.id, hidden.id, content_version(hidden))).status
+        for t in (off, theirs)
+    ] == ["pending", "skipped:inaccessible"]
 
 
 @pytest.mark.parametrize(
@@ -206,7 +220,7 @@ def test_lost_credentials_trip_the_breaker(
     trigger.api_key_id, trigger.via_api_key = key.id, True
     db_session.commit()
 
-    assert fire_trigger(trigger.id, claimed(post(db_session))) is None
+    assert fire_trigger(trigger.id, claimed(db_session, trigger, post(db_session))) is None
 
     db_session.refresh(trigger)
     assert trigger.enabled is False
@@ -224,7 +238,7 @@ def test_a_valid_key_bounds_the_triggered_run(db_session, admin_user, fake_provi
 
     item = post(db_session, creator_id=admin_user.id)
 
-    run = db_session.get(AgentRun, fire_trigger(trigger.id, claimed(item)))
+    run = db_session.get(AgentRun, fire_trigger(trigger.id, claimed(db_session, trigger, item)))
 
     assert run is not None
     assert (run.api_key_id, sorted(run.scopes)) == (key.id, scopes)
@@ -249,11 +263,10 @@ def test_a_trigger_reads_items_with_its_keys_scopes(
     db_session.commit()
     items = [post(db_session), post(db_session, creator_id=admin_user.id)]
 
-    fired = [fire_trigger(trigger.id, claimed(i)) is not None for i in items]
-    matched = [
-        route_item(db_session, i.id, fakeredis.FakeRedis()) == [trigger.id]
-        for i in items
-    ]
+    fired = [fire_trigger(trigger.id, claimed(db_session, trigger, i)) is not None for i in items]
+    db_session.query(AgentTriggerMatch).delete()
+    db_session.commit()
+    matched = [route_item(db_session, i.id) == [trigger.id] for i in items]
 
     assert fired == matched == reads
 
@@ -263,45 +276,23 @@ def test_a_deleted_pinned_provider_key_trips_the_breaker(
 ):
     trigger = setup(db_session, admin_user, spec=SPEC | {"provider_key": 99999})
 
-    assert fire_trigger(trigger.id, claimed(post(db_session))) is None
+    assert fire_trigger(trigger.id, claimed(db_session, trigger, post(db_session))) is None
 
     db_session.refresh(trigger)
     assert trigger.enabled is False
     assert "is not yours or was deleted" in trigger.state["tripped"]["reason"]
 
 
-@pytest.mark.parametrize(
-    "spec,earlier_cost,reason",
-    [
-        (SPEC | {"max_runs_per_hour": 1}, "0", "max_runs_per_hour"),
-        (SPEC | {"max_cost_usd_per_day": "0.50"}, "0.50", "definition pool"),
-        (SPEC | {"model": "openai/m", "reasoning": "medium"}, "0", "reasoning"),
-    ],
-)
-def test_hitting_a_cap_trips_the_breaker_and_tells_the_owner(
-    db_session, admin_user, fake_providers, admin_keys, no_celery_dispatch, spec, earlier_cost, reason
+def test_an_invalid_spec_trips_the_breaker_and_tells_the_owner(
+    db_session, admin_user, fake_providers, admin_keys, no_celery_dispatch
 ):
-    trigger = setup(db_session, admin_user, spec)
-    db_session.add(
-        AgentRun(
-            user_id=admin_user.id,
-            definition_id=trigger.definition_id,
-            spec=SPEC,
-            input="earlier",
-            max_cost_usd=Decimal("1"),
-            cost_usd=Decimal(earlier_cost),
-            trigger_kind="ingest",
-            status="done",
-        )
-    )
-    db_session.commit()
-    item = post(db_session)
+    trigger = setup(db_session, admin_user, SPEC | {"model": "openai/m", "reasoning": "medium"})
 
-    assert fire_trigger(trigger.id, claimed(item)) is None
+    assert fire_trigger(trigger.id, claimed(db_session, trigger, post(db_session))) is None
 
     db_session.refresh(trigger)
     assert trigger.enabled is False
-    assert reason in trigger.state["tripped"]["reason"]
+    assert "reasoning" in trigger.state["tripped"]["reason"]
     [notification] = no_celery_dispatch.call_args_list
     assert notification.args[0] == SEND_NOTIFICATION
     assert "Agent trigger paused: watcher" in notification.kwargs["args"][2]
@@ -312,7 +303,7 @@ def test_a_deleted_key_trips_rather_than_widening(db_session, admin_user, fake_p
     trigger.via_api_key = True
     db_session.commit()
 
-    assert fire_trigger(trigger.id, claimed(post(db_session))) is None
+    assert fire_trigger(trigger.id, claimed(db_session, trigger, post(db_session))) is None
 
     db_session.refresh(trigger)
     assert "was deleted" in trigger.state["tripped"]["reason"]
@@ -348,8 +339,15 @@ def test_a_batch_runs_over_only_the_items_still_readable_when_it_fires(
     moved.project_id = None
     db_session.commit()
 
-    run = db_session.get(AgentRun, fire_trigger(trigger.id, claimed(readable, moved)))
+    run = db_session.get(
+        AgentRun, fire_trigger(trigger.id, claimed(db_session, trigger, readable, moved))
+    )
 
+    db_session.expire_all()
     assert run is not None
     assert run.trigger_ref["item_ids"] == [readable.id]
     assert "moved" not in run.input
+    assert [
+        (m.item_id, m.status, m.run_id)
+        for m in db_session.query(AgentTriggerMatch).order_by(AgentTriggerMatch.item_id)
+    ] == [(readable.id, "done", run.id), (moved.id, "skipped:inaccessible", None)]

@@ -106,7 +106,7 @@ CLEANUP_EXPIRED_SESSIONS = f"{MAINTENANCE_ROOT}.cleanup_expired_sessions"
 SWEEP_AGENT_RUNS = f"{MAINTENANCE_ROOT}.sweep_agent_runs"
 PURGE_AGENT_RUNS = f"{MAINTENANCE_ROOT}.purge_agent_runs"
 ROUTE_EVENTS = f"{MAINTENANCE_ROOT}.route_events"
-SWEEP_TRIGGER_BUFFERS = f"{MAINTENANCE_ROOT}.sweep_trigger_buffers"
+SWEEP_TRIGGER_DELIVERIES = f"{MAINTENANCE_ROOT}.sweep_trigger_deliveries"
 CLEANUP_OLD_CLAUDE_SESSIONS = f"{MAINTENANCE_ROOT}.cleanup_old_claude_sessions"
 CLEANUP_OLD_TASK_EXECUTIONS = f"{MAINTENANCE_ROOT}.cleanup_old_task_executions"
 CLEANUP_OLD_TASK_RESULTS = f"{MAINTENANCE_ROOT}.cleanup_old_task_results"
@@ -363,6 +363,7 @@ app.conf.update(
         f"{FORUMS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-forums"},
         # The scheduler queue has its own worker, so long ingest tasks can't delay routing.
         ROUTE_EVENTS: {"queue": f"{settings.CELERY_QUEUE_PREFIX}-scheduler"},
+        SWEEP_TRIGGER_DELIVERIES: {"queue": f"{settings.CELERY_QUEUE_PREFIX}-scheduler"},
         f"{MAINTENANCE_ROOT}.*": {
             "queue": f"{settings.CELERY_QUEUE_PREFIX}-maintenance"
         },
@@ -521,7 +522,11 @@ def build_beat_schedule() -> dict:
         },
         "sweep-agent-runs": {"task": SWEEP_AGENT_RUNS, "schedule": 300},
         "sweep-worker-runs": {"task": SWEEP_WORKER_RUNS, "schedule": 60},
-        "sweep-trigger-buffers": {"task": SWEEP_TRIGGER_BUFFERS, "schedule": 60},
+        "sweep-trigger-deliveries": {
+            "task": SWEEP_TRIGGER_DELIVERIES,
+            "schedule": 30,
+            "options": {"expires": 30},
+        },
         # Expiring, so runs queued behind a busy worker don't pile up: the next one routes it all.
         "route-events": {"task": ROUTE_EVENTS, "schedule": 5, "options": {"expires": 5}},
         "purge-agent-runs": {

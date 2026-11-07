@@ -18,7 +18,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.postgresql import BYTEA, JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, BYTEA, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -289,7 +289,7 @@ class AgentTrigger(Base):
         Integer, ForeignKey("agent_definitions.id", ondelete="CASCADE")
     )
     handler: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
-    # Shaping; coalesce_mode, order_by and backlog_max aren't applied yet.
+    # Shaping; coalesce_mode and order_by aren't applied yet.
     coalesce_mode: Mapped[str] = mapped_column(
         Text, nullable=False, default="none", server_default="none"
     )
@@ -316,8 +316,9 @@ class AgentTrigger(Base):
     via_api_key: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
-    # Set on creation and on every re-enable: items stored before it (including
-    # while the trigger was paused) never match, however often they're reprocessed.
+    # Set on creation and on every re-enable (to the trip time on a resume): items
+    # stored before it match only once their sync reports a change, and events
+    # written before it never do.
     active_since: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -382,9 +383,15 @@ class AgentTrigger(Base):
 
 
 class AgentTriggerMatch(Base):
-    """A version of an item a trigger has matched, so reprocessing it never matches
-    again: without on_edit the first version claims the item, with it each
-    version (memory.agents.triggers.content_version) matches once."""
+    """A version of an item a trigger has matched, and its delivery: written by the
+    router with the event it routes, so a match is never lost between routing and
+    the run. Reprocessing never matches again: without on_edit the first version
+    claims the item, with it each version (memory.agents.triggers.content_version)
+    matches once.
+
+    `status` is pending until the delivery ends: done (run_id is its run), failed,
+    expired or skipped:<reason> (memory.agents.triggers).
+    """
 
     __tablename__ = "agent_trigger_matches"
 
@@ -395,13 +402,46 @@ class AgentTriggerMatch(Base):
         BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
     )
     content_hash: Mapped[bytes] = mapped_column(BYTEA, primary_key=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
+    # The trigger had matched an earlier version of the item.
+    edited: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    # The Change tags delivered for this version, sorted.
+    changes: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, default=list, server_default="{}"
+    )
+    # Deferred by a cap; one still over it when this passes is shed.
+    not_before: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Last handed to FIRE_TRIGGER; the sweep resends it if it's still pending.
+    dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Times sent since it was routed or deferred, which spaces out its resends.
+    sends: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    error: Mapped[str | None] = mapped_column(Text)
+    run_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("agent_runs.id", ondelete="SET NULL")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
 
+    run: Mapped[AgentRun | None] = relationship("AgentRun")
+
     __table_args__ = (
+        Index(
+            "agent_trigger_matches_run_idx", "run_id", postgresql_where=text("run_id IS NOT NULL")
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'done', 'failed', 'expired') OR status LIKE 'skipped:%'",
+            name="agent_trigger_matches_status_check",
+        ),
         Index("agent_trigger_matches_item_idx", "item_id"),
         Index("agent_trigger_matches_created_idx", "created_at"),
+        Index(
+            "agent_trigger_matches_pending_idx",
+            "trigger_id",
+            "created_at",
+            postgresql_where=text("status = 'pending'"),
+        ),
     )
 
 

@@ -191,8 +191,10 @@ async def test_catch_up_fills_recent_gaps_then_crawls_older_history(db_session, 
         await backfill.backfill_channel_messages(ACCESS, 10, celery_app, max_messages=100)
 
     assert queued_ids(celery_app) == [newest, recent_stored, recent_missed, older]
-    edits = [c.kwargs["kwargs"]["is_edit"] for c in sent(celery_app, ADD_DISCORD_MESSAGE)]
-    assert edits == [True, True, True, False]
+    queued = [c.kwargs["kwargs"] for c in sent(celery_app, ADD_DISCORD_MESSAGE)]
+    assert [k["is_edit"] for k in queued] == [True, True, True, False]
+    # Only history below what is stored is a backfill; the catch-up is what push missed.
+    assert [k["backfill"] for k in queued] == [False, False, False, True]
 
 
 def sent(celery_app, task: str) -> list:

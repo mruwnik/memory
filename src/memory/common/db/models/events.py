@@ -60,11 +60,14 @@ class Event(Base):
     )
 
 
-def item_event(session: Session, item: SourceItem, changes: list[str] | None) -> Event:
-    """The event for storing `item`, which reported `changes`."""
+def item_event(
+    session: Session, item: SourceItem, changes: list[str] | None, backfill: bool = False
+) -> Event:
+    """The event for storing `item`, which reported `changes`; `backfill` when a
+    history import stored it."""
     inserted = session.info.get(INSERTED_ITEMS_KEY, set())
     action = ADDED if item.id in inserted else CHANGED
-    return Event(kind=ITEM, action=action, item_id=item.id, changes=changes)
+    return Event(kind=ITEM, action=action, item_id=item.id, changes=changes, backfill=backfill)
 
 
 @event.listens_for(Session, "before_flush")

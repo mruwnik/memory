@@ -6,8 +6,8 @@ import pytest
 from memory.agents import triggers
 from memory.api.MCP.servers import agent
 from memory.common import settings
-from memory.common.db.models import AgentDefinition, AgentTrigger, APIKey
-from tests.conftest import mcp_auth_context
+from memory.common.db.models import AgentDefinition, AgentTrigger, APIKey, BlogPost
+from tests.conftest import mcp_auth_context, route_item, unique_sha256
 
 SPEC = {"system_prompt": "x", "model": "anthropic/m", "reasoning": "high"}
 CONFIG = {"filter": {"tags_any": ["ai"]}}
@@ -298,16 +298,9 @@ async def test_write_and_egress_tools_are_flagged(
     assert len(created["warnings"]) == len(warned[:1])
 
 
-@pytest.fixture
-def dropped(monkeypatch):
-    calls = []
-    monkeypatch.setattr(agent, "drop_buffer", calls.append)
-    return calls
-
-
 @pytest.mark.asyncio
 async def test_pausing_works_after_access_is_lost(
-    db_session, regular_user, user_session, fake_providers, dropped
+    db_session, regular_user, user_session, fake_providers
 ):
     d = definition(db_session, regular_user)
     with mcp_auth_context(user_session.token):
@@ -321,29 +314,11 @@ async def test_pausing_works_after_access_is_lost(
         )
 
     assert paused["enabled"] is False
-    assert dropped == [created["id"]]
-
-
-@pytest.mark.asyncio
-async def test_switching_off_batch_drops_the_buffer(
-    db_session, regular_user, user_session, fake_providers, dropped
-):
-    d = definition(db_session, regular_user)
-    batched = CONFIG | {"delivery": {"mode": "batch", "window_sec": 600}}
-    with mcp_auth_context(user_session.token):
-        created = await agent.trigger_upsert.fn(definition_id=d.id, config=batched)
-        await agent.trigger_upsert.fn(
-            definition_id=d.id, trigger_id=created["id"], config=batched | {"template": "x"}
-        )
-        kept = list(dropped)
-        await agent.trigger_upsert.fn(definition_id=d.id, trigger_id=created["id"], config=CONFIG)
-
-    assert (kept, dropped) == ([], [created["id"]])
 
 
 @pytest.mark.asyncio
 async def test_re_enabling_moves_active_since_forward(
-    db_session, regular_user, user_session, fake_providers, dropped
+    db_session, regular_user, user_session, fake_providers
 ):
     d = definition(db_session, regular_user)
     t = trigger(d, enabled=False, active_since=datetime(2026, 1, 1, tzinfo=timezone.utc))
@@ -358,3 +333,107 @@ async def test_re_enabling_moves_active_since_forward(
     assert datetime.fromisoformat(enabled["active_since"]) > datetime(
         2026, 10, 1, tzinfo=timezone.utc
     )
+
+
+TRIPPED_AT = datetime(2026, 11, 1, tzinfo=timezone.utc)
+ACTIVE_SINCE = datetime(2026, 10, 15, tzinfo=timezone.utc)
+
+
+def tripped(d, **state):
+    return trigger(
+        d,
+        enabled=False,
+        active_since=ACTIVE_SINCE,
+        state={"tripped": {"reason": "key revoked", "at": TRIPPED_AT.isoformat()}} | state,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("resume,missed", [(False, []), (True, [True])])
+async def test_a_tripped_trigger_can_resume_from_when_it_tripped(
+    db_session, regular_user, user_session, fake_providers, no_celery_dispatch, resume, missed
+):
+    d = definition(db_session, regular_user)
+    t = tripped(d)
+    db_session.add(t)
+    db_session.commit()
+    item = BlogPost(
+        sha256=unique_sha256("p"), modality="blog", content="x", tags=["ai"], creator_id=regular_user.id
+    )
+    db_session.add(item)
+    db_session.commit()
+    # Routed while the trigger was tripped, so it never saw this item.
+    route_item(db_session, item.id)
+
+    with mcp_auth_context(user_session.token):
+        enabled = await agent.trigger_upsert.fn(
+            definition_id=d.id, trigger_id=t.id, enabled=True, resume=resume
+        )
+    routed = triggers.route_events()
+
+    # Resuming carries on as if it had never tripped; otherwise it starts from now.
+    kept_active_since = datetime.fromisoformat(enabled["active_since"]) == ACTIVE_SINCE
+    assert (kept_active_since, [r == t.id for r in routed]) == (resume, missed)
+    assert "resume" not in db_session.get(AgentTrigger, t.id).state
+
+
+@pytest.mark.asyncio
+async def test_resuming_needs_a_tripped_trigger(db_session, regular_user, user_session, fake_providers):
+    d = definition(db_session, regular_user)
+    t = trigger(d, enabled=False)
+    db_session.add(t)
+    db_session.commit()
+
+    with mcp_auth_context(user_session.token), pytest.raises(ValueError, match="tripped"):
+        await agent.trigger_upsert.fn(definition_id=d.id, trigger_id=t.id, enabled=True, resume=True)
+
+
+@pytest.mark.asyncio
+async def test_an_upsert_that_does_not_enable_leaves_a_tripped_trigger_alone(
+    db_session, regular_user, user_session, fake_providers
+):
+    d = definition(db_session, regular_user)
+    t = tripped(d)
+    db_session.add(t)
+    db_session.commit()
+
+    with mcp_auth_context(user_session.token):
+        updated = await agent.trigger_upsert.fn(
+            definition_id=d.id, trigger_id=t.id, config=CONFIG | {"template": "x"}
+        )
+
+    assert (updated["enabled"], updated["active_since"], updated["state"]) == (
+        False,
+        ACTIVE_SINCE.isoformat(),
+        t.state,
+    )
+
+
+@pytest.mark.asyncio
+async def test_resume_without_enabling_is_refused(db_session, regular_user, user_session, fake_providers):
+    d = definition(db_session, regular_user)
+    t = tripped(d)
+    db_session.add(t)
+    db_session.commit()
+
+    with mcp_auth_context(user_session.token), pytest.raises(ValueError, match="enabled=true"):
+        await agent.trigger_upsert.fn(definition_id=d.id, trigger_id=t.id, config=CONFIG, resume=True)
+
+
+@pytest.mark.asyncio
+async def test_re_enabling_from_now_clears_a_stale_throttle_and_replay(
+    db_session, regular_user, user_session, fake_providers
+):
+    d = definition(db_session, regular_user)
+    t = tripped(
+        d,
+        throttled={"reason": "rate", "since": "x", "last": "x"},
+        resume={"from": "x", "to": "x", "after": 0},
+    )
+    db_session.add(t)
+    db_session.commit()
+
+    with mcp_auth_context(user_session.token):
+        enabled = await agent.trigger_upsert.fn(definition_id=d.id, trigger_id=t.id, enabled=True)
+
+    assert enabled["state"] == {}

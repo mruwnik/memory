@@ -373,7 +373,7 @@ def apply_action_item(session, task: Task, item: dict, held_at: datetime) -> lis
         "title": ("task_title", item["description"]),
         "due": ("due_date", parse_due_date(item.get("due_date"), held_at)),
         "priority": ("priority", priority if priority in ("low", "medium", "high", "urgent") else "medium"),
-        "assignee": ("people", [assignee] if assignee else []),
+        "assignees": ("people", [assignee] if assignee else []),
     }
     changed = [tag for tag, (attr, value) in fields.items() if getattr(task, attr) != value]
     for attr, value in fields.values():
