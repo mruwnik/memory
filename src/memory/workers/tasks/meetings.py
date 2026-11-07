@@ -20,6 +20,7 @@ from memory.common import jobs as job_utils
 from memory.common.llms import PROVIDER_ERRORS
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import CalendarAccount, JobStatus, JobType, PendingJob, Person, Task, TranscriptAccount, User
+from memory.common.db.models.events import item_event
 from memory.common.db.models.source_items import CalendarEvent, Meeting
 from memory.common.celery_app import (
     app,
@@ -354,65 +355,93 @@ def link_attendees(
     return {"linked": linked, "created": created, "skipped": skipped}
 
 
-def create_action_item_tasks(
-    session, meeting: Meeting, action_items: list[dict]
-) -> list[str]:
-    """Create Task records for action items. Returns list of created task descriptions."""
-    created_tasks = []
-    tasks = []
+# Tasks nobody has started, finished or cancelled.
+UNTOUCHED_TASK_STATUSES = ("pending",)
+
+
+def action_item_key(description: str) -> str:
+    """Rewordings that only change case, spacing or a final full stop are the same action item."""
+    return " ".join(description.casefold().split()).rstrip(".")
+
+
+def apply_action_item(session, task: Task, item: dict, held_at: datetime) -> list[str]:
+    """Set the task's fields from its action item; returns the change tags of those that changed."""
+    assignee_name = item.get("assignee")
+    assignee = find_person_by_name(session, assignee_name) if assignee_name else None
+    priority = item.get("priority")
+    fields = {
+        "title": ("task_title", item["description"]),
+        "due": ("due_date", parse_due_date(item.get("due_date"), held_at)),
+        "priority": ("priority", priority if priority in ("low", "medium", "high", "urgent") else "medium"),
+        "assignee": ("people", [assignee] if assignee else []),
+    }
+    changed = [tag for tag, (attr, value) in fields.items() if getattr(task, attr) != value]
+    for attr, value in fields.values():
+        setattr(task, attr, value)
+    task.tags = ["meeting", "action-item"] + ([f"assignee:{assignee.identifier}"] if assignee else [])
+    return changed
+
+
+def sync_action_item_tasks(session, meeting: Meeting, action_items: list[dict]) -> list[Task]:
+    """Make the meeting's Tasks match its action items, keeping each known item's task id.
+
+    An item finds its task by hash, then by the title of a task attached to the
+    meeting. Pending tasks follow the extraction: updated when kept (edits made
+    while pending are overwritten), deleted when their item is gone. Tasks
+    someone started, finished or cancelled are kept as they are. Returns the
+    tasks created.
+    """
     held_at = meeting_time(meeting)
-
+    items: dict[str, dict] = {}
     for item in action_items:
-        if not item.get("description"):
+        if item.get("description"):
+            items.setdefault(action_item_key(item["description"]), item)
+    hashes = {key: make_task_sha256(meeting.id, key) for key in items}
+    # Older releases hashed the raw text.
+    legacy = {key: make_task_sha256(meeting.id, item["description"]) for key, item in items.items()}
+    by_sha = {
+        t.sha256: t
+        for t in session.query(Task).filter(Task.sha256.in_([*hashes.values(), *legacy.values()]))
+    }
+    attached = session.query(Task).filter(Task.source_item_id == meeting.id).all()
+    by_title: dict[str, Task] = {}
+    for task in attached:
+        by_title.setdefault(action_item_key(task.task_title), task)
+
+    kept: dict[str, Task] = {}
+    for lookup in (lambda k: by_sha.get(hashes[k]), lambda k: by_sha.get(legacy[k]), by_title.get):
+        for key in items.keys() - kept.keys():
+            task = lookup(key)
+            if task is not None and task not in kept.values():
+                kept[key] = task
+
+    created = []
+    for key, item in items.items():
+        task = kept.get(key)
+        if task is None:
+            task = Task(task_title=item["description"], status="pending", sha256=hashes[key])
+            session.add(task)
+            created.append(task)
+            kept[key] = task
+        task.source_item_id = meeting.id
+        if by_sha.get(hashes[key]) in (None, task):
+            task.sha256 = hashes[key]
+        if task.status not in UNTOUCHED_TASK_STATUSES:
             continue
-        sha256 = make_task_sha256(meeting.id, item["description"])
-        # A task kept through a rerun, or one an older release's rerun left
-        # detached: the same action item, which someone may have worked on.
-        if existing := session.query(Task).filter(Task.sha256 == sha256).one_or_none():
-            existing.source_item_id = meeting.id
-            tasks.append(existing)
-            continue
+        changes = apply_action_item(session, task, item, held_at)
+        if changes and task not in created:
+            session.add(item_event(session, task, changes))
 
-        task_tags = ["meeting", "action-item"]
-
-        assignee_name = item.get("assignee")
-        assignee_person = (
-            find_person_by_name(session, assignee_name) if assignee_name else None
-        )
-        if assignee_person:
-            task_tags.append(f"assignee:{assignee_person.identifier}")
-
-        extracted_priority = item.get("priority")
-        priority = (
-            extracted_priority
-            if extracted_priority in ("low", "medium", "high", "urgent")
-            else "medium"
-        )
-
-        task = Task(
-            task_title=item["description"],
-            source_item_id=meeting.id,
-            due_date=parse_due_date(item.get("due_date"), held_at),
-            priority=priority,
-            status="pending",
-            tags=task_tags,
-            sha256=sha256,
-        )
-
-        # Link assignee to task via people relationship
-        if assignee_person and assignee_person not in task.people:
-            task.people.append(assignee_person)
-
-        session.add(task)
-        tasks.append(task)
-        created_tasks.append(item["description"])
+    for task in attached:
+        if task.status in UNTOUCHED_TASK_STATUSES and task not in kept.values():
+            session.delete(task)
 
     session.flush()
     # Tasks copy the meeting's stored values, so the meeting resolves first.
     meeting.apply_inherited_access_control()
-    for task in tasks:
+    for task in kept.values():
         task.apply_inherited_access_control()
-    return created_tasks
+    return created
 
 
 def detach_meeting_tasks(session: DBSession, meeting: Meeting) -> None:
@@ -427,19 +456,6 @@ def detach_meeting_tasks(session: DBSession, meeting: Meeting) -> None:
         task.project_id_inherited = False
         task.sensitivity_inherited = False
     session.flush()
-
-
-# Tasks nobody has started, finished or cancelled. Rerunning a meeting deletes
-# these (extraction recreates them) and keeps the rest.
-UNTOUCHED_TASK_STATUSES = ("pending",)
-
-
-def delete_untouched_tasks(session: DBSession, meeting: Meeting) -> None:
-    query = session.query(Task).filter(
-        Task.source_item_id == meeting.id, Task.status.in_(UNTOUCHED_TASK_STATUSES)
-    )
-    for task in query:
-        session.delete(task)
 
 
 def extract_and_update_meeting(session: DBSession, meeting: Meeting) -> dict:
@@ -467,16 +483,15 @@ def extract_and_update_meeting(session: DBSession, meeting: Meeting) -> dict:
 
     meeting.summary = extracted.get("summary", "")
     meeting.notes = extracted.get("notes", "")
-    created_tasks = create_action_item_tasks(
-        session, meeting, extracted.get("action_items", [])
-    )
-    logger.info(f"Created {len(created_tasks)} tasks from meeting {meeting.id}")
+    created = sync_action_item_tasks(session, meeting, extracted.get("action_items", []))
+    logger.info(f"Created {len(created)} tasks from meeting {meeting.id}")
 
     return {
         "status": "success",
         "summary_length": len(meeting.summary or ""),
         "notes_length": len(meeting.notes or ""),
-        "tasks_created": len(created_tasks),
+        "tasks_created": len(created),
+        "created_task_ids": [t.id for t in created],
     }
 
 
@@ -538,19 +553,18 @@ def create_meeting_record(
 
 def prepare_meeting_for_reingest(session: DBSession, item_id: int, retry: bool = False) -> Meeting | None:
     """
-    Fetch an existing meeting and clear its chunks and untouched tasks for reprocessing.
+    Fetch an existing meeting and clear its chunks for reprocessing.
 
-    Tasks someone worked on stay attached, and extraction keeps them rather
-    than recreating them. People relationships are left intact (they're
-    re-linked during processing). A
-    `retry` is cleanup_stuck_meetings rerunning a lost run, and isn't rerun again.
+    Its tasks stay attached, for extraction to match to its action items.
+    People relationships are left intact (they're re-linked during
+    processing). A `retry` is cleanup_stuck_meetings rerunning a lost run,
+    and isn't rerun again.
     """
     meeting = session.get(Meeting, item_id)
     if not meeting:
         return None
 
     chunks_deleted = clear_item_chunks(meeting, session)
-    delete_untouched_tasks(session, meeting)
     # Committed with the cleared chunks before the LLM call, so a worker lost
     # mid-call leaves it for cleanup_stuck_meetings rather than looking done.
     mark_in_flight(meeting, RETRYING if retry else "processing")
@@ -668,11 +682,16 @@ def execute_meeting_processing(
 
     except Exception as e:
         logger.exception(f"Failed to process meeting {meeting.id}: {e}")
+        session.rollback()
         # "extracted": extraction worked, but the meeting wasn't stored.
         outcome = (extract_result or {}).get("status", "")
         meeting.extraction_status = {"success": "extracted", "skipped": "skipped"}.get(outcome, "failed")
-        # Tasks would point at a meeting search can't return; reprocessing recreates them.
-        delete_untouched_tasks(session, meeting)
+        # New tasks would point at a meeting search can't return; reprocessing
+        # recreates them. Tasks this run reused keep their ids.
+        created_ids = (extract_result or {}).get("created_task_ids", [])
+        new = session.query(Task).filter(Task.id.in_(created_ids), Task.status.in_(UNTOUCHED_TASK_STATUSES))
+        for task in new:
+            session.delete(task)
         if job_id:
             job_utils.fail_job(session, job_id, str(e))
         session.commit()

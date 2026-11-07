@@ -95,6 +95,7 @@ def pr_files(item: GithubItem) -> list[str]:
 def action_items(meeting: Meeting) -> list[dict[str, Any]]:
     return [
         {
+            "task_id": t.id,
             "title": t.task_title,
             "assignee": ", ".join(p.display_name for p in t.people) or None,
             "due": t.due_date,

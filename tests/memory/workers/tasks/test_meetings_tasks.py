@@ -29,6 +29,7 @@ from memory.common.db.models import (
     Task,
     TranscriptAccount,
 )
+from memory.common.db.models.events import Event
 from memory.common.db.models.source_items import Meeting
 from memory.common.celery_app import REPROCESS_MEETING
 from memory.common.db.models.source_item import Chunk, SourceItem
@@ -612,11 +613,11 @@ def test_link_attendees_skips_already_linked(mock_make_session, qdrant):
 
 
 # ============================================================================
-# Tests for create_action_item_tasks
+# Tests for sync_action_item_tasks
 # ============================================================================
 
 
-def test_create_action_item_tasks_basic(mock_make_session, qdrant):
+def test_sync_action_item_tasks_basic(mock_make_session, qdrant):
     """Test creating tasks from action items."""
     meeting = Meeting(
         title="Test Meeting",
@@ -634,18 +635,16 @@ def test_create_action_item_tasks_basic(mock_make_session, qdrant):
         {"description": "Task 2", "assignee": None, "due_date": "2024-01-20", "priority": "low"},
     ]
 
-    created = meetings.create_action_item_tasks(mock_make_session, meeting, action_items)
+    created = meetings.sync_action_item_tasks(mock_make_session, meeting, action_items)
 
-    assert len(created) == 2
-    assert "Task 1" in created
-    assert "Task 2" in created
+    assert sorted(t.task_title for t in created) == ["Task 1", "Task 2"]
 
     mock_make_session.flush()
     tasks = mock_make_session.query(Task).all()
     assert len(tasks) == 2
 
 
-def test_create_action_item_tasks_with_assignee(mock_make_session, qdrant):
+def test_sync_action_item_tasks_with_assignee(mock_make_session, qdrant):
     """Test creating tasks with assignee tags."""
     alice = Person(
         identifier="alice",
@@ -669,7 +668,7 @@ def test_create_action_item_tasks_with_assignee(mock_make_session, qdrant):
         {"description": "Alice's task", "assignee": "Alice", "due_date": None, "priority": "medium"},
     ]
 
-    created = meetings.create_action_item_tasks(mock_make_session, meeting, action_items)
+    created = meetings.sync_action_item_tasks(mock_make_session, meeting, action_items)
 
     assert len(created) == 1
     mock_make_session.flush()
@@ -677,7 +676,7 @@ def test_create_action_item_tasks_with_assignee(mock_make_session, qdrant):
     assert "assignee:alice" in task.tags
 
 
-def test_create_action_item_tasks_skips_empty_description(mock_make_session, qdrant):
+def test_sync_action_item_tasks_skips_empty_description(mock_make_session, qdrant):
     """Test that items without description are skipped."""
     meeting = Meeting(
         title="Test Meeting",
@@ -696,11 +695,11 @@ def test_create_action_item_tasks_skips_empty_description(mock_make_session, qdr
         {"assignee": None, "due_date": None, "priority": None},  # No description key
     ]
 
-    created = meetings.create_action_item_tasks(mock_make_session, meeting, action_items)
+    created = meetings.sync_action_item_tasks(mock_make_session, meeting, action_items)
     assert len(created) == 0
 
 
-def test_create_action_item_tasks_priority_validation(mock_make_session, qdrant):
+def test_sync_action_item_tasks_priority_validation(mock_make_session, qdrant):
     """Test that invalid priorities default to medium."""
     meeting = Meeting(
         title="Test Meeting",
@@ -720,7 +719,7 @@ def test_create_action_item_tasks_priority_validation(mock_make_session, qdrant)
         {"description": "No priority", "priority": None},
     ]
 
-    meetings.create_action_item_tasks(mock_make_session, meeting, action_items)
+    meetings.sync_action_item_tasks(mock_make_session, meeting, action_items)
     mock_make_session.commit()
 
     tasks = mock_make_session.query(Task).all()
@@ -732,7 +731,7 @@ def test_create_action_item_tasks_priority_validation(mock_make_session, qdrant)
     assert priorities["No priority"] == "medium"
 
 
-def test_create_action_item_tasks_with_due_date(mock_make_session, qdrant):
+def test_sync_action_item_tasks_with_due_date(mock_make_session, qdrant):
     """Test creating tasks with due dates."""
     meeting = Meeting(
         title="Test Meeting",
@@ -750,7 +749,7 @@ def test_create_action_item_tasks_with_due_date(mock_make_session, qdrant):
         {"description": "Task with date", "due_date": "2024-03-15", "priority": "medium"},
     ]
 
-    meetings.create_action_item_tasks(mock_make_session, meeting, action_items)
+    meetings.sync_action_item_tasks(mock_make_session, meeting, action_items)
     mock_make_session.commit()
 
     task = mock_make_session.query(Task).first()
@@ -870,6 +869,61 @@ def test_a_meeting_that_is_not_stored_keeps_no_tasks(
 
     tasks = mock_make_session.query(Task).filter(Task.source_item_id == meeting.id).all()
     assert (result["status"], meeting.extraction_status, tasks) == ("error", "extracted", [])
+
+
+def test_a_failed_reprocess_keeps_the_tasks_it_reused(
+    regular_user, llm_key, scripted_llm, mock_make_session, qdrant
+):
+    revised = EXTRACTED | {"action_items": EXTRACTED["action_items"] + [{"description": "Tell Bob"}]}
+    scripted_llm.script = [submitted(EXTRACTED), submitted(revised)]
+    meeting = meeting_for(mock_make_session, regular_user.id)
+    meetings.execute_meeting_processing(mock_make_session, meeting, None, None)
+    reused = {t.id for t in mock_make_session.query(Task).filter(Task.source_item_id == meeting.id)}
+
+    with patch("memory.workers.tasks.meetings.process_content_item", side_effect=RuntimeError("embed down")):
+        meetings.execute_meeting_processing(mock_make_session, meeting, None, None)
+
+    tasks = mock_make_session.query(Task).filter(Task.source_item_id == meeting.id).all()
+    assert {t.id for t in tasks} == reused
+
+
+def test_sync_reattaches_a_detached_task_hashed_by_its_raw_text(regular_user, mock_make_session, qdrant):
+    meeting = meeting_for(mock_make_session, regular_user.id)
+    legacy = Task(task_title="Draft API proposal", status="done", sha256=meetings.make_task_sha256(meeting.id, "Draft API proposal"))
+    mock_make_session.add(legacy)
+    mock_make_session.commit()
+
+    created = meetings.sync_action_item_tasks(mock_make_session, meeting, [{"description": "Draft API proposal"}])
+
+    assert (created, legacy.source_item_id) == ([], meeting.id)
+    assert legacy.sha256 == meetings.make_task_sha256(meeting.id, "draft api proposal")
+
+
+def test_a_retitled_task_keeps_its_action_item_and_the_new_title_gets_its_own_task(
+    regular_user, mock_make_session, qdrant
+):
+    meeting = meeting_for(mock_make_session, regular_user.id)
+    meetings.sync_action_item_tasks(mock_make_session, meeting, [{"description": "Send report"}])
+    task = mock_make_session.query(Task).one()
+    task.task_title = "X"
+    mock_make_session.commit()
+
+    created = meetings.sync_action_item_tasks(
+        mock_make_session, meeting, [{"description": "Send report"}, {"description": "X"}]
+    )
+
+    titles = {t.task_title: t.id for t in mock_make_session.query(Task)}
+    assert ([t.task_title for t in created], set(titles), titles["Send report"]) == (["X"], {"Send report", "X"}, task.id)
+
+
+def test_action_items_that_differ_only_in_case_and_spacing_make_one_task(regular_user, mock_make_session, qdrant):
+    meeting = meeting_for(mock_make_session, regular_user.id)
+
+    created = meetings.sync_action_item_tasks(
+        mock_make_session, meeting, [{"description": "Fix the bug"}, {"description": "fix  the bug."}]
+    )
+
+    assert ([t.task_title for t in created], mock_make_session.query(Task).count()) == (["Fix the bug"], 1)
 
 
 def test_a_meeting_keeps_its_tasks_when_embeddings_are_not_configured(
@@ -1348,25 +1402,33 @@ def test_process_meeting_replace_updates_the_stored_meeting(
     assert mock_make_session.query(Meeting).count() == 1
 
 
-def test_process_meeting_replace_drops_untouched_action_items(
+def test_rerunning_a_meeting_keeps_the_task_ids_of_unchanged_action_items(
     scripted_llm, llm_key, regular_user, sample_extraction_response, sample_transcript, mock_make_session, qdrant
 ):
-    scripted_llm.script = [submitted(sample_extraction_response), submitted(sample_extraction_response)]
+    draft, coordinate, _ = sample_extraction_response["action_items"]
+    revised = sample_extraction_response | {
+        "action_items": [
+            draft | {"priority": "low"},
+            coordinate | {"description": "coordinate  with QA team."},
+            {"description": "Book the launch room", "priority": "high"},
+        ]
+    }
+    scripted_llm.script = [submitted(sample_extraction_response), submitted(revised)]
     first = meetings.process_meeting(creator_id=regular_user.id, transcript=sample_transcript, external_id="ff-1")
-    old = mock_make_session.query(Task).filter(Task.source_item_id == first["meeting_id"]).all()
-    old[0].status = "done"
-    mock_make_session.commit()
-    done_id, pending_ids = old[0].id, [t.id for t in old[1:]]
+    before = {t.task_title: t.id for t in mock_make_session.query(Task)}
 
-    meetings.process_meeting(
-        creator_id=regular_user.id, transcript="Ann: Corrected.", external_id="ff-1", replace=True
-    )
+    meetings.reprocess_meeting(item_id=first["meeting_id"])
 
-    remaining = {t.id: t.source_item_id for t in mock_make_session.query(Task).all()}
-    attached = {i for i, source in remaining.items() if source == first["meeting_id"]}
-    assert done_id in attached
-    assert not set(pending_ids) & set(remaining)
-    assert len(attached) == 3
+    after = {t.task_title: (t.id, t.priority) for t in mock_make_session.query(Task)}
+    assert set(after) == {"Draft API proposal", "coordinate  with QA team.", "Book the launch room"}
+    assert after["Draft API proposal"] == (before["Draft API proposal"], "low")
+    assert after["coordinate  with QA team."][0] == before["Coordinate with QA team"]
+    assert after["Book the launch room"][0] not in before.values()
+    changed = mock_make_session.query(Event).filter(Event.action == "changed", Event.item_id.in_(before.values()))
+    assert {(e.item_id, tuple(e.changes)) for e in changed} == {
+        (before["Draft API proposal"], ("priority",)),
+        (before["Coordinate with QA team"], ("title",)),
+    }
 
 
 def rerun_by_reprocess(meeting_id, user_id, transcript, retry=False):
@@ -1396,7 +1458,9 @@ def test_a_rerun_meeting_keeps_its_action_items(
 ):
     scripted_llm.script = [submitted(sample_extraction_response), submitted(sample_extraction_response)]
     first = meetings.process_meeting(creator_id=regular_user.id, transcript=sample_transcript, external_id="ff-1")
-    done = mock_make_session.query(Task).filter(Task.source_item_id == first["meeting_id"]).first()
+    tasks = mock_make_session.query(Task).filter(Task.source_item_id == first["meeting_id"]).all()
+    task_ids = {t.id for t in tasks}
+    done = tasks[0]
     done.status = "done"
     mock_make_session.get(Meeting, first["meeting_id"]).extraction_status = in_flight
     mock_make_session.commit()
@@ -1404,7 +1468,7 @@ def test_a_rerun_meeting_keeps_its_action_items(
     rerun(first["meeting_id"], regular_user.id, sample_transcript)
 
     attached = mock_make_session.query(Task).filter(Task.source_item_id == first["meeting_id"]).all()
-    assert len(attached) == 3
+    assert {t.id for t in attached} == task_ids
     assert (done.source_item_id, done.status) == (first["meeting_id"], "done")
     assert mock_make_session.query(Task).count() == 3
 
@@ -1496,7 +1560,7 @@ def test_process_meeting_extraction_failure_short_circuits(
     assert meeting.extraction_status == "failed"
 
 
-@patch("memory.workers.tasks.meetings.create_action_item_tasks", side_effect=RuntimeError("db down"))
+@patch("memory.workers.tasks.meetings.sync_action_item_tasks", side_effect=RuntimeError("db down"))
 def test_a_task_creation_failure_marks_the_meeting_failed(
     mock_create_tasks, scripted_llm, llm_key, regular_user, sample_extraction_response, sample_transcript, mock_make_session, qdrant
 ):
@@ -1620,7 +1684,7 @@ def test_action_item_priority_normalization(
     mock_make_session.add(meeting)
     mock_make_session.commit()
 
-    meetings.create_action_item_tasks(
+    meetings.sync_action_item_tasks(
         mock_make_session,
         meeting,
         [{"description": "Test task", "priority": priority_input}],

@@ -7,7 +7,7 @@ import pytest
 from fastmcp.exceptions import ToolError
 
 from memory.api.MCP.base import mcp
-from memory.api.MCP.visibility import get_visibility_checker
+from memory.api.MCP.visibility import get_call_checker, get_visibility_checker
 from memory.api.MCP.visibility_middleware import VisibilityMiddleware
 
 
@@ -44,7 +44,7 @@ READ_ONLY_TOOLS = {
     *("core_count_items", "core_fetch", "core_fetch_file", "core_list_items"),
     *("core_search", "core_search_observations"),
     *("deadlines_fetch", "deadlines_list_upcoming"),
-    *("discord_channel_history", "discord_list_channels"),
+    *("discord_channel_history", "discord_list_channels", "discord_thread"),
     "github_pr_diff",
     "journal_list_all",
     *("meta_get_current_time", "meta_get_metadata_schemas", "meta_get_search_defaults"),
@@ -55,7 +55,7 @@ READ_ONLY_TOOLS = {
     *("polling_fetch", "polling_list_polls"),
     *("projects_fetch", "projects_list_all"),
     *("scheduler_executions", "scheduler_list_all"),
-    *("slack_get_channel_history", "slack_list_channels"),
+    *("slack_get_channel_history", "slack_list_channels", "slack_thread"),
     *("teams_fetch", "teams_list_all", "teams_project_list_access"),
 }
 
@@ -70,6 +70,15 @@ async def test_exactly_the_tools_that_only_read_are_marked_read_only():
         if t.annotations and t.annotations.readOnlyHint
     }
     assert marked == READ_ONLY_TOOLS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool, scope", [("slack_thread", "slack"), ("discord_thread", "discord")])
+@pytest.mark.parametrize("get_checker", [get_visibility_checker, get_call_checker])
+async def test_thread_tools_need_only_their_scope(tool, scope, get_checker):
+    # Stored messages are access-filtered, so readers without a connected
+    # workspace or bot of their own (team access) can use them.
+    assert await get_checker(tool)({"scopes": [scope]}, None) is True
 
 
 @pytest.fixture

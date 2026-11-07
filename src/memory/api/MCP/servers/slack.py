@@ -7,9 +7,17 @@ from typing import Any
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_access_token
 
-from memory.api.MCP.access import fetch_user_by_token
+from memory.agents.trigger_input import bare, untrusted
+from memory.api.MCP.access import (
+    build_mcp_user_access_filter,
+    fetch_user_by_token,
+    get_mcp_current_user,
+)
 from memory.api.MCP.visibility import READ_ONLY, require_scopes, visible_when
+from memory.common import settings
+from memory.common.access_control import apply_access_filter_to_query
 from memory.common.db.connection import DBSession, make_session
+from memory.common.db.models import SlackMessage
 from memory.common.scopes import SCOPE_SLACK, SCOPE_SLACK_WRITE
 from memory.common.db.models.slack import (
     SlackChannel,
@@ -254,6 +262,43 @@ def _get_history_data(
             access_token,
             slack_api_base_url(credentials.slack_app),
         )
+
+
+def thread_message(message: SlackMessage) -> dict[str, Any]:
+    return {
+        "id": message.id,
+        "ts": message.message_ts,
+        "user": message.author_id and bare(message.author_id),
+        "author": message.author_name and bare(message.author_name),
+        "text": untrusted(message.id, "text", message.resolved_content or message.content or ""),
+    }
+
+
+def fetch_thread(session: DBSession, item_id: int, limit: int) -> dict[str, Any]:
+    access = build_mcp_user_access_filter(session, get_mcp_current_user(session))
+
+    def readable(*criteria):
+        return apply_access_filter_to_query(session.query(SlackMessage).filter(*criteria), access)
+
+    item = readable(SlackMessage.id == item_id).one_or_none()
+    if item is None:
+        raise ValueError(f"Slack message {item_id} not found")
+    root = item.thread_ts or item.message_ts
+    channel = (SlackMessage.workspace_id == item.workspace_id, SlackMessage.channel_id == item.channel_id)
+    parent = readable(*channel, SlackMessage.message_ts == root).one_or_none()
+    replies = (
+        readable(*channel, SlackMessage.thread_ts == root, SlackMessage.message_ts != root)
+        .order_by(SlackMessage.message_ts.desc())
+        .limit(limit)
+        .all()
+    )
+    return {
+        "workspace_id": item.workspace_id,
+        "channel_id": item.channel_id,
+        "thread_ts": root,
+        "parent": parent and thread_message(parent),
+        "replies": [thread_message(m) for m in reversed(replies)],
+    }
 
 
 # --- MCP Tools ---
@@ -514,3 +559,23 @@ async def get_channel_history(
         "count": len(formatted_messages),
         "has_more": data.get("has_more", False),
     }
+
+
+@slack_mcp.tool(annotations=READ_ONLY)
+@visible_when(require_scopes(SCOPE_SLACK))
+async def thread(item_id: int, limit: int = settings.CHAT_THREAD_REPLIES) -> dict[str, Any]:
+    """
+    Get the thread a stored Slack message is in: its parent and latest replies.
+    Use on a message from search or a trigger delivery to see the conversation
+    around it. Only messages you can read are returned.
+
+    Args:
+        item_id: The message's item id (the `id` in search results or trigger input)
+        limit: How many of the latest replies to return, oldest first (max 100)
+
+    Returns:
+        Dict with workspace_id, channel_id, thread_ts, parent (null if you can't
+        read it) and replies; each message has id, ts, user, author and text
+    """
+    with make_session() as session:
+        return await asyncio.to_thread(fetch_thread, session, item_id, max(1, min(100, limit)))

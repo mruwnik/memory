@@ -239,6 +239,8 @@ def ensure_listed_channel(
     channel = ensure_channel(
         session, int(data["id"]), server_id, bot_id, name=data.get("name"), channel_type=channel_type
     )
+    # A thread first stored from a message event was taken for a text channel.
+    channel.channel_type = channel_type
     parent_id = snowflake(data.get("parent_id"))
     if channel_type == "thread":
         # A thread first stored from a message event has no parent yet.

@@ -88,12 +88,11 @@ def pending_job(db_session):
     return job
 
 
-def test_prepare_meeting_for_reingest_clears_chunks_and_untouched_tasks(
+def test_prepare_meeting_for_reingest_clears_chunks_and_keeps_tasks(
     db_session, meeting_with_tasks, qdrant
 ):
-    """Pending tasks go (extraction recreates them); tasks someone worked on stay attached."""
+    """Extraction matches its action items to these tasks, keeping their ids."""
     meeting, tasks = meeting_with_tasks
-    tasks[0].status = "done"
 
     # Add a chunk
     chunk = Chunk(
@@ -117,7 +116,7 @@ def test_prepare_meeting_for_reingest_clears_chunks_and_untouched_tasks(
     mock_delete.assert_called_once()
 
     remaining = db_session.query(Task).filter(Task.id.in_([t.id for t in tasks])).all()
-    assert [(t.id, t.source_item_id) for t in remaining] == [(tasks[0].id, meeting.id)]
+    assert sorted((t.id, t.source_item_id) for t in remaining) == sorted((t.id, meeting.id) for t in tasks)
 
     # Verify chunk was deleted. The relationship is cached on the in-memory
     # `meeting` object — refresh it so we observe the post-flush state rather

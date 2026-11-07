@@ -25,6 +25,7 @@ from memory.common.scopes import SCOPE_ORGANIZER, SCOPE_ORGANIZER_WRITE
 from memory.common.calendar import EventDict, get_events_in_range, parse_date_range
 from memory.common.db.connection import make_session
 from memory.common.db.models import CalendarEvent, Task
+from memory.common.db.models.events import item_event
 from memory.common.db.models.journal import JournalEntry, build_journal_access_filter
 from memory.common.tasks import TaskDict, get_tasks, task_to_dict
 
@@ -322,6 +323,8 @@ async def update_task(
             task.due_date = parsed
         if priority is not _UNSET:
             task.priority = priority
+        if status is not None and status != task.status:
+            session.add(item_event(session, task, ["state"]))
         if status is not None:
             task.status = status
             if status == "done" and not task.completed_at:

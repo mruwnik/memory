@@ -517,6 +517,8 @@ SLACK_SYNC_INTERVAL = int(os.getenv("SLACK_SYNC_INTERVAL", 3600))  # seconds (1 
 # never appear in its history, so each sync re-lists this many days of
 # history and reads the threads whose latest reply isn't stored. 0 turns it off.
 SLACK_THREAD_LOOKBACK_DAYS = float(os.getenv("SLACK_THREAD_LOOKBACK_DAYS", 14))
+# How many of a thread's latest replies the Slack and Discord thread tools return by default.
+CHAT_THREAD_REPLIES = int(os.getenv("CHAT_THREAD_REPLIES", 10))
 
 # A source whose push channel (GitHub webhooks, Slack events) delivered an event
 # within PUSH_STALE_HOURS is only polled every PUSH_GAP_FILL_MINUTES (or its own

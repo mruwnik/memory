@@ -5,13 +5,19 @@ import logging
 from typing import Any
 
 from fastmcp import FastMCP
-from sqlalchemy import or_
+from sqlalchemy import desc, or_
 from fastmcp.server.dependencies import get_access_token
 
-from memory.api.MCP.access import fetch_user_by_token, get_mcp_current_user
+from memory.agents.trigger_input import bare, untrusted
+from memory.api.MCP.access import (
+    build_mcp_user_access_filter,
+    fetch_user_by_token,
+    get_mcp_current_user,
+)
 from memory.api.MCP.visibility import READ_ONLY, require_scopes, visible_when
 from memory.common import discord as discord_client
-from memory.common.access_control import UserProxy
+from memory.common import settings
+from memory.common.access_control import UserProxy, apply_access_filter_to_query
 from memory.common.dates import parse_iso_datetime
 from memory.common.scopes import (
     SCOPE_DISCORD,
@@ -20,7 +26,7 @@ from memory.common.scopes import (
     has_scope,
 )
 from memory.common.db.connection import DBSession, make_session
-from memory.common.db.models import DiscordBot, DiscordServer, DiscordUser
+from memory.common.db.models import DiscordBot, DiscordMessage, DiscordServer, DiscordUser
 from memory.common.people import find_person, primary_contact
 from memory.common.discord_data import (
     caller_can_see_discord_user,
@@ -308,6 +314,67 @@ async def channel_history(
             after_dt,
             limit,
         )
+
+
+def thread_message(message: DiscordMessage) -> dict[str, Any]:
+    return {
+        "id": message.id,
+        "message_id": str(message.message_id),
+        "author": bare(message.author.username) if message.author else str(message.author_id),
+        "sent_at": message.sent_at.isoformat(),
+        "text": untrusted(message.id, "text", message.content or ""),
+    }
+
+
+def fetch_thread(session: DBSession, item_id: int, limit: int) -> dict[str, Any]:
+    access = build_mcp_user_access_filter(session, require_caller(session))
+
+    def readable(*criteria):
+        return apply_access_filter_to_query(session.query(DiscordMessage).filter(*criteria), access)
+
+    item = readable(DiscordMessage.id == item_id).one_or_none()
+    if item is None:
+        raise ValueError(f"Discord message {item_id} not found")
+    # A thread's id is the id of the message that started it.
+    channel = item.channel
+    in_thread = channel is not None and (channel.channel_type == "thread" or channel.parent_id is not None)
+    thread_id = item.channel_id if in_thread else item.thread_id
+    if thread_id is None:
+        return {"thread_id": None, "parent": thread_message(item), "replies": []}
+    parent = readable(DiscordMessage.message_id == thread_id).first()
+    replies = (
+        readable(DiscordMessage.channel_id == thread_id, DiscordMessage.message_id != thread_id)
+        .order_by(desc(DiscordMessage.sent_at))
+        .limit(limit)
+        .all()
+    )
+    return {
+        "thread_id": str(thread_id),
+        "parent": parent and thread_message(parent),
+        "replies": [thread_message(m) for m in reversed(replies)],
+    }
+
+
+@discord_mcp.tool(annotations=READ_ONLY)
+@visible_when(require_scopes(SCOPE_DISCORD))
+async def thread(item_id: int, limit: int = settings.CHAT_THREAD_REPLIES) -> dict[str, Any]:
+    """
+    Get the thread a stored Discord message is in (or started): the message
+    that started it and the latest replies. Use on a message from search or a
+    trigger delivery to see the conversation around it. Only messages you can
+    read are returned.
+
+    Args:
+        item_id: The message's item id (the `id` in search results or trigger input)
+        limit: How many of the latest replies to return, oldest first (max 100)
+
+    Returns:
+        Dict with thread_id (null when the message isn't in a thread), parent
+        (null if you can't read it) and replies; each message has id,
+        message_id, author, sent_at and text
+    """
+    with make_session() as session:
+        return await asyncio.to_thread(fetch_thread, session, item_id, max(1, min(100, limit)))
 
 
 @discord_mcp.tool(annotations=READ_ONLY)

@@ -108,6 +108,7 @@ def _mock_mcp_modules(monkeypatch):
 
 from memory.common.db import connection as db_connection  # noqa: E402
 from memory.common.db.models import CalendarEvent, Task  # noqa: E402
+from memory.common.db.models.events import Event  # noqa: E402
 
 
 def get_fn(tool):
@@ -774,6 +775,31 @@ async def test_update_task_none_clears_only_that_field(
 
     assert result[cleared] is None
     assert result[kept] is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "updates, events",
+    [
+        ({"status": "done"}, [("changed", ["state"])]),
+        ({"status": "pending", "title": "Same status"}, []),
+        ({"priority": "low"}, []),
+    ],
+)
+async def test_update_task_writes_a_state_event_when_its_status_changes(
+    db_session, sample_tasks, updates, events
+):
+    from memory.api.MCP.servers.organizer import update_task
+
+    task = sample_tasks[0]
+    with patch(
+        "memory.api.MCP.servers.organizer.make_session",
+        return_value=db_session.__enter__(),
+    ):
+        await get_fn(update_task)(task_id=task.id, **updates)
+
+    written = db_session.query(Event).filter(Event.item_id == task.id).all()
+    assert [(e.action, e.changes) for e in written] == events
 
 
 # =============================================================================

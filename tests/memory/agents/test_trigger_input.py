@@ -116,7 +116,7 @@ def meeting():
         people=[ann],
         inserted_at=WHEN,
     )
-    Task(task_title="Write notes", status="pending", due_date=WHEN, people=[ann], source_item=m)
+    Task(id=7, task_title="Write notes", status="pending", due_date=WHEN, people=[ann], source_item=m)
     return m
 
 
@@ -189,7 +189,7 @@ def test_a_meeting_renders_summary_action_items_and_attendees():
 
     assert rendered == (
         "<untrusted_item id=4 field=summary>We agreed to ship.</untrusted_item>\n"
-        "<untrusted_item id=4 field=action_items>- title: Write notes; assignee: Ann; "
+        "<untrusted_item id=4 field=action_items>- task_id: 7; title: Write notes; assignee: Ann; "
         "due: 2026-11-06T12:00:00+00:00; status: pending</untrusted_item>\n"
         "Ann"
     )

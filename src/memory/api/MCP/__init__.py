@@ -5,7 +5,7 @@ Subservers are mounted with prefixes. Tool names after mounting:
 - beeper: beeper_list_chats
 - books: books_list_books, books_fetch
 - core: core_search, core_observe, core_search_observations, core_create_note, core_note_files, core_fetch_file, core_get_item, core_list_items, core_count_items
-- discord: discord_send_message, discord_channel_history, discord_list_channels
+- discord: discord_send_message, discord_channel_history, discord_thread, discord_list_channels
 - email: email_send
 - forecast: forecast_get_forecasts, forecast_clear_cache, forecast_history, forecast_get_market_depth, forecast_compare_forecasts, forecast_resolved, forecast_watch_market, forecast_get_watchlist, forecast_unwatch_market
 - meta: meta_get_metadata_schemas, meta_get_tags, meta_get_search_defaults, meta_get_current_time, meta_get_user, meta_notify_user
@@ -13,7 +13,7 @@ Subservers are mounted with prefixes. Tool names after mounting:
 - people: people_add, people_update, people_get_person, people_list_people, people_delete, people_add_tidbit, people_update_tidbit, people_delete_tidbit, people_list_tidbits
 - polling: polling_upsert_poll, polling_list_polls, polling_delete_poll, polling_get_poll
 - projects: projects_list_all, projects_fetch, projects_upsert, projects_delete
-- slack: slack_send, slack_add_reaction, slack_list_channels, slack_get_channel_history
+- slack: slack_send, slack_add_reaction, slack_list_channels, slack_get_channel_history, slack_thread
 - teams: teams_upsert, teams_team_get, teams_team_list, teams_team_update, teams_team_add_member, teams_team_remove_member, teams_team_list_members, teams_teams_by_tag, teams_person_teams, teams_project_assign_team, teams_project_unassign_team, teams_project_list_teams, teams_project_list_access, teams_projects_for_person, teams_check_project_access
 """
 

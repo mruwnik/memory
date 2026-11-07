@@ -269,6 +269,18 @@ def test_a_thread_stored_without_its_parent_gets_it_from_a_later_thread_event(db
     assert db_session.get(DiscordChannel, 42).parent_id == int(CHANNEL)
 
 
+def test_a_thread_first_stored_as_a_text_channel_becomes_a_thread(db_session, webhook_bot):
+    db_session.add(DiscordServer(id=int(GUILD), name="Guild", bot_id=webhook_bot.id, verified=True))
+    db_session.flush()
+    db_session.add(DiscordChannel(id=42, server_id=int(GUILD), name="Channel 42", channel_type="text"))
+    db_session.commit()
+
+    handle(webhook_bot, "THREAD_CREATE", {"id": "42", "guild_id": GUILD, "parent_id": CHANNEL, "type": 11})
+
+    db_session.expire_all()
+    assert db_session.get(DiscordChannel, 42).channel_type == "thread"
+
+
 def test_thread_update_renames(db_session, webhook_bot):
     db_session.add(DiscordServer(id=int(GUILD), name="Guild", bot_id=webhook_bot.id, verified=True))
     db_session.commit()
