@@ -345,15 +345,12 @@ def test_per_item_triggers_fire_at_once(
     )
 
 
-@pytest.mark.parametrize("handler", [{"queue": "inbox"}, {"agent": "fact-check"}])
-def test_triggers_without_a_definition_are_not_matched_yet(
-    db_session, admin_user, no_celery_dispatch, handler
-):
+def test_code_slug_triggers_are_not_matched_yet(db_session, admin_user, no_celery_dispatch):
     db_session.add(
         AgentTrigger(
             user_id=admin_user.id,
             name="q",
-            handler=handler,
+            handler={"agent": "fact-check"},
             kind="ingest",
             config=IngestConfig.model_validate({"filter": {"tags_any": ["ai"]}}).model_dump(),
         )

@@ -46,6 +46,7 @@ from memory.agents.external import (
 )
 from memory.agents.mcp_client import calling_run, memory_tools
 from memory.agents.prebuilt import PREBUILT_AGENTS
+from memory.agents.queues import backlog, can_read, is_delivery, ready_to_claim, take_from_queue
 from memory.agents.provider_keys import (
     KeyUnavailable,
     check_key,
@@ -101,6 +102,7 @@ from memory.common.db.models import (
     LLMProviderKey,
     ScheduledTask,
     ServerStatus,
+    User,
 )
 from memory.common.db.models.agents import (
     EXECUTOR_WORKERS,
@@ -686,7 +688,7 @@ def worker_caller() -> int:
 
 
 def leased_payload(run: AgentRun) -> dict:
-    return {
+    payload = {
         "id": run.id,
         "status": run.status,
         "input": run.input,
@@ -696,6 +698,8 @@ def leased_payload(run: AgentRun) -> dict:
         "lease_lapses": run.lease_lapses,
         "worker_label": run.worker_label,
     }
+    # A queue delivery has no spec; what it's about is its ref.
+    return payload | ({"queue": run.queue, "ref": run.trigger_ref} if run.queue else {})
 
 
 def lease_length(lease_sec: int | None) -> timedelta:
@@ -745,14 +749,29 @@ def renew(run_id: str, lease_token: str, user_id: int, lease: timedelta) -> dict
         return {"run": leased_payload(run), "cancel_requested": False}
 
 
+def lease_run(run: AgentRun, user_id: int, worker: str | None, lease: timedelta) -> dict:
+    now = datetime.now(timezone.utc)
+    run.status = RunStatus.RUNNING.value
+    run.lease_token = secrets.token_urlsafe(24)
+    run.worker_user_id, run.worker_label = user_id, worker
+    run.started_at = run.started_at or now
+    run.lease_expires_at = min(now + lease, hold_ends(run))
+    return leased_payload(run)
+
+
 def take_next(
-    user_id: int, declared: Requirements, worker: str | None, lease: timedelta
+    user_id: int, token: str, declared: Requirements, worker: str | None, lease: timedelta
 ) -> dict | None:
     """Scans the queue oldest first in CLAIM_SCAN batches, by (created_at, id) cursor,
     without locks, then locks only the run it picks, passing over it if another worker
     has it or took it since the scan. The requirement globs are matched here: either
-    side may be a glob, which SQL can't match."""
+    side may be a glob, which SQL can't match. A run of trigger deliveries is rendered
+    as its items are now (queues.rerender); one the claiming credential can't read all
+    of is passed over for a worker that can."""
     with make_session() as db:
+        user = db.get(User, user_id)
+        assert user is not None
+        key = token_api_key(token, db)
         cursor = None
         while True:
             now = datetime.now(timezone.utc)
@@ -760,11 +779,13 @@ def take_next(
                 AgentRun.user_id == user_id,
                 AgentRun.status == RunStatus.PENDING.value,
                 AgentRun.executor == EXECUTOR_WORKERS,
+                AgentRun.queue.is_(None),
                 or_(
                     AgentRun.started_at.is_(None),
                     AgentRun.started_at
                     > now - timedelta(seconds=settings.AGENT_WORK_HOLD_MAX_SEC),
                 ),
+                *(() if can_read(user, key) else (AgentRun.trigger_kind != INGEST,)),
             )
             query = db.query(AgentRun.created_at, AgentRun.id, AgentRun.spec["requires"]).filter(
                 *claimable
@@ -786,13 +807,34 @@ def take_next(
                 )
                 if run is None:
                     continue
-                run.status = RunStatus.RUNNING.value
-                run.lease_token = secrets.token_urlsafe(24)
-                run.worker_user_id, run.worker_label = user_id, worker
-                run.started_at = run.started_at or now
-                run.lease_expires_at = min(now + lease, hold_ends(run))
+                ready = not is_delivery(run) or ready_to_claim(db, run, user, key)
+                if ready is None:
+                    # Left, unlocked, for a worker whose key can read it.
+                    db.rollback()
+                    continue
+                if not ready:
+                    db.commit()
+                    continue
+                payload = lease_run(run, user_id, worker, lease)
                 db.commit()
-                return leased_payload(run)
+                return payload
+
+
+def take_from(
+    user_id: int, token: str, queue: str, worker: str | None, lease: timedelta
+) -> dict | None:
+    with make_session() as db:
+        user = db.get(User, user_id)
+        assert user is not None
+        key = token_api_key(token, db)
+        if not can_read(user, key):
+            raise ValueError("claiming queue deliveries needs the read scope")
+        run = take_from_queue(db, user, queue, key)
+        if run is None:
+            return None
+        payload = lease_run(run, user_id, worker, lease)
+        db.commit()
+        return payload
 
 
 @agent_mcp.tool()
@@ -804,9 +846,21 @@ async def work_claim(
     wait: int = 0,
     run_id: str | None = None,
     lease_token: str | None = None,
+    queue: str | None = None,
 ) -> dict:
     """Take the oldest of your own runs placed on workers whose requirements you meet,
     to execute yourself with your own models and tools. Returns {"run": null} if none.
+
+    With `queue`, take instead the next delivery of your triggers whose handler is
+    that queue, which needs the read scope. It comes as a run with "queue" and "ref"
+    ({"trigger_id", "item_ids", "changes": {"<item id>": [change tags]}, and
+    "coalesced": {"<item id>": [ids of items whose deliveries were folded into it]}
+    when any were}), its input rendered from the trigger's template and the items as
+    they are now. Items the trigger can no longer read are left out and their
+    deliveries skipped; ones only your key can't read are left for another worker. A
+    trigger's order_by ("item" or "thread") holds a delivery back until an earlier one
+    for the same item or thread is answered. Report on it with agent_work_submit as on
+    any run; capabilities don't apply. agent_work_queues shows what is waiting.
 
     `capabilities` declares what you have, as {"models": [...], "tools": ["server:tool",
     ...], "flags": [...]} (globs allowed, e.g. "memory:*"); a run is yours to take when
@@ -825,6 +879,7 @@ async def work_claim(
     so stop.
     """
     user_id = worker_caller()
+    token, _ = caller_token()
     lease = lease_length(lease_sec)
     if worker is not None and len(worker) > MAX_WORKER_LABEL_CHARS:
         raise ValueError(f"worker label is longer than {MAX_WORKER_LABEL_CHARS} characters")
@@ -835,7 +890,10 @@ async def work_claim(
     declared = Requirements.model_validate(capabilities or {})
     deadline = time.monotonic() + min(max(wait, 0), settings.AGENT_MAX_WAIT_SEC)
     while True:
-        taken = await asyncio.to_thread(take_next, user_id, declared, worker, lease)
+        if queue is None:
+            taken = await asyncio.to_thread(take_next, user_id, token, declared, worker, lease)
+        else:
+            taken = await asyncio.to_thread(take_from, user_id, token, queue, worker, lease)
         if taken is not None:
             return {"run": taken}
         if time.monotonic() >= deadline:
@@ -913,6 +971,16 @@ async def work_submit(
     return await asyncio.to_thread(
         record_outcome, run_id, lease_token, user_id, result, error, reported
     )
+
+
+@agent_mcp.tool(annotations=READ_ONLY)
+@visible_when(require_scopes(SCOPE_AGENTS_WORK))
+async def work_queues() -> dict:
+    """Your triggers' queues (agent_work_claim's `queue`), each with how many deliveries
+    are waiting to be claimed and the oldest one's age in seconds (null when none)."""
+    user_id = worker_caller()
+    with make_session() as db:
+        return {"queues": backlog(db, user_id)}
 
 
 def capabilities_json(caps: Capabilities) -> dict:

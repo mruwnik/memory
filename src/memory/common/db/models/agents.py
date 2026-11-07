@@ -103,6 +103,8 @@ class AgentRun(Base):
     # The prebuilt or system agent's slug. With definition_id also None, an inline
     # spec, which only the snapshot in `spec` keeps.
     agent: Mapped[str | None] = mapped_column(Text)
+    # A queue delivery's queue: only claims naming it take the run.
+    queue: Mapped[str | None] = mapped_column(Text)
     spec: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     # Where the run executes: EXECUTOR_SERVER (the agents worker) or EXECUTOR_WORKERS
     # (its owner's agents:work credentials claim it); a placement fallback moves it.
@@ -209,6 +211,13 @@ class AgentRun(Base):
             "id",
             postgresql_where=text("status = 'pending' AND executor = 'workers'"),
         ),
+        Index(
+            "agent_runs_queue_pending_idx",
+            "user_id",
+            "queue",
+            "created_at",
+            postgresql_where=text("queue IS NOT NULL AND status = 'pending'"),
+        ),
         Index("agent_runs_worker_user_idx", "worker_user_id"),
         # Runs without a trigger (cron) still dedupe per definition.
         Index(
@@ -239,6 +248,7 @@ class AgentRun(Base):
             "user_id": self.user_id,
             "definition_id": self.definition_id,
             "agent": self.agent,
+            "queue": self.queue,
             "executor": self.executor,
             "worker_user_id": self.worker_user_id,
             "worker_label": self.worker_label,
@@ -274,8 +284,9 @@ class AgentTrigger(Base):
     `config` is validated per kind by memory.agents.triggers. `state` holds what
     the trigger machinery records, e.g. why a circuit breaker disabled it.
     `handler` is {"agent": <definition id>} (then also in definition_id, which
-    cascades its deletion), {"agent": "<code agent slug>"} or {"queue": "<name>"};
-    only definitions fire so far.
+    cascades its deletion), {"agent": "<code agent slug>"} or {"queue": "<name>"},
+    whose deliveries the owner's workers claim (memory.agents.queues); code slugs
+    don't fire yet.
     """
 
     __tablename__ = "agent_triggers"
@@ -289,7 +300,7 @@ class AgentTrigger(Base):
         Integer, ForeignKey("agent_definitions.id", ondelete="CASCADE")
     )
     handler: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
-    # Shaping; coalesce_mode and order_by aren't applied yet.
+    # Shaping (memory.agents.triggers.claim and memory.agents.queues).
     coalesce_mode: Mapped[str] = mapped_column(
         Text, nullable=False, default="none", server_default="none"
     )
@@ -409,6 +420,12 @@ class AgentTriggerMatch(Base):
     changes: Mapped[list[str]] = mapped_column(
         ARRAY(Text), nullable=False, default=list, server_default="{}"
     )
+    # What the trigger's order_by orders it by (memory.agents.triggers.order_key).
+    order_key: Mapped[str | None] = mapped_column(Text)
+    # Items whose pending deliveries coalescing folded into this one, once per delivery.
+    coalesced: Mapped[list[int]] = mapped_column(
+        ARRAY(BigInteger), nullable=False, default=list, server_default="{}"
+    )
     # Deferred by a cap; one still over it when this passes is shed.
     not_before: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Last handed to FIRE_TRIGGER; the sweep resends it if it's still pending.
@@ -441,6 +458,13 @@ class AgentTriggerMatch(Base):
             "trigger_id",
             "created_at",
             postgresql_where=text("status = 'pending'"),
+        ),
+        Index(
+            "agent_trigger_matches_order_idx",
+            "trigger_id",
+            "order_key",
+            "created_at",
+            postgresql_where=text("order_key IS NOT NULL"),
         ),
     )
 

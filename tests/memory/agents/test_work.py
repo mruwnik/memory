@@ -16,9 +16,10 @@ from memory.api.MCP.servers import agent
 from memory.api.MCP.visibility import get_visibility_checker
 from memory.common import settings
 from memory.common.celery_app import RUN_AGENT
-from memory.common.db.models import AgentRun, HumanUser, LLMProviderKey, UserSession
+from memory.common.db.models import AgentRun, HumanUser, LLMProviderKey
 from memory.workers.tasks.maintenance import sweep_agent_runs
 from tests.conftest import mcp_auth_context
+from tests.memory.agents.conftest import work_session
 from tests.memory.agents.test_child_runs import call_as_run
 
 BASE = {"system_prompt": "check this", "model": "anthropic/m", "reasoning": "high"}
@@ -28,23 +29,6 @@ SCHEMA = {
     "properties": {"answer": {"type": "string"}},
     "required": ["answer"],
 }
-
-
-def work_session(db, user_id: int, token: str) -> UserSession:
-    session = UserSession(
-        token=token, user_id=user_id, expires_at=datetime.now() + timedelta(days=1)
-    )
-    db.add(session)
-    db.commit()
-    return session
-
-
-@pytest.fixture
-def worker_session(db_session, regular_user):
-    """The runs' owner, working on them from a worker."""
-    regular_user.scopes = [*regular_user.scopes, "agents:work"]
-    db_session.commit()
-    return work_session(db_session, regular_user.id, "worker-session-token")
 
 
 @pytest.fixture

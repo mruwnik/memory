@@ -1,8 +1,10 @@
+from datetime import datetime, timedelta
+
 import pytest
 import pytest_asyncio
 from sse_starlette.sse import AppStatus
 
-from memory.common.db.models import HumanUser, LLMProviderKey
+from memory.common.db.models import HumanUser, LLMProviderKey, UserSession
 from memory.common.llms import registry
 from memory.common import safe_http
 from memory.common.safe_http import NetworkPolicy
@@ -21,6 +23,23 @@ def regular_user(db_session):
     db_session.add(user)
     db_session.commit()
     return user
+
+
+def work_session(db, user_id: int, token: str) -> UserSession:
+    session = UserSession(
+        token=token, user_id=user_id, expires_at=datetime.now() + timedelta(days=1)
+    )
+    db.add(session)
+    db.commit()
+    return session
+
+
+@pytest.fixture
+def worker_session(db_session, regular_user):
+    """The runs' owner, working on them from a worker."""
+    regular_user.scopes = [*regular_user.scopes, "agents:work"]
+    db_session.commit()
+    return work_session(db_session, regular_user.id, "worker-session-token")
 
 
 def default_keys(db, user) -> dict[str, LLMProviderKey]:

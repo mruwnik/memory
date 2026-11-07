@@ -91,6 +91,7 @@ SKIPPED_DISABLED = "skipped:disabled"
 SHED_RATE = "skipped:shed:rate"
 SHED_BUDGET = "skipped:shed:budget"
 SHED_BACKLOG = "skipped:shed:backlog"
+SKIPPED_COALESCED = "skipped:coalesced"
 # A delivery still pending this long after it was sent is sent again, and each
 # resend waits twice as long as the one before, so a backlogged agents queue
 # doesn't fill with copies of what it already holds.
@@ -500,12 +501,16 @@ def accessible_ids(
     )
 
 
-# Only definition handlers fire yet: matching others would claim items nothing delivers.
+# Code-slug handlers don't fire yet: matching them would claim items nothing delivers.
 LIVE_INGEST = (
     AgentTrigger.kind == INGEST,
     AgentTrigger.enabled,
-    AgentTrigger.definition_id.is_not(None),
+    or_(AgentTrigger.definition_id.is_not(None), AgentTrigger.handler.has_key("queue")),
 )
+
+
+def handler_queue(trigger: AgentTrigger) -> str | None:
+    return (trigger.handler or {}).get("queue")
 
 
 def enabled_ingest_triggers(db: DBSession) -> list[AgentTrigger]:
@@ -577,9 +582,13 @@ def claim(
     on_edit: bool,
     changes: list[str] | None = None,
     sent: bool = False,
+    order_key: str | None = None,
+    coalesce: bool = False,
 ) -> AgentTriggerMatch | None:
     """Record, uncommitted, that trigger_id matched this version of item_id, as a
     pending delivery (`sent`: about to be sent to FIRE_TRIGGER); None if it may not.
+    With `coalesce`, it replaces the trigger's pending deliveries for the item (or
+    `order_key`), taking over the item's changes.
 
     Items are reprocessed (re-embeds, upstream edits, re-syncs), and each pass
     re-runs matching, so a version claims at most once.
@@ -596,12 +605,78 @@ def claim(
         content_hash=version,
         edited=bool(seen),
         changes=delivered_changes(bool(seen), changes),
+        order_key=order_key,
         dispatched_at=datetime.now(timezone.utc) if sent else None,
         sends=int(sent),
+        # Not the transaction's start, which deliveries routed together share: order_by
+        # orders by it.
+        created_at=func.clock_timestamp(),
     )
+    if coalesce:
+        take_over(db, match)
     db.add(match)
     db.flush()
     return match
+
+
+def take_over(db: DBSession, match: AgentTriggerMatch) -> None:
+    """Skip, uncommitted, the pending deliveries the new `match` replaces: its trigger's
+    for the same item, or the same order key. It takes the oldest one's place in line
+    (created_at and deferral), so a busy item isn't pushed back with every event, and
+    records the items folded into it. As in changes_by_item, a replaced first sight of
+    the item stays a first sight. Deliveries a fire or sweep has locked are left to it."""
+    same = (
+        AgentTriggerMatch.order_key == match.order_key
+        if match.order_key is not None
+        else AgentTriggerMatch.item_id == match.item_id
+    )
+    replaced = db.scalars(
+        select(AgentTriggerMatch)
+        .where(
+            AgentTriggerMatch.trigger_id == match.trigger_id,
+            AgentTriggerMatch.status == PENDING,
+            same,
+        )
+        .order_by(AgentTriggerMatch.created_at)
+        .with_for_update(skip_locked=True)
+    ).all()
+    if not replaced:
+        return
+    for r in replaced:
+        r.status = SKIPPED_COALESCED
+    match.created_at, match.not_before = replaced[0].created_at, replaced[0].not_before
+    match.coalesced = sorted(i for r in replaced for i in [*r.coalesced, r.item_id])
+    mine = [(r.edited, r.changes) for r in replaced if r.item_id == match.item_id]
+    mine.append((match.edited, match.changes))
+    match.edited = all(e for e, _ in mine)
+    match.changes = sorted({tag for e, c in mine if match.edited or not e for tag in c})
+
+
+def coalesced_ref(deliveries: list[AgentTriggerMatch]) -> dict[str, Any]:
+    """A run ref's "coalesced": {"<item id>": [ids of the items folded into its
+    delivery, once per delivery folded]}; nothing when none were."""
+    folded: dict[str, list[int]] = {}
+    for d in deliveries:
+        if d.coalesced:
+            folded.setdefault(str(d.item_id), []).extend(d.coalesced)
+    return {"coalesced": {k: sorted(v) for k, v in folded.items()}} if folded else {}
+
+
+def order_key(item: SourceItem, order_by: str) -> str | None:
+    """What a delivery of `item` is ordered by: the item, or the conversation it's in."""
+    if order_by == "none":
+        return None
+    if order_by == "thread":
+        if isinstance(item, SlackMessage):
+            return f"slack:{item.channel_id}:{item.thread_ts or item.message_ts}"
+        # A Discord thread is a channel whose id is its starting message's, so a
+        # top-level message and the thread it starts share a key.
+        if isinstance(item, DiscordMessage):
+            in_thread = parent_channel_id(item) is not None
+            return f"discord:{item.channel_id if in_thread else item.message_id}"
+        if isinstance(item, BeeperMessage):
+            return f"beeper:{item.chat_id}"
+    return f"item:{item.id}"
 
 
 def item_claims(db: DBSession, item_id: int) -> dict[int, set[bytes]]:
@@ -655,8 +730,9 @@ def send(trigger_id: int, refs: list[str]) -> None:
 class Claimed:
     trigger_id: int
     ref: str
-    # Batch members wait for the sweep; per-item deliveries are sent at once.
-    batched: bool
+    # Per-item agent deliveries are sent at once; batch members wait for the sweep,
+    # queue deliveries for a worker's claim.
+    sent: bool
 
 
 @dataclass(frozen=True)
@@ -735,6 +811,7 @@ def match_item(
         if facts.authors & t.own or item_id not in t.readable:
             continue
         batched = isinstance(config.delivery, Batch)
+        sent = not batched and handler_queue(trigger) is None
         match = claim(
             db,
             trigger.id,
@@ -743,10 +820,13 @@ def match_item(
             fresh=fresh,
             on_edit=refires,
             changes=event.changes,
-            sent=not batched,
+            sent=sent,
+            # Batches aren't ordered.
+            order_key=None if batched else order_key(item, trigger.order_by),
+            coalesce=trigger.coalesce_mode == "latest",
         )
         if match is not None:
-            claimed.append(Claimed(trigger.id, delivery_ref(item_id, version), batched))
+            claimed.append(Claimed(trigger.id, delivery_ref(item_id, version), sent))
     return claimed
 
 
@@ -864,7 +944,7 @@ def route_events() -> list[int]:
                 taken, claimed = route(db, cursor)
                 db.commit()
             for c in claimed:
-                if not c.batched:
+                if c.sent:
                     send(c.trigger_id, [c.ref])
             delivered += [c.trigger_id for c in claimed]
             if taken is None:
@@ -1063,7 +1143,8 @@ def sweep_deliveries() -> dict[str, int]:
         expired = expire_deliveries(db, now)
         newly_throttled: list[tuple[AgentTrigger, str]] = []
         for trigger in waiting:
-            if not (trigger.kind == INGEST and trigger.enabled and trigger.definition_id):
+            queued = handler_queue(trigger) is not None
+            if not (trigger.kind == INGEST and trigger.enabled and (trigger.definition_id or queued)):
                 continue
             if n := shed_backlog(db, trigger):
                 logger.warning("agent trigger %s shed %d deliveries over its backlog", trigger.id, n)
@@ -1071,7 +1152,9 @@ def sweep_deliveries() -> dict[str, int]:
                 if throttled(trigger, reason):
                     newly_throttled.append((trigger, reason))
             shed += n
-            sends += [(trigger.id, refs) for refs in due_sends(db, trigger, now)]
+            # Workers claim queue deliveries; there's nothing to send.
+            if not queued:
+                sends += [(trigger.id, refs) for refs in due_sends(db, trigger, now)]
         db.commit()
         for trigger, reason in newly_throttled:
             tell_throttled(db, trigger, reason)

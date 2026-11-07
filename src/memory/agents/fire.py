@@ -23,6 +23,7 @@ from memory.agents.triggers import (
     IngestConfig,
     accessible_ids,
     changes_by_item,
+    coalesced_ref,
     dedupe_key,
     delivery_ref,
     episode_over,
@@ -53,7 +54,7 @@ def trip(db: DBSession, trigger_id: int, owner: User, reason: str) -> bool:
     this call did.
     """
     trigger = lock_trigger(db, trigger_id)
-    if trigger is None or trigger.definition is None or not trigger.enabled:
+    if trigger is None or not trigger.enabled:
         db.commit()
         return False
     trigger.enabled = False
@@ -61,15 +62,15 @@ def trip(db: DBSession, trigger_id: int, owner: User, reason: str) -> bool:
         "tripped": {"reason": reason, "at": datetime.now(timezone.utc).isoformat()}
     }
     db.commit()
-    name = trigger.definition.name
+    name = trigger.definition.name if trigger.definition else trigger.name
     logger.warning("agent trigger %s (%s) tripped: %s", trigger.id, name, reason)
     tell_owner(
         db,
         owner,
         subject=f"Agent trigger paused: {name}",
         message=(
-            f"Trigger {trigger.id} of agent '{name}' was disabled: {reason}\n"
-            "Re-enable it on the agent's page once that's resolved. Enabling it with "
+            f"Trigger {trigger.id} ('{name}') was disabled: {reason}\n"
+            "Re-enable it once that's resolved. Enabling it with "
             "resume also delivers what it missed while paused."
         ),
     )
@@ -138,7 +139,8 @@ def start_run(
         input=render_input(config.template, items, MAX_TEXT_CHARS, changes),
         trigger=TriggerInfo(
             kind=INGEST,
-            ref={"trigger_id": trigger.id, "item_ids": item_ids, "changes": changes},
+            ref={"trigger_id": trigger.id, "item_ids": item_ids, "changes": changes}
+            | coalesced_ref(delivered),
             dedupe_key=dedupe_key(trigger.id, delivered),
             trigger_id=trigger.id,
         ),
@@ -188,7 +190,7 @@ def fire_trigger(trigger_id: int, refs: list[str]) -> str | None:
     due; returns its id, or None if nothing ran.
 
     The run's trigger ref is {"trigger_id", "item_ids": [readable ids], "changes":
-    {"<item id>": [Change tags delivered for it]}}.
+    {"<item id>": [Change tags delivered for it]}}, plus triggers.coalesced_ref.
     """
     with make_session() as db:
         trigger = lock_trigger(db, trigger_id)

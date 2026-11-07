@@ -35,6 +35,7 @@ async def test_every_mounted_tool_forbids_task_execution():
 
 # Forecast lookups only read, but send caller-chosen text to outside services.
 READ_ONLY_TOOLS = {
+    "agent_work_queues",
     *("agent_catalog", "agent_fetch", "agent_key_list", "agent_list_all"),
     *("agent_list_runs", "agent_schedules", "agent_server_list", "agent_system_list"),
     *("agent_triggers", "agent_wait"),
