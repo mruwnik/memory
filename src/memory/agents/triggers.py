@@ -433,19 +433,20 @@ def accessible_ids(
     )
 
 
+# Only definition handlers fire yet: matching others would claim items nothing delivers.
+LIVE_INGEST = (
+    AgentTrigger.kind == INGEST,
+    AgentTrigger.enabled,
+    AgentTrigger.definition_id.is_not(None),
+)
+
+
 def enabled_ingest_triggers(db: DBSession) -> list[AgentTrigger]:
-    return (
-        db.query(AgentTrigger)
-        .filter(AgentTrigger.kind == INGEST, AgentTrigger.enabled)
-        .order_by(AgentTrigger.id)
-        .all()
-    )
+    return db.query(AgentTrigger).filter(*LIVE_INGEST).order_by(AgentTrigger.id).all()
 
 
 def any_ingest_trigger(db: DBSession) -> bool:
-    return db.query(
-        exists().where(AgentTrigger.kind == INGEST, AgentTrigger.enabled)
-    ).scalar()
+    return db.query(exists().where(*LIVE_INGEST)).scalar()
 
 
 @functools.cache
@@ -653,7 +654,7 @@ def match_ingest_triggers(
             refires = config.refires(changes)
             if not may_claim(claims.get(trigger.id, set()), version, fresh=fresh, on_edit=refires):
                 continue
-            owner = db.get(User, trigger.definition.user_id)
+            owner = db.get(User, trigger.user_id)
             if owner is None:
                 continue
             mine = owner_bots(db, owner.id) if config.filter.mentions_me else frozenset()

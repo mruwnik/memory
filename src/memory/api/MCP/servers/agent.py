@@ -11,6 +11,7 @@ themselves; the run stays its owner's.
 import asyncio
 import json
 import logging
+import re
 import secrets
 import time
 from dataclasses import asdict
@@ -21,7 +22,7 @@ from typing import Annotated, Any
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_access_token
 from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, ValidationError
-from sqlalchemy import and_, func, or_, tuple_
+from sqlalchemy import and_, func, or_, select, tuple_
 from sqlalchemy.exc import IntegrityError
 
 from memory.agents.cancel import cancel_tree
@@ -965,17 +966,13 @@ async def catalog() -> dict:
 
 def owned_trigger(db: DBSession, trigger_id: int, user_id: int) -> AgentTrigger:
     trigger = db.get(AgentTrigger, trigger_id)
-    if trigger is None or trigger.definition.user_id != user_id:
+    if trigger is None or trigger.user_id != user_id:
         raise ValueError(f"unknown trigger {trigger_id}")
     return trigger
 
 
 def check_trigger_cap(db: DBSession, user_id: int, exclude_id: int | None) -> None:
-    query = (
-        db.query(AgentTrigger)
-        .join(AgentDefinition, AgentDefinition.id == AgentTrigger.definition_id)
-        .filter(AgentDefinition.user_id == user_id, AgentTrigger.enabled)
-    )
+    query = db.query(AgentTrigger).filter(AgentTrigger.user_id == user_id, AgentTrigger.enabled)
     if exclude_id is not None:
         query = query.filter(AgentTrigger.id != exclude_id)
     if query.count() >= settings.AGENT_MAX_TRIGGERS_PER_USER:
@@ -1005,6 +1002,29 @@ async def exposure_warnings(spec: AgentSpec) -> list[str]:
     ]
 
 
+# Default names carry the trigger's id, so no other trigger may take one.
+DEFAULT_TRIGGER_NAME = re.compile(r"trigger-\d+")
+
+
+def next_trigger_id(db: DBSession) -> int:
+    """Drawn before the insert, so a new trigger's default name can carry its id."""
+    sequence = func.pg_get_serial_sequence("agent_triggers", "id")
+    return db.execute(select(func.nextval(sequence))).scalar_one()
+
+
+def trigger_name(db: DBSession, user_id: int, name: str, trigger_id: int) -> str:
+    """`name` stripped, refused if empty or already another of the user's triggers'."""
+    name = name.strip()
+    if not name:
+        raise ValueError("name must not be empty")
+    taken = db.query(AgentTrigger).filter(
+        AgentTrigger.user_id == user_id, AgentTrigger.name == name, AgentTrigger.id != trigger_id
+    )
+    if db.query(taken.exists()).scalar():
+        raise ValueError(f"you already have a trigger named '{name}'")
+    return name
+
+
 def drop_buffer(trigger_id: int) -> None:
     """Forget batched matches, so a re-enabled trigger doesn't fire stale ones."""
     try:
@@ -1021,8 +1041,14 @@ async def trigger_upsert(
     config: dict | None = None,
     enabled: bool | None = None,
     trigger_id: int | None = None,
+    name: str | None = None,
+    max_per_hour: int | None = None,
 ) -> dict:
     """Create or update an ingest trigger: run one of your definitions when newly stored items match.
+
+    name: unique among your triggers; defaults to "trigger-<id>". max_per_hour: the
+    most runs this trigger starts in an hour (default AGENT_MAX_RUNS_PER_HOUR), on
+    top of the definition's own max_runs_per_hour. Omitted on update, both are kept.
 
     config: {"filter": {source_types, tags_any, channel_ids, exclude_channel_ids,
     text_contains, regex, exclude_authors, repos, mentions_me}, "delivery": {"mode": "per_item"} or {"mode": "batch",
@@ -1071,6 +1097,10 @@ async def trigger_upsert(
     user_id, _ = caller()
     if trigger_id is not None and enabled is False and config is None:
         return pause_trigger(trigger_id, user_id)
+    if max_per_hour is not None and max_per_hour < 1:
+        raise ValueError("max_per_hour must be at least 1")
+    if name is not None and DEFAULT_TRIGGER_NAME.fullmatch(name.strip()):
+        raise ValueError('names like "trigger-<number>" are reserved for default names')
     token, _ = caller_token()
     with make_session() as db:
         definition = owned_definition(db, definition_id, user_id)
@@ -1098,9 +1128,17 @@ async def trigger_upsert(
         was_batched = existing is not None and isinstance(
             IngestConfig.model_validate(existing.config).delivery, Batch
         )
-        trigger = existing or AgentTrigger(kind=INGEST, state={})
+        trigger = existing or AgentTrigger(
+            id=next_trigger_id(db), user_id=user_id, kind=INGEST, state={}
+        )
+        if existing is None or name is not None:
+            default = f"trigger-{trigger.id}"
+            trigger.name = trigger_name(db, user_id, default if name is None else name, trigger.id)
+        if max_per_hour is not None:
+            trigger.max_per_hour = max_per_hour
         db.add(trigger)
         trigger.definition_id = definition.id
+        trigger.handler = {"agent": definition.id}
         trigger.config = parsed.model_dump(mode="json")
         if existing is None:
             trigger.api_key_id, trigger.via_api_key = (key.id, True) if key else (None, False)
@@ -1109,7 +1147,12 @@ async def trigger_upsert(
             # The database clock, which also stamps items' inserted_at.
             trigger.active_since = func.now()
             trigger.state = {k: v for k, v in (trigger.state or {}).items() if k != "tripped"}
-        db.flush()
+        try:
+            db.flush()
+        except IntegrityError as e:
+            if "agent_triggers_user_name_key" not in str(e.orig):
+                raise
+            raise ValueError(f"you already have a trigger named '{trigger.name}'") from e
         stale_buffer = was_batched and (not will_be_enabled or parsed.delivery.mode != "batch")
         saved_id = trigger.id
         result = trigger.serialize() | {"warnings": await exposure_warnings(spec)}

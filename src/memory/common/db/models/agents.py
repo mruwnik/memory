@@ -146,6 +146,9 @@ class AgentRun(Base):
         JSONB, nullable=False, default=dict, server_default="{}"
     )
     dedupe_key: Mapped[str | None] = mapped_column(Text)
+    trigger_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("agent_triggers.id", ondelete="SET NULL")
+    )
     api_key_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("api_keys.id", ondelete="SET NULL")
     )
@@ -207,12 +210,26 @@ class AgentRun(Base):
             postgresql_where=text("status = 'pending' AND executor = 'workers'"),
         ),
         Index("agent_runs_worker_user_idx", "worker_user_id"),
+        # Runs without a trigger (cron) still dedupe per definition.
         Index(
             "agent_runs_definition_dedupe_key",
             "definition_id",
             "dedupe_key",
             unique=True,
-            postgresql_where=text("dedupe_key IS NOT NULL"),
+            postgresql_where=text("dedupe_key IS NOT NULL AND trigger_id IS NULL"),
+        ),
+        Index(
+            "agent_runs_trigger_dedupe_key",
+            "trigger_id",
+            "dedupe_key",
+            unique=True,
+            postgresql_where=text("dedupe_key IS NOT NULL AND trigger_id IS NOT NULL"),
+        ),
+        Index(
+            "agent_runs_trigger_created_idx",
+            "trigger_id",
+            "created_at",
+            postgresql_where=text("trigger_id IS NOT NULL"),
         ),
     )
 
@@ -240,6 +257,7 @@ class AgentRun(Base):
             "num_turns": self.num_turns,
             "trigger_kind": self.trigger_kind,
             "trigger_ref": self.trigger_ref,
+            "trigger_id": self.trigger_id,
             "starred": self.starred,
             "provider_key_id": self.provider_key_id,
             "model": self.spec.get("model"),
@@ -251,18 +269,36 @@ class AgentRun(Base):
 
 
 class AgentTrigger(Base):
-    """Starts runs of a definition when something happens (phase 2: ingest filters).
+    """Hands what matches its source (`kind` and `config`) to its handler.
 
     `config` is validated per kind by memory.agents.triggers. `state` holds what
     the trigger machinery records, e.g. why a circuit breaker disabled it.
+    `handler` is {"agent": <definition id>} (then also in definition_id, which
+    cascades its deletion), {"agent": "<code agent slug>"} or {"queue": "<name>"};
+    only definitions fire so far.
     """
 
     __tablename__ = "agent_triggers"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    definition_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("agent_definitions.id", ondelete="CASCADE"), nullable=False
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    definition_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("agent_definitions.id", ondelete="CASCADE")
+    )
+    handler: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    # Shaping; coalesce_mode, order_by and backlog_max aren't applied yet.
+    coalesce_mode: Mapped[str] = mapped_column(
+        Text, nullable=False, default="none", server_default="none"
+    )
+    order_by: Mapped[str] = mapped_column(
+        Text, nullable=False, default="none", server_default="none"
+    )
+    # Unset: AGENT_MAX_RUNS_PER_HOUR.
+    max_per_hour: Mapped[int | None] = mapped_column(Integer)
+    backlog_max: Mapped[int | None] = mapped_column(Integer)
     kind: Mapped[str] = mapped_column(String(20), nullable=False)
     config: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     enabled: Mapped[bool] = mapped_column(
@@ -292,10 +328,28 @@ class AgentTrigger(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
-    definition: Mapped[AgentDefinition] = relationship("AgentDefinition")
+    definition: Mapped[AgentDefinition | None] = relationship("AgentDefinition")
 
     __table_args__ = (
         CheckConstraint("kind IN ('ingest')", name="agent_triggers_kind_check"),
+        UniqueConstraint("user_id", "name", name="agent_triggers_user_name_key"),
+        CheckConstraint(
+            "CASE WHEN definition_id IS NOT NULL "
+            "THEN handler = jsonb_build_object('agent', definition_id) "
+            "ELSE ((jsonb_typeof(handler->'agent') = 'string' AND handler->>'agent' <> '' "
+            "AND handler - 'agent' = '{}'::jsonb) "
+            "OR (jsonb_typeof(handler->'queue') = 'string' AND handler->>'queue' <> '' "
+            "AND handler - 'queue' = '{}'::jsonb)) IS TRUE END",
+            name="agent_triggers_handler_check",
+        ),
+        CheckConstraint(
+            "coalesce_mode IN ('none', 'latest')", name="agent_triggers_coalesce_mode_check"
+        ),
+        CheckConstraint(
+            "order_by IN ('none', 'item', 'thread')", name="agent_triggers_order_by_check"
+        ),
+        CheckConstraint("max_per_hour > 0", name="agent_triggers_max_per_hour_check"),
+        CheckConstraint("backlog_max > 0", name="agent_triggers_backlog_max_check"),
         Index("agent_triggers_definition_idx", "definition_id"),
         Index(
             "agent_triggers_enabled_kind_idx",
@@ -307,7 +361,14 @@ class AgentTrigger(Base):
     def serialize(self) -> dict[str, Any]:
         return {
             "id": self.id,
+            "user_id": self.user_id,
+            "name": self.name,
             "definition_id": self.definition_id,
+            "handler": self.handler,
+            "coalesce_mode": self.coalesce_mode,
+            "order_by": self.order_by,
+            "max_per_hour": self.max_per_hour,
+            "backlog_max": self.backlog_max,
             "kind": self.kind,
             "config": self.config,
             "enabled": self.enabled,

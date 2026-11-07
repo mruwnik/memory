@@ -13,12 +13,19 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.dialects.postgresql import insert
 
 from memory.common import settings
 from memory.common.db.connection import DBSession
-from memory.common.db.models import AgentDefinition, AgentRun, APIKey, LLMProviderKey, LLMSpend
+from memory.common.db.models import (
+    AgentDefinition,
+    AgentRun,
+    AgentTrigger,
+    APIKey,
+    LLMProviderKey,
+    LLMSpend,
+)
 from memory.common.db.models.agents import TERMINAL_STATUSES
 from memory.common.llms.neutral import AgentUsage
 
@@ -229,17 +236,31 @@ def resolve_run_cap(
     return min([per_run, *(p.remaining for p in pools)])
 
 
-def check_run_rate(db: DBSession, definition: AgentDefinition, spec_rate: int | None) -> None:
-    """CapExceeded once a definition has started its hourly allowance of runs."""
-    limit = min(settings.AGENT_MAX_RUNS_PER_HOUR, spec_rate or settings.AGENT_MAX_RUNS_PER_HOUR)
+def check_hourly_rate(
+    db: DBSession, of: ColumnElement[bool], rate: int | None, what: str, knob: str
+) -> None:
+    """CapExceeded once the runs matching `of` have reached `rate` (or the global ceiling) this hour."""
+    limit = min(settings.AGENT_MAX_RUNS_PER_HOUR, rate or settings.AGENT_MAX_RUNS_PER_HOUR)
     since = datetime.now(timezone.utc) - timedelta(hours=1)
     started = (
-        db.query(func.count(AgentRun.id))
-        .filter(AgentRun.definition_id == definition.id, AgentRun.created_at > since)
-        .scalar()
+        db.query(func.count(AgentRun.id)).filter(of, AgentRun.created_at > since).scalar()
     )
     if started >= limit:
         raise CapExceeded(
-            f"definition rate: {started} runs in the last hour, limit {limit} "
-            "(max_runs_per_hour / AGENT_MAX_RUNS_PER_HOUR); try again later or raise it"
+            f"{what} rate: {started} runs in the last hour, limit {limit} "
+            f"({knob} / AGENT_MAX_RUNS_PER_HOUR); try again later or raise it"
         )
+
+
+def check_run_rate(db: DBSession, definition: AgentDefinition, spec_rate: int | None) -> None:
+    """CapExceeded once a definition has started its hourly allowance of runs."""
+    check_hourly_rate(
+        db, AgentRun.definition_id == definition.id, spec_rate, "definition", "max_runs_per_hour"
+    )
+
+
+def check_trigger_rate(db: DBSession, trigger: AgentTrigger) -> None:
+    """CapExceeded once a trigger has started its hourly allowance of runs."""
+    check_hourly_rate(
+        db, AgentRun.trigger_id == trigger.id, trigger.max_per_hour, "trigger", "max_per_hour"
+    )

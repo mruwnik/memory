@@ -42,7 +42,15 @@ def setup(db, user, spec=SPEC, enabled=True, config=CONFIG):
     d = AgentDefinition(user_id=user.id, name="watcher", spec=spec)
     db.add(d)
     db.flush()
-    t = AgentTrigger(definition_id=d.id, kind="ingest", config=config, enabled=enabled)
+    t = AgentTrigger(
+        user_id=user.id,
+        name="t",
+        definition_id=d.id,
+        handler={"agent": d.id},
+        kind="ingest",
+        config=config,
+        enabled=enabled,
+    )
     db.add(t)
     db.commit()
     return t
@@ -100,7 +108,7 @@ def test_a_fire_starts_one_run_with_the_rendered_input(
     run = db_session.get(AgentRun, run_id)
     assert run is not None
     assert redelivered == run_id
-    assert (run.trigger_kind, run.trigger_ref, run.definition_id) == (
+    assert (run.trigger_kind, run.trigger_ref, run.definition_id, run.trigger_id) == (
         "ingest",
         {
             "trigger_id": trigger.id,
@@ -108,6 +116,7 @@ def test_a_fire_starts_one_run_with_the_rendered_input(
             "changes": {str(a.id): ["new"], str(b.id): ["new"]},
         },
         trigger.definition_id,
+        trigger.id,
     )
     assert run.input == "New:\n" + "\n".join(rendered(p) for p in (a, b))
     no_celery_dispatch.assert_called_once_with(RUN_AGENT, args=[run.id], task_id=run.id)

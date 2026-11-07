@@ -20,6 +20,18 @@ def definition(db, user, spec=SPEC):
     return d
 
 
+def trigger(d, name="t", **fields):
+    return AgentTrigger(
+        user_id=d.user_id,
+        name=name,
+        definition_id=d.id,
+        handler={"agent": d.id},
+        kind="ingest",
+        config=CONFIG,
+        **fields,
+    )
+
+
 @pytest.mark.asyncio
 async def test_triggers_are_created_listed_updated_and_deleted(
     db_session, regular_user, user_session, fake_providers
@@ -53,6 +65,64 @@ async def test_triggers_are_created_listed_updated_and_deleted(
 
 
 @pytest.mark.asyncio
+async def test_triggers_belong_to_their_creator_and_are_named(
+    db_session, regular_user, user_session, fake_providers
+):
+    d = definition(db_session, regular_user)
+
+    with mcp_auth_context(user_session.token):
+        unnamed = await agent.trigger_upsert.fn(definition_id=d.id, config=CONFIG)
+        named = await agent.trigger_upsert.fn(
+            definition_id=d.id, config=CONFIG, name="inbox", max_per_hour=5
+        )
+        kept = await agent.trigger_upsert.fn(definition_id=d.id, trigger_id=named["id"])
+
+    assert (unnamed["user_id"], unnamed["name"], unnamed["handler"]) == (
+        regular_user.id,
+        f"trigger-{unnamed['id']}",
+        {"agent": d.id},
+    )
+    assert (kept["name"], kept["max_per_hour"]) == ("inbox", 5)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fields,expected",
+    [
+        ({"name": "taken"}, "you already have a trigger named 'taken'"),
+        ({"name": " "}, "name must not be empty"),
+        ({"max_per_hour": 0}, "max_per_hour must be at least 1"),
+        ({"name": "trigger-12"}, "reserved for default names"),
+    ],
+)
+async def test_bad_names_and_limits_are_refused(
+    db_session, regular_user, user_session, fake_providers, fields, expected
+):
+    d = definition(db_session, regular_user)
+    db_session.add(trigger(d, "taken"))
+    db_session.commit()
+
+    with mcp_auth_context(user_session.token):
+        with pytest.raises(ValueError, match=expected):
+            await agent.trigger_upsert.fn(definition_id=d.id, config=CONFIG, **fields)
+
+
+@pytest.mark.asyncio
+async def test_a_name_taken_concurrently_is_refused_by_the_database(
+    db_session, regular_user, user_session, fake_providers, monkeypatch
+):
+    d = definition(db_session, regular_user)
+    db_session.add(trigger(d, "taken"))
+    db_session.commit()
+    # As if the other trigger was committed after this call's own check.
+    monkeypatch.setattr(agent, "trigger_name", lambda db, user_id, name, trigger_id: name)
+
+    with mcp_auth_context(user_session.token):
+        with pytest.raises(ValueError, match="you already have a trigger named 'taken'"):
+            await agent.trigger_upsert.fn(definition_id=d.id, config=CONFIG, name="taken")
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "config,expected",
     [
@@ -80,13 +150,7 @@ async def test_re_enabling_clears_a_tripped_breaker(
     db_session, regular_user, user_session, fake_providers
 ):
     d = definition(db_session, regular_user)
-    t = AgentTrigger(
-        definition_id=d.id,
-        kind="ingest",
-        config=CONFIG,
-        enabled=False,
-        state={"tripped": {"reason": "rate", "at": "now"}},
-    )
+    t = trigger(d, enabled=False, state={"tripped": {"reason": "rate", "at": "now"}})
     db_session.add(t)
     db_session.commit()
 
@@ -144,16 +208,13 @@ async def test_a_key_cannot_edit_a_trigger_bound_to_another_credential(
     db_session.add_all([key, other])
     db_session.commit()
     api_key_id, via_api_key = {"session": (None, False), "other key": (other.id, True)}[bound_to]
-    trigger = AgentTrigger(
-        definition_id=d.id, kind="ingest", config=CONFIG, enabled=False,
-        api_key_id=api_key_id, via_api_key=via_api_key,
-    )
-    db_session.add(trigger)
+    bound = trigger(d, enabled=False, api_key_id=api_key_id, via_api_key=via_api_key)
+    db_session.add(bound)
     db_session.commit()
 
     with mcp_auth_context(key.key, scopes=["agents"]):
         with pytest.raises(ValueError, match="bound to another credential"):
-            await agent.trigger_upsert.fn(definition_id=d.id, trigger_id=trigger.id, config=CONFIG)
+            await agent.trigger_upsert.fn(definition_id=d.id, trigger_id=bound.id, config=CONFIG)
 
 
 @pytest.mark.asyncio
@@ -161,7 +222,7 @@ async def test_other_users_triggers_are_unknown(
     db_session, admin_user, regular_user, user_session, fake_providers
 ):
     theirs = definition(db_session, admin_user)
-    t = AgentTrigger(definition_id=theirs.id, kind="ingest", config=CONFIG)
+    t = trigger(theirs)
     mine = definition(db_session, regular_user)
     db_session.add(t)
     db_session.commit()
@@ -184,14 +245,8 @@ async def test_list_all_summarises_triggers(
     d = definition(db_session, regular_user)
     db_session.add_all(
         [
-            AgentTrigger(definition_id=d.id, kind="ingest", config=CONFIG),
-            AgentTrigger(
-                definition_id=d.id,
-                kind="ingest",
-                config=CONFIG,
-                enabled=False,
-                state={"tripped": {"reason": "rate", "at": "now"}},
-            ),
+            trigger(d, "a"),
+            trigger(d, "b", enabled=False, state={"tripped": {"reason": "rate", "at": "now"}}),
         ]
     )
     db_session.commit()
@@ -291,13 +346,7 @@ async def test_re_enabling_moves_active_since_forward(
     db_session, regular_user, user_session, fake_providers, dropped
 ):
     d = definition(db_session, regular_user)
-    t = AgentTrigger(
-        definition_id=d.id,
-        kind="ingest",
-        config=CONFIG,
-        enabled=False,
-        active_since=datetime(2026, 1, 1, tzinfo=timezone.utc),
-    )
+    t = trigger(d, enabled=False, active_since=datetime(2026, 1, 1, tzinfo=timezone.utc))
     db_session.add(t)
     db_session.commit()
 

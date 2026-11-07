@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from memory.agents.caps import (
     CapExceeded,
     check_run_rate,
+    check_trigger_rate,
     children_cost,
     resolve_run_cap,
 )
@@ -32,6 +33,7 @@ from memory.common.db.connection import DBSession
 from memory.common.db.models import (
     AgentDefinition,
     AgentRun,
+    AgentTrigger,
     APIKey,
     ExternalMCPServer,
     LLMProviderKey,
@@ -59,7 +61,9 @@ class SpecInvalid(ValueError):
 class TriggerInfo:
     kind: str  # manual | mcp | cron | ingest | relative | webhook | discord | chain
     ref: dict[str, Any] = field(default_factory=dict)
+    # Unique per trigger when trigger_id is set, else per definition.
     dedupe_key: str | None = None
+    trigger_id: int | None = None
 
 
 def server_errors(db: DBSession, user_id: int, spec: AgentSpec) -> list[str]:
@@ -198,9 +202,10 @@ def enqueue_run(
 
     Tool visibility is not checked here (it needs the owner's MCP identity):
     interactive callers check it up front and the runner re-checks at start.
-    Runs of a definition hold its row lock until the new run is committed,
-    so dedupe and the rate cap don't race; the unique partial index on
-    (definition_id, dedupe_key) remains the backstop.
+    Runs of a trigger or definition hold their row locks until the new run is
+    committed, so dedupe and the rate caps don't race; the unique partial
+    indexes on (trigger_id, dedupe_key) and (definition_id, dedupe_key) remain
+    the backstop.
 
     A `parent` run's child gets at most its scopes and tools, one more level of
     depth, and a cap no larger than what the parent has left (half of it, unless the
@@ -221,23 +226,24 @@ def enqueue_run(
         problems += child_problems(parent, spec)
     if problems or (provider_key is None and uses_server(spec)):
         raise SpecInvalid(problems)
+    # Serialise a trigger's and a definition's enqueues until this run is committed,
+    # so concurrent starts can't all pass the rate checks or the dedupe lookup. The
+    # trigger goes first, as in fire_trigger.
+    subscription = (
+        None
+        if trigger.trigger_id is None
+        else db.get(AgentTrigger, trigger.trigger_id, with_for_update=True)
+    )
+    if trigger.trigger_id is not None and subscription is None:
+        raise ValueError(f"unknown trigger {trigger.trigger_id}")
     if definition is not None:
-        # Serialises a definition's enqueues until this run is committed, so
-        # concurrent starts can't all pass the rate check or the dedupe lookup.
         db.query(AgentDefinition).filter(
             AgentDefinition.id == definition.id
         ).with_for_update().one()
-    if definition is not None and trigger.dedupe_key is not None:
-        existing = (
-            db.query(AgentRun)
-            .filter(
-                AgentRun.definition_id == definition.id,
-                AgentRun.dedupe_key == trigger.dedupe_key,
-            )
-            .one_or_none()
-        )
-        if existing is not None:
-            return existing
+    if (existing := duplicate(db, trigger, definition)) is not None:
+        return existing
+    if subscription is not None:
+        check_trigger_rate(db, subscription)
     if definition is not None:
         check_run_rate(db, definition, spec.max_runs_per_hour)
     if provider_key is None or not starts_on_server(spec):
@@ -255,6 +261,7 @@ def enqueue_run(
         trigger_kind=trigger.kind,
         trigger_ref=trigger.ref,
         dedupe_key=trigger.dedupe_key,
+        trigger_id=trigger.trigger_id,
         api_key_id=api_key.id if api_key else None,
         provider_key_id=provider_key.id if provider_key else None,
         scopes=scopes,
@@ -267,6 +274,23 @@ def enqueue_run(
     if run.executor == EXECUTOR_SERVER:
         dispatch(run.id)
     return run
+
+
+def duplicate(
+    db: DBSession, trigger: TriggerInfo, definition: AgentDefinition | None
+) -> AgentRun | None:
+    """The run already started under `trigger`'s dedupe key, if any."""
+    if trigger.dedupe_key is None:
+        return None
+    if trigger.trigger_id is not None:
+        scope = AgentRun.trigger_id == trigger.trigger_id
+    elif definition is not None:
+        scope = (AgentRun.definition_id == definition.id) & AgentRun.trigger_id.is_(None)
+    else:
+        return None
+    return (
+        db.query(AgentRun).filter(scope, AgentRun.dedupe_key == trigger.dedupe_key).one_or_none()
+    )
 
 
 def dispatch(run_id: str) -> None:

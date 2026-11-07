@@ -1008,7 +1008,10 @@ def test_owner_trigger_fires_for_synced_meeting_before_any_reconcile(
     db.add_all([account, definition])
     db.flush()
     trigger = AgentTrigger(
+        user_id=definition.user_id,
+        name="t",
         definition_id=definition.id,
+        handler={"agent": definition.id},
         kind="ingest",
         enabled=True,
         config=IngestConfig.model_validate(

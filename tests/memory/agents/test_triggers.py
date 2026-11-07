@@ -1,3 +1,4 @@
+import itertools
 import threading
 import time
 from datetime import timedelta
@@ -7,6 +8,7 @@ from typing import Any
 import fakeredis
 import pytest
 from pydantic import ValidationError
+from sqlalchemy.exc import IntegrityError
 
 from memory.agents import triggers
 from memory.agents.triggers import (
@@ -43,6 +45,7 @@ from memory.common.content_processing import process_content_item
 from tests.conftest import unique_sha256
 
 SPEC = {"system_prompt": "x", "model": "anthropic/m", "reasoning": "high"}
+TRIGGER_NAMES = (f"t{i}" for i in itertools.count())
 
 
 @pytest.fixture
@@ -303,7 +306,10 @@ def make_definition(db, user):
 
 def make_trigger(db, definition, enabled=True, **config):
     t = AgentTrigger(
+        user_id=definition.user_id,
+        name=next(TRIGGER_NAMES),
         definition_id=definition.id,
+        handler={"agent": definition.id},
         kind="ingest",
         enabled=enabled,
         config=IngestConfig.model_validate(
@@ -347,6 +353,60 @@ def test_per_item_triggers_fire_at_once(
         FIRE_TRIGGER,
         args=[on.id, [Delivery(post.id, content_version(post).hex(), False, ("new",)).encode()]],
     )
+
+
+@pytest.mark.parametrize("handler", [{"queue": "inbox"}, {"agent": "fact-check"}])
+def test_triggers_without_a_definition_are_not_matched_yet(
+    db_session, admin_user, client, no_celery_dispatch, handler
+):
+    db_session.add(
+        AgentTrigger(
+            user_id=admin_user.id,
+            name="q",
+            handler=handler,
+            kind="ingest",
+            config=IngestConfig.model_validate({"filter": {"tags_any": ["ai"]}}).model_dump(),
+        )
+    )
+    db_session.commit()
+    post = blog_post(db_session)
+
+    triggers.queue_trigger_match(post.id)
+
+    assert triggers.match_ingest_triggers(post.id, client) == []
+    no_celery_dispatch.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "with_definition,handler",
+    [
+        (True, {"agent": 999}),
+        (True, {"queue": "inbox"}),
+        (False, {"agent": 1}),
+        (False, {}),
+        (False, {"agent": "x", "queue": "y"}),
+        (False, {"agent": ""}),
+        (False, {"queue": ""}),
+        (False, {"queue": "inbox", "extra": 1}),
+    ],
+)
+def test_a_triggers_handler_must_agree_with_its_definition(
+    db_session, admin_user, with_definition, handler
+):
+    d = make_definition(db_session, admin_user)
+    db_session.add(
+        AgentTrigger(
+            user_id=admin_user.id,
+            name="t",
+            definition_id=d.id if with_definition else None,
+            handler=handler,
+            kind="ingest",
+            config={},
+        )
+    )
+
+    with pytest.raises(IntegrityError, match="agent_triggers_handler_check"):
+        db_session.commit()
 
 
 def test_items_the_owner_cannot_read_never_match(

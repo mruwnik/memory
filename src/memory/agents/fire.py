@@ -29,7 +29,7 @@ def trip(db: DBSession, trigger_id: int, owner: User, reason: str) -> bool:
     returns whether this call did.
     """
     trigger = db.get(AgentTrigger, trigger_id, with_for_update=True, populate_existing=True)
-    if trigger is None or not trigger.enabled:
+    if trigger is None or trigger.definition is None or not trigger.enabled:
         db.commit()
         return False
     trigger.enabled = False
@@ -66,8 +66,8 @@ def fire_trigger(trigger_id: int, deliveries: list[str]) -> str | None:
         if trigger is None or not trigger.enabled or trigger.kind != INGEST:
             return None
         definition = trigger.definition
-        owner = db.get(User, definition.user_id)
-        if owner is None:
+        owner = db.get(User, trigger.user_id)
+        if definition is None or owner is None:
             return None
         config = IngestConfig.model_validate(trigger.config)
         try:
@@ -91,6 +91,7 @@ def fire_trigger(trigger_id: int, deliveries: list[str]) -> str | None:
                         "changes": changes,
                     },
                     dedupe_key=dedupe_key(trigger.id, delivered),
+                    trigger_id=trigger.id,
                 ),
                 definition=definition,
                 api_key=key,

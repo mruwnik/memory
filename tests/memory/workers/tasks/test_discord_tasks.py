@@ -264,7 +264,10 @@ def test_an_edited_message_refires_an_on_edit_trigger(
     db_session.add(definition)
     db_session.flush()
     trigger = AgentTrigger(
+        user_id=definition.user_id,
+        name="t",
         definition_id=definition.id,
+        handler={"agent": definition.id},
         kind="ingest",
         config=triggers.IngestConfig.model_validate(
             {"filter": {"source_types": ["discord_message"]}, "on_edit": True}
