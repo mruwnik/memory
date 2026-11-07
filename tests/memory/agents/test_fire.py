@@ -23,6 +23,7 @@ from memory.common.db.models.sources import (
     team_members,
 )
 from tests.conftest import route_item, unique_sha256
+from tests.memory.agents.test_triggers import posted_run, slack_message
 
 SPEC = {"system_prompt": "x", "model": "anthropic/m", "reasoning": "high"}
 CONFIG = {
@@ -351,3 +352,24 @@ def test_a_batch_runs_over_only_the_items_still_readable_when_it_fires(
         (m.item_id, m.status, m.run_id)
         for m in db_session.query(AgentTriggerMatch).order_by(AgentTriggerMatch.item_id)
     ] == [(readable.id, "done", run.id), (moved.id, "skipped:inaccessible", None)]
+
+
+def test_a_fire_skips_what_the_trigger_reported_posting_after_it_was_routed(
+    db_session, admin_user, fake_providers, admin_keys
+):
+    """A worker's reply can be stored and routed before its report says it posted it."""
+    trigger = setup(db_session, admin_user)
+    reply = slack_message(db_session, admin_user, "U_OTHER")
+    other = post(db_session)
+    deliveries = claimed(db_session, trigger, reply, other)
+    posted_run(db_session, trigger, [{"source": "slack", "external_id": "C1:1.0"}])
+
+    run = db_session.get(AgentRun, fire_trigger(trigger.id, deliveries))
+
+    db_session.expire_all()
+    assert run is not None
+    assert run.trigger_ref["item_ids"] == [other.id]
+    assert {m.item_id: m.status for m in db_session.query(AgentTriggerMatch)} == {
+        reply.id: "skipped:posted",
+        other.id: "done",
+    }

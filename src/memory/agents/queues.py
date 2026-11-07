@@ -13,7 +13,7 @@ what a wider one could deliver.
 import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Any
+from typing import Any, Collection
 
 from pydantic import ValidationError
 from sqlalchemy import exists, func, or_, select, tuple_
@@ -31,6 +31,7 @@ from memory.agents.triggers import (
     LIVE_INGEST,
     PENDING,
     SKIPPED_INACCESSIBLE,
+    SKIPPED_POSTED,
     THROTTLED,
     Batch,
     IngestConfig,
@@ -42,6 +43,7 @@ from memory.agents.triggers import (
     due_batches,
     episode_over,
     lock_trigger,
+    posted_among,
     trigger_key,
 )
 from memory.common import settings
@@ -61,6 +63,9 @@ from memory.common.scopes import SCOPE_ADMIN, SCOPE_READ
 logger = logging.getLogger(__name__)
 
 CLAIM_SCAN = 200
+# Workers poll about every second, so a claim that fails waits this long before
+# its next attempt, or a passing error would use up every attempt at once.
+CLAIM_RETRY = timedelta(minutes=1)
 
 
 def can_read(owner: User, key: APIKey | None) -> bool:
@@ -82,6 +87,13 @@ def subscription_key(db: DBSession, trigger: AgentTrigger, owner: User) -> APIKe
     return standing_key(db, owner, trigger.api_key_id, SCOPE_READ)
 
 
+def unposted(db: DBSession, trigger: AgentTrigger, item_ids: Collection[int]) -> set[int]:
+    """The `item_ids` none of the trigger's runs reported posting: a worker's reply can
+    be stored and routed before its report says it posted it."""
+    items = db.query(SourceItem).filter(SourceItem.id.in_(item_ids)).all()
+    return set(item_ids) - posted_among(db, trigger.id, items)
+
+
 def rendered(
     db: DBSession, template: str, item_ids: list[int], changes: dict[str, list[str]]
 ) -> str:
@@ -97,9 +109,10 @@ def fail(run: AgentRun, error: str) -> None:
 
 def rerender(db: DBSession, run: AgentRun, owner: User, claimer: APIKey | None) -> bool | None:
     """Render, uncommitted, a delivery run (is_delivery) about to be claimed, from the
-    items as they are now. Deliveries of items its trigger can no longer read are
-    skipped; with none left, or the trigger gone, broken or revoked, the run fails
-    (False). None, changing nothing, if `claimer` can't read one of the rest."""
+    items as they are now. Deliveries of items its trigger can no longer read, or
+    reported posting, are skipped; with none left, or the trigger gone, broken or
+    revoked, the run fails (False). None, changing nothing, if `claimer` can't read
+    one of the rest."""
     trigger = db.get(AgentTrigger, run.trigger_id) if run.trigger_id is not None else None
     if trigger is None:
         fail(run, "its trigger was deleted")
@@ -114,7 +127,8 @@ def rerender(db: DBSession, run: AgentRun, owner: User, claimer: APIKey | None) 
         trigger_can = set(accessible_ids(db, owner, key, run.trigger_ref["item_ids"]))
     except PrincipalRevoked:
         trigger_can = set()
-    kept = [i for i in run.trigger_ref["item_ids"] if i in trigger_can]
+    fresh = unposted(db, trigger, trigger_can)
+    kept = [i for i in run.trigger_ref["item_ids"] if i in fresh]
     if kept and set(accessible_ids(db, owner, claimer, kept)) != set(kept):
         return None
     gone = db.scalars(
@@ -123,7 +137,7 @@ def rerender(db: DBSession, run: AgentRun, owner: User, claimer: APIKey | None) 
         )
     )
     for d in gone:
-        d.status = SKIPPED_INACCESSIBLE
+        d.status = SKIPPED_POSTED if d.item_id in trigger_can else SKIPPED_INACCESSIBLE
     if not kept:
         fail(run, "its trigger can't read anything it was started for now")
         return False
@@ -256,15 +270,19 @@ def delivery_run(
     group: list[AgentTriggerMatch],
 ) -> AgentRun | None:
     """The run, uncommitted, for the deliveries in `group` that the trigger and the
-    claimer can read, which are marked done. Those the trigger can't read are
-    skipped; those only the claimer can't stay pending. None if no run is left."""
+    claimer can read, which are marked done. Those the trigger can't read, or
+    reported posting, are skipped; those only the claimer can't stay pending. None
+    if no run is left."""
     item_ids = [d.item_id for d in group]
     trigger_can = set(accessible_ids(db, owner, subscription_key(db, trigger, owner), item_ids))
+    fresh = unposted(db, trigger, trigger_can)
     claimer_can = set(accessible_ids(db, owner, claimer, item_ids))
     for d in group:
         if d.item_id not in trigger_can:
             d.status = SKIPPED_INACCESSIBLE
-    taken = [d for d in group if d.item_id in trigger_can & claimer_can]
+        elif d.item_id not in fresh:
+            d.status = SKIPPED_POSTED
+    taken = [d for d in group if d.item_id in fresh & claimer_can]
     if not taken:
         return None
     taken_ids = sorted(d.item_id for d in taken)
@@ -302,7 +320,8 @@ def take_from_queue(
 
     A trigger whose deliveries can't be claimed now (deferred by a cap, tripped, or
     failing) is passed over for the rest of the claim. A failure counts against its
-    deliveries, which fail after EVENT_MAX_ATTEMPTS, so none can block the queue.
+    deliveries, which wait CLAIM_RETRY and fail after EVENT_MAX_ATTEMPTS, so none can
+    block the queue.
     """
     if (run := lapsed_run(db, owner, queue, claimer)) is not None:
         return run
@@ -363,7 +382,7 @@ def take_from_queue(
                 logger.exception("could not claim deliveries of trigger %s", trigger_id)
                 refs = [delivery_ref(d.item_id, d.content_hash) for d in group]
                 db.rollback()
-                count_failure(db, trigger_id, refs, e)
+                count_failure(db, trigger_id, refs, e, retry_after=CLAIM_RETRY)
             passed.add(trigger_id)
 
 

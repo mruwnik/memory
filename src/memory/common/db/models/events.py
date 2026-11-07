@@ -49,6 +49,8 @@ class Event(Base):
     item_id: Mapped[int | None] = mapped_column(BigInteger)
     # The ingester's Change tags; NULL when it didn't say what changed.
     changes: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    # Who made each change, where the ingester knows: {change: [author ids or logins]}.
+    actors: Mapped[dict[str, list[str]] | None] = mapped_column(JSONB)
     backfill: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     # Failed routing attempts; after settings.EVENT_MAX_ATTEMPTS the event is
     # routed anyway, with the last error's type.
@@ -179,10 +181,14 @@ def caused_by_event(event_id: int | None) -> Iterator[None]:
 
 
 def item_event(
-    session: Session, item: SourceItem, changes: list[str] | None, backfill: bool = False
+    session: Session,
+    item: SourceItem,
+    changes: list[str] | None,
+    backfill: bool = False,
+    actors: dict[str, list[str]] | None = None,
 ) -> Event:
-    """The event for storing `item`, which reported `changes`; `backfill` when a
-    history import stored it."""
+    """The event for storing `item`, which reported `changes` (made by `actors`);
+    `backfill` when a history import stored it."""
     inserted = session.info.get(INSERTED_ITEMS_KEY, set())
     action = ADDED if item.id in inserted else CHANGED
     return Event(
@@ -192,6 +198,7 @@ def item_event(
         changes=changes,
         backfill=backfill,
         caused_by=CAUSING_EVENT.get(),
+        actors=actors or None,
     )
 
 

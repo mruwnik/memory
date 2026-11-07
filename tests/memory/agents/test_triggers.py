@@ -14,14 +14,18 @@ from memory.agents.triggers import (
     IngestConfig,
     IngestFilter,
     ItemFacts,
+    Me,
+    changes_caused,
     content_version,
     item_facts,
     matches,
+    posted_ref,
     regex_search,
 )
 from memory.common.celery_app import FIRE_TRIGGER
 from memory.common.db.models import (
     AgentDefinition,
+    AgentRun,
     AgentTrigger,
     AgentTriggerMatch,
     BeeperMessage,
@@ -34,6 +38,9 @@ from memory.common.db.models import (
     GithubIssue,
     GithubPR,
     GithubPRData,
+    HumanUser,
+    MailMessage,
+    Person,
     SlackChannel,
     SlackMessage,
     SlackWorkspace,
@@ -51,7 +58,8 @@ def facts(**overrides):
         source_type="blog_post",
         tags=frozenset({"ai"}),
         channel_id=None,
-        authors=frozenset({"alice"}),
+        authors=frozenset({"alice", "u1"}),
+        author_ids=frozenset({"u1"}),
         text="A post about Agent Runs",
     )
     return ItemFacts(**(base | overrides))
@@ -62,6 +70,10 @@ def facts(**overrides):
     [
         ({"filter": {}}, "set at least one of"),
         ({"filter": {"exclude_channel_ids": ["C1"]}}, "set at least one of"),
+        (
+            {"filter": {"known_people_only": True, "exclude_own": False, "exclude_changed_by": ["x"]}},
+            "set at least one of",
+        ),
         ({"filter": {"source_types": ["nope"]}}, "unknown source types"),
         ({"filter": {"regex": "("}}, "regex does not compile"),
         ({"filter": {"regex": "a" * 501}}, "at most 500"),
@@ -112,18 +124,155 @@ def test_on_changes_can_name_what_syncs_report(change):
         ({"repos": ["equistamp/other"]}, False),
         ({"mentions_me": True}, True),
         ({"tags_any": ["ai"], "mentions_me": True, "repos": ["x/y"]}, False),
+        ({"authors_any": ["U1", "bob"]}, True),
+        # A name isn't an identity: anyone can take one.
+        ({"authors_any": ["alice"]}, False),
+        ({"dms_to_me": True}, False),
     ],
 )
 def test_matches_every_set_criterion(f, expected):
     item = facts(repo="equistamp/memory", mentions=frozenset({"200", "u_other"}))
-    assert matches(IngestFilter.model_validate(f), item, mine=frozenset({"200"})) is expected
+    assert matches(IngestFilter.model_validate(f), item, Me(bots=frozenset({"200"}))) is expected
 
 
 @pytest.mark.parametrize("mine", [frozenset(), frozenset({"u_bot"})])
 def test_mentions_me_needs_a_mention_of_one_of_mine(mine):
     f = IngestFilter.model_validate({"mentions_me": True})
 
-    assert matches(f, facts(mentions=frozenset({"200"})), mine=mine) is False
+    assert matches(f, facts(mentions=frozenset({"200"})), Me(bots=mine)) is False
+
+
+@pytest.mark.parametrize(
+    "direct,collector,expected",
+    [
+        (True, "slack_app:1", True),
+        (True, "slack_app:2", False),
+        (True, None, False),
+        (False, "slack_app:1", False),
+    ],
+)
+def test_dms_to_me_are_direct_messages_that_reached_me(direct, collector, expected):
+    f = IngestFilter.model_validate({"dms_to_me": True})
+    me = Me(collectors=frozenset({"slack_app:1"}))
+
+    assert matches(f, facts(direct=direct, collector=collector), me) is expected
+
+
+@pytest.mark.parametrize(
+    "item,direct,collector",
+    [
+        (
+            SlackMessage(
+                type="slack_message",
+                channel_id="D1",
+                slack_app_id=3,
+                channel=SlackChannel(id="D1", name="bob", channel_type="dm"),
+            ),
+            True,
+            "slack_app:3",
+        ),
+        (
+            SlackMessage(
+                type="slack_message",
+                channel_id="C1",
+                slack_app_id=3,
+                channel=SlackChannel(id="C1", name="general", channel_type="channel"),
+            ),
+            False,
+            "slack_app:3",
+        ),
+        (
+            DiscordMessage(
+                type="discord_message",
+                channel_id=10,
+                author_id=1,
+                channel=DiscordChannel(
+                    id=10, name="bob", channel_type="dm", bot=DiscordBot(application_id=700)
+                ),
+            ),
+            True,
+            "discord_bot:700",
+        ),
+        (
+            DiscordMessage(
+                type="discord_message",
+                channel_id=10,
+                author_id=1,
+                bot=DiscordBot(application_id=800),
+                channel=DiscordChannel(
+                    id=10, name="bob", channel_type="dm", bot=DiscordBot(application_id=700)
+                ),
+            ),
+            True,
+            "discord_bot:800",
+        ),
+        (BlogPost(type="blog_post"), False, None),
+    ],
+)
+def test_message_facts_say_whether_they_are_direct_and_what_collected_them(item, direct, collector):
+    got = item_facts(item, with_direct=True)
+
+    assert (got.direct, got.collector) == (direct, collector)
+
+
+@pytest.mark.parametrize(
+    "f,changes,actors,expected",
+    [
+        ({}, ["review"], {}, ["review"]),
+        ({"exclude_changed_by": ["Worker"]}, ["review"], {"review": ["worker"]}, []),
+        (
+            {"exclude_changed_by": ["worker"]},
+            ["commits", "review"],
+            {"review": ["worker"]},
+            ["commits"],
+        ),
+        (
+            {"exclude_changed_by": ["worker"]},
+            ["review"],
+            {"review": ["worker", "bob"]},
+            ["review"],
+        ),
+        # A new item or an edit nobody is named for was made by its author.
+        ({"exclude_changed_by": ["u1"]}, ["new"], {}, []),
+        ({"exclude_changed_by": ["u1"]}, ["edited"], {}, []),
+        ({"exclude_changed_by": ["u1"]}, ["state"], {}, ["state"]),
+        ({"changed_by_any": ["bob"]}, ["review", "comments"], {"review": ["bob"]}, ["review"]),
+        ({"changed_by_any": ["U1"]}, ["new"], {}, ["new"]),
+        ({"changed_by_any": ["alice"]}, ["new"], {}, []),
+        # Nobody is known to have made it, so it wasn't one of them.
+        ({"changed_by_any": ["u1"]}, ["state"], {}, []),
+    ],
+)
+def test_changes_are_kept_by_who_caused_them(f, changes, actors, expected):
+    got = changes_caused(
+        IngestFilter.model_validate({"tags_any": ["ai"]} | f), changes, actors, facts().author_ids
+    )
+
+    assert got == expected
+
+
+@pytest.mark.parametrize(
+    "item,author_ids",
+    [
+        (
+            DiscordMessage(
+                type="discord_message",
+                channel_id=1,
+                author_id=100,
+                author=DiscordUser(id=100, username="alice"),
+            ),
+            {"100"},
+        ),
+        (SlackMessage(type="slack_message", channel_id="C1", author_id="U1", author_name="Bob"), {"u1"}),
+        (BeeperMessage(type="beeper_message", chat_id=5, sender_id="@a:b", sender_name="A"), {"@a:b"}),
+        (GithubPR(kind="pr", repo_path="o/r", author="Al"), {"al"}),
+        # Anyone can write any From header.
+        (MailMessage(sender="Al <al@example.com>"), set()),
+        (BlogPost(type="blog_post", author="Al"), set()),
+    ],
+)
+def test_only_ids_a_platform_vouches_for_identify_an_author(item, author_ids):
+    assert item_facts(item).author_ids == frozenset(author_ids)
 
 
 @pytest.mark.parametrize(
@@ -505,12 +654,21 @@ def slack_message(db, owner, author_id):
 
 
 @pytest.mark.parametrize(
-    "author_id,fires", [("U_OTHER", True), ("U_OWNER", False), ("U_BOT", False)]
+    "exclude_own,author_id,fires",
+    [
+        (None, "U_OTHER", True),
+        (None, "U_OWNER", False),
+        (None, "U_BOT", False),
+        (True, "U_OWNER", False),
+        (False, "U_OWNER", True),
+        (False, "U_BOT", False),
+    ],
 )
-def test_the_owners_slack_integration_and_bot_users_never_trigger(
-    db_session, admin_user, no_celery_dispatch, author_id, fires
+def test_the_owners_slack_user_triggers_only_without_exclude_own_and_bot_users_never(
+    db_session, admin_user, no_celery_dispatch, exclude_own, author_id, fires
 ):
-    make_trigger(db_session, make_definition(db_session, admin_user))
+    f = {"tags_any": ["ai"]} | ({} if exclude_own is None else {"exclude_own": exclude_own})
+    make_trigger(db_session, make_definition(db_session, admin_user), filter=f)
     message = slack_message(db_session, admin_user, author_id)
 
     assert bool(route_item(db_session, message.id)) is fires
@@ -778,3 +936,292 @@ def test_items_older_than_claim_retention_never_match(
     )
 
     assert route_item(db_session, old.id) == []
+
+
+def queue_trigger(db, owner, **filter_fields):
+    t = AgentTrigger(
+        user_id=owner.id,
+        name=next(TRIGGER_NAMES),
+        handler={"queue": "inbox"},
+        kind="ingest",
+        config=IngestConfig.model_validate(
+            {"filter": {"tags_any": ["ai"]} | filter_fields}
+        ).model_dump(mode="json"),
+    )
+    db.add(t)
+    db.commit()
+    return t
+
+
+@pytest.mark.parametrize("queue_filter,queue_sees_it", [({}, True), ({"exclude_own": True}, False)])
+def test_only_queue_handlers_see_their_owners_own_slack_messages_by_default(
+    db_session, admin_user, no_celery_dispatch, queue_filter, queue_sees_it
+):
+    """For a bot its owner talks to, the owner's messages are the input."""
+    agent_handled = make_trigger(db_session, make_definition(db_session, admin_user))
+    queued = queue_trigger(db_session, admin_user, **queue_filter)
+    message = slack_message(db_session, admin_user, "U_OWNER")
+
+    matched = route_item(db_session, message.id)
+
+    assert (queued.id in matched, agent_handled.id in matched) == (queue_sees_it, False)
+
+
+@pytest.fixture
+def stranger(db_session):
+    """A non-admin who isn't the trigger's owner."""
+    user = HumanUser(name="S", email="s@example.com", password_hash="x", scopes=["read"])
+    db_session.add(user)
+    db_session.commit()
+    return user
+
+
+def known_people_trigger(db, owner):
+    owner.scopes = ["read"]
+    db.commit()
+    return make_trigger(
+        db, make_definition(db, owner), filter={"tags_any": ["ai"], "known_people_only": True}
+    )
+
+
+def message_by_person(db, owner, **person):
+    """A Discord message the owner can read, by an author linked to a new Person."""
+    message = discord_message(db, 100)
+    message.creator_id = owner.id
+    alice = Person(identifier="alice", display_name="Alice", **person)
+    db.add(alice)
+    db.flush()
+    db.get(DiscordUser, 100).person_id = alice.id
+    db.commit()
+    return message
+
+
+@pytest.mark.parametrize(
+    "made_by,fires", [("regular_user", True), ("admin_user", True), ("stranger", False)]
+)
+def test_known_people_only_trusts_persons_the_owner_or_an_admin_recorded(
+    request, db_session, regular_user, no_celery_dispatch, made_by, fires
+):
+    """A non-admin could record a Person under anyone's account."""
+    known_people_trigger(db_session, regular_user)
+    maker = request.getfixturevalue(made_by)
+    message = message_by_person(db_session, regular_user, creator_id=maker.id)
+
+    assert bool(route_item(db_session, message.id)) is fires
+
+
+def test_persons_ingest_made_vouch_for_nobody(db_session, regular_user, no_celery_dispatch):
+    """Ingest makes a Person for everyone it sees."""
+    known_people_trigger(db_session, regular_user)
+    message = message_by_person(db_session, regular_user)
+
+    assert route_item(db_session, message.id) == []
+
+
+def test_persons_linked_to_a_user_are_known(
+    db_session, regular_user, stranger, no_celery_dispatch
+):
+    trigger = known_people_trigger(db_session, regular_user)
+    message = message_by_person(db_session, regular_user, user_id=stranger.id)
+
+    assert route_item(db_session, message.id) == [trigger.id]
+
+
+@pytest.mark.parametrize("slack_user,fires", [("U_OTHER", True), ("U_ELSE", False)])
+def test_known_people_only_finds_slack_authors_by_their_slack_id(
+    db_session, admin_user, no_celery_dispatch, slack_user, fires
+):
+    make_trigger(
+        db_session,
+        make_definition(db_session, admin_user),
+        filter={"tags_any": ["ai"], "known_people_only": True},
+    )
+    message = slack_message(db_session, admin_user, "U_OTHER")
+    db_session.add(
+        Person(
+            identifier="bob",
+            display_name="Bob",
+            creator_id=admin_user.id,
+            contact_info={"slack": {"T1": {"user_id": slack_user}}},
+        )
+    )
+    db_session.commit()
+
+    assert bool(route_item(db_session, message.id)) is fires
+
+
+def slack_thread(db, owner, root_author, reply_thread_ts):
+    """A root by root_author and a reply to it by someone else; returns the reply."""
+    root = slack_message(db, owner, root_author)
+    root.thread_ts = "1.0"
+    reply = SlackMessage(
+        sha256=unique_sha256("sm"),
+        modality="message",
+        content="ai news",
+        message_ts="2.0",
+        thread_ts=reply_thread_ts,
+        channel_id="C1",
+        workspace_id="T1",
+        author_id="U_OTHER",
+        embed_status="STORED",
+        tags=["ai"],
+    )
+    db.add(reply)
+    db.commit()
+    return reply
+
+
+@pytest.mark.parametrize(
+    "root_author,thread_ts,fires",
+    [("U_OWNER", "1.0", True), ("U_BOT", "1.0", True), ("U_X", "1.0", False), ("U_OWNER", None, False)],
+)
+def test_threads_im_in_match_slack_threads_my_user_or_bot_posted_in(
+    db_session, admin_user, no_celery_dispatch, root_author, thread_ts, fires
+):
+    make_trigger(
+        db_session,
+        make_definition(db_session, admin_user),
+        filter={"source_types": ["slack_message"], "threads_im_in": True},
+    )
+    reply = slack_thread(db_session, admin_user, root_author, thread_ts)
+
+    assert bool(route_item(db_session, reply.id)) is fires
+
+
+@pytest.mark.parametrize("starter_author,fires", [(200, True), (100, False)])
+def test_threads_im_in_match_discord_threads_my_bot_started(
+    db_session, admin_user, no_celery_dispatch, starter_author, fires
+):
+    make_trigger(
+        db_session,
+        make_definition(db_session, admin_user),
+        filter={"source_types": ["discord_message"], "threads_im_in": True},
+    )
+    starter = discord_message(db_session, starter_author, owner=admin_user)
+    starter.message_id = 20
+    db_session.add(
+        DiscordChannel(id=20, server_id=1, name="t", channel_type="thread", parent_id=10)
+    )
+    db_session.flush()
+    reply = DiscordMessage(
+        sha256=unique_sha256("dm"),
+        modality="message",
+        content="ai news",
+        message_id=21,
+        channel_id=20,
+        server_id=1,
+        author_id=100,
+        sent_at=datetime.now(timezone.utc),
+        embed_status="STORED",
+        tags=["ai"],
+    )
+    db_session.add(reply)
+    db_session.commit()
+
+    assert bool(route_item(db_session, reply.id)) is fires
+
+
+@pytest.mark.parametrize("app_owner,fires", [("admin_user", True), ("stranger", False)])
+def test_dms_to_me_match_direct_messages_through_my_slack_app(
+    request, db_session, admin_user, no_celery_dispatch, app_owner, fires
+):
+    make_trigger(db_session, make_definition(db_session, admin_user), filter={"dms_to_me": True})
+    message = slack_message(db_session, admin_user, "U_OTHER")
+    app = db_session.query(SlackApp).one()
+    app.created_by_user_id = request.getfixturevalue(app_owner).id
+    db_session.add(SlackChannel(id="D1", workspace_id="T1", name="bob", channel_type="dm"))
+    db_session.flush()
+    message.channel_id, message.slack_app_id = "D1", app.id
+    db_session.commit()
+
+    assert bool(route_item(db_session, message.id)) is fires
+
+
+@pytest.mark.parametrize("bot_owner,fires", [("admin_user", True), ("stranger", False)])
+def test_dms_to_me_match_discord_dms_to_my_bot(
+    request, db_session, admin_user, no_celery_dispatch, bot_owner, fires
+):
+    make_trigger(db_session, make_definition(db_session, admin_user), filter={"dms_to_me": True})
+    message = discord_message(db_session, 100, owner=request.getfixturevalue(bot_owner))
+    db_session.add(DiscordChannel(id=30, name="alice", channel_type="dm", bot_id=200))
+    db_session.flush()
+    message.channel_id, message.server_id = 30, None
+    db_session.commit()
+
+    assert bool(route_item(db_session, message.id)) is fires
+
+
+@pytest.mark.parametrize(
+    "changes,delivered",
+    [(["review"], []), (["commits", "review"], [["commits", "new"]])],
+)
+def test_changes_only_excluded_identities_made_never_fire(
+    db_session, admin_user, no_celery_dispatch, changes, delivered
+):
+    make_trigger(
+        db_session,
+        make_definition(db_session, admin_user),
+        filter={"tags_any": ["ai"], "exclude_changed_by": ["review-bot"]},
+    )
+    post = blog_post(db_session)
+
+    route_item(db_session, post.id, changes=changes, actors={"review": ["Review-Bot"]})
+
+    assert [m.changes for m in db_session.query(AgentTriggerMatch)] == delivered
+
+
+@pytest.mark.parametrize(
+    "item,ref",
+    [
+        (SlackMessage(type="slack_message", channel_id="C1", message_ts="1.5"), ("slack", "C1:1.5")),
+        (DiscordMessage(type="discord_message", channel_id=1, author_id=1, message_id=99), ("discord", "99")),
+        (MailMessage(message_id="<a@b>"), ("email", "<a@b>")),
+        (BeeperMessage(type="beeper_message", chat_id=1, message_id="m1"), ("beeper", "m1")),
+        # A worker's comments and reviews change a PR; they don't post one.
+        (GithubPR(kind="pr", repo_path="EquiStamp/Memory", number=7), None),
+        (BlogPost(type="blog_post"), None),
+    ],
+)
+def test_items_name_themselves_as_a_report_names_what_it_posted(item, ref):
+    assert posted_ref(item) == ref
+
+
+def posted_run(db, trigger, posted, age=timedelta(0)):
+    run = AgentRun(
+        user_id=trigger.user_id,
+        spec=SPEC,
+        input="x",
+        trigger_kind="ingest",
+        trigger_ref={},
+        max_cost_usd=1,
+        trigger_id=trigger.id,
+        status="done",
+        posted=posted,
+        created_at=datetime.now(timezone.utc) - age,
+    )
+    db.add(run)
+    db.commit()
+    return run
+
+
+@pytest.mark.parametrize(
+    "posted,age,poster_fires",
+    [
+        ([{"source": "slack", "external_id": "C1:1.0"}], timedelta(0), False),
+        ([{"source": "slack", "external_id": "C2:1.0"}], timedelta(0), True),
+        ([{"source": "discord", "external_id": "C1:1.0"}], timedelta(0), True),
+        # Posts are ingested within minutes, so older reports aren't searched.
+        ([{"source": "slack", "external_id": "C1:1.0"}], timedelta(days=8), True),
+    ],
+)
+def test_what_a_triggers_runs_posted_never_triggers_it_again(
+    db_session, admin_user, no_celery_dispatch, posted, age, poster_fires
+):
+    d = make_definition(db_session, admin_user)
+    poster, other = make_trigger(db_session, d), make_trigger(db_session, d)
+    posted_run(db_session, poster, posted, age)
+    message = slack_message(db_session, admin_user, "U_OTHER")
+
+    matched = route_item(db_session, message.id)
+
+    assert (poster.id in matched, other.id in matched) == (poster_fires, True)

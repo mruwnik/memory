@@ -367,13 +367,10 @@ def sync_slack_workspace(
                     client, workspace, session, users_by_id
                 )
 
-                # Sync Slack users to Person records (match by email, don't create new)
-                people_result = sync_slack_users_to_people(
-                    session, workspace_id, users_list, create_missing=False
-                )
+                people_result = sync_slack_users_to_people(session, workspace_id, users_list)
                 logger.info(
                     f"People sync: {people_result['matched']} matched, "
-                    f"{people_result['created']} created, {people_result['skipped']} skipped"
+                    f"{people_result['skipped']} skipped"
                 )
 
                 # Update sync status

@@ -26,6 +26,7 @@ from memory.common.db.models import (
 )
 from tests.conftest import mcp_auth_context, route_item, unique_sha256
 from tests.memory.agents.test_deliveries import BATCH, age, post, statuses
+from tests.memory.agents.test_triggers import posted_run
 from tests.memory.agents.test_work import backdate, expire_lease, submit_run
 
 QUEUE = "reviews"
@@ -457,12 +458,85 @@ async def test_a_delivery_whose_claim_keeps_failing_fails_after_its_attempts(
     subscribe(db_session, regular_user)
     route_item(db_session, post(db_session, creator_id=regular_user.id).id)
 
-    claims = [await claim(worker_session.token, queue=QUEUE) for _ in range(3)]
+    claims = []
+    for _ in range(3):
+        claims.append(await claim(worker_session.token, queue=QUEUE))
+        # The next attempt waits for its retry.
+        db_session.query(AgentTriggerMatch).update({"not_before": None})
+        db_session.commit()
 
     db_session.expire_all()
     [delivery] = db_session.query(AgentTriggerMatch).all()
     assert claims == [None, None, None]
     assert (delivery.status, delivery.attempts, delivery.error) == ("failed", 2, "RuntimeError")
+
+
+@pytest.mark.asyncio
+async def test_a_failed_claim_is_retried_only_after_a_wait(
+    db_session, regular_user, worker_session, monkeypatch
+):
+    """Workers poll every second, so a transient error would use up every attempt at once."""
+
+    def broken(*args):
+        raise RuntimeError("render bug")
+
+    monkeypatch.setattr(queues, "rendered", broken)
+    subscribe(db_session, regular_user)
+    route_item(db_session, post(db_session, creator_id=regular_user.id).id)
+
+    await claim(worker_session.token, queue=QUEUE)
+    await claim(worker_session.token, queue=QUEUE)
+
+    db_session.expire_all()
+    [delivery] = db_session.query(AgentTriggerMatch).all()
+    wait = delivery.not_before - datetime.now(timezone.utc)
+    assert (delivery.status, delivery.attempts) == ("pending", 1)
+    assert timedelta(seconds=30) < wait <= queues.CLAIM_RETRY
+
+
+def posted_reply(db, user) -> SlackMessage:
+    [reply] = thread_messages(db, 1)
+    reply.creator_id = user.id
+    db.commit()
+    return reply
+
+
+@pytest.mark.asyncio
+async def test_a_claim_skips_what_the_subscription_reported_posting_after_routing(
+    db_session, regular_user, worker_session
+):
+    """A worker's reply can be stored and routed before its report says it posted it."""
+    trigger = subscribe(db_session, regular_user)
+    reply = posted_reply(db_session, regular_user)
+    route_item(db_session, reply.id)
+    posted_run(db_session, trigger, [{"source": "slack", "external_id": "C1:1.0"}])
+
+    claimed = await claim(worker_session.token, queue=QUEUE)
+
+    assert claimed is None
+    assert statuses(db_session, trigger) == ["skipped:posted"]
+
+
+@pytest.mark.asyncio
+async def test_a_lapsed_run_drops_what_the_subscription_reported_posting_since(
+    db_session, regular_user, worker_session
+):
+    trigger = subscribe(db_session, regular_user)
+    reply = posted_reply(db_session, regular_user)
+    route_item(db_session, reply.id)
+    first = await claim(worker_session.token, queue=QUEUE)
+    assert first is not None
+    expire_lease(db_session, first["id"])
+    sweep_worker_runs()
+    posted_run(db_session, trigger, [{"source": "slack", "external_id": "C1:1.0"}])
+
+    again = await claim(worker_session.token, queue=QUEUE)
+
+    assert again is None
+    assert run_status(db_session, first["id"]) == "failed"
+    assert [
+        d.status for d in db_session.query(AgentTriggerMatch).filter_by(run_id=first["id"])
+    ] == ["skipped:posted"]
 
 
 def test_a_coalesced_delivery_keeps_the_place_and_deferral_of_the_one_it_replaced(

@@ -124,6 +124,8 @@ class AgentRun(Base):
     )
     # What the worker says it spent: shown, never counted against any cap.
     worker_usage: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    # What the worker says it posted ([{source, external_id}]), which its trigger never matches.
+    posted: Mapped[list[dict[str, str]] | None] = mapped_column(JSONB)
     input: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(
         String(20),
@@ -253,6 +255,7 @@ class AgentRun(Base):
             "worker_user_id": self.worker_user_id,
             "worker_label": self.worker_label,
             "worker_usage": self.worker_usage,
+            "posted": self.posted,
             "lease_expires_at": iso(self.lease_expires_at),
             "lease_lapses": self.lease_lapses,
             "parent_run_id": self.parent_run_id,

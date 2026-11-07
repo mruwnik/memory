@@ -500,6 +500,11 @@ async def test_submitting_to_a_run_the_server_ended_is_refused(
         ({"error": "x" * (agent.MAX_WORKER_ERROR_CHARS + 1)}, "error is longer"),
         ({"result": "x", "usage": {"cost_usd": 0.1234567}}, "decimal places"),
         ({"result": "x", "usage": {"cost_usd": -1}}, "cost_usd"),
+        ({"result": "x", "posted": [{"source": "fax", "external_id": "1"}]}, "source"),
+        ({"result": "x", "posted": [{"source": "github", "external_id": "o/r#1"}]}, "source"),
+        ({"result": "x", "posted": [{"source": "slack", "external_id": "1.5"}]}, "channel:ts"),
+        ({"result": "x", "posted": [{"source": "slack", "external_id": ""}]}, "external_id"),
+        ({"result": "x", "posted": [{"source": "slack", "external_id": "C1:1"}] * 51}, "at most 50"),
     ],
 )
 async def test_submit_rejects(db_session, regular_user, worker_session, kwargs, expected):
@@ -509,6 +514,21 @@ async def test_submit_rejects(db_session, regular_user, worker_session, kwargs, 
         token = (await claim())["run"]["lease_token"]
         with pytest.raises(ValueError, match=expected):
             await submit(run_id, token, **kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", [{"result": "ok"}, {"error": "half done"}])
+async def test_a_report_records_what_the_worker_posted(
+    db_session, regular_user, worker_session, outcome
+):
+    posted = [{"source": "slack", "external_id": "C1:1.5"}, {"source": "discord", "external_id": "99"}]
+    run_id = submit_run(db_session, regular_user)
+
+    with mcp_auth_context(worker_session.token):
+        token = (await claim())["run"]["lease_token"]
+        await submit(run_id, token, posted=posted, **outcome)
+
+    assert stored(db_session, run_id).posted == posted
 
 
 @pytest.mark.asyncio

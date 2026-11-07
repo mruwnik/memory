@@ -2,7 +2,7 @@
 deliveries; broken credentials or an invalid definition trip the trigger's breaker."""
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import or_, select, tuple_
 
@@ -18,6 +18,7 @@ from memory.agents.triggers import (
     SHED_BUDGET,
     SHED_RATE,
     SKIPPED_INACCESSIBLE,
+    SKIPPED_POSTED,
     THROTTLE_WINDOW,
     THROTTLED,
     IngestConfig,
@@ -29,6 +30,7 @@ from memory.agents.triggers import (
     episode_over,
     lock_trigger,
     parse_ref,
+    posted_among,
     tell_owner,
     tell_throttled,
     throttled,
@@ -107,16 +109,22 @@ def start_run(
     deliveries: list[AgentTriggerMatch],
 ) -> str | None:
     """Enqueue the run for the deliveries the trigger can still read, marking them
-    done in the run's transaction. The unreadable ones are skipped first, in their
+    done in the run's transaction. The unreadable ones, and those a run of the
+    trigger reported posting since they were routed, are skipped first, in their
     own, so a cap that stops the run can't hold them back too."""
     config = IngestConfig.model_validate(trigger.config)
     key = trigger_key(db, trigger, owner)
-    allowed = accessible_ids(db, owner, key, [d.item_id for d in deliveries])
-    readable = [delivery_ref(d.item_id, d.content_hash) for d in deliveries if d.item_id in allowed]
-    if len(readable) < len(deliveries):
+    allowed = set(accessible_ids(db, owner, key, [d.item_id for d in deliveries]))
+    candidates = db.query(SourceItem).filter(SourceItem.id.in_(allowed)).all()
+    posted = posted_among(db, trigger.id, candidates)
+    skipped = {d.item_id: SKIPPED_INACCESSIBLE for d in deliveries if d.item_id not in allowed}
+    skipped |= {item_id: SKIPPED_POSTED for item_id in posted}
+    readable = [
+        delivery_ref(d.item_id, d.content_hash) for d in deliveries if d.item_id not in skipped
+    ]
+    if skipped:
         for d in deliveries:
-            if d.item_id not in allowed:
-                d.status = SKIPPED_INACCESSIBLE
+            d.status = skipped.get(d.item_id, d.status)
         db.commit()
         relocked = lock_trigger(db, trigger.id)
         # Disabled, deleted or moved meanwhile: what's left waits for it, or goes with it.
@@ -175,13 +183,23 @@ def hold_back(db: DBSession, trigger_id: int, refs: list[str], cap: CapExceeded)
         tell_throttled(db, trigger, reason)
 
 
-def count_failure(db: DBSession, trigger_id: int, refs: list[str], error: Exception) -> None:
-    """Count a failed fire against its deliveries; after EVENT_MAX_ATTEMPTS they fail."""
+def count_failure(
+    db: DBSession,
+    trigger_id: int,
+    refs: list[str],
+    error: Exception,
+    retry_after: timedelta | None = None,
+) -> None:
+    """Count a failed fire against its deliveries; after EVENT_MAX_ATTEMPTS they
+    fail. With `retry_after`, the rest wait that long for their next attempt."""
     lock_trigger(db, trigger_id)
+    retry_at = None if retry_after is None else datetime.now(timezone.utc) + retry_after
     for d in due_deliveries(db, trigger_id, refs):
         d.attempts += 1
         if d.attempts >= settings.EVENT_MAX_ATTEMPTS:
             d.status, d.error = FAILED, type(error).__name__
+        elif retry_at:
+            d.not_before = retry_at
     db.commit()
 
 

@@ -9,8 +9,11 @@ from dataclasses import dataclass
 from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.utils import make_msgid, parseaddr
+from typing import Any
 
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 from memory.common.db.connection import DBSession
 from memory.common.db.models import EmailAccount, GoogleAccount
@@ -197,6 +200,10 @@ def _build_mime_message(
         msg["Reply-To"] = sanitize_header(reply_to)
     for name, value in (headers or {}).items():
         msg[sanitize_header(name)] = sanitize_header(value)
+    if "Message-ID" not in msg:
+        # What the sent copy is stored under once ingested, so a sender can name it.
+        domain = parseaddr(from_addr)[1].rpartition("@")[2] or None
+        msg["Message-ID"] = make_msgid(domain=domain)
 
     # Create body part
     if html_body:
@@ -312,6 +319,25 @@ def send_via_smtp(
         return EmailResult(success=False, error=str(e))
 
 
+def sent_message_id(service: Any, gmail_id: str | None) -> str | None:
+    """The Message-ID header Gmail sent a message with, which it may have replaced."""
+    if not gmail_id:
+        return None
+    request = (
+        service.users()
+        .messages()
+        .get(userId="me", id=gmail_id, format="metadata", metadataHeaders=["Message-ID"])
+    )
+    try:
+        sent = request.execute()
+    except HttpError:
+        # The message went out; only its id is unknown.
+        logger.warning("could not read the Message-ID of sent Gmail message %s", gmail_id)
+        return None
+    headers = sent.get("payload", {}).get("headers", [])
+    return next((h["value"] for h in headers if h.get("name", "").lower() == "message-id"), None)
+
+
 def send_via_gmail_api(
     config: GmailConfig,
     to: list[str],
@@ -371,7 +397,7 @@ def send_via_gmail_api(
             .execute()
         )
 
-        message_id = result.get("id")
+        message_id = sent_message_id(service, result.get("id")) or msg["Message-ID"]
         logger.info(f"Email sent via Gmail API to {to}, message_id={message_id}")
 
         return EmailResult(success=True, message_id=message_id)

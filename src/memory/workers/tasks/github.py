@@ -3,7 +3,7 @@
 import logging
 from collections.abc import Collection
 from datetime import datetime, timedelta, timezone
-from typing import Any, cast
+from typing import Any, NamedTuple, cast
 
 import requests
 
@@ -112,10 +112,17 @@ def checks_complete_key(data: GithubIssueData) -> str | None:
     return f"{head_sha}:{state}"
 
 
+class Changes(NamedTuple):
+    tags: list[str]
+    # Who made the comments, review and commits changes, where GitHub says.
+    actors: dict[str, list[str]]
+
+
 def item_changes(
     existing: GithubItem | None, new: GithubIssueData, logins: Collection[str]
-) -> list[str]:
-    """What a sync of ``new`` changes about ``existing``, as trigger change tags.
+) -> Changes:
+    """What a sync of ``new`` changes about ``existing``, as trigger change tags,
+    and who made them.
 
     A head SHA, check summary or draft flag seen for the first time is not a
     change, so items stored before they were recorded don't all fire on their
@@ -124,13 +131,41 @@ def item_changes(
     FAILURE into SUCCESS, fires it again; a re-run with the same result doesn't.
     """
     if existing is None:
-        return ["new"]
+        return Changes(["new"], {})
 
+    actors = contributors(existing, new, logins)
+    head_sha, checks, draft = new.get("head_sha"), new.get("checks"), new.get("draft")
+    complete = checks_complete_key(new)
+    changed = {
+        "edited": existing.title != new["title"] or not has_body(existing, new["body"]),
+        "labels": set(existing.labels or []) != set(new["labels"]),
+        "assignees": set(existing.assignees or []) != set(new["assignees"]),
+        "draft": existing.draft is not None and draft is not None and draft != existing.draft,
+        "commits": existing.head_sha is not None
+        and head_sha is not None
+        and head_sha != existing.head_sha,
+        "comments": bool(actors.get("comments")),
+        "review": bool(actors.get("review")),
+        "checks": existing.checks is not None
+        and checks is not None
+        and checks != existing.checks,
+        "checks_complete": existing.checks is not None
+        and complete not in (None, existing.checks_complete_key),
+        "state": (existing.state, existing.merged_at, existing.closed_at)
+        != (new["state"], new["merged_at"], new["closed_at"]),
+    }
+    head_author = new.get("head_author")
+    if changed["commits"] and head_author:
+        actors["commits"] = [head_author]
+    return Changes([c for c in CHANGES if changed[c]], actors)
+
+
+def contributors(
+    existing: GithubItem, new: GithubIssueData, logins: Collection[str]
+) -> dict[str, list[str]]:
+    """Who, other than the account's own ``logins``, wrote the comments and
+    reviews that ``new`` has and ``existing`` hadn't."""
     own = {login.removesuffix("[bot]") for login in logins}
-
-    def by_others(authors: list[str]) -> bool:
-        return any(a.removesuffix("[bot]") not in own for a in authors)
-
     since = cast(datetime | None, existing.github_updated_at)
     comment_authors = [
         c["author"]
@@ -146,28 +181,12 @@ def item_changes(
         comment_authors += [
             c["user"] for c in pr["review_comments"] if c["id"] not in known_comments
         ]
-
-    head_sha, checks, draft = new.get("head_sha"), new.get("checks"), new.get("draft")
-    complete = checks_complete_key(new)
-    changed = {
-        "edited": existing.title != new["title"] or not has_body(existing, new["body"]),
-        "labels": set(existing.labels or []) != set(new["labels"]),
-        "assignees": set(existing.assignees or []) != set(new["assignees"]),
-        "draft": existing.draft is not None and draft is not None and draft != existing.draft,
-        "commits": existing.head_sha is not None
-        and head_sha is not None
-        and head_sha != existing.head_sha,
-        "comments": by_others(comment_authors),
-        "review": by_others(review_authors),
-        "checks": existing.checks is not None
-        and checks is not None
-        and checks != existing.checks,
-        "checks_complete": existing.checks is not None
-        and complete not in (None, existing.checks_complete_key),
-        "state": (existing.state, existing.merged_at, existing.closed_at)
-        != (new["state"], new["merged_at"], new["closed_at"]),
+    by = {"comments": comment_authors, "review": review_authors}
+    others = {
+        change: sorted({a for a in authors if a.removesuffix("[bot]") not in own})
+        for change, authors in by.items()
     }
-    return [c for c in CHANGES if changed[c]]
+    return {change: authors for change, authors in others.items() if authors}
 
 
 def close_open_repo_projects(session: Any, repo: GithubRepo) -> int:
@@ -392,6 +411,7 @@ def _update_existing_item(
     milestone_id: int | None = None,
     project_id: int | None = None,
     changes: list[str] | None = None,
+    actors: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     """Update an existing GithubItem and reindex if content changed."""
     changes = changes or []
@@ -413,7 +433,7 @@ def _update_existing_item(
 
     if not _needs_reindex(existing, issue_data):
         if changes:
-            session.add(item_event(session, existing, changes))
+            session.add(item_event(session, existing, changes, actors=actors))
         session.commit()
         return create_task_result(existing, "updated" if changes else "unchanged")
 
@@ -488,7 +508,7 @@ def _update_existing_item(
     session.flush()
 
     # Re-embed and push to Qdrant
-    return process_content_item(existing, session, changes=changes)
+    return process_content_item(existing, session, changes=changes, actors=actors)
 
 
 def _deserialize_issue_data(data: dict[str, Any]) -> GithubIssueData:
@@ -754,13 +774,13 @@ def sync_item(
             .first()
         )
 
-        changes = item_changes(existing, issue_data, logins)
+        changes, actors = item_changes(existing, issue_data, logins)
         if polled and push_missed(repo, issue_data, changes):
             record_push_miss(GithubRepo, repo.id, repo.account.user_id, f"GitHub repo {repo.repo_path}")
         if existing:
             _apply_author_person(session, existing, issue_data)
             return _update_existing_item(
-                session, existing, repo, issue_data, milestone_id, project_id, changes
+                session, existing, repo, issue_data, milestone_id, project_id, changes, actors
             )
 
         # Create new item

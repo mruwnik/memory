@@ -212,7 +212,11 @@ def test_send_via_smtp_success(mock_smtp_class):
         body="Test body",
     )
 
+    sent = mock_server.send_message.call_args.args[0]
     assert result.success is True
+    # The RFC Message-ID, which the sent copy is stored under once it is ingested.
+    assert result.message_id == sent["Message-ID"]
+    assert sent["Message-ID"].endswith("@example.com>")
     mock_server.starttls.assert_called_once()
     mock_server.login.assert_called_once_with("sender@example.com", "password123")
     mock_server.send_message.assert_called_once()
@@ -344,6 +348,9 @@ def test_send_via_gmail_api_success(mock_build):
         "id": "msg123",
         "threadId": "thread456",
     }
+    mock_service.users().messages().get().execute.return_value = {
+        "payload": {"headers": [{"name": "Message-Id", "value": "<sent@mail.gmail.com>"}]}
+    }
 
     config = GmailConfig(
         email_address="sender@gmail.com",
@@ -358,7 +365,7 @@ def test_send_via_gmail_api_success(mock_build):
     )
 
     assert result.success is True
-    assert result.message_id == "msg123"
+    assert result.message_id == "<sent@mail.gmail.com>"
     mock_build.assert_called_once_with("gmail", "v1", credentials=mock_credentials)
 
 

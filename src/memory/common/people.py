@@ -11,7 +11,7 @@ import logging
 import re
 from typing import TYPE_CHECKING, Any, TypeAlias
 
-from sqlalchemy import Text
+from sqlalchemy import Text, or_
 from sqlalchemy import cast as sql_cast
 from sqlalchemy import func as sql_func
 from sqlalchemy.dialects.postgresql import JSONB
@@ -135,17 +135,18 @@ def find_person_by_slack_id(
     Returns:
         Matching Person or None
     """
-    # Query for people with Slack info for this workspace
-    people = (
-        session.query(Person)
-        .filter(Person.contact_info["slack"].isnot(None))
-        .all()
-    )
+    return people_with_slack_id(session, workspace_id, slack_user_id).order_by(Person.id).first()
 
-    return next(
-        (p for p in people if (workspace_id, slack_user_id) in slack_accounts(p.contact_info)),
-        None,
-    )
+
+def people_with_slack_id(session: DBSession, workspace_id: str, slack_user_id: str) -> Query:
+    """The Persons linked to this Slack user, in each shape slack_accounts reads."""
+    infos = ({"user_id": slack_user_id}, {"user_id": [slack_user_id]})
+    shapes = [
+        {"slack": slack}
+        for info in infos
+        for slack in ({workspace_id: info}, [{workspace_id: info}])
+    ]
+    return session.query(Person).filter(or_(*(Person.contact_info.contains(s) for s in shapes)))
 
 
 def find_person_by_github(session: DBSession, login: str | None) -> Person | None:
@@ -472,31 +473,16 @@ def link_slack_user_to_person(
     )
 
 
-def sync_slack_users_to_people(
-    session: DBSession,
-    workspace_id: str,
-    users: list[dict],
-    create_missing: bool = False,
-) -> dict:
-    """Sync Slack workspace users to Person records.
+def sync_slack_users_to_people(session: DBSession, workspace_id: str, users: list[dict]) -> dict:
+    """Link Slack workspace users to the Persons with their email address.
 
-    For each Slack user:
-    1. Try to match by existing Slack ID link
-    2. Try to match by email
-    3. Try to match by name
-    4. Optionally create new Person if no match
-
-    Args:
-        session: Database session
-        workspace_id: Slack workspace/team ID
-        users: List of Slack user dicts from users.list API
-        create_missing: If True, create Person records for unmatched users
+    Only by email: a Slack name is the user's to choose, and a link says who
+    wrote their messages.
 
     Returns:
-        Dict with counts: {"matched": N, "created": N, "skipped": N}
+        Dict with counts: {"matched": N, "skipped": N}
     """
     matched = 0
-    created = 0
     skipped = 0
 
     for user in users:
@@ -526,34 +512,22 @@ def sync_slack_users_to_people(
             matched += 1
             continue
 
-        # Try to find by email or name
-        person, was_created = find_or_create_person(
-            session,
-            name=display_name,
-            email=email,
-            create_if_missing=create_missing,
-        )
-
-        if person:
-            # Link Slack user to person
-            link_slack_user_to_person(
-                session,
-                person,
-                workspace_id,
-                user_id,
-                slack_username=user.get("name"),
-                slack_display_name=display_name,
-            )
-            if was_created:
-                created += 1
-            else:
-                matched += 1
-        else:
+        person = find_person_by_email(session, email)
+        if person is None:
             skipped += 1
+            continue
+        link_slack_user_to_person(
+            session,
+            person,
+            workspace_id,
+            user_id,
+            slack_username=user.get("name"),
+            slack_display_name=display_name,
+        )
+        matched += 1
 
     session.commit()
     logger.info(
-        f"Slack user sync for workspace {workspace_id}: "
-        f"{matched} matched, {created} created, {skipped} skipped"
+        f"Slack user sync for workspace {workspace_id}: {matched} matched, {skipped} skipped"
     )
-    return {"matched": matched, "created": created, "skipped": skipped}
+    return {"matched": matched, "skipped": skipped}

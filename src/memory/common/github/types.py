@@ -167,6 +167,8 @@ class GithubIssueData(TypedDict):
     draft: NotRequired[bool | None]
     # PRs only: the head commit's check rollup (SUCCESS, FAILURE, ERROR, PENDING, EXPECTED).
     checks_state: NotRequired[str | None]
+    # PRs only: the login of the head commit's author, when GitHub knows the user.
+    head_author: NotRequired[str | None]
 
 
 def parse_github_date(date_str: str | None) -> datetime | None:

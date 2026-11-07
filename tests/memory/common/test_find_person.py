@@ -7,6 +7,8 @@ from memory.common.people import (
     find_person_by_email,
     find_person_by_name,
     find_or_create_person,
+    slack_accounts,
+    sync_slack_users_to_people,
 )
 
 
@@ -117,3 +119,17 @@ def test_email_lookup_refuses_ambiguous_people(db_session):
         db_session.add(Person(identifier=identifier, display_name=identifier, contact_info={"email": "same@example.com"}))
     db_session.commit()
     assert find_person_by_email(db_session, "same@example.com") is None
+
+
+@pytest.mark.parametrize(
+    "email,linked",
+    [("alice@company.com", True), (None, False), ("other@company.com", False)],
+)
+def test_slack_users_link_to_people_by_email_only(db_session, alice_person, email, linked):
+    """A Slack display name is the user's to choose, so it never links them to a Person."""
+    user = {"id": "U1", "name": "alice", "profile": {"display_name": "Alice", "email": email}}
+
+    sync_slack_users_to_people(db_session, "T1", [user])
+
+    db_session.refresh(alice_person)
+    assert (("T1", "U1") in slack_accounts(alice_person.contact_info)) is linked

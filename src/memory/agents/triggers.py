@@ -17,10 +17,19 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
+from functools import cached_property
 from typing import Annotated, Any, Collection, Iterable, Literal, cast
 
 from celery.exceptions import SoftTimeLimitExceeded
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from sqlalchemy import case, exists, func, or_, select, update
 from sqlalchemy.orm import aliased
 
@@ -40,26 +49,33 @@ from memory.common.notify import notify_user_now
 from memory.common.scopes import SCOPE_ADMIN, SCOPE_AGENTS, SCOPE_READ
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import (
+    AgentRun,
     AgentTrigger,
     APIKey,
     AgentTriggerMatch,
     BeeperMessage,
+    BeeperParticipant,
     BlogPost,
     CalendarEvent,
     Comic,
     DiscordBot,
     DiscordMessage,
+    DiscordUser,
     Event,
     ForumComment,
     ForumPost,
     GithubItem,
     MailMessage,
+    Person,
+    SlackApp,
     SlackMessage,
     SourceItem,
     User,
 )
-from memory.common.db.models.events import ITEM, REMOVED
+from memory.common.db.models.events import ADDED, ITEM, REMOVED
 from memory.common.db.models.slack import SlackUserCredentials
+from memory.common.db.models.source_items import DIRECT_CHANNEL_TYPES
+from memory.common.people import people_with_slack_id
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +104,7 @@ SWEEP_LOCK_KEY = 0x64656C6976657279  # "delivery"
 PENDING, DONE, FAILED, EXPIRED = "pending", "done", "failed", "expired"
 SKIPPED_INACCESSIBLE = "skipped:inaccessible"
 SKIPPED_DISABLED = "skipped:disabled"
+SKIPPED_POSTED = "skipped:posted"
 SHED_RATE = "skipped:shed:rate"
 SHED_BUDGET = "skipped:shed:budget"
 SHED_BACKLOG = "skipped:shed:backlog"
@@ -160,11 +177,25 @@ class IngestFilter(BaseModel):
     text_contains: FilterValues = []
     regex: str | None = Field(default=None, max_length=MAX_REGEX_CHARS)
     # Author ids, usernames or email addresses (case-insensitive, exact).
+    authors_any: FilterValues = []
     exclude_authors: FilterValues = []
+    # Anyone can make a Person, so only ones ingest, an admin or the owner made
+    # vouch for an author.
+    known_people_only: bool = False
+    # Who made a change, named as authors are.
+    changed_by_any: FilterValues = []
+    exclude_changed_by: FilterValues = []
+    # The owner's own Slack messages. None means on, except for queue handlers:
+    # for a bot the owner talks to, the owner's messages are its input.
+    exclude_own: bool | None = None
     # GitHub "owner/name" (case-insensitive).
     repos: FilterValues = []
     # Discord/Slack messages that @-mention one of the owner's bots.
     mentions_me: bool = False
+    # Discord/Slack thread messages where the owner or one of their bots posted.
+    threads_im_in: bool = False
+    # Discord/Slack direct messages that reached the owner's bots or Slack apps.
+    dms_to_me: bool = False
 
     @field_validator("channel_ids", "exclude_channel_ids")
     @classmethod
@@ -205,10 +236,14 @@ class IngestFilter(BaseModel):
             or self.regex
             or self.repos
             or self.mentions_me
+            or self.authors_any
+            or self.changed_by_any
+            or self.threads_im_in
+            or self.dms_to_me
         ):
             raise ValueError(
-                "set at least one of source_types, tags_any, channel_ids, "
-                "text_contains, regex, repos or mentions_me"
+                "set at least one of source_types, tags_any, channel_ids, text_contains, "
+                "regex, repos, mentions_me, authors_any, changed_by_any, threads_im_in or dms_to_me"
             )
         return self
 
@@ -269,12 +304,33 @@ class ItemFacts:
     # Lowercased author ids, usernames and addresses.
     authors: frozenset[str]
     text: str
+    # The lowercased authors the platform vouches for: user ids and GitHub logins,
+    # never a display name or a From header, which anyone can set.
+    author_ids: frozenset[str] = frozenset()
     # A Discord thread's parent; Slack thread replies carry their channel's id.
     parent_channel_id: str | None = None
     # Lowercased GitHub "owner/name".
     repo: str | None = None
     # Lowercased ids the message @-mentions, as its raw content spells them.
     mentions: frozenset[str] = frozenset()
+    # A Discord/Slack direct message.
+    direct: bool = False
+    # What collected the message: "slack_app:<row id>" or "discord_bot:<application id>".
+    collector: str | None = None
+
+
+@dataclass(frozen=True)
+class Me:
+    """Who a trigger's owner is in chat."""
+
+    # Their bots, which mentions_me looks for.
+    bots: frozenset[str] = frozenset()
+    # Their Slack users, which exclude_own leaves out.
+    slack_users: frozenset[str] = frozenset()
+    # Them in a thread: their bots, Slack users and the Discord accounts linked to them.
+    accounts: frozenset[str] = frozenset()
+    # Their Slack apps and Discord bots, as ItemFacts.collector names them.
+    collectors: frozenset[str] = frozenset()
 
 
 def lowered(values: Iterable[Any]) -> frozenset[str]:
@@ -303,6 +359,16 @@ def channel_and_authors(item: SourceItem) -> tuple[str | None, list[Any]]:
     if isinstance(item, (GithubItem, BlogPost, Comic, ForumComment)):
         return None, [item.author]
     return None, []
+
+
+def author_ids(item: SourceItem) -> list[Any]:
+    if isinstance(item, (DiscordMessage, SlackMessage)):
+        return [item.author_id]
+    if isinstance(item, BeeperMessage):
+        return [item.sender_id]
+    if isinstance(item, GithubItem):
+        return [item.author]
+    return []
 
 
 def item_title(item: SourceItem) -> str | None:
@@ -370,17 +436,35 @@ def mentioned_ids(item: SourceItem) -> frozenset[str]:
     return lowered(MENTION.findall(item.content or ""))
 
 
-def item_facts(item: SourceItem) -> ItemFacts:
+def direct_and_collector(item: SourceItem) -> tuple[bool, str | None]:
+    if isinstance(item, SlackMessage):
+        collector = f"slack_app:{item.slack_app_id}" if item.slack_app_id else None
+        channel = item.channel
+    elif isinstance(item, DiscordMessage):
+        channel = item.channel
+        bot = item.bot or (channel.bot if channel else None)
+        collector = f"discord_bot:{bot.application_id}" if bot else None
+    else:
+        return False, None
+    return channel is not None and channel.channel_type in DIRECT_CHANNEL_TYPES, collector
+
+
+def item_facts(item: SourceItem, with_direct: bool = False) -> ItemFacts:
+    """`with_direct` also reads whether it's a direct message, which loads its channel."""
     channel_id, authors = channel_and_authors(item)
+    direct, collector = direct_and_collector(item) if with_direct else (False, None)
     return ItemFacts(
         source_type=item.type or "",
         tags=frozenset(item.tags or []),
         channel_id=channel_id,
         authors=lowered(authors),
+        author_ids=lowered(author_ids(item)),
         text=item_text(item),
         parent_channel_id=parent_channel_id(item),
         repo=item.repo_path.lower() if isinstance(item, GithubItem) and item.repo_path else None,
         mentions=mentioned_ids(item),
+        direct=direct,
+        collector=collector,
     )
 
 
@@ -413,8 +497,8 @@ def regex_search(pattern: str, text: str) -> bool:
         signal.signal(signal.SIGALRM, previous)
 
 
-def matches(f: IngestFilter, facts: ItemFacts, mine: frozenset[str] = frozenset()) -> bool:
-    """`mine`: the owner's bot ids, which mentions_me looks for."""
+def matches(f: IngestFilter, facts: ItemFacts, me: Me = Me()) -> bool:
+    """Whether the filter's criteria that the item's facts settle all hold."""
     if f.source_types and facts.source_type not in f.source_types:
         return False
     if f.tags_any and not facts.tags & set(f.tags_any):
@@ -425,9 +509,13 @@ def matches(f: IngestFilter, facts: ItemFacts, mine: frozenset[str] = frozenset(
         return False
     if facts.authors & lowered(f.exclude_authors):
         return False
+    if f.authors_any and not facts.author_ids & lowered(f.authors_any):
+        return False
     if f.repos and facts.repo not in lowered(f.repos):
         return False
-    if f.mentions_me and not facts.mentions & mine:
+    if f.mentions_me and not facts.mentions & me.bots:
+        return False
+    if f.dms_to_me and not (facts.direct and facts.collector in me.collectors):
         return False
     text = facts.text[:MAX_MATCH_TEXT_CHARS].lower()
     if f.text_contains and not any(t.lower() in text for t in f.text_contains):
@@ -435,20 +523,204 @@ def matches(f: IngestFilter, facts: ItemFacts, mine: frozenset[str] = frozenset(
     return f.regex is None or regex_search(f.regex, facts.text)
 
 
-def own_authors(db: DBSession, owner_id: int) -> frozenset[str]:
-    """Accounts an agent's own posts come from: any of our Discord bots and Slack
-    app bot users, and the owner's Slack integration user. Matching their items
-    would let an agent that posts to a channel re-trigger itself."""
+def changes_caused(
+    f: IngestFilter, changes: list[str], actors: dict[str, list[str]], authors: frozenset[str]
+) -> list[str]:
+    """The `changes` whose makers pass changed_by_any and exclude_changed_by.
+
+    A change is made by the `actors` its ingester named; a new item or an edit
+    nobody is named for, by its `authors` (ItemFacts.author_ids). Anything else has
+    no known maker, which changed_by_any never lets through and exclude_changed_by
+    never stops.
+    """
+    wanted, unwanted = lowered(f.changed_by_any), lowered(f.exclude_changed_by)
+
+    def kept(change: str) -> bool:
+        if change in actors:
+            makers = lowered(actors[change])
+        else:
+            makers = authors if change in ("new", "edited") else frozenset()
+        if wanted and not makers & wanted:
+            return False
+        return not (makers and makers <= unwanted)
+
+    return [c for c in changes if kept(c)]
+
+
+# Slack message ts are unique only within a channel.
+SLACK_POSTED_ID = re.compile(r"[A-Z0-9]+:\d+\.\d+")
+
+
+class Posted(BaseModel):
+    """Something a consumer posted, named as posted_ref names items."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: Literal["slack", "discord", "email", "beeper"]
+    external_id: str = Field(min_length=1, max_length=500)
+
+    @model_validator(mode="after")
+    def slack_names_its_channel(self) -> "Posted":
+        if self.source == "slack" and not SLACK_POSTED_ID.fullmatch(self.external_id):
+            raise ValueError('a slack external_id is "channel:ts", e.g. "C123:1700000000.000100"')
+        return self
+
+
+POSTED = TypeAdapter(Annotated[list[Posted], Field(max_length=MAX_FILTER_VALUES)])
+
+
+def posted_ref(item: SourceItem) -> tuple[str, str] | None:
+    """How a report names the item, if its consumer posted it: (source, external_id)."""
+    if isinstance(item, SlackMessage):
+        return "slack", f"{item.channel_id}:{item.message_ts}"
+    if isinstance(item, DiscordMessage):
+        return "discord", str(item.message_id)
+    if isinstance(item, MailMessage) and item.message_id:
+        return "email", item.message_id
+    if isinstance(item, BeeperMessage):
+        return "beeper", item.message_id
+    return None
+
+
+def recent_runs(trigger_id: int) -> tuple[Any, ...]:
+    """A trigger's runs young enough to have reports its new items could be in:
+    a post is ingested within minutes, and no delivery waits longer than this."""
+    since = datetime.now(timezone.utc) - DELIVERY_MAX_AGE
+    return (AgentRun.trigger_id == trigger_id, AgentRun.created_at >= since)
+
+
+def posted_among(db: DBSession, trigger_id: int, items: Iterable[SourceItem]) -> set[int]:
+    """The ids of `items` that a run of the trigger reported posting."""
+    refs = {ref: item.id for item in items if (ref := posted_ref(item))}
+    if not refs:
+        return set()
+    entries = [[{"source": source, "external_id": external_id}] for source, external_id in refs]
+    reports = db.scalars(
+        select(AgentRun.posted).where(
+            *recent_runs(trigger_id), or_(*(AgentRun.posted.contains(e) for e in entries))
+        )
+    )
+    found = {(p["source"], p["external_id"]) for posted in reports for p in posted or []}
+    return {item_id for ref, item_id in refs.items() if ref in found}
+
+
+def discord_thread_id(item: DiscordMessage) -> int | None:
+    """A thread's id is the id of the message that started it."""
+    channel = item.channel
+    in_thread = channel is not None and (
+        channel.channel_type == "thread" or channel.parent_id is not None
+    )
+    return item.channel_id if in_thread else item.thread_id
+
+
+def thread_authors(db: DBSession, item: SourceItem) -> frozenset[str]:
+    """Who posted in the item's Discord/Slack thread, its first message included."""
+    if isinstance(item, SlackMessage) and item.thread_ts:
+        query = select(SlackMessage.author_id).where(
+            SlackMessage.channel_id == item.channel_id,
+            or_(SlackMessage.thread_ts == item.thread_ts, SlackMessage.message_ts == item.thread_ts),
+        )
+    elif isinstance(item, DiscordMessage) and (thread := discord_thread_id(item)) is not None:
+        query = select(DiscordMessage.author_id).where(
+            or_(DiscordMessage.channel_id == thread, DiscordMessage.message_id == thread)
+        )
+    else:
+        return frozenset()
+    return lowered(db.scalars(query))
+
+
+def author_people(db: DBSession, item: SourceItem) -> list[Person]:
+    """The Persons the item's author is linked to. Email has none: its From
+    header is the sender's to write."""
+    found: list[Person | None] = []
+    if isinstance(item, DiscordMessage):
+        found = [item.author.person if item.author else None]
+    elif isinstance(item, SlackMessage) and item.author_id:
+        found = people_with_slack_id(db, item.workspace_id, item.author_id).all()
+    elif isinstance(item, GithubItem):
+        found = [item.author_person]
+    elif isinstance(item, BeeperMessage) and item.chat and item.sender_id:
+        found = list(
+            db.scalars(
+                select(Person)
+                .join(BeeperParticipant, BeeperParticipant.person_id == Person.id)
+                .where(
+                    BeeperParticipant.network_id == item.chat.network_id,
+                    BeeperParticipant.participant_id == item.sender_id,
+                )
+            )
+        )
+    return [p for p in found if p is not None]
+
+
+def vouches(person: Person, owner_id: int) -> bool:
+    """Ingest makes a Person for everyone it sees and anyone can make one, so only
+    a link to a user, or the owner or an admin having made it, says who someone is."""
+    made_by = person.creator_id
+    return person.user_id is not None or (
+        made_by is not None and (person.creator_trusted or made_by == owner_id)
+    )
+
+
+class ItemLookups:
+    """What matching looks up about one item, at most once however many triggers ask."""
+
+    def __init__(self, db: DBSession, item: SourceItem):
+        self.db, self.item = db, item
+
+    @cached_property
+    def thread_authors(self) -> frozenset[str]:
+        return thread_authors(self.db, self.item)
+
+    @cached_property
+    def people(self) -> list[Person]:
+        return author_people(self.db, self.item)
+
+    def known_to(self, owner_id: int) -> bool:
+        return any(vouches(p, owner_id) for p in self.people)
+
+
+def own_authors(db: DBSession) -> frozenset[str]:
+    """Accounts our syncs and bots post as: any of our Discord bots and Slack app
+    bot users. Matching their items would let an agent that posts to a channel
+    re-trigger itself."""
     bots = db.scalars(
         select(DiscordBot.application_id).where(DiscordBot.token_encrypted.is_not(None))
     ).all()
     slack_bots = db.scalars(select(SlackUserCredentials.bot_user_id)).all()
-    slack = db.scalars(
-        select(SlackUserCredentials.slack_user_id).where(
-            SlackUserCredentials.user_id == owner_id
+    return lowered([*bots, *slack_bots])
+
+
+def owner_me(db: DBSession, owner_id: int) -> Me:
+    bots = owner_bots(db, owner_id)
+    slack_users = lowered(
+        db.scalars(
+            select(SlackUserCredentials.slack_user_id).where(
+                SlackUserCredentials.user_id == owner_id
+            )
         )
-    ).all()
-    return lowered([*bots, *slack_bots, *slack])
+    )
+    discord_accounts = lowered(
+        db.scalars(
+            select(DiscordUser.id)
+            .join(Person, DiscordUser.person_id == Person.id)
+            .where(Person.user_id == owner_id)
+        )
+    )
+    discord_bots = db.scalars(
+        select(DiscordBot.application_id).where(
+            DiscordBot.created_by_user_id == owner_id, DiscordBot.token_encrypted.is_not(None)
+        )
+    )
+    slack_apps = db.scalars(select(SlackApp.id).where(SlackApp.created_by_user_id == owner_id))
+    return Me(
+        bots=bots,
+        slack_users=slack_users,
+        accounts=bots | slack_users | discord_accounts,
+        collectors=frozenset(
+            [*(f"discord_bot:{i}" for i in discord_bots), *(f"slack_app:{i}" for i in slack_apps)]
+        ),
+    )
 
 
 def owner_bots(db: DBSession, owner_id: int) -> frozenset[str]:
@@ -741,11 +1013,18 @@ class LiveTrigger:
 
     trigger: AgentTrigger
     config: IngestConfig
-    # The owner's bots (for mentions_me) and own authors (never matched).
-    bots: frozenset[str]
+    me: Me
+    # Accounts never matched: our syncs' and bots'.
     own: frozenset[str]
     # The batch's items the trigger may read.
     readable: frozenset[int]
+    exclude_own: bool
+    # Whether any of its runs reported posting something.
+    posts: bool
+
+
+def excludes_own(f: IngestFilter, handler: dict[str, Any] | None) -> bool:
+    return f.exclude_own if f.exclude_own is not None else "queue" not in (handler or {})
 
 
 def live_triggers(
@@ -753,7 +1032,8 @@ def live_triggers(
 ) -> list[LiveTrigger]:
     """The enabled ingest triggers (or `candidates`) that can match, skipping any
     whose config no longer validates."""
-    per_owner: dict[int, tuple[frozenset[str], frozenset[str]]] = {}
+    per_owner: dict[int, Me] = {}
+    own = own_authors(db)
     live = []
     for trigger in enabled_ingest_triggers(db) if candidates is None else candidates:
         try:
@@ -765,13 +1045,34 @@ def live_triggers(
         if owner is None:
             continue
         if owner.id not in per_owner:
-            per_owner[owner.id] = (owner_bots(db, owner.id), own_authors(db, owner.id))
-        bots, own = per_owner[owner.id]
+            per_owner[owner.id] = owner_me(db, owner.id)
         # Validity is left to the fire, which trips the breaker if the key is gone.
         key = db.get(APIKey, trigger.api_key_id) if trigger.api_key_id else None
         readable = frozenset(accessible_ids(db, owner, key, item_ids))
-        live.append(LiveTrigger(trigger, config, bots, own, readable))
+        posts = exists().where(*recent_runs(trigger.id), AgentRun.posted.is_not(None))
+        live.append(
+            LiveTrigger(
+                trigger,
+                config,
+                per_owner[owner.id],
+                own,
+                readable,
+                excludes_own(config.filter, trigger.handler),
+                bool(db.scalar(select(posts))),
+            )
+        )
     return live
+
+
+def passes_lookups(db: DBSession, t: LiveTrigger, lookups: ItemLookups) -> bool:
+    """Whether the filter's criteria that need more than the item's facts hold,
+    and none of the trigger's runs posted the item."""
+    f = t.config.filter
+    if f.threads_im_in and not lookups.thread_authors & t.me.accounts:
+        return False
+    if f.known_people_only and not lookups.known_to(t.trigger.user_id):
+        return False
+    return not (t.posts and posted_among(db, t.trigger.id, [lookups.item]))
 
 
 def match_item(
@@ -784,7 +1085,8 @@ def match_item(
     item = db.get(SourceItem, item_id)
     if item is None:
         return []
-    facts = item_facts(item)
+    facts = item_facts(item, with_direct=any(t.config.filter.dms_to_me for t in live))
+    lookups = ItemLookups(db, item)
     version = content_version(item)
     # Settles most reprocesses before the costlier checks; claim() re-checks under its lock.
     claims = item_claims(db, item_id)
@@ -795,20 +1097,31 @@ def match_item(
         trigger, config = t.trigger, t.config
         if event.created_at < trigger.active_since and not replay:
             continue
+        changes = event.changes
+        if config.filter.changed_by_any or config.filter.exclude_changed_by:
+            reported = changes or ["new" if event.action == ADDED else "edited"]
+            kept = changes_caused(config.filter, reported, event.actors or {}, facts.author_ids)
+            if not kept:
+                continue
+            # What the ingester didn't report stays unreported.
+            changes = changes and kept
         # Triggers react to new items and to news about older ones, not to the
         # backlog that predates them.
         fresh = (
             inserted is not None
             and inserted >= oldest
-            and (inserted >= trigger.active_since or config.reacts_to(event.changes))
+            and (inserted >= trigger.active_since or config.reacts_to(changes))
         )
-        refires = config.refires(event.changes)
+        refires = config.refires(changes)
         if not may_claim(claims.get(trigger.id, set()), version, fresh=fresh, on_edit=refires):
             continue
-        mine = t.bots if config.filter.mentions_me else frozenset()
-        if not matches(config.filter, facts, mine):
+        if not matches(config.filter, facts, t.me):
             continue
         if facts.authors & t.own or item_id not in t.readable:
+            continue
+        if t.exclude_own and facts.authors & t.me.slack_users:
+            continue
+        if not passes_lookups(db, t, lookups):
             continue
         batched = isinstance(config.delivery, Batch)
         sent = not batched and handler_queue(trigger) is None
@@ -819,7 +1132,7 @@ def match_item(
             version,
             fresh=fresh,
             on_edit=refires,
-            changes=event.changes,
+            changes=changes,
             sent=sent,
             # Batches aren't ordered.
             order_key=None if batched else order_key(item, trigger.order_by),

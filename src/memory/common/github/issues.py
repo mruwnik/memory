@@ -113,6 +113,7 @@ class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
         commits(last: 1) {
           nodes {
             commit {
+              author { user { login } }
               statusCheckRollup {
                 state
                 contexts(first: 100) {
@@ -509,11 +510,15 @@ class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
             head_repo=self._extract_nested(pr, "headRepository", "nameWithOwner"),
             draft=pr.get("isDraft"),
             checks_state=self._extract_nested(self.head_rollup(pr), "state"),
+            head_author=self._extract_nested(self.head_commit(pr), "author", "user", "login"),
         )
 
-    def head_rollup(self, pr: dict[str, Any]) -> dict[str, Any] | None:
+    def head_commit(self, pr: dict[str, Any]) -> dict[str, Any] | None:
         commits = self._extract_nested(pr, "commits", "nodes", default=[])
-        return self._extract_nested(commits[-1], "commit", "statusCheckRollup") if commits else None
+        return self._extract_nested(commits[-1], "commit") if commits else None
+
+    def head_rollup(self, pr: dict[str, Any]) -> dict[str, Any] | None:
+        return self._extract_nested(self.head_commit(pr), "statusCheckRollup")
 
     def _parse_checks(self, pr: dict[str, Any]) -> dict[str, str]:
         contexts = self._extract_nested(self.head_rollup(pr), "contexts", "nodes", default=[])

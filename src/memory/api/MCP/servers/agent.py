@@ -74,6 +74,7 @@ from memory.agents.system import SYSTEM_AGENTS, SystemAgent
 from memory.agents.trigger_input import check_template
 from memory.agents.triggers import (
     INGEST,
+    POSTED,
     RESUME,
     THROTTLED,
     IngestConfig,
@@ -856,8 +857,10 @@ async def work_claim(
     ({"trigger_id", "item_ids", "changes": {"<item id>": [change tags]}, and
     "coalesced": {"<item id>": [ids of items whose deliveries were folded into it]}
     when any were}), its input rendered from the trigger's template and the items as
-    they are now. Items the trigger can no longer read are left out and their
-    deliveries skipped; ones only your key can't read are left for another worker. A
+    they are now. Items the trigger can no longer read, or that one of its runs
+    reported posting (agent_work_submit's `posted`), are left out and their
+    deliveries skipped; ones only your key can't read are left for another worker,
+    and those no worker's key can read wait and end `expired`. A
     trigger's order_by ("item" or "thread") holds a delivery back until an earlier one
     for the same item or thread is answered. Report on it with agent_work_submit as on
     any run; capabilities don't apply. agent_work_queues shows what is waiting.
@@ -924,7 +927,13 @@ def same_outcome(run: AgentRun, result: Any, error: str | None) -> bool:
 
 
 def record_outcome(
-    run_id: str, lease_token: str, user_id: int, result: Any, error: str | None, usage: dict
+    run_id: str,
+    lease_token: str,
+    user_id: int,
+    result: Any,
+    error: str | None,
+    usage: dict,
+    posted: list[dict[str, str]],
 ) -> dict:
     with make_session() as db:
         run = leased_run(db, run_id, lease_token, user_id)
@@ -936,6 +945,7 @@ def record_outcome(
         run.status = (RunStatus.DONE if error is None else RunStatus.FAILED).value
         run.result, run.error = stored, error
         run.worker_usage = usage or None
+        run.posted = posted or None
         run.finished_at = datetime.now(timezone.utc)
         db.commit()
         return run.serialize()
@@ -949,6 +959,7 @@ async def work_submit(
     result: Any = None,
     error: str | None = None,
     usage: dict | None = None,
+    posted: list[dict] | None = None,
 ) -> dict:
     """Finish a run you claimed with agent_work_claim: either its `result` (text, or an
     object matching the run's result_schema) or an `error` (at most 10000 characters)
@@ -960,7 +971,10 @@ async def work_submit(
     that ended (cancelled, already answered, or failed by the server for lapsed or
     overlong leases) is refused, saying how it ended. `usage` optionally reports what you spent (input_tokens,
     output_tokens, model, cost_usd): it is shown on the run and never counted against
-    your budgets.
+    your budgets. `posted` lists what you posted while working on it (at most 50 of
+    {"source", "external_id"}: slack "channel:ts", discord message id, email
+    Message-ID header (as email_send returns it), beeper message id); once Memory
+    ingests them, they never match the trigger that started this run.
     """
     user_id = worker_caller()
     if (result is None) == (error is None):
@@ -968,8 +982,16 @@ async def work_submit(
     if error is not None and len(error) > MAX_WORKER_ERROR_CHARS:
         raise ValueError(f"error is longer than {MAX_WORKER_ERROR_CHARS} characters")
     reported = WorkerUsage.model_validate(usage or {}).model_dump(mode="json", exclude_none=True)
+    posts = POSTED.validate_python(posted or [])
     return await asyncio.to_thread(
-        record_outcome, run_id, lease_token, user_id, result, error, reported
+        record_outcome,
+        run_id,
+        lease_token,
+        user_id,
+        result,
+        error,
+        reported,
+        [p.model_dump() for p in posts],
     )
 
 
@@ -977,7 +999,8 @@ async def work_submit(
 @visible_when(require_scopes(SCOPE_AGENTS_WORK))
 async def work_queues() -> dict:
     """Your triggers' queues (agent_work_claim's `queue`), each with how many deliveries
-    are waiting to be claimed and the oldest one's age in seconds (null when none)."""
+    are waiting to be claimed and the oldest one's age in seconds (null when none).
+    Deliveries no worker's key can read wait here and end `expired`."""
     user_id = worker_caller()
     with make_session() as db:
         return {"queues": backlog(db, user_id)}
@@ -1111,14 +1134,30 @@ async def trigger_upsert(
     waiting to run; beyond it the oldest are dropped. Omitted on update, these are kept.
 
     config: {"filter": {source_types, tags_any, channel_ids, exclude_channel_ids,
-    text_contains, regex, exclude_authors, repos, mentions_me}, "delivery": {"mode": "per_item"} or {"mode": "batch",
+    text_contains, regex, authors_any, exclude_authors, known_people_only, changed_by_any,
+    exclude_changed_by, exclude_own, repos, mentions_me, threads_im_in, dms_to_me}, "delivery": {"mode": "per_item"} or {"mode": "batch",
     "window_sec", "max_items"}, "template": the run's input, "on_edit": bool, "on_changes": [...]}. Set filter values must all
     hold; within a list, any value matches. exclude_channel_ids drops items in
     those channels and their threads; a Discord thread whose parent isn't known
     yet still matches until a thread listing or thread event records it. Beeper
     messages match by their beeper_chat_id and sender. repos: GitHub "owner/name",
     case-insensitive. mentions_me: true matches Discord and Slack messages that
-    @-mention one of your Discord bots or your Slack app's bot user. Every stored
+    @-mention one of your Discord bots or your Slack app's bot user. authors_any
+    keeps only items by those authors, named by ids the platform vouches for:
+    Discord and Slack user ids, Beeper sender ids, GitHub logins (case-insensitive);
+    display names never match. Email never passes authors_any or
+    known_people_only: its From header is the sender's to write. known_people_only
+    keeps only items whose author is linked to a Person that is linked to a user,
+    or that you or an admin recorded (not the ones ingest makes for everyone it
+    sees). changed_by_any / exclude_changed_by filter by who made each change, named
+    the same way: a new item or edit is made by its author, a GitHub comments or
+    review change by whoever wrote the new comments or reviews, commits by the head
+    commit's author; other changes have no known maker, which changed_by_any never
+    passes and exclude_changed_by never drops. Changes dropped this way aren't
+    delivered, and an event left with none doesn't match. threads_im_in: Discord and
+    Slack thread messages where you (your Slack user, your linked Discord accounts)
+    or one of your bots posted. dms_to_me: direct messages that reached your
+    Discord bots or Slack apps. Every stored
     item is matched, however short. Only items stored since it was last enabled
     match, each at most once, and only if you can read them; so does an older item
     once its sync reports news about it (commits, comments, review, checks_complete
@@ -1143,8 +1182,9 @@ async def trigger_upsert(
     nothing counts as "edited". The run's trigger_ref.changes lists each item's
     changes, with "new" for a first match.
 
-    Loop protection: posts by our own Discord bots, by connected Slack apps' bot
-    users and by your Slack user never match. An on_edit agent that edits the
+    Loop protection: posts by our own Discord bots and by connected Slack apps' bot
+    users never match; nor do your own Slack user's, unless "exclude_own": false.
+    Items a run of this trigger reported posting (agent_work_submit's `posted`) never match it. An on_edit agent that edits the
     item it was given re-fires itself, and anything else an agent writes that
     gets ingested again (email, GitHub, Beeper) is only stopped by the caps. Over a
     cap (max_per_hour, the definition's max_runs_per_hour or a daily cost pool), a

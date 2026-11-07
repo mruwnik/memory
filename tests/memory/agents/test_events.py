@@ -197,10 +197,10 @@ def fail_for(monkeypatch, item, error: BaseException = RuntimeError("bad item"))
     """Make matching raise for one item."""
     real_facts = triggers.item_facts
 
-    def facts(i):
+    def facts(i, **kwargs):
         if i.id == item.id:
             raise error
-        return real_facts(i)
+        return real_facts(i, **kwargs)
 
     monkeypatch.setattr(triggers, "item_facts", facts)
 

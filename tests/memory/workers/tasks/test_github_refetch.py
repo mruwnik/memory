@@ -118,7 +118,7 @@ def test_item_changes(changed, expected):
     repo = GithubRepo(id=1, owner="o", name="r", tags=[])
     existing = github._create_github_item(repo, pr_data())
 
-    assert github.item_changes(existing, pr_data(**changed), {OWN}) == expected
+    assert github.item_changes(existing, pr_data(**changed), {OWN}).tags == expected
 
 
 @pytest.mark.parametrize(
@@ -130,11 +130,29 @@ def test_item_changes_ignores_a_first_recorded_value(field, after):
     existing = github._create_github_item(repo, pr_data())
     setattr(existing, field, None)
 
-    assert github.item_changes(existing, pr_data(**{field: after}), {OWN}) == []
+    assert github.item_changes(existing, pr_data(**{field: after}), {OWN}).tags == []
+
+
+@pytest.mark.parametrize(
+    "changed, expected",
+    [
+        ({"reviews": [review(5, "alice"), review(6, OWN)]}, {"review": ["alice"]}),
+        ({"comments": [comment(1, "bob", LATER), comment(2, "bob", EARLIER)]}, {"comments": ["bob"]}),
+        ({"head_sha": "b" * 40, "head_author": "dev"}, {"commits": ["dev"]}),
+        ({"head_sha": "b" * 40}, {}),
+        ({"head_author": "dev"}, {}),
+        ({"reviews": [review(5, f"{OWN}[bot]")]}, {}),
+    ],
+)
+def test_item_changes_name_who_made_the_comments_reviews_and_commits(changed, expected):
+    repo = GithubRepo(id=1, owner="o", name="r", tags=[])
+    existing = github._create_github_item(repo, pr_data())
+
+    assert github.item_changes(existing, pr_data(**changed), {OWN}).actors == expected
 
 
 def test_item_changes_new_item():
-    assert github.item_changes(None, pr_data(), {OWN}) == ["new"]
+    assert github.item_changes(None, pr_data(), {OWN}) == (["new"], {})
 
 
 @pytest.mark.parametrize("own", ["memory-app[bot]", "memory-app"])
@@ -143,7 +161,7 @@ def test_item_changes_matches_app_bot_logins_with_or_without_suffix(own):
     existing = github._create_github_item(repo, pr_data())
 
     new = pr_data(comments=[comment(1, "memory-app", LATER)], reviews=[review(5, "memory-app[bot]")])
-    assert github.item_changes(existing, new, {own}) == []
+    assert github.item_changes(existing, new, {own}).tags == []
 
 
 # --- Refetch task against a real DB, GitHub mocked at its HTTP boundary ---
@@ -181,12 +199,21 @@ def repo(db_session, account):
     return repo
 
 
-def rollup(state: str | None, contexts: list[dict]) -> dict:
-    return {"commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": state, "contexts": {"nodes": contexts}}}}]}}
+def rollup(state: str | None, contexts: list[dict], author: str | None = None) -> dict:
+    commit = {
+        "statusCheckRollup": {"state": state, "contexts": {"nodes": contexts}},
+        "author": {"user": author and {"login": author}},
+    }
+    return {"commits": {"nodes": [{"commit": commit}]}}
 
 
 def pr_node(
-    head: str, updated: str = "2024-01-06T00:00:00Z", comments=(), checks=None, state=None
+    head: str,
+    updated: str = "2024-01-06T00:00:00Z",
+    comments=(),
+    checks=None,
+    state=None,
+    head_author=None,
 ) -> dict:
     contexts = [{"context": n, "state": c.upper()} for n, c in (checks or {}).items()]
     return {
@@ -207,7 +234,7 @@ def pr_node(
         "changedFiles": 1,
         "headRefOid": head,
         "isDraft": False,
-        **rollup(state, contexts),
+        **rollup(state, contexts, head_author),
         "comments": {
             "nodes": [
                 {"databaseId": i, "author": {"login": a}, "body": f"c{i}", "createdAt": at, "updatedAt": at}
@@ -278,6 +305,24 @@ def test_refetch_after_synchronize_reports_commits(db_session, repo, qdrant, git
     assert item.head_sha == "b" * 40
     assert changes_reported(db_session) == [(item.id, ["commits"])]
     assert queue_refetch(repo.id, 7, "pr")  # the run cleared its debounce mark
+
+
+def test_refetch_records_who_made_each_change(db_session, repo, qdrant, github_serves):
+    github_serves(pr_node("a" * 40) | branch_context("base", "testorg/testrepo"))
+    github.refetch_github_item(repo.id, 7, "pr")
+    forget_events(db_session)
+
+    node = pr_node(
+        "b" * 40, updated=LATER, comments=[("carol", LATER), (OWN, LATER)], head_author="dev"
+    )
+    github_serves(node | branch_context("base", "testorg/testrepo", ["b" * 40]))
+    github.refetch_github_item(repo.id, 7, "pr")
+
+    [event] = db_session.query(Event).all()
+    assert (event.changes, event.actors) == (
+        ["commits", "comments", "review"],
+        {"commits": ["dev"], "comments": ["carol"], "review": ["bob"]},
+    )
 
 
 def test_refetch_ignores_own_comment(db_session, repo, qdrant, github_serves):
