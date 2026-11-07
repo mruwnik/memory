@@ -22,6 +22,8 @@ a new, empty `## Unreleased` above it.
 
 ## Unreleased
 
+## v0.4.11 (2026-11-07)
+
 ### Changes
 
 - GitHub webhooks install themselves: **Sources → GitHub → Webhook → Install on all repos** generates a secret if there is none and creates (or PATCHes) one repo hook per active tracked repo, found by its payload URL; other hooks are untouched. The dialog lists each repo's result (installed, missing permission, rejected by GitHub, failed); the manual instructions moved into a collapsed "Set it up by hand".
@@ -39,6 +41,14 @@ a new, empty `## Unreleased` above it.
 - A GitHub webhook delivery whose refetch couldn't be queued is processed again when GitHub retries it, instead of being answered "duplicate".
 - A Slack channel push stops reaching (bot removed from it, `message.groups` unsubscribed) no longer re-flags its app and re-notifies the owner every poll while other channels keep delivering: the miss clears that channel's `push_since` until push delivers there again, and a Slack event ends the app's outage only once `PUSH_STALE_HOURS` have passed since the last miss.
 
+### Required env vars
+
+None.
+
+### Manual steps
+
+None.
+
 ### Other changes for operators
 
 - To install hooks, a PAT needs `admin:repo_hook` (classic) or **Webhooks: Read and write** (fine-grained). Without it repos show "Missing permission"; polling and hand-added hooks keep working.
@@ -54,6 +64,10 @@ a new, empty `## Unreleased` above it.
 - `20261207_github_webhook_status`: adds nullable `github_repos.webhook_status` and `github_repos.webhook_checked_at` (`ADD COLUMN IF NOT EXISTS`). Fast.
 - `20261207_github_pr_issue_types`: sets `source_item.type` to `github_pr` / `github_issue` from `github_item.kind` (one UPDATE over the GitHub rows; no schema change), and adds both types to every ingest trigger whose `filter.source_types` names `github_item`. Fast.
 - `20261208_push_missed`: adds nullable `push_missing_since`/`push_last_miss_at` to `github_repos` and `slack_apps`, and `push_since` to `slack_channels`. Fast (nullable columns, no rewrite).
+
+### Post-deploy commands
+
+None.
 
 ## v0.4.10 (2026-11-06)
 
