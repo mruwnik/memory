@@ -52,7 +52,7 @@ export default function AgentsPage() {
               badges={<>
                 {!!d.problems?.length && <Badge tone="danger">Can't run</Badge>}
                 {d.last_run && <StatusBadge status={d.last_run.status} />}
-                {!!d.triggers?.tripped && <Badge tone="warning">{plural(d.triggers.tripped, 'trigger')} tripped</Badge>}
+                {!!d.subscriptions?.tripped && <Badge tone="warning">{plural(d.subscriptions.tripped, 'subscription')} tripped</Badge>}
               </>}
               meta={[
                 <span className="font-mono">{d.spec.model}</span>,

@@ -24,7 +24,7 @@ from memory.common import (
     summarizer,
     summary_batch,
 )
-from memory.agents import clock, triggers
+from memory.agents import clock, subscriptions
 from memory.agents.cancel import cancel_tree
 from memory.common.db.models.agents import EXECUTOR_SERVER, MAX_RETENTION_DAYS, RunStatus
 from memory.common.db.models.events import ITEM, REMOVED
@@ -44,7 +44,7 @@ from memory.common.celery_app import (
     ROUTE_EVENTS,
     RUN_CLOCK,
     SWEEP_AGENT_RUNS,
-    SWEEP_TRIGGER_DELIVERIES,
+    SWEEP_DELIVERIES,
     CLEANUP_OLD_CLAUDE_SESSIONS,
     CLEANUP_OLD_TASK_RESULTS,
     CLEANUP_OLD_PENDING_JOBS,
@@ -1586,7 +1586,7 @@ def fold_into_spend(runs):
 def purge_agent_runs() -> dict[str, int]:
     """Delete runs (with their transcripts) past their agent's retention_days, else
     AGENT_RUN_RETENTION_DAYS, unless they or a run that started them are starred,
-    keeping their cost and tokens in llm_spend; old trigger match claims; old routed events;
+    keeping their cost and tokens in llm_spend; old deliveries; old routed events;
     and raw events' payloads past EVENT_RAW_PAYLOAD_DAYS."""
     retention = func.least(
         func.coalesce(
@@ -1635,7 +1635,7 @@ def purge_agent_runs() -> dict[str, int]:
         purged += len(ids)
     logger.info("purged %d agent runs", purged)
     with make_session() as db:
-        claims = triggers.purge_matches(db, triggers.MATCH_RETENTION)
+        purged_deliveries = subscriptions.purge_deliveries(db, subscriptions.DELIVERY_RETENTION)
     events = apply_in_batches(
         delete(Event),
         Event.id,
@@ -1649,7 +1649,7 @@ def purge_agent_runs() -> dict[str, int]:
     )
     return {
         "purged_runs": purged,
-        "purged_trigger_matches": claims,
+        "purged_deliveries": purged_deliveries,
         "purged_events": events,
         "purged_raw_payloads": payloads,
     }
@@ -1657,8 +1657,8 @@ def purge_agent_runs() -> dict[str, int]:
 
 @app.task(name=ROUTE_EVENTS)
 def route_events() -> dict[str, int]:
-    """Write a delivery for every ingest trigger a pending event matches, and send the per-item ones."""
-    return {"delivered": len(triggers.route_events())}
+    """Write a delivery for every subscription a pending event matches, and send the per-item ones."""
+    return {"delivered": len(subscriptions.route_events())}
 
 
 @app.task(name=RUN_CLOCK)
@@ -1667,7 +1667,7 @@ def run_clock() -> dict[str, int]:
     return clock.run_clock()
 
 
-@app.task(name=SWEEP_TRIGGER_DELIVERIES)
-def sweep_trigger_deliveries() -> dict[str, int]:
-    """Send trigger deliveries that are due or were lost, and end stale or excess ones."""
-    return triggers.sweep_deliveries()
+@app.task(name=SWEEP_DELIVERIES)
+def sweep_deliveries() -> dict[str, int]:
+    """Send deliveries that are due or were lost, and end stale or excess ones."""
+    return subscriptions.sweep_deliveries()

@@ -8,7 +8,7 @@ from memory.agents import cron
 from memory.agents.cron import start_time_run
 from memory.common import settings
 from memory.common.celery_app import RUN_AGENT
-from memory.common.db.models import AgentDefinition, AgentRun, AgentTrigger, APIKey, Event
+from memory.common.db.models import AgentDefinition, AgentRun, Subscription, APIKey, Event
 
 SPEC = {"system_prompt": "x", "model": "anthropic/m", "reasoning": "high"}
 
@@ -48,8 +48,8 @@ def api_key(db, user, scopes, revoked=False):
     return key
 
 
-def subscription(db, user, d, key=None):
-    trigger = AgentTrigger(
+def new_subscription(db, user, d, key=None):
+    subscription = Subscription(
         user_id=user.id,
         name="daily",
         kind="cron",
@@ -60,14 +60,14 @@ def subscription(db, user, d, key=None):
         via_api_key=key is not None,
         next_at=now() + timedelta(days=1),
     )
-    db.add(trigger)
+    db.add(subscription)
     db.commit()
-    return trigger
+    return subscription
 
 
-def tick(db, trigger, fire_at=None, result=None, missed=0):
+def tick(db, subscription, fire_at=None, result=None, missed=0):
     event = Event(
-        kind="tick", trigger_id=trigger.id, owner_id=trigger.user_id,
+        kind="tick", subscription_id=subscription.id, owner_id=subscription.user_id,
         fire_at=fire_at or now(), data={"missed": missed}, result=result,
         routed_at=now() if result else None,
     )
@@ -78,22 +78,22 @@ def tick(db, trigger, fire_at=None, result=None, missed=0):
 
 def test_a_tick_starts_its_run_and_ends_done(db_session, owner, fake_providers, no_celery_dispatch):
     d = definition(db_session, owner)
-    trigger = subscription(db_session, owner, d)
-    earlier = tick(db_session, trigger, now() - timedelta(days=1), result={"status": "done"})
-    e = tick(db_session, trigger, missed=2)
+    subscription = new_subscription(db_session, owner, d)
+    earlier = tick(db_session, subscription, now() - timedelta(days=1), result={"status": "done"})
+    e = tick(db_session, subscription, missed=2)
 
     run_id = start_time_run(e.id)
 
     db_session.refresh(e)
     run = db_session.get_one(AgentRun, run_id)
     assert e.result == {"status": "done", "run_id": run_id}
-    assert (run.definition_id, run.input, run.trigger_kind, run.trigger_id, run.dedupe_key) == (
-        d.id, "daily digest", "cron", trigger.id, f"event:{e.id}",
+    assert (run.definition_id, run.input, run.trigger_kind, run.subscription_id, run.dedupe_key) == (
+        d.id, "daily digest", "cron", subscription.id, f"event:{e.id}",
     )
     assert run.trigger_ref == {
         "event_id": e.id,
         "time": e.fire_at.isoformat(),
-        "trigger_id": trigger.id,
+        "subscription_id": subscription.id,
         "missed": 2,
         "since": earlier.fire_at.isoformat(),
     }
@@ -109,7 +109,7 @@ def test_a_timer_runs_its_definition_with_its_input(db_session, owner, fake_prov
     run_id = start_time_run(e.id)
 
     run = db_session.get_one(AgentRun, run_id)
-    assert (run.input, run.trigger_kind, run.trigger_id, run.trigger_ref) == (
+    assert (run.input, run.trigger_kind, run.subscription_id, run.trigger_ref) == (
         "once", "timer", None, {"event_id": e.id, "time": e.fire_at.isoformat()},
     )
 
@@ -142,8 +142,8 @@ def test_a_code_agents_hourly_cap_sheds_its_timers(db_session, owner, code_agent
 
 
 def test_a_redelivery_does_nothing(db_session, owner, fake_providers):
-    trigger = subscription(db_session, owner, definition(db_session, owner))
-    e = tick(db_session, trigger)
+    subscription = new_subscription(db_session, owner, definition(db_session, owner))
+    e = tick(db_session, subscription)
 
     first = start_time_run(e.id)
     second = start_time_run(e.id)
@@ -152,8 +152,8 @@ def test_a_redelivery_does_nothing(db_session, owner, fake_providers):
 
 
 def test_a_resend_after_a_crash_reuses_the_run(db_session, owner, fake_providers):
-    trigger = subscription(db_session, owner, definition(db_session, owner))
-    e = tick(db_session, trigger)
+    subscription = new_subscription(db_session, owner, definition(db_session, owner))
+    e = tick(db_session, subscription)
     run_id = start_time_run(e.id)
     db_session.refresh(e)
     e.routed_at, e.result = None, None
@@ -165,9 +165,9 @@ def test_a_resend_after_a_crash_reuses_the_run(db_session, owner, fake_providers
 
 def test_the_creating_api_key_bounds_the_run(db_session, owner, fake_providers):
     key = api_key(db_session, owner, ["agents", "read"])
-    trigger = subscription(db_session, owner, definition(db_session, owner), key)
+    subscription = new_subscription(db_session, owner, definition(db_session, owner), key)
 
-    run = db_session.get_one(AgentRun, start_time_run(tick(db_session, trigger).id))
+    run = db_session.get_one(AgentRun, start_time_run(tick(db_session, subscription).id))
 
     assert (run.api_key_id, sorted(run.scopes)) == (key.id, ["agents", "read"])
 
@@ -191,14 +191,14 @@ def test_a_subscription_that_can_never_run_fails_and_trips(
         "invalid spec": lambda: (SPEC | {"reasoning": "medium", "model": "openai/m"}, None),
     }
     spec, key = setups[case]()
-    trigger = subscription(db_session, owner, definition(db_session, owner, spec), key)
-    e = tick(db_session, trigger)
+    subscription = new_subscription(db_session, owner, definition(db_session, owner, spec), key)
+    e = tick(db_session, subscription)
 
     assert start_time_run(e.id) is None
 
     db_session.refresh(e)
-    db_session.refresh(trigger)
-    assert (e.result["status"], trigger.enabled, told) == ("failed", False, ["Schedule paused: daily"])
+    db_session.refresh(subscription)
+    assert (e.result["status"], subscription.enabled, told) == ("failed", False, ["Schedule paused: daily"])
     assert expected in e.result["error"]
     assert db_session.query(AgentRun).count() == 0
 
@@ -212,20 +212,20 @@ def test_a_cap_sheds_the_tick_and_keeps_the_subscription(db_session, owner, fake
         )
     )
     db_session.commit()
-    trigger = subscription(db_session, owner, d)
-    e = tick(db_session, trigger)
+    subscription = new_subscription(db_session, owner, d)
+    e = tick(db_session, subscription)
 
     start_time_run(e.id)
 
     db_session.refresh(e)
-    db_session.refresh(trigger)
-    assert (e.result["status"], trigger.enabled) == ("skipped:shed:budget", True)
+    db_session.refresh(subscription)
+    assert (e.result["status"], subscription.enabled) == ("skipped:shed:budget", True)
 
 
 def test_a_disabled_subscriptions_tick_is_skipped(db_session, owner, fake_providers):
-    trigger = subscription(db_session, owner, definition(db_session, owner))
-    e = tick(db_session, trigger)
-    trigger.enabled = False
+    subscription = new_subscription(db_session, owner, definition(db_session, owner))
+    e = tick(db_session, subscription)
+    subscription.enabled = False
     db_session.commit()
 
     start_time_run(e.id)
@@ -235,8 +235,8 @@ def test_a_disabled_subscriptions_tick_is_skipped(db_session, owner, fake_provid
 
 
 def test_an_unexpected_error_leaves_the_tick_for_a_resend(db_session, owner, fake_providers, monkeypatch):
-    trigger = subscription(db_session, owner, definition(db_session, owner))
-    e = tick(db_session, trigger)
+    subscription = new_subscription(db_session, owner, definition(db_session, owner))
+    e = tick(db_session, subscription)
 
     def broker_down(*args, **kwargs):
         raise ConnectionError("broker unreachable")
@@ -246,12 +246,12 @@ def test_an_unexpected_error_leaves_the_tick_for_a_resend(db_session, owner, fak
         start_time_run(e.id)
 
     db_session.refresh(e)
-    db_session.refresh(trigger)
-    assert (e.routed_at, trigger.enabled) == (None, True)
+    db_session.refresh(subscription)
+    assert (e.routed_at, subscription.enabled) == (None, True)
 
 
 def late_tick(db, owner, d, at):
-    return tick(db, subscription(db, owner, d), at)
+    return tick(db, new_subscription(db, owner, d), at)
 
 
 def late_timer(db, owner, d, at):

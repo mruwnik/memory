@@ -1,4 +1,4 @@
-"""Single-item GitHub refetches and the trigger changes a sync reports."""
+"""Single-item GitHub refetches and the changes a sync reports."""
 
 from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock, patch

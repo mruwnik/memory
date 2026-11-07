@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { emptyTriggerConfig, type Subscription, type TriggerConfig } from '@/hooks/useAgents'
+import { emptyIngestConfig, type Subscription, type IngestConfig } from '@/hooks/useAgents'
 import {
   deliveryLabel, describeFilter, describeRaw, formFor, formProblem, newForm, sourceKind, subscriptionState, toUpsert, type SubscriptionForm,
 } from './subscriptions'
 
-const filterConfig = { ...emptyTriggerConfig(), filter: { ...emptyTriggerConfig().filter, tags_any: ['ai'] } }
+const filterConfig = { ...emptyIngestConfig(), filter: { ...emptyIngestConfig().filter, tags_any: ['ai'] } }
 
 const subscription = (overrides: Partial<Subscription> = {}): Subscription => ({
   id: 7, name: 'reviews', kind: 'ingest', config: filterConfig, definition_id: null, handler: { queue: 'prs' },
@@ -90,7 +90,7 @@ it('summarises a filter and its delivery', () => {
 })
 
 it('summarises a stored filter that predates newer fields', () => {
-  const stored = { delivery: { mode: 'per_item' }, template: 't', filter: { tags_any: ['ai'] } } as unknown as TriggerConfig
+  const stored = { delivery: { mode: 'per_item' }, template: 't', filter: { tags_any: ['ai'] } } as unknown as IngestConfig
 
   expect(describeFilter(stored)).toBe('tags: ai · one delivery per item')
 })

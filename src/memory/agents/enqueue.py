@@ -1,4 +1,4 @@
-"""The one way any trigger starts an agent run."""
+"""The one way anything starts an agent run."""
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -12,7 +12,7 @@ from memory.agents.caps import (
     CapExceeded,
     check_hourly_rate,
     check_run_rate,
-    check_trigger_rate,
+    check_subscription_rate,
     children_cost,
     resolve_run_cap,
 )
@@ -35,8 +35,8 @@ from memory.common.db.connection import DBSession
 from memory.common.db.models import (
     AgentDefinition,
     AgentRun,
-    AgentTrigger,
-    AgentTriggerMatch,
+    Subscription,
+    Delivery,
     APIKey,
     ExternalMCPServer,
     LLMProviderKey,
@@ -62,11 +62,11 @@ class SpecInvalid(ValueError):
 
 @dataclass(frozen=True)
 class TriggerInfo:
-    kind: str  # manual | mcp | cron | ingest | relative | webhook | discord | chain
+    kind: str  # manual | mcp | agent | cron | timer | ingest | raw
     ref: dict[str, Any] = field(default_factory=dict)
-    # Unique per trigger when trigger_id is set, else per definition.
+    # Unique per subscription when subscription_id is set, else per definition.
     dedupe_key: str | None = None
-    trigger_id: int | None = None
+    subscription_id: int | None = None
 
 
 def server_errors(db: DBSession, user_id: int, spec: AgentSpec) -> list[str]:
@@ -200,22 +200,22 @@ def enqueue_run(
     agent: str | None = None,
     api_key: APIKey | None = None,
     parent: AgentRun | None = None,
-    deliveries: Sequence[AgentTriggerMatch] = (),
+    deliveries: Sequence[Delivery] = (),
 ) -> AgentRun:
     """Validate, cap, insert a pending run and dispatch it.
 
     Tool visibility is not checked here (it needs the owner's MCP identity):
     interactive callers check it up front and the runner re-checks at start.
-    Runs of a trigger or definition hold their row locks until the new run is
+    Runs of a subscription or definition hold their row locks until the new run is
     committed, so dedupe and the rate caps don't race; the unique partial
-    indexes on (trigger_id, dedupe_key) and (definition_id, dedupe_key) remain
+    indexes on (subscription_id, dedupe_key) and (definition_id, dedupe_key) remain
     the backstop.
 
     A `parent` run's child gets at most its scopes and tools, one more level of
     depth, and a cap no larger than what the parent has left (half of it, unless the
     child's spec sets max_cost_usd), which it holds until it finishes.
 
-    `deliveries`, the trigger's claims the run is for, are linked to a new run in
+    `deliveries`, the subscription's deliveries the run is for, are linked to a new run in
     its transaction.
     """
     if len(input) > MAX_TEXT_CHARS:
@@ -233,17 +233,17 @@ def enqueue_run(
         problems += child_problems(parent, spec)
     if problems or (provider_key is None and uses_server(spec)):
         raise SpecInvalid(problems)
-    # Serialise a trigger's and a definition's enqueues until this run is committed,
+    # Serialise a subscription's and a definition's enqueues until this run is committed,
     # so concurrent starts can't all pass the rate checks or the dedupe lookup. The
-    # trigger goes first, as in fire_trigger.
+    # subscription goes first, as in fire_subscription.
     subscription = (
         None
-        if trigger.trigger_id is None
-        # NO KEY UPDATE, as triggers.lock_trigger: claims being inserted hold key-share locks on it.
-        else db.get(AgentTrigger, trigger.trigger_id, with_for_update={"key_share": True})
+        if trigger.subscription_id is None
+        # NO KEY UPDATE, as subscriptions.lock_subscription: deliveries being inserted hold key-share locks on it.
+        else db.get(Subscription, trigger.subscription_id, with_for_update={"key_share": True})
     )
-    if trigger.trigger_id is not None and subscription is None:
-        raise ValueError(f"unknown trigger {trigger.trigger_id}")
+    if trigger.subscription_id is not None and subscription is None:
+        raise ValueError(f"unknown subscription {trigger.subscription_id}")
     if definition is not None:
         db.query(AgentDefinition).filter(
             AgentDefinition.id == definition.id
@@ -251,7 +251,7 @@ def enqueue_run(
     if (existing := duplicate(db, trigger, definition)) is not None:
         return existing
     if subscription is not None:
-        check_trigger_rate(db, subscription)
+        check_subscription_rate(db, subscription)
     if definition is not None:
         check_run_rate(db, definition, spec.max_runs_per_hour)
     elif agent is not None:
@@ -277,7 +277,7 @@ def enqueue_run(
         trigger_kind=trigger.kind,
         trigger_ref=trigger.ref,
         dedupe_key=trigger.dedupe_key,
-        trigger_id=trigger.trigger_id,
+        subscription_id=trigger.subscription_id,
         api_key_id=api_key.id if api_key else None,
         provider_key_id=provider_key.id if provider_key else None,
         scopes=scopes,
@@ -300,10 +300,10 @@ def duplicate(
     """The run already started under `trigger`'s dedupe key, if any."""
     if trigger.dedupe_key is None:
         return None
-    if trigger.trigger_id is not None:
-        scope = AgentRun.trigger_id == trigger.trigger_id
+    if trigger.subscription_id is not None:
+        scope = AgentRun.subscription_id == trigger.subscription_id
     elif definition is not None:
-        scope = (AgentRun.definition_id == definition.id) & AgentRun.trigger_id.is_(None)
+        scope = (AgentRun.definition_id == definition.id) & AgentRun.subscription_id.is_(None)
     else:
         return None
     return (

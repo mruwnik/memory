@@ -15,7 +15,7 @@ const catalog: Catalog = {
   ceilings: { max_timeout_sec: 1800, max_runs_per_hour: 60, default_user_key_run_cost_usd: '2.00' },
   default_model: 'anthropic/claude-sonnet-5-5',
   agents: [],
-  trigger_source_types: [],
+  subscription_source_types: [],
   mcp_servers: [],
   provider_keys: [],
 }

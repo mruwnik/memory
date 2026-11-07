@@ -360,7 +360,7 @@ def store_message(
     backfill: bool = False,
 ) -> str:
     """Store, edit or delete one message as Server now lists it; returns what was
-    done. ``backfill`` marks it history, which triggers don't react to.
+    done. ``backfill`` marks it history, which subscriptions don't react to.
 
     A REACTION row is never stored: its parent lists the reactions, and only
     which message it reacts to is kept. Hidden rows (state events) aren't stored either.

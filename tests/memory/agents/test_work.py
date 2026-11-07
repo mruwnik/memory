@@ -105,7 +105,7 @@ async def test_a_worker_claims_its_owners_run(
     )
     assert claimed["spec"]["system_prompt"] == "check this"
     assert claimed["lease_token"]
-    # Only what executing it takes: nothing about its owner, their key or its trigger.
+    # Only what executing it takes: nothing about its owner, their key or its subscription.
     assert set(claimed) == {
         "id", "status", "input", "spec", "lease_token", "lease_expires_at",
         "lease_lapses", "worker_label",

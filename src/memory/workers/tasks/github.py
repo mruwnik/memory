@@ -121,7 +121,7 @@ class Changes(NamedTuple):
 def item_changes(
     existing: GithubItem | None, new: GithubIssueData, logins: Collection[str]
 ) -> Changes:
-    """What a sync of ``new`` changes about ``existing``, as trigger change tags,
+    """What a sync of ``new`` changes about ``existing``, as change tags,
     and who made them.
 
     A head SHA, check summary or draft flag seen for the first time is not a

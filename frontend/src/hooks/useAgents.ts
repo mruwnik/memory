@@ -59,7 +59,7 @@ export interface AgentDefinition {
   created_at: string | null
   updated_at: string | null
   last_run?: AgentRun | null
-  triggers?: { total: number; enabled: number; tripped: number }
+  subscriptions?: { total: number; enabled: number; tripped: number }
   // External tools whose schema changed after this definition was saved.
   changed_tools?: string[]
   // Why it can't run as configured; empty when it can.
@@ -117,7 +117,7 @@ export interface Catalog {
   }
   default_model: string
   agents: { slug: string; title: string; description: string }[]
-  trigger_source_types: string[]
+  subscription_source_types: string[]
   mcp_servers: ExternalServer[]
   provider_keys: ProviderKey[]
 }
@@ -251,7 +251,7 @@ export const CHANGE_TAGS = [
   'labels', 'assignees', 'draft', 'title', 'due', 'priority',
 ] as const
 
-export interface TriggerConfig {
+export interface IngestConfig {
   filter: IngestFilter
   delivery: Delivery
   template: string
@@ -302,7 +302,7 @@ interface SubscriptionBase {
 }
 
 export type Subscription =
-  | (SubscriptionBase & { kind: 'ingest'; config: TriggerConfig })
+  | (SubscriptionBase & { kind: 'ingest'; config: IngestConfig })
   | (SubscriptionBase & { kind: 'cron'; config: CronConfig })
   | (SubscriptionBase & { kind: 'raw'; config: RawConfig })
 
@@ -353,7 +353,7 @@ export interface SubscriptionUpsert {
   subscription_id?: number
   name?: string
   handler?: Handler
-  source?: Partial<TriggerConfig> | Partial<CronConfig> | { at: string; input?: string } | RawConfig
+  source?: Partial<IngestConfig> | Partial<CronConfig> | { at: string; input?: string } | RawConfig
   enabled?: boolean
   resume?: boolean
   max_per_hour?: number
@@ -364,7 +364,7 @@ export interface SubscriptionUpsert {
   create_only?: boolean
 }
 
-export const DEFAULT_TRIGGER_TEMPLATE = 'New items matched this trigger:\n\n{items}'
+export const DEFAULT_INGEST_TEMPLATE = 'New items matched this subscription:\n\n{items}'
 
 export const emptyFilter = (): IngestFilter => ({
   source_types: [], tags_any: [], channel_ids: [], exclude_channel_ids: [], text_contains: [], regex: null,
@@ -372,10 +372,10 @@ export const emptyFilter = (): IngestFilter => ({
   exclude_own: null, repos: [], mentions_me: false, threads_im_in: false, dms_to_me: false,
 })
 
-export const emptyTriggerConfig = (): TriggerConfig => ({
+export const emptyIngestConfig = (): IngestConfig => ({
   filter: emptyFilter(),
   delivery: { mode: 'per_item' },
-  template: DEFAULT_TRIGGER_TEMPLATE,
+  template: DEFAULT_INGEST_TEMPLATE,
   on_edit: false,
   on_changes: [],
 })

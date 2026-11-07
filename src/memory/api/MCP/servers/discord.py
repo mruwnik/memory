@@ -8,7 +8,7 @@ from fastmcp import FastMCP
 from sqlalchemy import desc, or_
 from fastmcp.server.dependencies import get_access_token
 
-from memory.agents.trigger_input import bare, untrusted
+from memory.agents.subscription_input import bare, untrusted
 from memory.api.MCP.access import (
     build_mcp_user_access_filter,
     fetch_user_by_token,
@@ -361,11 +361,11 @@ async def thread(item_id: int, limit: int = settings.CHAT_THREAD_REPLIES) -> dic
     """
     Get the thread a stored Discord message is in (or started): the message
     that started it and the latest replies. Use on a message from search or a
-    trigger delivery to see the conversation around it. Only messages you can
+    subscription delivery to see the conversation around it. Only messages you can
     read are returned.
 
     Args:
-        item_id: The message's item id (the `id` in search results or trigger input)
+        item_id: The message's item id (the `id` in search results or a delivery's input)
         limit: How many of the latest replies to return, oldest first (max 100)
 
     Returns:

@@ -11,7 +11,7 @@ from memory.common.db.rekey import encrypted_columns, is_encrypted_column, rekey
 # Binary columns that are not ciphertext. Anything else of type LargeBinary must
 # be named like an encrypted column so rotation picks it up.
 PLAINTEXT_BINARY_COLUMNS = {
-    ("agent_trigger_matches", "content_hash"),
+    ("deliveries", "content_hash"),
     ("source_item", "sha256"),
     ("github_pr_data", "diff_compressed"),
 }

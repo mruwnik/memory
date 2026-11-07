@@ -28,8 +28,8 @@ from memory.agents.clock import (
 from memory.agents.prebuilt import code_agent
 from memory.agents.raw_events import RawConfig, account_owner
 from memory.agents.spec import MAX_NAME_CHARS, MAX_TEXT_CHARS, AgentSpec
-from memory.agents.trigger_input import check_template
-from memory.agents.triggers import (
+from memory.agents.subscription_input import check_template
+from memory.agents.subscriptions import (
     INGEST,
     PENDING,
     RAW_WAITING,
@@ -59,8 +59,8 @@ from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import (
     AgentDefinition,
     AgentRun,
-    AgentTrigger,
-    AgentTriggerMatch,
+    Subscription,
+    Delivery,
     APIKey,
     Event,
     SourceItem,
@@ -82,7 +82,7 @@ subscription_mcp = FastMCP("memory-subscription")
 WRITERS = (SCOPE_AGENTS, SCOPE_AGENTS_WORK, SCOPE_SCHEDULE_WRITE)
 READERS = (*WRITERS, SCOPE_SCHEDULE)
 # Default names carry the subscription's id, so no other subscription may take one.
-DEFAULT_NAME = re.compile(r"(subscription|trigger|schedule)-\d+")
+DEFAULT_NAME = re.compile(r"subscription-\d+")
 SOURCE_KINDS = {"filter": INGEST, "raw": RAW, "cron": CRON, "at": TIMER}
 # Sources whose subscriptions say what is read, which schedule keys don't see.
 READING_KINDS = (INGEST, RAW)
@@ -108,38 +108,38 @@ def check_binding(bound_key_id: int | None, key: APIKey | None) -> None:
         raise ValueError("this subscription was set up through another credential")
 
 
-def check_pause_binding(db: DBSession, trigger: AgentTrigger, key: APIKey | None) -> None:
+def check_pause_binding(db: DBSession, subscription: Subscription, key: APIKey | None) -> None:
     """Pausing needs the binding too, unless the key it is bound to no longer
     works: then anyone who owns it may pause it."""
-    bound = db.get(APIKey, trigger.api_key_id) if trigger.api_key_id is not None else None
-    if trigger.via_api_key and (bound is None or not bound.is_valid()):
+    bound = db.get(APIKey, subscription.api_key_id) if subscription.api_key_id is not None else None
+    if subscription.via_api_key and (bound is None or not bound.is_valid()):
         return
-    check_binding(trigger.api_key_id, key)
+    check_binding(subscription.api_key_id, key)
 
 
-def owned(db: DBSession, subscription_id: int, user_id: int) -> AgentTrigger:
+def owned(db: DBSession, subscription_id: int, user_id: int) -> Subscription:
     """One of the caller's subscriptions that their credential may see."""
-    trigger = db.get(AgentTrigger, subscription_id)
+    subscription = db.get(Subscription, subscription_id)
     if (
-        trigger is None
-        or trigger.user_id != user_id
-        or trigger.kind in READING_KINDS and not reads_filters(set(caller_token()[1]))
+        subscription is None
+        or subscription.user_id != user_id
+        or subscription.kind in READING_KINDS and not reads_filters(set(caller_token()[1]))
     ):
         raise ValueError(f"unknown subscription {subscription_id}")
-    return trigger
+    return subscription
 
 
-def find(db: DBSession, user_id: int, subscription_id: int | None, name: str | None) -> AgentTrigger | None:
+def find(db: DBSession, user_id: int, subscription_id: int | None, name: str | None) -> Subscription | None:
     if subscription_id is not None:
         return owned(db, subscription_id, user_id)
     if name is None:
         return None
-    named = select(AgentTrigger.id).where(AgentTrigger.user_id == user_id, AgentTrigger.name == name.strip())
+    named = select(Subscription.id).where(Subscription.user_id == user_id, Subscription.name == name.strip())
     found = db.scalar(named)
     return None if found is None else owned(db, found, user_id)
 
 
-def checked_name(db: DBSession, user_id: int, name: str, trigger_id: int) -> str:
+def checked_name(db: DBSession, user_id: int, name: str, subscription_id: int) -> str:
     """`name` stripped, refused if empty, another subscription's default or already
     another of the user's subscriptions'."""
     name = name.strip()
@@ -147,10 +147,10 @@ def checked_name(db: DBSession, user_id: int, name: str, trigger_id: int) -> str
         raise ValueError("name must not be empty")
     if len(name) > MAX_NAME_CHARS:
         raise ValueError(f"name is longer than {MAX_NAME_CHARS} characters")
-    if DEFAULT_NAME.fullmatch(name) and not name.endswith(f"-{trigger_id}"):
+    if DEFAULT_NAME.fullmatch(name) and not name.endswith(f"-{subscription_id}"):
         raise ValueError('names like "subscription-<number>" are reserved for default names')
-    taken = select(AgentTrigger.id).where(
-        AgentTrigger.user_id == user_id, AgentTrigger.name == name, AgentTrigger.id != trigger_id
+    taken = select(Subscription.id).where(
+        Subscription.user_id == user_id, Subscription.name == name, Subscription.id != subscription_id
     )
     if db.scalar(select(taken.exists())):
         raise ValueError(f"you already have a subscription named '{name}'")
@@ -159,12 +159,12 @@ def checked_name(db: DBSession, user_id: int, name: str, trigger_id: int) -> str
 
 def check_cap(db: DBSession, user_id: int, exclude_id: int) -> None:
     query = select(func.count()).where(
-        AgentTrigger.user_id == user_id, AgentTrigger.enabled, AgentTrigger.id != exclude_id
+        Subscription.user_id == user_id, Subscription.enabled, Subscription.id != exclude_id
     )
-    if db.execute(query).scalar_one() >= settings.AGENT_MAX_TRIGGERS_PER_USER:
+    if db.execute(query).scalar_one() >= settings.AGENT_MAX_SUBSCRIPTIONS_PER_USER:
         raise ValueError(
-            f"at most {settings.AGENT_MAX_TRIGGERS_PER_USER} of your subscriptions can be "
-            "enabled at once (AGENT_MAX_TRIGGERS_PER_USER); pause or delete one first"
+            f"at most {settings.AGENT_MAX_SUBSCRIPTIONS_PER_USER} of your subscriptions can be "
+            "enabled at once (AGENT_MAX_SUBSCRIPTIONS_PER_USER); pause or delete one first"
         )
 
 
@@ -320,10 +320,10 @@ def add_one_off(
     return timer_payload(timer)
 
 
-def new_subscription(db: DBSession, user_id: int, kind: str, key: APIKey | None) -> AgentTrigger:
+def new_subscription(db: DBSession, user_id: int, kind: str, key: APIKey | None) -> Subscription:
     # The id is drawn before the insert, so the default name can carry it.
-    sequence = func.pg_get_serial_sequence("agent_triggers", "id")
-    return AgentTrigger(
+    sequence = func.pg_get_serial_sequence("subscriptions", "id")
+    return Subscription(
         id=db.execute(select(func.nextval(sequence))).scalar_one(),
         user_id=user_id,
         kind=kind,
@@ -334,26 +334,26 @@ def new_subscription(db: DBSession, user_id: int, kind: str, key: APIKey | None)
 
 
 def apply_enabled(
-    db: DBSession, trigger: AgentTrigger, was_enabled: bool, resume: bool, cron_changed: bool
+    db: DBSession, subscription: Subscription, was_enabled: bool, resume: bool, cron_changed: bool
 ) -> None:
     """Start a subscription being enabled afresh, or, with `resume`, from when it
     tripped; point an enabled cron at its next tick when it starts or changes."""
-    if trigger.enabled and not was_enabled:
-        check_cap(db, trigger.user_id, exclude_id=trigger.id)
+    if subscription.enabled and not was_enabled:
+        check_cap(db, subscription.user_id, exclude_id=subscription.id)
         if resume:
-            resume_from_trip(db, trigger)
-        elif trigger.kind in READING_KINDS:
+            resume_from_trip(db, subscription)
+        elif subscription.kind in READING_KINDS:
             # The database clock, which also stamps items' inserted_at.
-            trigger.active_since = func.now()
+            subscription.active_since = func.now()
         # A replay left from an earlier resume would deliver what "from now" skips.
         stale = {"tripped", "failures", THROTTLED} | (set() if resume else {RESUME})
-        trigger.state = {k: v for k, v in (trigger.state or {}).items() if k not in stale}
-    if trigger.kind != CRON:
+        subscription.state = {k: v for k, v in (subscription.state or {}).items() if k not in stale}
+    if subscription.kind != CRON:
         return
-    if not trigger.enabled:
-        trigger.next_at = None
+    if not subscription.enabled:
+        subscription.next_at = None
     elif not was_enabled or cron_changed:
-        schedule_next(trigger, db.get_one(User, trigger.user_id).timezone)
+        schedule_next(subscription, db.get_one(User, subscription.user_id).timezone)
 
 
 @subscription_mcp.tool()
@@ -455,7 +455,7 @@ async def upsert(
     enable it again with enabled=true, adding resume=true (filter sources) to also
     get what it missed while disabled, as far back as events are kept. To pause,
     pass only the subscription and enabled=false; that always works. At most
-    AGENT_MAX_TRIGGERS_PER_USER subscriptions can be enabled at once. The response's
+    AGENT_MAX_SUBSCRIPTIONS_PER_USER subscriptions can be enabled at once. The response's
     `warnings` lists an agent's tools that write or reach outside memory, which a
     filter subscription exposes to whatever content arrives.
     """
@@ -525,33 +525,33 @@ async def upsert(
         merged = merged_source(stored_config, source or {}, stored)
         config = checked_raw(db, user_id, merged) if kind == RAW else checked_config(kind, merged, stored, cron_changed)
         was_enabled = existing is not None and existing.enabled
-        trigger = existing or new_subscription(db, user_id, kind, key)
-        trigger.enabled = was_enabled if enabled is None and existing else enabled is not False
+        subscription = existing or new_subscription(db, user_id, kind, key)
+        subscription.enabled = was_enabled if enabled is None and existing else enabled is not False
         if existing is None or renaming:
-            trigger.name = checked_name(db, user_id, name or f"subscription-{trigger.id}", trigger.id)
-        trigger.handler, trigger.config = stored, config
-        trigger.definition_id = definition.id if definition else None
+            subscription.name = checked_name(db, user_id, name or f"subscription-{subscription.id}", subscription.id)
+        subscription.handler, subscription.config = stored, config
+        subscription.definition_id = definition.id if definition else None
         # 0 clears a cap.
         if max_per_hour is not None:
-            trigger.max_per_hour = max_per_hour or None
+            subscription.max_per_hour = max_per_hour or None
         if backlog_max is not None:
-            trigger.backlog_max = backlog_max or None
+            subscription.backlog_max = backlog_max or None
         if coalesce is not None:
-            trigger.coalesce_mode = coalesce
+            subscription.coalesce_mode = coalesce
         if order_by is not None:
-            trigger.order_by = order_by
+            subscription.order_by = order_by
         elif existing is None and "queue" in stored:
-            trigger.order_by = "item"
-        db.add(trigger)
-        apply_enabled(db, trigger, was_enabled, resume, cron_changed)
+            subscription.order_by = "item"
+        db.add(subscription)
+        apply_enabled(db, subscription, was_enabled, resume, cron_changed)
         try:
             db.flush()
         except IntegrityError as e:
-            if "agent_triggers_user_name_key" not in str(e.orig):
+            if "subscriptions_user_name_key" not in str(e.orig):
                 raise
-            raise ValueError(f"you already have a subscription named '{trigger.name}'") from e
+            raise ValueError(f"you already have a subscription named '{subscription.name}'") from e
         warnings = await exposure_warnings(spec) if spec is not None and kind == INGEST else []
-        return trigger.serialize() | {"warnings": warnings}
+        return subscription.serialize() | {"warnings": warnings}
 
 
 @subscription_mcp.tool(annotations=READ_ONLY)
@@ -570,13 +570,13 @@ async def list_all(
     Filter subscriptions are listed only for 'agents', or 'agents:work' with 'read'."""
     user_id, _ = caller()
     with make_session() as db:
-        query = select(AgentTrigger).where(AgentTrigger.user_id == user_id)
+        query = select(Subscription).where(Subscription.user_id == user_id)
         if not reads_filters(set(caller_token()[1])):
-            query = query.where(AgentTrigger.kind.not_in(READING_KINDS))
+            query = query.where(Subscription.kind.not_in(READING_KINDS))
         if definition_id is not None:
-            query = query.where(AgentTrigger.definition_id == definition_id)
+            query = query.where(Subscription.definition_id == definition_id)
         if queue is not None:
-            query = query.where(AgentTrigger.handler["queue"].astext == queue)
+            query = query.where(Subscription.handler["queue"].astext == queue)
         timers = [] if queue is not None else pending_timers(db, user_id)
         fired: list[Event] = []
         if include_fired and queue is None:
@@ -591,7 +591,7 @@ async def list_all(
         if definition_id is not None:
             timers = [t for t in timers if (t.handler or {}).get("agent") == definition_id]
             fired = [t for t in fired if (t.handler or {}).get("agent") == definition_id]
-        subscriptions = list(db.scalars(query.order_by(AgentTrigger.id)))
+        subscriptions = list(db.scalars(query.order_by(Subscription.id)))
         activity = subscription_activity(db, subscriptions, token_api_key(caller_token()[0], db))
         listed = {
             "subscriptions": [t.serialize() | activity[t.id] for t in subscriptions],
@@ -600,7 +600,7 @@ async def list_all(
         return listed | ({"fired": [timer_payload(t) for t in fired]} if include_fired else {})
 
 
-def delivery(match: AgentTriggerMatch, run_status: str | None) -> dict[str, Any]:
+def delivery(match: Delivery, run_status: str | None) -> dict[str, Any]:
     return {
         "item_id": match.item_id,
         "status": match.status,
@@ -674,12 +674,12 @@ async def fetch(
     user_id, _ = caller()
     limit = max(1, min(limit, MAX_HISTORY))
     with make_session() as db:
-        trigger = owned(db, subscription_id, user_id)
-        if trigger.kind == CRON:
-            ticks = select(Event).where(Event.kind == TICK, Event.trigger_id == trigger.id)
+        subscription = owned(db, subscription_id, user_id)
+        if subscription.kind == CRON:
+            ticks = select(Event).where(Event.kind == TICK, Event.subscription_id == subscription.id)
             deliveries = [tick(e) for e in db.scalars(ticks.order_by(Event.fire_at.desc()).limit(limit))]
-        elif trigger.kind == RAW:
-            raw_runs = select(AgentRun).where(AgentRun.trigger_id == trigger.id)
+        elif subscription.kind == RAW:
+            raw_runs = select(AgentRun).where(AgentRun.subscription_id == subscription.id)
             if pending is not None:
                 waiting = and_(*RAW_WAITING)
                 raw_runs = raw_runs.where(waiting if pending else ~waiting)
@@ -690,25 +690,25 @@ async def fetch(
             deliveries = [raw_delivery(r, events.get(raw_event_id(r) or 0)) for r in listed]
         else:
             matches = (
-                select(AgentTriggerMatch, AgentRun.status)
-                .outerjoin(AgentRun, AgentRun.id == AgentTriggerMatch.run_id)
-                .where(AgentTriggerMatch.trigger_id == trigger.id)
+                select(Delivery, AgentRun.status)
+                .outerjoin(AgentRun, AgentRun.id == Delivery.run_id)
+                .where(Delivery.subscription_id == subscription.id)
             )
             if item_id is not None:
-                matches = matches.where(AgentTriggerMatch.item_id == item_id)
+                matches = matches.where(Delivery.item_id == item_id)
             if pending is not None:
-                waiting = AgentTriggerMatch.status == PENDING
+                waiting = Delivery.status == PENDING
                 matches = matches.where(waiting if pending else ~waiting)
-            newest = (AgentTriggerMatch.created_at.desc(), AgentTriggerMatch.item_id.desc())
-            oldest = (AgentTriggerMatch.created_at, AgentTriggerMatch.item_id)
+            newest = (Delivery.created_at.desc(), Delivery.item_id.desc())
+            oldest = (Delivery.created_at, Delivery.item_id)
             ordered = matches.order_by(*(oldest if pending else newest)).limit(limit)
             deliveries = [delivery(m, status) for m, status in db.execute(ordered).tuples()]
-        runs = select(AgentRun).where(AgentRun.trigger_id == trigger.id, AgentRun.user_id == user_id)
+        runs = select(AgentRun).where(AgentRun.subscription_id == subscription.id, AgentRun.user_id == user_id)
         if item_id is not None:
             runs = runs.where(AgentRun.trigger_ref["item_ids"].contains([item_id]))
         ordered_runs = runs.order_by(AgentRun.created_at.desc(), AgentRun.id.desc()).limit(limit)
         return {
-            "subscription": trigger.serialize(),
+            "subscription": subscription.serialize(),
             "deliveries": deliveries,
             "runs": [run_summary(r) for r in db.scalars(ordered_runs)],
         }
@@ -734,15 +734,15 @@ async def test(subscription_id: int, item_id: int) -> dict:
 
 def try_item(user_id: int, token: str, subscription_id: int, item_id: int) -> dict:
     with make_session() as db:
-        trigger = owned(db, subscription_id, user_id)
-        if trigger.kind != INGEST:
+        subscription = owned(db, subscription_id, user_id)
+        if subscription.kind != INGEST:
             raise ValueError("only filter subscriptions take items")
         key = token_api_key(token, db)
         item = db.get(SourceItem, item_id)
         if item is None or not accessible_ids(db, db.get_one(User, user_id), key, [item_id]):
             raise ValueError(f"unknown item {item_id}")
-        failed = dry_run(db, trigger, item)
-        return {"subscription_id": trigger.id, "item_id": item_id, "matches": failed is None, "failed": failed}
+        failed = dry_run(db, subscription, item)
+        return {"subscription_id": subscription.id, "item_id": item_id, "matches": failed is None, "failed": failed}
 
 
 @subscription_mcp.tool()
@@ -757,9 +757,9 @@ async def delete(subscription_id: int | None = None, timer_id: int | None = None
     with make_session() as db:
         key = token_api_key(token, db)
         if subscription_id is not None:
-            trigger = owned(db, subscription_id, user_id)
-            check_binding(trigger.api_key_id, key)
-            db.delete(trigger)
+            subscription = owned(db, subscription_id, user_id)
+            check_binding(subscription.api_key_id, key)
+            db.delete(subscription)
             return {"deleted": subscription_id}
         owned_timer = select(Event).where(Event.id == timer_id, Event.kind == TIMER, Event.owner_id == user_id)
         timer = db.scalar(owned_timer.with_for_update())

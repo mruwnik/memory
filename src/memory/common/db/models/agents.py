@@ -124,7 +124,7 @@ class AgentRun(Base):
     )
     # What the worker says it spent: shown, never counted against any cap.
     worker_usage: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
-    # What the worker says it posted ([{source, external_id}]), which its trigger never matches.
+    # What the worker says it posted ([{source, external_id}]), which its subscription never matches.
     posted: Mapped[list[dict[str, str]] | None] = mapped_column(JSONB)
     input: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(
@@ -150,8 +150,8 @@ class AgentRun(Base):
         JSONB, nullable=False, default=dict, server_default="{}"
     )
     dedupe_key: Mapped[str | None] = mapped_column(Text)
-    trigger_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("agent_triggers.id", ondelete="SET NULL")
+    subscription_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("subscriptions.id", ondelete="SET NULL")
     )
     api_key_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("api_keys.id", ondelete="SET NULL")
@@ -227,26 +227,26 @@ class AgentRun(Base):
             text("((trigger_ref->>'event_id')::bigint)"),
             postgresql_where=text("trigger_kind = 'raw'"),
         ),
-        # Runs without a trigger (cron) still dedupe per definition.
+        # Runs without a subscription (timers) still dedupe per definition.
         Index(
             "agent_runs_definition_dedupe_key",
             "definition_id",
             "dedupe_key",
             unique=True,
-            postgresql_where=text("dedupe_key IS NOT NULL AND trigger_id IS NULL"),
+            postgresql_where=text("dedupe_key IS NOT NULL AND subscription_id IS NULL"),
         ),
         Index(
-            "agent_runs_trigger_dedupe_key",
-            "trigger_id",
+            "agent_runs_subscription_dedupe_key",
+            "subscription_id",
             "dedupe_key",
             unique=True,
-            postgresql_where=text("dedupe_key IS NOT NULL AND trigger_id IS NOT NULL"),
+            postgresql_where=text("dedupe_key IS NOT NULL AND subscription_id IS NOT NULL"),
         ),
         Index(
-            "agent_runs_trigger_created_idx",
-            "trigger_id",
+            "agent_runs_subscription_created_idx",
+            "subscription_id",
             "created_at",
-            postgresql_where=text("trigger_id IS NOT NULL"),
+            postgresql_where=text("subscription_id IS NOT NULL"),
         ),
     )
 
@@ -276,7 +276,7 @@ class AgentRun(Base):
             "num_turns": self.num_turns,
             "trigger_kind": self.trigger_kind,
             "trigger_ref": self.trigger_ref,
-            "trigger_id": self.trigger_id,
+            "subscription_id": self.subscription_id,
             "starred": self.starred,
             "provider_key_id": self.provider_key_id,
             "model": self.spec.get("model"),
@@ -287,11 +287,11 @@ class AgentRun(Base):
         return data | ({"spec": self.spec} if include_spec else {})
 
 
-class AgentTrigger(Base):
+class Subscription(Base):
     """Hands what matches its source (`kind` and `config`) to its handler.
 
-    `config` is validated per kind by memory.agents.triggers. `state` holds what
-    the trigger machinery records, e.g. why a circuit breaker disabled it.
+    `config` is validated per kind by memory.agents.subscriptions. `state` holds what
+    the subscription machinery records, e.g. why a circuit breaker disabled it.
     `handler` is {"agent": <definition id>} (then also in definition_id, which
     cascades its deletion), {"agent": "<code agent slug>"}, {"queue": "<name>"},
     whose deliveries the owner's workers claim (memory.agents.queues), or
@@ -301,7 +301,7 @@ class AgentTrigger(Base):
     A cron subscription's `next_at` is its next tick, in its owner's timezone.
     """
 
-    __tablename__ = "agent_triggers"
+    __tablename__ = "subscriptions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(
@@ -312,7 +312,7 @@ class AgentTrigger(Base):
         Integer, ForeignKey("agent_definitions.id", ondelete="CASCADE")
     )
     handler: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
-    # Shaping (memory.agents.triggers.claim and memory.agents.queues).
+    # Shaping (memory.agents.subscriptions.claim and memory.agents.queues).
     coalesce_mode: Mapped[str] = mapped_column(
         Text, nullable=False, default="none", server_default="none"
     )
@@ -330,12 +330,12 @@ class AgentTrigger(Base):
     state: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, default=dict, server_default="{}"
     )
-    # The key the trigger was set up through: its runs act with that key's scopes.
+    # The key the subscription was set up through: its runs act with that key's scopes.
     api_key_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("api_keys.id", ondelete="SET NULL")
     )
     # Survives the key's deletion (which nulls api_key_id), so a deleted key
-    # stops the trigger instead of widening it to the owner's full access.
+    # stops the subscription instead of widening it to the owner's full access.
     via_api_key: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
@@ -356,8 +356,8 @@ class AgentTrigger(Base):
     definition: Mapped[AgentDefinition | None] = relationship("AgentDefinition")
 
     __table_args__ = (
-        CheckConstraint("kind IN ('ingest', 'cron', 'raw')", name="agent_triggers_kind_check"),
-        UniqueConstraint("user_id", "name", name="agent_triggers_user_name_key"),
+        CheckConstraint("kind IN ('ingest', 'cron', 'raw')", name="subscriptions_kind_check"),
+        UniqueConstraint("user_id", "name", name="subscriptions_user_name_key"),
         CheckConstraint(
             "CASE WHEN definition_id IS NOT NULL "
             "THEN handler = jsonb_build_object('agent', definition_id) "
@@ -367,24 +367,24 @@ class AgentTrigger(Base):
             "AND handler - 'queue' = '{}'::jsonb) "
             "OR (jsonb_typeof(handler->'notify') = 'object' "
             "AND handler - 'notify' = '{}'::jsonb)) IS TRUE END",
-            name="agent_triggers_handler_check",
+            name="subscriptions_handler_check",
         ),
         CheckConstraint(
-            "coalesce_mode IN ('none', 'latest')", name="agent_triggers_coalesce_mode_check"
+            "coalesce_mode IN ('none', 'latest')", name="subscriptions_coalesce_mode_check"
         ),
         CheckConstraint(
-            "order_by IN ('none', 'item', 'thread')", name="agent_triggers_order_by_check"
+            "order_by IN ('none', 'item', 'thread')", name="subscriptions_order_by_check"
         ),
-        CheckConstraint("max_per_hour > 0", name="agent_triggers_max_per_hour_check"),
-        CheckConstraint("backlog_max > 0", name="agent_triggers_backlog_max_check"),
-        Index("agent_triggers_definition_idx", "definition_id"),
+        CheckConstraint("max_per_hour > 0", name="subscriptions_max_per_hour_check"),
+        CheckConstraint("backlog_max > 0", name="subscriptions_backlog_max_check"),
+        Index("subscriptions_definition_idx", "definition_id"),
         Index(
-            "agent_triggers_enabled_kind_idx",
+            "subscriptions_enabled_kind_idx",
             "kind",
             postgresql_where=text("enabled"),
         ),
         Index(
-            "agent_triggers_cron_due_idx",
+            "subscriptions_cron_due_idx",
             "next_at",
             postgresql_where=text("kind = 'cron' AND enabled"),
         ),
@@ -414,34 +414,34 @@ class AgentTrigger(Base):
         }
 
 
-class AgentTriggerMatch(Base):
-    """A version of an item a trigger has matched, and its delivery: written by the
+class Delivery(Base):
+    """A version of an item a subscription has matched, and its delivery: written by the
     router with the event it routes, so a match is never lost between routing and
     the run. Reprocessing never matches again: without on_edit the first version
-    claims the item, with it each version (memory.agents.triggers.content_version)
+    claims the item, with it each version (memory.agents.subscriptions.content_version)
     matches once.
 
     `status` is pending until the delivery ends: done (run_id is its run), failed,
-    expired or skipped:<reason> (memory.agents.triggers).
+    expired or skipped:<reason> (memory.agents.subscriptions).
     """
 
-    __tablename__ = "agent_trigger_matches"
+    __tablename__ = "deliveries"
 
-    trigger_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("agent_triggers.id", ondelete="CASCADE"), primary_key=True
+    subscription_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("subscriptions.id", ondelete="CASCADE"), primary_key=True
     )
     # No foreign key: an item's removal is delivered after it is gone, and its
     # deliveries end as recorded states rather than vanish with it.
     item_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     content_hash: Mapped[bytes] = mapped_column(BYTEA, primary_key=True)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
-    # The trigger had matched an earlier version of the item.
+    # The subscription had matched an earlier version of the item.
     edited: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     # The Change tags delivered for this version, sorted.
     changes: Mapped[list[str]] = mapped_column(
         ARRAY(Text), nullable=False, default=list, server_default="{}"
     )
-    # What the trigger's order_by orders it by (memory.agents.triggers.order_key).
+    # What the subscription's order_by orders it by (memory.agents.subscriptions.order_key).
     order_key: Mapped[str | None] = mapped_column(Text)
     # Items whose pending deliveries coalescing folded into this one, once per delivery.
     coalesced: Mapped[list[int]] = mapped_column(
@@ -449,7 +449,7 @@ class AgentTriggerMatch(Base):
     )
     # Deferred by a cap; one still over it when this passes is shed.
     not_before: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    # Last handed to FIRE_TRIGGER; the sweep resends it if it's still pending.
+    # Last handed to FIRE_SUBSCRIPTION; the sweep resends it if it's still pending.
     dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Times sent since it was routed or deferred, which spaces out its resends.
     sends: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
@@ -469,30 +469,32 @@ class AgentTriggerMatch(Base):
 
     __table_args__ = (
         Index(
-            "agent_trigger_matches_run_idx", "run_id", postgresql_where=text("run_id IS NOT NULL")
+            "deliveries_run_idx", "run_id", postgresql_where=text("run_id IS NOT NULL")
         ),
         CheckConstraint(
-            "status IN ('pending', 'done', 'failed', 'expired') OR status LIKE 'skipped:%'",
-            name="agent_trigger_matches_status_check",
+            "status IN ('pending', 'done', 'failed', 'expired', 'skipped:inaccessible', "
+            "'skipped:disabled', 'skipped:posted', 'skipped:coalesced', 'skipped:shed:rate', "
+            "'skipped:shed:budget', 'skipped:shed:backlog')",
+            name="deliveries_status_check",
         ),
-        Index("agent_trigger_matches_item_idx", "item_id"),
+        Index("deliveries_item_idx", "item_id"),
         Index(
-            "agent_trigger_matches_event_idx",
+            "deliveries_event_idx",
             "event_id",
             postgresql_where=text("event_id IS NOT NULL"),
         ),
         # A subscription's latest delivery (memory.agents.activity).
-        Index("agent_trigger_matches_trigger_created_idx", "trigger_id", text("created_at DESC")),
-        Index("agent_trigger_matches_created_idx", "created_at"),
+        Index("deliveries_subscription_created_idx", "subscription_id", text("created_at DESC")),
+        Index("deliveries_created_idx", "created_at"),
         Index(
-            "agent_trigger_matches_pending_idx",
-            "trigger_id",
+            "deliveries_pending_idx",
+            "subscription_id",
             "created_at",
             postgresql_where=text("status = 'pending'"),
         ),
         Index(
-            "agent_trigger_matches_order_idx",
-            "trigger_id",
+            "deliveries_order_idx",
+            "subscription_id",
             "order_key",
             "created_at",
             postgresql_where=text("order_key IS NOT NULL"),

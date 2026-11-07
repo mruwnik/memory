@@ -8,8 +8,8 @@ from sqlalchemy import select, text
 
 from memory.common.db.models import (
     AgentRun,
-    AgentTrigger,
-    AgentTriggerMatch,
+    Subscription,
+    Delivery,
     BlogPost,
     Event,
     GithubAccount,
@@ -42,13 +42,13 @@ def other_user(db):
     return other
 
 
-def subscription(db, user_id, name):
-    trigger = AgentTrigger(
+def new_subscription(db, user_id, name):
+    subscription = Subscription(
         user_id=user_id, name=name, handler={"queue": "q"}, kind="ingest", config={"filter": {"tags_any": ["ai"]}}
     )
-    db.add(trigger)
+    db.add(subscription)
     db.flush()
-    return trigger
+    return subscription
 
 
 def stored_item(db, raw_id, creator_id=None):
@@ -84,8 +84,8 @@ def test_items_the_viewer_cannot_read_are_left_out(member_client, db_session, us
     mine, _ = stored_item(db_session, raw_id, user.id)
     # No project and someone else's: only an admin reads it.
     hidden, hidden_event = stored_item(db_session, raw_id)
-    trigger = subscription(db_session, user.id, "mine")
-    db_session.add(AgentTriggerMatch(trigger_id=trigger.id, item_id=hidden.id, content_hash=b"v", event_id=hidden_event.id))
+    subscription = new_subscription(db_session, user.id, "mine")
+    db_session.add(Delivery(subscription_id=subscription.id, item_id=hidden.id, content_hash=b"v", event_id=hidden_event.id))
     db_session.commit()
 
     [shown] = member_client.get("/webhook-events/github/5").json()
@@ -130,9 +130,9 @@ def test_a_delivery_from_an_untracked_channel_shows_only_when_it_arrived(member_
 def test_a_delivery_shows_what_the_viewers_subscriptions_made_of_it(member_client, db_session, user):
     raw_id = raw(db_session, user.id, "d1", outcome="stored")
     item, event = stored_item(db_session, raw_id, user.id)
-    mine, theirs = subscription(db_session, user.id, "mine"), subscription(db_session, other_user(db_session).id, "theirs")
+    mine, theirs = new_subscription(db_session, user.id, "mine"), new_subscription(db_session, other_user(db_session).id, "theirs")
     db_session.add_all(
-        AgentTriggerMatch(trigger_id=t.id, item_id=item.id, content_hash=b"v", status=status, event_id=event.id)
+        Delivery(subscription_id=t.id, item_id=item.id, content_hash=b"v", status=status, event_id=event.id)
         for t, status in [(mine, "pending"), (theirs, "done")]
     )
     db_session.commit()
@@ -172,7 +172,7 @@ def test_an_unknown_source_is_rejected(client):
 def test_a_delivery_shows_the_viewers_raw_subscriptions_runs_of_it(member_client, db_session, user):
     raw_id = raw(db_session, user.id, "d1")
     mine, theirs = (
-        AgentTrigger(user_id=u, name=n, handler={"queue": "q"}, kind="raw", config={"raw": {"source": "github"}})
+        Subscription(user_id=u, name=n, handler={"queue": "q"}, kind="raw", config={"raw": {"source": "github"}})
         for u, n in [(user.id, "mine"), (other_user(db_session).id, "theirs")]
     )
     db_session.add_all([mine, theirs])
@@ -185,8 +185,8 @@ def test_a_delivery_shows_the_viewers_raw_subscriptions_runs_of_it(member_client
             input="",
             max_cost_usd=0,
             trigger_kind="raw",
-            trigger_ref={"trigger_id": t.id, "event_id": raw_id},
-            trigger_id=t.id,
+            trigger_ref={"subscription_id": t.id, "event_id": raw_id},
+            subscription_id=t.id,
             executor="workers",
         )
         for t in (mine, theirs)
@@ -207,14 +207,14 @@ def test_a_delivery_shows_the_viewers_raw_subscriptions_runs_of_it(member_client
 def test_a_filter_delivery_links_its_run_only_once_it_started(member_client, db_session, user, started, linked):
     raw_id = raw(db_session, user.id, "d1", outcome="stored")
     item, event = stored_item(db_session, raw_id, user.id)
-    trigger = subscription(db_session, user.id, "mine")
+    subscription = new_subscription(db_session, user.id, "mine")
     run = AgentRun(
-        user_id=user.id, spec={}, input="", max_cost_usd=0, trigger_kind="ingest", trigger_id=trigger.id,
+        user_id=user.id, spec={}, input="", max_cost_usd=0, trigger_kind="ingest", subscription_id=subscription.id,
         executor="workers", started_at=datetime.now(timezone.utc) if started else None,
     )
     db_session.add(run)
     db_session.flush()
-    db_session.add(AgentTriggerMatch(trigger_id=trigger.id, item_id=item.id, content_hash=b"v", status="done",
+    db_session.add(Delivery(subscription_id=subscription.id, item_id=item.id, content_hash=b"v", status="done",
                                      event_id=event.id, run_id=run.id))
     db_session.commit()
 

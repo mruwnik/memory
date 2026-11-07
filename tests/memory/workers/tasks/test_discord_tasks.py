@@ -4,10 +4,10 @@ from unittest.mock import patch
 
 import pytest
 
-from memory.agents import triggers
+from memory.agents import subscriptions
 from memory.common.db.models import (
     AgentDefinition,
-    AgentTrigger,
+    Subscription,
     DiscordBot,
     DiscordChannel,
     DiscordMessage,
@@ -251,30 +251,30 @@ def edit_via_edit_task(data):
 
 
 @pytest.mark.parametrize("backfill,fires", [(False, True), (True, False)])
-def test_a_backfilled_message_is_stored_but_triggers_nothing(
+def test_a_backfilled_message_is_stored_but_subscriptions_nothing(
     db_session, admin_user, sample_message_data, qdrant, no_celery_dispatch, backfill, fires
 ):
     definition = AgentDefinition(user_id=admin_user.id, name="t", spec={"system_prompt": "x"})
     db_session.add(definition)
     db_session.flush()
-    trigger = AgentTrigger(
+    subscription = Subscription(
         user_id=definition.user_id,
         name="t",
         definition_id=definition.id,
         handler={"agent": definition.id},
         kind="ingest",
-        config=triggers.IngestConfig.model_validate(
+        config=subscriptions.IngestConfig.model_validate(
             {"filter": {"source_types": ["discord_message"]}}
         ).model_dump(mode="json"),
     )
-    db_session.add(trigger)
+    db_session.add(subscription)
     db_session.commit()
 
     discord.add_discord_message(**sample_message_data, backfill=backfill)
 
     db_session.expire_all()
     assert [e.backfill for e in db_session.query(Event)] == [backfill]
-    assert triggers.route_events() == ([trigger.id] if fires else [])
+    assert subscriptions.route_events() == ([subscription.id] if fires else [])
 
 
 def edit_via_add_task(data):
@@ -290,26 +290,26 @@ def test_an_edited_message_refires_an_on_edit_trigger(
     definition = AgentDefinition(user_id=admin_user.id, name="t", spec={"system_prompt": "x"})
     db_session.add(definition)
     db_session.flush()
-    trigger = AgentTrigger(
+    subscription = Subscription(
         user_id=definition.user_id,
         name="t",
         definition_id=definition.id,
         handler={"agent": definition.id},
         kind="ingest",
-        config=triggers.IngestConfig.model_validate(
+        config=subscriptions.IngestConfig.model_validate(
             {"filter": {"source_types": ["discord_message"]}, "on_edit": True}
         ).model_dump(mode="json"),
     )
-    db_session.add(trigger)
+    db_session.add(subscription)
     db_session.commit()
 
     discord.add_discord_message(**sample_message_data)
-    first = triggers.route_events()
+    first = subscriptions.route_events()
     edit(sample_message_data)
     [(item_id, _, _), edited] = item_events(db_session)
 
     assert edited == (item_id, "changed", None)
-    assert (first, triggers.route_events()) == ([trigger.id], [trigger.id])
+    assert (first, subscriptions.route_events()) == ([subscription.id], [subscription.id])
 
 
 def test_edit_discord_message_not_found(db_session):

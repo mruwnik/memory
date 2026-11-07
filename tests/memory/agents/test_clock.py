@@ -4,11 +4,11 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from sqlalchemy import text
 
-from memory.agents import clock, triggers
+from memory.agents import clock, subscriptions
 from memory.common import settings
 from memory.common.celery_app import SEND_TIME_NOTIFY, START_TIME_RUN
 from memory.common.db.connection import make_session
-from memory.common.db.models import AgentDefinition, AgentTrigger, APIKey, Event
+from memory.common.db.models import AgentDefinition, Subscription, APIKey, Event
 
 UTC = timezone.utc
 NOW = datetime(2026, 11, 7, 12, 30, tzinfo=UTC)
@@ -19,10 +19,10 @@ def utc(*args) -> datetime:
     return datetime(*args, tzinfo=UTC)
 
 
-def cron_trigger(db, user, handler=NOTIFY, cron="0 * * * *", next_at=None, **fields):
-    trigger = AgentTrigger(
+def cron_subscription(db, user, handler=NOTIFY, cron="0 * * * *", next_at=None, **fields):
+    subscription = Subscription(
         user_id=user.id,
-        name=f"cron-{db.query(AgentTrigger).count()}",
+        name=f"cron-{db.query(Subscription).count()}",
         kind="cron",
         handler=handler,
         definition_id=handler.get("agent"),
@@ -30,14 +30,14 @@ def cron_trigger(db, user, handler=NOTIFY, cron="0 * * * *", next_at=None, **fie
         next_at=next_at,
         **fields,
     )
-    db.add(trigger)
+    db.add(subscription)
     db.commit()
-    return trigger
+    return subscription
 
 
-def tick(db, trigger, fire_at, missed=0):
+def tick(db, subscription, fire_at, missed=0):
     event = Event(
-        kind="tick", trigger_id=trigger.id, owner_id=trigger.user_id, fire_at=fire_at,
+        kind="tick", subscription_id=subscription.id, owner_id=subscription.user_id, fire_at=fire_at,
         data={"missed": missed},
     )
     db.add(event)
@@ -52,9 +52,9 @@ def timer(db, user, fire_at, handler=NOTIFY, **data):
     return event
 
 
-def ticks(db, trigger):
+def ticks(db, subscription):
     db.expire_all()
-    rows = db.query(Event).filter(Event.trigger_id == trigger.id).order_by(Event.fire_at)
+    rows = db.query(Event).filter(Event.subscription_id == subscription.id).order_by(Event.fire_at)
     return [(e.fire_at, (e.data or {}).get("missed"), (e.result or {}).get("status")) for e in rows]
 
 
@@ -130,83 +130,83 @@ def test_check_cron_refuses_a_short_gap_whenever_it_runs(monkeypatch, hour, minu
 
 
 def test_a_due_cron_writes_one_tick_for_its_latest_time_counting_the_missed(db_session, regular_user):
-    trigger = cron_trigger(db_session, regular_user, next_at=utc(2026, 11, 7, 9))
+    subscription = cron_subscription(db_session, regular_user, next_at=utc(2026, 11, 7, 9))
 
     written = clock.write_ticks(db_session, NOW, clock.Notices())
     db_session.commit()
 
-    assert (written, ticks(db_session, trigger)) == (1, [(utc(2026, 11, 7, 12), 3, None)])
-    assert trigger.next_at == utc(2026, 11, 7, 13)
+    assert (written, ticks(db_session, subscription)) == (1, [(utc(2026, 11, 7, 12), 3, None)])
+    assert subscription.next_at == utc(2026, 11, 7, 13)
 
 
 def test_an_unscheduled_cron_is_scheduled_without_ticking(db_session, regular_user):
-    trigger = cron_trigger(db_session, regular_user)
+    subscription = cron_subscription(db_session, regular_user)
 
     clock.write_ticks(db_session, NOW, clock.Notices())
     db_session.commit()
 
-    assert (ticks(db_session, trigger), trigger.next_at) == ([], utc(2026, 11, 7, 13))
+    assert (ticks(db_session, subscription), subscription.next_at) == ([], utc(2026, 11, 7, 13))
 
 
 def test_a_cron_set_under_a_longer_minimum_still_ticks(db_session, regular_user):
-    trigger = cron_trigger(db_session, regular_user, cron="*/5 * * * *", next_at=utc(2026, 11, 7, 12, 30))
+    subscription = cron_subscription(db_session, regular_user, cron="*/5 * * * *", next_at=utc(2026, 11, 7, 12, 30))
 
     clock.write_ticks(db_session, NOW, clock.Notices())
     db_session.commit()
 
-    assert (trigger.enabled, len(ticks(db_session, trigger))) == (True, 1)
+    assert (subscription.enabled, len(ticks(db_session, subscription))) == (True, 1)
 
 
 def test_a_new_tick_coalesces_the_ones_still_waiting(db_session, regular_user):
-    trigger = cron_trigger(db_session, regular_user, next_at=utc(2026, 11, 7, 12))
-    tick(db_session, trigger, utc(2026, 11, 7, 10), missed=1)
+    subscription = cron_subscription(db_session, regular_user, next_at=utc(2026, 11, 7, 12))
+    tick(db_session, subscription, utc(2026, 11, 7, 10), missed=1)
 
     clock.write_ticks(db_session, NOW, clock.Notices())
     db_session.commit()
 
-    assert ticks(db_session, trigger) == [
+    assert ticks(db_session, subscription) == [
         (utc(2026, 11, 7, 10), 1, "skipped:coalesced"),
         (utc(2026, 11, 7, 12), 2, None),
     ]
 
 
 def test_a_tick_already_handed_off_is_not_coalesced(db_session, regular_user):
-    trigger = cron_trigger(db_session, regular_user, next_at=utc(2026, 11, 7, 12))
-    in_flight = tick(db_session, trigger, utc(2026, 11, 7, 11))
+    subscription = cron_subscription(db_session, regular_user, next_at=utc(2026, 11, 7, 12))
+    in_flight = tick(db_session, subscription, utc(2026, 11, 7, 11))
     in_flight.dispatched_at, in_flight.attempts = utc(2026, 11, 7, 11, 1), 1
     db_session.commit()
 
     clock.write_ticks(db_session, NOW, clock.Notices())
     db_session.commit()
 
-    assert ticks(db_session, trigger) == [
+    assert ticks(db_session, subscription) == [
         (utc(2026, 11, 7, 11), 0, None),
         (utc(2026, 11, 7, 12), 0, None),
     ]
 
 
 def test_a_tick_is_written_once_per_time(db_session, regular_user):
-    trigger = cron_trigger(db_session, regular_user, next_at=utc(2026, 11, 7, 12))
+    subscription = cron_subscription(db_session, regular_user, next_at=utc(2026, 11, 7, 12))
     clock.write_ticks(db_session, NOW, clock.Notices())
     db_session.commit()
-    trigger.next_at = utc(2026, 11, 7, 12)
+    subscription.next_at = utc(2026, 11, 7, 12)
     db_session.commit()
 
     clock.write_ticks(db_session, NOW, clock.Notices())
     db_session.commit()
 
-    assert len(ticks(db_session, trigger)) == 1
+    assert len(ticks(db_session, subscription)) == 1
 
 
 def test_an_unparseable_cron_trips_its_subscription(db_session, regular_user):
-    trigger = cron_trigger(db_session, regular_user, cron="not a cron", next_at=utc(2026, 11, 7, 9))
+    subscription = cron_subscription(db_session, regular_user, cron="not a cron", next_at=utc(2026, 11, 7, 9))
     notices = clock.Notices()
 
     clock.write_ticks(db_session, NOW, notices)
     db_session.commit()
 
-    assert (trigger.enabled, "tripped" in trigger.state, len(notices.tripped)) == (False, True, 1)
-    assert ticks(db_session, trigger) == []
+    assert (subscription.enabled, "tripped" in subscription.state, len(notices.tripped)) == (False, True, 1)
+    assert ticks(db_session, subscription) == []
 
 
 def handoffs(no_celery_dispatch, task):
@@ -217,7 +217,7 @@ def test_run_clock_hands_a_due_notify_tick_to_its_task_which_sends_it(
     db_session, regular_user, sent, no_celery_dispatch
 ):
     now = datetime.now(UTC)
-    trigger = cron_trigger(db_session, regular_user, next_at=now - timedelta(minutes=1))
+    subscription = cron_subscription(db_session, regular_user, next_at=now - timedelta(minutes=1))
 
     clock.run_clock()
     [[event_id]] = handoffs(no_celery_dispatch, SEND_TIME_NOTIFY)
@@ -229,8 +229,8 @@ def test_run_clock_hands_a_due_notify_tick_to_its_task_which_sends_it(
     assert [(p.notification_channel, p.notification_target, p.message, p.topic) for p in sent] == [
         ("email", "me@example.com", "stand up", "Daily")
     ]
-    assert [status for _, _, status in ticks(db_session, trigger)] == ["sent"]
-    assert trigger.next_at > now
+    assert [status for _, _, status in ticks(db_session, subscription)] == ["sent"]
+    assert subscription.next_at > now
 
 
 def test_a_hung_send_that_succeeds_late_keeps_the_failure_recorded_meanwhile(
@@ -274,19 +274,19 @@ def test_a_crash_after_the_send_does_not_send_again(db_session, regular_user, se
 
 def test_a_recurring_message_failing_three_times_running_trips(db_session, regular_user, monkeypatch, told):
     monkeypatch.setattr(clock, "deliver_notification", lambda p: False)
-    trigger = cron_trigger(db_session, regular_user, next_at=datetime.now(UTC) + timedelta(hours=1))
-    events = [tick(db_session, trigger, datetime.now(UTC) - timedelta(minutes=m)) for m in (3, 2, 1)]
+    subscription = cron_subscription(db_session, regular_user, next_at=datetime.now(UTC) + timedelta(hours=1))
+    events = [tick(db_session, subscription, datetime.now(UTC) - timedelta(minutes=m)) for m in (3, 2, 1)]
 
     statuses = [clock.send_time_notify(e.id) for e in events]
 
-    db_session.refresh(trigger)
-    assert (statuses, trigger.enabled, trigger.state["failures"]) == (["failed"] * 3, False, 3)
-    assert told == [f"Schedule paused: {trigger.name}"]
+    db_session.refresh(subscription)
+    assert (statuses, subscription.enabled, subscription.state["failures"]) == (["failed"] * 3, False, 3)
+    assert told == [f"Schedule paused: {subscription.name}"]
 
 
 def test_a_send_resets_the_failure_count(db_session, regular_user, monkeypatch):
-    trigger = cron_trigger(db_session, regular_user, next_at=datetime.now(UTC) + timedelta(hours=1))
-    first, second = (tick(db_session, trigger, datetime.now(UTC) - timedelta(minutes=m)) for m in (2, 1))
+    subscription = cron_subscription(db_session, regular_user, next_at=datetime.now(UTC) + timedelta(hours=1))
+    first, second = (tick(db_session, subscription, datetime.now(UTC) - timedelta(minutes=m)) for m in (2, 1))
     with monkeypatch.context() as m:
         m.setattr(clock, "deliver_notification", lambda p: False)
         clock.send_time_notify(first.id)
@@ -294,8 +294,8 @@ def test_a_send_resets_the_failure_count(db_session, regular_user, monkeypatch):
 
     clock.send_time_notify(second.id)
 
-    db_session.refresh(trigger)
-    assert (trigger.enabled, "failures" in trigger.state) == (True, False)
+    db_session.refresh(subscription)
+    assert (subscription.enabled, "failures" in subscription.state) == (True, False)
 
 
 def test_a_revoked_key_fails_the_tick_and_trips_the_subscription_once(db_session, regular_user, sent, told):
@@ -303,23 +303,23 @@ def test_a_revoked_key_fails_the_tick_and_trips_the_subscription_once(db_session
     key.revoked = True
     db_session.add(key)
     db_session.commit()
-    trigger = cron_trigger(
+    subscription = cron_subscription(
         db_session, regular_user, api_key_id=key.id, via_api_key=True,
         next_at=datetime.now(UTC) + timedelta(hours=1),
     )
-    first = tick(db_session, trigger, datetime.now(UTC) - timedelta(minutes=2))
-    second = tick(db_session, trigger, datetime.now(UTC) - timedelta(minutes=1))
+    first = tick(db_session, subscription, datetime.now(UTC) - timedelta(minutes=2))
+    second = tick(db_session, subscription, datetime.now(UTC) - timedelta(minutes=1))
 
     clock.send_time_notify(first.id)
     clock.send_time_notify(second.id)
 
-    db_session.refresh(trigger)
+    db_session.refresh(subscription)
     db_session.refresh(first)
     db_session.refresh(second)
-    assert (sent, trigger.enabled, "tripped" in trigger.state) == ([], False, True)
+    assert (sent, subscription.enabled, "tripped" in subscription.state) == ([], False, True)
     assert first.result["status"] == "failed"
     assert second.result == {"status": "skipped:disabled"}
-    assert told == [f"Schedule paused: {trigger.name}"]
+    assert told == [f"Schedule paused: {subscription.name}"]
 
 
 def test_a_failed_timer_tells_its_owner(db_session, regular_user, monkeypatch, told):
@@ -367,8 +367,8 @@ def test_a_discord_target_that_is_no_id_fails_cleanly(db_session, regular_user, 
 def test_a_tick_that_should_not_run_is_skipped(
     db_session, regular_user, no_celery_dispatch, late, enabled, status
 ):
-    trigger = cron_trigger(db_session, regular_user, enabled=enabled, next_at=datetime.now(UTC) + timedelta(hours=1))
-    event = tick(db_session, trigger, datetime.now(UTC) - late)
+    subscription = cron_subscription(db_session, regular_user, enabled=enabled, next_at=datetime.now(UTC) + timedelta(hours=1))
+    event = tick(db_session, subscription, datetime.now(UTC) - late)
 
     clock.run_clock()
 
@@ -411,11 +411,11 @@ def test_an_agent_tick_is_sent_to_the_agents_queue_once_until_its_resend_is_due(
     definition = AgentDefinition(user_id=regular_user.id, name="d", spec={"system_prompt": "x"})
     db_session.add(definition)
     db_session.commit()
-    trigger = cron_trigger(
+    subscription = cron_subscription(
         db_session, regular_user, handler={"agent": definition.id},
         next_at=datetime.now(UTC) + timedelta(hours=1),
     )
-    event = tick(db_session, trigger, datetime.now(UTC) - timedelta(minutes=1))
+    event = tick(db_session, subscription, datetime.now(UTC) - timedelta(minutes=1))
 
     clock.run_clock()
     clock.run_clock()
@@ -437,7 +437,7 @@ def test_a_handoff_is_resent_after_its_grace(db_session, regular_user, no_celery
 
 
 def test_a_second_clock_waits_for_the_first(db_session, db_engine, regular_user, no_celery_dispatch):
-    trigger = cron_trigger(db_session, regular_user, next_at=datetime.now(UTC) - timedelta(minutes=1))
+    subscription = cron_subscription(db_session, regular_user, next_at=datetime.now(UTC) - timedelta(minutes=1))
     event = timer(db_session, regular_user, datetime.now(UTC) - timedelta(seconds=1))
     with db_engine.connect() as other:
         other.execute(text("SELECT pg_advisory_lock(:key)"), {"key": clock.CLOCK_LOCK_KEY})
@@ -445,13 +445,13 @@ def test_a_second_clock_waits_for_the_first(db_session, db_engine, regular_user,
         other.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": clock.CLOCK_LOCK_KEY})
 
     db_session.refresh(event)
-    assert (result, ticks(db_session, trigger), event.dispatched_at) == ({"ticks": 0, "delivered": 0}, [], None)
+    assert (result, ticks(db_session, subscription), event.dispatched_at) == ({"ticks": 0, "delivered": 0}, [], None)
 
 
 def test_the_item_router_leaves_ticks_and_timers_to_the_clock(db_session, regular_user):
     event = timer(db_session, regular_user, datetime.now(UTC) - timedelta(minutes=1))
 
-    triggers.route_events()
+    subscriptions.route_events()
 
     db_session.refresh(event)
     assert event.routed_at is None
@@ -467,10 +467,10 @@ def test_add_timer_keeps_to_the_per_user_cap(db_session, regular_user, monkeypat
 
 
 def test_reschedule_user_moves_crons_onto_the_new_timezone(db_session, regular_user):
-    trigger = cron_trigger(db_session, regular_user, cron="0 9 * * *", next_at=utc(2999, 1, 1, 9))
-    paused = cron_trigger(db_session, regular_user, cron="0 9 * * *", enabled=False, next_at=None)
+    subscription = cron_subscription(db_session, regular_user, cron="0 9 * * *", next_at=utc(2999, 1, 1, 9))
+    paused = cron_subscription(db_session, regular_user, cron="0 9 * * *", enabled=False, next_at=None)
 
     clock.reschedule_user(db_session, regular_user.id, "Asia/Kolkata")
 
-    assert (trigger.next_at.astimezone(UTC).hour, trigger.next_at.astimezone(UTC).minute) == (3, 30)
+    assert (subscription.next_at.astimezone(UTC).hour, subscription.next_at.astimezone(UTC).minute) == (3, 30)
     assert paused.next_at is None

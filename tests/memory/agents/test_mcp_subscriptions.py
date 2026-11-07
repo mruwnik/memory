@@ -3,14 +3,14 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from memory.agents import triggers
+from memory.agents import subscriptions
 from memory.api.MCP.servers import agent, subscription
 from memory.common import settings
 from memory.common.db.models import (
     AgentDefinition,
     AgentRun,
-    AgentTrigger,
-    AgentTriggerMatch,
+    Subscription,
+    Delivery,
     APIKey,
     BlogPost,
     Event,
@@ -38,7 +38,7 @@ def definition(db, user, spec=SPEC, name="d"):
 
 
 def subscribed(d, name="t", **fields):
-    return AgentTrigger(
+    return Subscription(
         user_id=d.user_id,
         name=name,
         definition_id=d.id,
@@ -96,13 +96,13 @@ async def test_a_filter_subscription_on_a_definition_is_created_updated_and_dele
     assert (created["kind"], created["enabled"], created["handler"], created["definition_id"]) == (
         "ingest", True, {"agent": d.id}, d.id,
     )
-    assert (created["config"]["template"], created["order_by"]) == (triggers.DEFAULT_TEMPLATE, "none")
+    assert (created["config"]["template"], created["order_by"]) == (subscriptions.DEFAULT_TEMPLATE, "none")
     assert (updated["enabled"], updated["config"]["delivery"]["window_sec"], updated["config"]["on_edit"]) == (
         False, 600, True,
     )
     assert updated["config"]["filter"]["tags_any"] == ["ai"]
     assert [s["id"] for s in listed["subscriptions"]] == [created["id"]]
-    assert db_session.query(AgentTrigger).count() == 0
+    assert db_session.query(Subscription).count() == 0
 
 
 @pytest.mark.asyncio
@@ -181,7 +181,7 @@ async def test_resume_is_refused_where_it_cannot_apply(db_session, regular_user,
             await upsert(**kwargs)
 
     assert db_session.query(Event).filter_by(kind="timer").count() == 0
-    assert db_session.query(AgentTrigger).one().enabled is True
+    assert db_session.query(Subscription).one().enabled is True
 
 
 @pytest.mark.asyncio
@@ -271,7 +271,7 @@ async def test_an_agent_runs_on_a_cron_with_its_input(
         ({"handler": {"queue": "q"}, "source": FILTER, "max_per_hour": -1}, "max_per_hour must be at least 0"),
         ({"handler": {"queue": "q"}, "source": FILTER, "backlog_max": -1}, "backlog_max must be at least 0"),
         ({"handler": {"queue": "q"}, "source": FILTER, "name": " "}, "name must not be empty"),
-        ({"handler": {"queue": "q"}, "source": FILTER, "name": "trigger-12"}, "reserved for default names"),
+        ({"handler": {"queue": "q"}, "source": FILTER, "name": "subscription-12"}, "reserved for default names"),
         ({"handler": {"queue": "q"}, "source": {"filter": {}}}, "set at least one of"),
         ({"handler": {"queue": "q"}, "source": {"filter": {"regex": "("}}}, "regex does not compile"),
         ({"handler": {"queue": "q"}, "source": FILTER | {"nope": 1}}, "Extra inputs"),
@@ -285,7 +285,7 @@ async def test_create_refuses_with_reasons(db_session, regular_user, user_sessio
     with mcp_auth_context(user_session.token):
         with pytest.raises(ValueError, match=match):
             await upsert(**kwargs)
-    assert db_session.query(AgentTrigger).count() == db_session.query(Event).count() == 0
+    assert db_session.query(Subscription).count() == db_session.query(Event).count() == 0
 
 
 @pytest.mark.asyncio
@@ -315,7 +315,7 @@ async def test_subscribing_again_by_name_updates_in_place(db_session, regular_us
 
     assert (again["id"], again["max_per_hour"], again["config"]["filter"]["tags_any"]) == (first["id"], 5, ["ml"])
     assert again["active_since"] == first["active_since"]
-    assert db_session.query(AgentTrigger).count() == 1
+    assert db_session.query(Subscription).count() == 1
 
 
 @pytest.mark.asyncio
@@ -354,7 +354,7 @@ async def test_a_name_taken_concurrently_is_refused_by_the_database(
     db_session.commit()
     # As if the other subscription was committed after this call's own check.
     monkeypatch.setattr(subscription, "find", lambda db, user_id, subscription_id, name: None)
-    monkeypatch.setattr(subscription, "checked_name", lambda db, user_id, name, trigger_id: name)
+    monkeypatch.setattr(subscription, "checked_name", lambda db, user_id, name, subscription_id: name)
 
     with mcp_auth_context(user_session.token):
         with pytest.raises(ValueError, match="you already have a subscription named 'taken'"):
@@ -365,15 +365,15 @@ async def test_a_name_taken_concurrently_is_refused_by_the_database(
 async def test_enabled_subscriptions_are_capped_per_user(
     db_session, regular_user, user_session, monkeypatch
 ):
-    monkeypatch.setattr(settings, "AGENT_MAX_TRIGGERS_PER_USER", 1)
+    monkeypatch.setattr(settings, "AGENT_MAX_SUBSCRIPTIONS_PER_USER", 1)
 
     with mcp_auth_context(user_session.token):
         paused = await upsert(name="a", handler=NOTIFY, source=CRON, enabled=False)
         first = await upsert(name="b", handler={"queue": "q"}, source=FILTER)
         edited = await upsert(subscription_id=first["id"], source=FILTER)
-        with pytest.raises(ValueError, match="AGENT_MAX_TRIGGERS_PER_USER"):
+        with pytest.raises(ValueError, match="AGENT_MAX_SUBSCRIPTIONS_PER_USER"):
             await upsert(name="c", handler={"queue": "q"}, source=FILTER)
-        with pytest.raises(ValueError, match="AGENT_MAX_TRIGGERS_PER_USER"):
+        with pytest.raises(ValueError, match="AGENT_MAX_SUBSCRIPTIONS_PER_USER"):
             await upsert(subscription_id=paused["id"], enabled=True)
 
     assert (paused["enabled"], edited["enabled"]) == (False, True)
@@ -601,12 +601,12 @@ async def test_a_tripped_subscription_can_resume_from_when_it_tripped(
 
     with mcp_auth_context(user_session.token):
         enabled = await upsert(subscription_id=t.id, enabled=True, resume=resume)
-    routed = triggers.route_events()
+    routed = subscriptions.route_events()
 
     # Resuming carries on as if it had never tripped; otherwise it starts from now.
     kept_active_since = datetime.fromisoformat(enabled["active_since"]) == ACTIVE_SINCE
     assert (kept_active_since, [r == t.id for r in routed]) == (resume, missed)
-    assert "resume" not in db_session.get_one(AgentTrigger, t.id).state
+    assert "resume" not in db_session.get_one(Subscription, t.id).state
 
 
 @pytest.mark.asyncio
@@ -652,8 +652,8 @@ async def test_pausing_a_cron_clears_its_next_tick_and_enabling_reschedules_it(
 ):
     with mcp_auth_context(user_session.token):
         created = await upsert(handler=NOTIFY, source=CRON)
-        trigger = db_session.get_one(AgentTrigger, created["id"])
-        trigger.state = {"tripped": {"reason": "x", "at": "2026-01-01T00:00:00+00:00"}, "failures": 3}
+        subscription = db_session.get_one(Subscription, created["id"])
+        subscription.state = {"tripped": {"reason": "x", "at": "2026-01-01T00:00:00+00:00"}, "failures": 3}
         db_session.commit()
         paused = await upsert(subscription_id=created["id"], enabled=False)
         resumed = await upsert(subscription_id=created["id"], enabled=True)
@@ -676,8 +676,8 @@ async def test_next_tick_moves_only_with_the_cron(db_session, regular_user, user
     far = datetime(2999, 1, 1, 9, tzinfo=timezone.utc)
     with mcp_auth_context(user_session.token):
         created = await upsert(handler=NOTIFY, source=CRON)
-        trigger = db_session.get_one(AgentTrigger, created["id"])
-        trigger.next_at = far
+        subscription = db_session.get_one(Subscription, created["id"])
+        subscription.next_at = far
         db_session.commit()
         updated = await upsert(subscription_id=created["id"], **change)
 
@@ -702,7 +702,7 @@ async def test_a_notify_handler_takes_only_its_message_fields(db_session, regula
         with pytest.raises(ValueError, match="takes only channel, target, message and subject"):
             await upsert(handler={"notify": NOTIFY["notify"] | injected}, source=CRON)
         created = await upsert(handler=NOTIFY, source=CRON)
-        stored = db_session.get_one(AgentTrigger, created["id"])
+        stored = db_session.get_one(Subscription, created["id"])
         stored.handler = {"notify": stored.handler["notify"] | injected}
         db_session.commit()
         updated = await upsert(subscription_id=created["id"], handler={"notify": {"message": "renamed"}})
@@ -864,7 +864,7 @@ async def test_a_key_that_may_not_read_filters_cannot_reach_one(
     with mcp_auth_context(key.key, scopes=scopes), pytest.raises(ValueError, match="unknown subscription"):
         await call(queued)
 
-    assert db_session.get_one(AgentTrigger, queued["id"]).enabled is True
+    assert db_session.get_one(Subscription, queued["id"]).enabled is True
 
 
 @pytest.mark.asyncio
@@ -881,7 +881,7 @@ async def test_a_stored_notify_handler_sheds_fields_callers_may_not_set(
 ):
     with mcp_auth_context(user_session.token):
         created = await upsert(handler=NOTIFY, source=CRON, enabled=False)
-    stored = db_session.get_one(AgentTrigger, created["id"])
+    stored = db_session.get_one(Subscription, created["id"])
     stored.handler = {"notify": stored.handler["notify"] | {"discord_bot_id": 5, "from_address": "x@example.com"}}
     db_session.commit()
 
@@ -897,7 +897,7 @@ async def test_a_cron_history_reads_tick_outcomes_newest_first(db_session, regul
         cron = await upsert(handler=NOTIFY, source=CRON)
     now = datetime.now(timezone.utc)
     db_session.add_all(
-        Event(kind="tick", trigger_id=cron["id"], owner_id=regular_user.id, fire_at=at, data={"missed": m}, result=r)
+        Event(kind="tick", subscription_id=cron["id"], owner_id=regular_user.id, fire_at=at, data={"missed": m}, result=r)
         for at, m, r in [(now - timedelta(days=1), 0, {"status": "sent"}), (now, 2, None)]
     )
     db_session.commit()
@@ -916,14 +916,14 @@ async def test_a_filter_history_shows_pending_deliveries_and_runs(db_session, re
     a, b = post(db_session, regular_user), post(db_session, regular_user)
     run = AgentRun(
         user_id=regular_user.id, queue="reviews", spec={}, input="", trigger_kind="ingest",
-        trigger_ref={"trigger_id": queued["id"], "item_ids": [a.id]}, trigger_id=queued["id"],
+        trigger_ref={"subscription_id": queued["id"], "item_ids": [a.id]}, subscription_id=queued["id"],
         executor="workers", status="done", max_cost_usd=0,
     )
     db_session.add(run)
     db_session.flush()
     db_session.add_all([
-        AgentTriggerMatch(trigger_id=queued["id"], item_id=a.id, content_hash=b"a", status="done", run_id=run.id),
-        AgentTriggerMatch(trigger_id=queued["id"], item_id=b.id, content_hash=b"b", changes=["new"]),
+        Delivery(subscription_id=queued["id"], item_id=a.id, content_hash=b"a", status="done", run_id=run.id),
+        Delivery(subscription_id=queued["id"], item_id=b.id, content_hash=b"b", changes=["new"]),
     ])
     db_session.commit()
 
@@ -950,7 +950,7 @@ async def test_deleting_a_definition_takes_its_subscriptions_and_cancels_its_tim
         slugged = await upsert(handler={"agent": "echo"}, source=at)
         await agent.delete.fn(definition_id=d.id)
 
-    assert db_session.query(AgentTrigger).count() == 0
+    assert db_session.query(Subscription).count() == 0
     assert db_session.get_one(Event, timer["id"]).result == {"status": "skipped:cancelled"}
     assert db_session.get_one(Event, slugged["id"]).result is None
 
@@ -963,7 +963,7 @@ async def test_create_only_refuses_a_name_already_taken(db_session, regular_user
             await upsert(name="reviews", handler={"queue": "other"}, source=FILTER, create_only=True)
         fresh = await upsert(name="fresh", handler={"queue": "other"}, source=FILTER, create_only=True)
 
-    assert db_session.get_one(AgentTrigger, first["id"]).handler == {"queue": "prs"}
+    assert db_session.get_one(Subscription, first["id"]).handler == {"queue": "prs"}
     assert fresh["name"] == "fresh"
 
 
@@ -979,10 +979,10 @@ async def test_caps_and_a_subject_are_cleared_with_their_empty_values(db_session
     assert unsubjected["handler"] == {"notify": {k: v for k, v in NOTIFY["notify"].items() if k != "subject"}}
 
 
-def queued_run(db, user, trigger_id, item_id, status="done"):
+def queued_run(db, user, subscription_id, item_id, status="done"):
     run = AgentRun(
         user_id=user.id, queue="reviews", spec={}, input="", trigger_kind="ingest",
-        trigger_ref={"trigger_id": trigger_id, "item_ids": [item_id]}, trigger_id=trigger_id,
+        trigger_ref={"subscription_id": subscription_id, "item_ids": [item_id]}, subscription_id=subscription_id,
         executor="workers", status=status, max_cost_usd=0,
     )
     db.add(run)
@@ -1004,13 +1004,13 @@ async def test_a_listing_shows_each_subscriptions_backlog_last_delivery_and_orig
     run = queued_run(db_session, regular_user, busy["id"], a.id, status="failed")
     now = datetime.now(timezone.utc)
     db_session.add_all([
-        AgentTriggerMatch(
-            trigger_id=busy["id"], item_id=a.id, content_hash=b"a", status="done", run_id=run.id,
+        Delivery(
+            subscription_id=busy["id"], item_id=a.id, content_hash=b"a", status="done", run_id=run.id,
             created_at=now - timedelta(minutes=1),
         ),
-        AgentTriggerMatch(trigger_id=busy["id"], item_id=b.id, content_hash=b"b", created_at=now - timedelta(hours=2)),
-        AgentTriggerMatch(trigger_id=busy["id"], item_id=c.id, content_hash=b"c", created_at=now - timedelta(hours=1)),
-        Event(kind="tick", trigger_id=cron["id"], owner_id=regular_user.id, fire_at=now, result={"status": "sent"}),
+        Delivery(subscription_id=busy["id"], item_id=b.id, content_hash=b"b", created_at=now - timedelta(hours=2)),
+        Delivery(subscription_id=busy["id"], item_id=c.id, content_hash=b"c", created_at=now - timedelta(hours=1)),
+        Event(kind="tick", subscription_id=cron["id"], owner_id=regular_user.id, fire_at=now, result={"status": "sent"}),
     ])
     db_session.commit()
 
@@ -1065,11 +1065,11 @@ async def test_a_history_lists_pending_deliveries_apart_with_their_runs_status(
     run = queued_run(db_session, regular_user, queued["id"], items["a"].id)
     now = datetime.now(timezone.utc)
     db_session.add_all([
-        AgentTriggerMatch(
-            trigger_id=queued["id"], item_id=items["a"].id, content_hash=b"a", status="done", run_id=run.id, created_at=now
+        Delivery(
+            subscription_id=queued["id"], item_id=items["a"].id, content_hash=b"a", status="done", run_id=run.id, created_at=now
         ),
-        AgentTriggerMatch(trigger_id=queued["id"], item_id=items["b"].id, content_hash=b"b", created_at=now - timedelta(hours=2)),
-        AgentTriggerMatch(trigger_id=queued["id"], item_id=items["c"].id, content_hash=b"c", created_at=now - timedelta(hours=1)),
+        Delivery(subscription_id=queued["id"], item_id=items["b"].id, content_hash=b"b", created_at=now - timedelta(hours=2)),
+        Delivery(subscription_id=queued["id"], item_id=items["c"].id, content_hash=b"c", created_at=now - timedelta(hours=1)),
     ])
     db_session.commit()
     names = {i.id: name for name, i in items.items()}

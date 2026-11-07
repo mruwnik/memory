@@ -16,7 +16,7 @@ from memory.common.celery_app import RUN_AGENT
 from memory.common.db.models import (
     AgentDefinition,
     AgentRun,
-    AgentTrigger,
+    Subscription,
     APIKey,
     InstanceSetting,
 )
@@ -287,9 +287,9 @@ def test_dedupe_key_returns_the_existing_run(
 
 
 def subscription(db, user, handler, max_per_hour=None):
-    """A trigger whose handler is a fresh definition ("definition") or a code agent's slug."""
+    """A subscription whose handler is a fresh definition ("definition") or a code agent's slug."""
     d = definition(db, user) if handler == "definition" else None
-    t = AgentTrigger(
+    t = Subscription(
         user_id=user.id,
         name=f"t-{handler}",
         definition_id=d.id if d else None,
@@ -309,13 +309,13 @@ def fire(db, user, t, d, dedupe_key=None):
         user_id=user.id,
         spec=spec(),
         input="hi",
-        trigger=TriggerInfo(kind="ingest", trigger_id=t.id, dedupe_key=dedupe_key),
+        trigger=TriggerInfo(kind="ingest", subscription_id=t.id, dedupe_key=dedupe_key),
         definition=d,
     )
 
 
 @pytest.mark.parametrize("handler", ["definition", "fact-check"])
-def test_a_triggers_dedupe_key_returns_its_existing_run(
+def test_a_subscriptions_dedupe_key_returns_its_existing_run(
     db_session, regular_user, fake_providers, no_celery_dispatch, handler
 ):
     t, d = subscription(db_session, regular_user, handler)
@@ -323,13 +323,13 @@ def test_a_triggers_dedupe_key_returns_its_existing_run(
     first = fire(db_session, regular_user, t, d, dedupe_key="k")
     second = fire(db_session, regular_user, t, d, dedupe_key="k")
 
-    assert (second.id, second.trigger_id) == (first.id, t.id)
+    assert (second.id, second.subscription_id) == (first.id, t.id)
     assert no_celery_dispatch.call_count == 1
 
 
 @pytest.mark.parametrize("handler", ["definition", "fact-check"])
 @pytest.mark.parametrize("max_per_hour,ceiling", [(2, 60), (None, 2)])
-def test_a_trigger_starts_at_most_its_hourly_limit_of_runs(
+def test_a_subscription_starts_at_most_its_hourly_limit_of_runs(
     db_session, regular_user, fake_providers, monkeypatch, handler, max_per_hour, ceiling
 ):
     monkeypatch.setattr(settings, "AGENT_MAX_RUNS_PER_HOUR", ceiling)
@@ -337,15 +337,15 @@ def test_a_trigger_starts_at_most_its_hourly_limit_of_runs(
     fire(db_session, regular_user, t, d)
     fire(db_session, regular_user, t, d)
 
-    with pytest.raises(CapExceeded, match="trigger rate: 2 runs in the last hour, limit 2"):
+    with pytest.raises(CapExceeded, match="subscription rate: 2 runs in the last hour, limit 2"):
         fire(db_session, regular_user, t, d)
 
 
-def test_a_triggers_limit_counts_only_its_own_runs(db_session, regular_user, fake_providers):
+def test_a_subscriptions_limit_counts_only_its_own_runs(db_session, regular_user, fake_providers):
     t, d = subscription(db_session, regular_user, "definition", max_per_hour=1)
     start_definition(db_session, regular_user, d)
 
-    assert fire(db_session, regular_user, t, d).trigger_id == t.id
+    assert fire(db_session, regular_user, t, d).subscription_id == t.id
 
 
 def rated_definition(db, user, monkeypatch, spec_rate, ceiling, earlier):

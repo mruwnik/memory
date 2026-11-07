@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from memory.agents.trigger_input import (
+from memory.agents.subscription_input import (
     check_template,
     field_names,
     item_fields,

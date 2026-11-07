@@ -68,7 +68,7 @@ from memory.agents.spec import (
     uses_server,
 )
 from memory.agents.system import SYSTEM_AGENTS, SystemAgent
-from memory.agents.triggers import (
+from memory.agents.subscriptions import (
     INGEST,
     POSTED,
     can_read,
@@ -85,7 +85,7 @@ from memory.common.db.models import (
     AgentDefinition,
     AgentRun,
     AgentRunStep,
-    AgentTrigger,
+    Subscription,
     ExternalMCPServer,
     LLMProviderKey,
     ServerStatus,
@@ -167,16 +167,16 @@ def external_writers(spec: AgentSpec, user_id: int) -> list[str]:
     return writers
 
 
-def trigger_summaries(db: DBSession, definition_ids: list[int]) -> dict[int, dict]:
+def subscription_summaries(db: DBSession, definition_ids: list[int]) -> dict[int, dict]:
     rows = (
         db.query(
-            AgentTrigger.definition_id,
+            Subscription.definition_id,
             func.count(),
-            func.count().filter(AgentTrigger.enabled),
-            func.count().filter(AgentTrigger.state.has_key("tripped")),
+            func.count().filter(Subscription.enabled),
+            func.count().filter(Subscription.state.has_key("tripped")),
         )
-        .filter(AgentTrigger.definition_id.in_(definition_ids), AgentTrigger.kind == INGEST)
-        .group_by(AgentTrigger.definition_id)
+        .filter(Subscription.definition_id.in_(definition_ids), Subscription.kind == INGEST)
+        .group_by(Subscription.definition_id)
         .all()
     )
     found = {d: {"total": t, "enabled": e, "tripped": x} for d, t, e, x in rows}
@@ -323,20 +323,20 @@ async def upsert(
 @agent_mcp.tool()
 @visible_when(require_scopes(SCOPE_AGENTS))
 async def delete(definition_id: int) -> dict:
-    """Delete an agent definition with its triggers and schedules, cancelling its
+    """Delete an agent definition with its subscriptions, cancelling its
     timers. Its past runs keep their frozen spec."""
     user_id, _ = caller()
     with make_session() as db:
         definition = owned_definition(db, definition_id, user_id)
-        # Triggers go first, explicitly: fire_trigger locks a trigger before its
+        # Subscriptions go first, explicitly: fire_subscription locks a subscription before its
         # definition, and deleting in the same order can't deadlock against it.
-        trigger_ids = [
+        subscription_ids = [
             t.id
-            for t in db.query(AgentTrigger)
-            .filter(AgentTrigger.definition_id == definition_id)
+            for t in db.query(Subscription)
+            .filter(Subscription.definition_id == definition_id)
             .with_for_update()
         ]
-        db.query(AgentTrigger).filter(AgentTrigger.id.in_(trigger_ids)).delete()
+        db.query(Subscription).filter(Subscription.id.in_(subscription_ids)).delete()
         timers = db.query(Event).filter(
             Event.kind == TIMER,
             Event.owner_id == user_id,
@@ -361,7 +361,7 @@ async def list_all() -> dict:
             .order_by(AgentDefinition.name)
             .all()
         )
-        summaries = trigger_summaries(db, [d.id for d in definitions])
+        summaries = subscription_summaries(db, [d.id for d in definitions])
         result = []
         for d in definitions:
             last = (
@@ -374,7 +374,7 @@ async def list_all() -> dict:
                 d.serialize()
                 | {
                     "last_run": last.serialize() if last else None,
-                    "triggers": summaries[d.id],
+                    "subscriptions": summaries[d.id],
                     "changed_tools": changed_tools(db, d),
                     "problems": stored_spec_problems(db, user_id, d.spec),
                 }
@@ -642,7 +642,7 @@ CLAIM_SCAN = 200
 MAX_WORKER_LABEL_CHARS = 200
 MAX_WORKER_ERROR_CHARS = 10_000
 # What a worker needs to execute a run. An allow-list, so new spec fields and run
-# columns (the owner's keys, servers, triggers) never reach workers by default.
+# columns (the owner's keys, servers, subscriptions) never reach workers by default.
 WORKER_SPEC_FIELDS = (
     "system_prompt",
     "model",
@@ -744,7 +744,7 @@ def take_next(
     """Scans the queue oldest first in CLAIM_SCAN batches, by (created_at, id) cursor,
     without locks, then locks only the run it picks, passing over it if another worker
     has it or took it since the scan. The requirement globs are matched here: either
-    side may be a glob, which SQL can't match. A run of trigger deliveries is rendered
+    side may be a glob, which SQL can't match. A run of subscription deliveries is rendered
     as its items are now (queues.rerender); one the claiming credential can't read all
     of is passed over for a worker that can."""
     with make_session() as db:
@@ -832,14 +832,14 @@ async def work_claim(
 
     With `queue`, take instead the next delivery of your subscriptions whose handler
     is that queue (subscription_upsert), which needs the read scope. It comes as a run with "queue" and "ref"
-    ({"trigger_id", "item_ids", "changes": {"<item id>": [change tags]}, and
+    ({"subscription_id", "item_ids", "changes": {"<item id>": [change tags]}, and
     "coalesced": {"<item id>": [ids of items whose deliveries were folded into it]}
-    when any were}), its input rendered from the trigger's template and the items as
-    they are now. Items the trigger can no longer read, or that one of its runs
+    when any were}), its input rendered from the subscription's template and the items as
+    they are now. Items the subscription can no longer read, or that one of its runs
     reported posting (agent_work_submit's `posted`), are left out and their
     deliveries skipped; ones only your key can't read are left for another worker,
     and those no worker's key can read wait and end `expired`. A
-    trigger's order_by ("item" or "thread") holds a delivery back until an earlier one
+    subscription's order_by ("item" or "thread") holds a delivery back until an earlier one
     for the same item or thread is answered. A removed item's delivery carries its id
     with the change "removed"; a raw subscription's carries the webhook delivery
     (see subscription_upsert). Report on it with agent_work_submit as on
@@ -954,7 +954,7 @@ async def work_submit(
     your budgets. `posted` lists what you posted while working on it (at most 50 of
     {"source", "external_id"}: slack "channel:ts", discord message id, email
     Message-ID header (as email_send returns it), beeper message id); once Memory
-    ingests them, they never match the trigger that started this run.
+    ingests them, they never match the subscription that started this run.
     """
     user_id = worker_caller()
     if (result is None) == (error is None):
@@ -1027,7 +1027,7 @@ async def catalog() -> dict:
             "max_spawn_depth": settings.AGENT_MAX_SPAWN_DEPTH,
         },
         "default_model": DEFAULT_AGENT_MODEL,
-        "trigger_source_types": source_types(),
+        "subscription_source_types": source_types(),
         "mcp_servers": user_servers(),
         "provider_keys": [k for keys in user_keys().values() for k in keys],
     }

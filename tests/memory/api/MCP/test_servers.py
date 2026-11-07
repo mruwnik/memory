@@ -227,7 +227,7 @@ def none(*args):
     "task, implementation, stub, args",
     [
         ("run_agent", "memory.agents.runner.execute_run", nothing, ["run-1"]),
-        ("fire_trigger", "memory.agents.fire.fire_trigger", none, [1, []]),
+        ("fire_subscription", "memory.agents.fire.fire_subscription", none, [1, []]),
         ("start_time_run", "memory.agents.cron.start_time_run", none, [1]),
     ],
 )

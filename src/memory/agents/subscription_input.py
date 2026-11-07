@@ -1,4 +1,4 @@
-"""The run input an ingest trigger renders from its template and matched items.
+"""The run input an ingest subscription renders from its template and matched items.
 
 Placeholders: {items} (every item, default rendering), {items_json} (a JSON list
 of each item's short fields) and, for per-item delivery, {item.<field>}. Fields
@@ -11,7 +11,7 @@ import re
 from datetime import datetime
 from typing import Any, Callable, Collection, Mapping
 
-from memory.agents.triggers import REMOVED_CHANGE, item_body, item_title
+from memory.agents.subscriptions import REMOVED_CHANGE, item_body, item_title
 from memory.common.db.models import (
     DiscordMessage,
     ForumPost,
@@ -322,7 +322,7 @@ def render_input(
     `removed` items, which are gone, are named by id alone.
 
     A template without placeholders gets the default rendering appended. Clipped
-    rather than refused: an oversized input would trip the trigger.
+    rather than refused: an oversized input would trip the subscription.
     """
     present = [item_fields(i, changes_for(i.id, changes)) for i in items]
     gone = [{"id": i, "type": "item", "changes": [REMOVED_CHANGE]} for i in sorted(removed)]

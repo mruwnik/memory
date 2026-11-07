@@ -1,6 +1,6 @@
 import {
-  emptyFilter, emptyTriggerConfig, type Handler, type NotifyHandler, type RawConfig, type RawOutcome, type RawSource,
-  type Subscription, type SubscriptionUpsert, type Timer, type TriggerConfig,
+  emptyFilter, emptyIngestConfig, type Handler, type NotifyHandler, type RawConfig, type RawOutcome, type RawSource,
+  type Subscription, type SubscriptionUpsert, type Timer, type IngestConfig,
 } from '@/hooks/useAgents'
 import type { Tone } from '@/components/shared/ui'
 import { WEBHOOK_SOURCE_NAMES } from '@/hooks/useWebhookLog'
@@ -58,7 +58,7 @@ export const describeHandler = (handler: Handler, agentNames: Record<string, str
 
 const list = (label: string, values: string[]) => values.length > 0 && `${label}: ${values.join(', ')}`
 
-export const describeFilter = (config: TriggerConfig): string => {
+export const describeFilter = (config: IngestConfig): string => {
   // Stored filters may predate fields added since.
   const f = { ...emptyFilter(), ...config.filter }
   const parts = [
@@ -104,7 +104,7 @@ export interface SubscriptionForm {
   agent: string
   queue: string
   notify: NotifyHandler
-  config: TriggerConfig
+  config: IngestConfig
   cron: string
   at: string
   input: string
@@ -125,7 +125,7 @@ export const newForm = (agent?: string): SubscriptionForm => ({
   agent: agent ?? '',
   queue: '',
   notify: emptyNotify(),
-  config: emptyTriggerConfig(),
+  config: emptyIngestConfig(),
   cron: '0 9 * * *',
   at: '',
   input: '',

@@ -333,7 +333,7 @@ def test_process_message_stores_account_and_uid(db_session, test_email_account, 
     assert mail_message.imap_uid == "12345"
 
 
-def test_stored_mail_is_offered_to_agent_triggers(db_session, test_email_account, qdrant):
+def test_stored_mail_is_offered_to_subscriptions(db_session, test_email_account, qdrant):
     res = run_process_message(
         account_id=test_email_account.id,
         message_id="777",

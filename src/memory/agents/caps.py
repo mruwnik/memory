@@ -21,7 +21,7 @@ from memory.common.db.connection import DBSession
 from memory.common.db.models import (
     AgentDefinition,
     AgentRun,
-    AgentTrigger,
+    Subscription,
     APIKey,
     LLMProviderKey,
     LLMSpend,
@@ -263,8 +263,8 @@ def check_run_rate(db: DBSession, definition: AgentDefinition, spec_rate: int | 
     )
 
 
-def check_trigger_rate(db: DBSession, trigger: AgentTrigger) -> None:
-    """CapExceeded once a trigger has started its hourly allowance of runs."""
+def check_subscription_rate(db: DBSession, subscription: Subscription) -> None:
+    """CapExceeded once a subscription has started its hourly allowance of runs."""
     check_hourly_rate(
-        db, AgentRun.trigger_id == trigger.id, trigger.max_per_hour, "trigger", "max_per_hour"
+        db, AgentRun.subscription_id == subscription.id, subscription.max_per_hour, "subscription", "max_per_hour"
     )

@@ -294,7 +294,7 @@ AGENT_DEFAULT_USER_KEY_DAILY_COST_USD = Decimal(
 )
 # Runs one definition may start per rolling hour; a definition's max_runs_per_hour may only lower it.
 AGENT_MAX_RUNS_PER_HOUR = int(os.getenv("AGENT_MAX_RUNS_PER_HOUR", "60"))
-AGENT_MAX_TRIGGERS_PER_USER = int(os.getenv("AGENT_MAX_TRIGGERS_PER_USER", "20"))
+AGENT_MAX_SUBSCRIPTIONS_PER_USER = int(os.getenv("AGENT_MAX_SUBSCRIPTIONS_PER_USER", "20"))
 AGENT_MAX_TIMEOUT_SEC = int(os.getenv("AGENT_MAX_TIMEOUT_SEC", "1800"))
 AGENT_MAX_WAIT_SEC = int(os.getenv("AGENT_MAX_WAIT_SEC", "300"))
 AGENT_LLM_TIMEOUT_SEC = float(os.getenv("AGENT_LLM_TIMEOUT_SEC", "600"))
@@ -404,7 +404,7 @@ RATE_LIMIT_TRUSTED_PROXIES = os.getenv(
     "RATE_LIMIT_TRUSTED_PROXIES", "127.0.0.1,::1"
 )
 
-# Timers waiting to fire, per user; cron subscriptions count as triggers.
+# Timers waiting to fire, per user; cron subscriptions count towards AGENT_MAX_SUBSCRIPTIONS_PER_USER.
 MAX_TIMERS_PER_USER = int(os.getenv("MAX_TIMERS_PER_USER", 20))
 MIN_CRON_INTERVAL_MINUTES = int(os.getenv("MIN_CRON_INTERVAL_MINUTES", 10))
 # Celery results are only read by tools/run_celery_task.py right after a run, so

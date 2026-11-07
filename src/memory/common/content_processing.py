@@ -403,7 +403,7 @@ def process_content_item(
 
     Performs the full pipeline for processing a content item:
     1. Add to database session, flush to get ID, resolve inherited
-       access control (so payloads and trigger matching see it), and write
+       access control (so payloads and subscriptions see it), and write
        the item's event
     2. Generate embeddings and chunks
     3. Push embeddings to Qdrant vector store
@@ -412,8 +412,8 @@ def process_content_item(
     Args:
         item: SourceItem to process
         session: Database session for persistence
-        changes: What changed, for trigger matching; an empty list writes no event
-        backfill: A history import stored the item, which triggers don't react to
+        changes: What changed, for subscriptions; an empty list writes no event
+        backfill: A history import stored the item, which subscriptions don't react to
         actors: Who made each of `changes`, where the ingester knows
 
     Returns:

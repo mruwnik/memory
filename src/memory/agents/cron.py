@@ -23,7 +23,7 @@ from memory.agents.enqueue import TriggerInfo, enqueue_run
 from memory.agents.prebuilt import code_agent
 from memory.agents.principal import standing_key
 from memory.agents.spec import AgentSpec
-from memory.agents.triggers import DONE, SHED_BUDGET, SHED_RATE, SKIPPED_DISABLED
+from memory.agents.subscriptions import DONE, SHED_BUDGET, SHED_RATE, SKIPPED_DISABLED
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import AgentDefinition, AgentRun, Event
 from memory.common.db.models.agents import iso
@@ -42,13 +42,13 @@ def time_ref(db: DBSession, event: Event) -> dict:
     since = db.scalar(
         select(func.max(Event.fire_at)).where(
             Event.kind == TICK,
-            Event.trigger_id == event.trigger_id,
+            Event.subscription_id == event.subscription_id,
             Event.fire_at < event.fire_at,
             Event.result["status"].astext.in_([DONE, SENT]),
         )
     )
     missed = (event.data or {}).get("missed", 0)
-    return ref | {"trigger_id": event.trigger_id, "missed": missed, "since": iso(since)}
+    return ref | {"subscription_id": event.subscription_id, "missed": missed, "since": iso(since)}
 
 
 def start(db: DBSession, event: Event, target: Target) -> AgentRun:
@@ -74,7 +74,7 @@ def start(db: DBSession, event: Event, target: Target) -> AgentRun:
             kind=CRON if event.kind == TICK else TIMER,
             ref=time_ref(db, event),
             dedupe_key=f"event:{event.id}",
-            trigger_id=event.trigger_id,
+            subscription_id=event.subscription_id,
         ),
         definition=definition,
         agent=slug,

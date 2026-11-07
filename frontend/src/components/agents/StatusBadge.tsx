@@ -23,8 +23,9 @@ export const TRIGGER_LABELS: Record<string, string> = {
   manual: 'Manual',
   mcp: 'MCP client',
   cron: 'Schedule',
+  timer: 'Timer',
   ingest: 'New items',
-  system: 'System',
+  raw: 'Webhook event',
   agent: 'Another run',
 }
 

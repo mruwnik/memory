@@ -35,12 +35,12 @@ describe('AgentsPage', () => {
     expect(screen.getByRole('link', { name: 'digest' })).toHaveAttribute('href', '/agents/1')
   })
 
-  it('flags definitions with a tripped trigger', async () => {
+  it('flags definitions with a tripped subscription', async () => {
     listDefinitions.mockResolvedValue([
-      { id: 1, name: 'watcher', description: '', spec: { model: 'm' }, last_run: null, triggers: { total: 2, enabled: 1, tripped: 1 } },
+      { id: 1, name: 'watcher', description: '', spec: { model: 'm' }, last_run: null, subscriptions: { total: 2, enabled: 1, tripped: 1 } },
     ])
     renderWithRouter(<AgentsPage />)
-    await waitFor(() => expect(screen.getByText('1 trigger tripped')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('1 subscription tripped')).toBeInTheDocument())
   })
 
   it('lists system agents and flags those you cannot pay for', async () => {

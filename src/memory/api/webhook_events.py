@@ -7,11 +7,11 @@ from sqlalchemy import BigInteger, cast as sql_cast, func, select
 from sqlalchemy.orm import Session, undefer
 
 from memory.agents.activity import run_outcome
-from memory.agents.triggers import accessible_ids
+from memory.agents.subscriptions import accessible_ids
 from memory.api.auth import request_api_key, require_rest_access
 from memory.common.access_control import has_admin_scope
 from memory.common.db.connection import get_session
-from memory.common.db.models import AgentRun, AgentTrigger, AgentTriggerMatch, Event, GithubAccount, TranscriptAccount, User
+from memory.common.db.models import AgentRun, Subscription, Delivery, Event, GithubAccount, TranscriptAccount, User
 from memory.common.db.models.discord import DiscordBot
 from memory.common.db.models.events import NOT_COLLECTED, RAW
 from memory.common.db.models.slack import SlackApp
@@ -109,10 +109,10 @@ RAW_RUN_EVENT = sql_cast(AgentRun.trigger_ref["event_id"].astext, BigInteger)
 def raw_runs_of(raw_ids: list[int]):
     """Raw subscriptions' runs of these raw events, with their subscription's name."""
     return (
-        select(AgentRun, AgentTrigger.name)
-        .join(AgentTrigger, AgentTrigger.id == AgentRun.trigger_id)
+        select(AgentRun, Subscription.name)
+        .join(Subscription, Subscription.id == AgentRun.subscription_id)
         .where(AgentRun.trigger_kind == RAW, RAW_RUN_EVENT.in_(raw_ids))
-        .order_by(AgentRun.created_at, AgentTrigger.id)
+        .order_by(AgentRun.created_at, Subscription.id)
     )
 
 
@@ -125,22 +125,22 @@ def triggered_by(db: Session, user: User, raw_ids: list[int]) -> dict[int, list[
     """For each raw event, the deliveries its items were routed into, of the
     caller's subscriptions (an admin: everyone's)."""
     query = (
-        select(Event.caused_by, AgentTriggerMatch, AgentTrigger.name, AgentRun.started_at.is_not(None))
-        .join(AgentTriggerMatch, AgentTriggerMatch.event_id == Event.id)
-        .join(AgentTrigger, AgentTrigger.id == AgentTriggerMatch.trigger_id)
-        .outerjoin(AgentRun, AgentRun.id == AgentTriggerMatch.run_id)
+        select(Event.caused_by, Delivery, Subscription.name, AgentRun.started_at.is_not(None))
+        .join(Delivery, Delivery.event_id == Event.id)
+        .join(Subscription, Subscription.id == Delivery.subscription_id)
+        .outerjoin(AgentRun, AgentRun.id == Delivery.run_id)
         .where(Event.caused_by.in_(raw_ids))
-        .order_by(Event.id, AgentTrigger.id)
+        .order_by(Event.id, Subscription.id)
     )
     raw_runs = raw_runs_of(raw_ids)
     if not has_admin_scope(user):
-        query = query.where(AgentTrigger.user_id == user.id)
-        raw_runs = raw_runs.where(AgentTrigger.user_id == user.id)
+        query = query.where(Subscription.user_id == user.id)
+        raw_runs = raw_runs.where(Subscription.user_id == user.id)
     found: dict[int, list[Triggered]] = {}
     for raw_id, match, name, started in db.execute(query):
         found.setdefault(raw_id, []).append(
             Triggered(
-                subscription_id=match.trigger_id,
+                subscription_id=match.subscription_id,
                 subscription=name,
                 item_id=match.item_id,
                 status=match.status,
@@ -150,7 +150,7 @@ def triggered_by(db: Session, user: User, raw_ids: list[int]) -> dict[int, list[
     for run, name in db.execute(raw_runs):
         found.setdefault(run.trigger_ref["event_id"], []).append(
             Triggered(
-                subscription_id=cast(int, run.trigger_id),
+                subscription_id=cast(int, run.subscription_id),
                 subscription=name,
                 item_id=None,
                 status=run_outcome(run),

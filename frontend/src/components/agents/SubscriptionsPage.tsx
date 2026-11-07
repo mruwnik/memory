@@ -58,7 +58,7 @@ export default function SubscriptionsPage() {
   const [subscriptions, setSubscriptions] = useState<Subscription[] | null>(null)
   const [timers, setTimers] = useState<Timer[]>([])
   const [agents, setAgents] = useState<AgentOption[]>([])
-  const [sourceTypes, setSourceTypes] = useState<Catalog['trigger_source_types']>([])
+  const [sourceTypes, setSourceTypes] = useState<Catalog['subscription_source_types']>([])
   const [loadError, setLoadError] = useState<string | null>(null)
   const [source, setSource] = useState<SourceFilter>('all')
   const [handler, setHandler] = useState<HandlerFilter>('all')
@@ -86,7 +86,7 @@ export default function SubscriptionsPage() {
   useEffect(() => {
     Promise.all([listDefinitions(), catalog(), listSystemAgents().catch(() => [])])
       .then(([definitions, cat, system]) => {
-        setSourceTypes(cat.trigger_source_types)
+        setSourceTypes(cat.subscription_source_types)
         setAgents([
           ...definitions.map(d => ({ value: String(d.id), label: d.name, group: 'Your agents' })),
           ...(cat.agents ?? []).map(a => ({ value: a.slug, label: a.title, group: 'Prebuilt' })),

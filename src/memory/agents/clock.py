@@ -1,4 +1,4 @@
-"""Time as events. A cron subscription (an AgentTrigger of kind "cron") writes a
+"""Time as events. A cron subscription (an Subscription of kind "cron") writes a
 tick event each time it is due, and a timer is an event with a fire time and its
 own handler; run_clock hands both, once due, to their handler's task: a notify
 handler's message is sent by send_time_notify (scheduler queue), an agent
@@ -22,18 +22,18 @@ from sqlalchemy import Integer, cast, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 
 from memory.agents.principal import PrincipalRevoked
-from memory.agents.triggers import (
+from memory.agents.subscriptions import (
     FAILED,
     MAX_TEMPLATE_CHARS,
     SKIPPED_DISABLED,
-    lock_trigger,
+    lock_subscription,
     tell_owner,
 )
 from memory.common import settings
 from memory.common.access_control import UserProxy, credential_scopes
 from memory.common.celery_app import SEND_TIME_NOTIFY, START_TIME_RUN, app
 from memory.common.db.connection import DBSession, make_session
-from memory.common.db.models import AgentTrigger, APIKey, Event, User
+from memory.common.db.models import Subscription, APIKey, Event, User
 from memory.common.db.models.events import TICK, TIME_KINDS, TIMER
 from memory.common.discord_data import (
     caller_can_see_discord_channel,
@@ -185,7 +185,7 @@ class Target:
     api_key_id: int | None
     via_api_key: bool
     # A tick's subscription.
-    trigger: AgentTrigger | None
+    subscription: Subscription | None
 
 
 def target_of(db: DBSession, event: Event) -> Target | None:
@@ -203,16 +203,16 @@ def target_of(db: DBSession, event: Event) -> Target | None:
             bool(data.get("via_api_key")),
             None,
         )
-    trigger = db.get(AgentTrigger, event.trigger_id)
-    if trigger is None or not trigger.enabled:
+    subscription = db.get(Subscription, event.subscription_id)
+    if subscription is None or not subscription.enabled:
         return None
     return Target(
         owner,
-        trigger.handler,
-        (trigger.config or {}).get("input") or "",
-        trigger.api_key_id,
-        trigger.via_api_key,
-        trigger,
+        subscription.handler,
+        (subscription.config or {}).get("input") or "",
+        subscription.api_key_id,
+        subscription.via_api_key,
+        subscription,
     )
 
 
@@ -268,35 +268,35 @@ def too_late(event: Event, target: Target, now: datetime) -> bool:
     return not reminder and lateness(event, now) > MAX_LATENESS
 
 
-def trip(db: DBSession, trigger_id: int, reason: str) -> AgentTrigger | None:
+def trip(db: DBSession, subscription_id: int, reason: str) -> Subscription | None:
     """Disable, uncommitted, a cron subscription that can't fire any more; its
     owner is told (Notices.tell) once that's committed."""
-    trigger = lock_trigger(db, trigger_id)
-    if trigger is None or not trigger.enabled:
+    subscription = lock_subscription(db, subscription_id)
+    if subscription is None or not subscription.enabled:
         return None
-    trigger.enabled = False
-    trigger.state = (trigger.state or {}) | {"tripped": {"reason": reason, "at": utcnow().isoformat()}}
-    logger.warning("cron subscription %s tripped", trigger.id)
-    return trigger
+    subscription.enabled = False
+    subscription.state = (subscription.state or {}) | {"tripped": {"reason": reason, "at": utcnow().isoformat()}}
+    logger.warning("cron subscription %s tripped", subscription.id)
+    return subscription
 
 
 @dataclass
 class Notices:
     """What to tell owners once the transaction that decided it commits."""
 
-    tripped: list[tuple[AgentTrigger, str]] = field(default_factory=list)
+    tripped: list[tuple[Subscription, str]] = field(default_factory=list)
     # (owner id, timer id, reason)
     failed_timers: list[tuple[int, int, str]] = field(default_factory=list)
 
     def tell(self, db: DBSession) -> None:
-        for trigger, reason in self.tripped:
-            owner = db.get(User, trigger.user_id)
+        for subscription, reason in self.tripped:
+            owner = db.get(User, subscription.user_id)
             if owner is not None:
                 tell_owner(
                     db,
                     owner,
-                    subject=f"Schedule paused: {trigger.name}",
-                    message=f"Schedule {trigger.id} was disabled: {reason}\n"
+                    subject=f"Schedule paused: {subscription.name}",
+                    message=f"Schedule {subscription.id} was disabled: {reason}\n"
                     "Enable it again once that's resolved.",
                 )
         for owner_id, timer_id, reason in self.failed_timers:
@@ -313,8 +313,8 @@ def fail(
     finish(event, FAILED, error=reason)
     if event.kind == TIMER:
         notices.failed_timers.append((target.owner.id, event.id, reason))
-    elif trip_it and target.trigger is not None and (trigger := trip(db, target.trigger.id, reason)):
-        notices.tripped.append((trigger, reason))
+    elif trip_it and target.subscription is not None and (subscription := trip(db, target.subscription.id, reason)):
+        notices.tripped.append((subscription, reason))
 
 
 def deliver(db: DBSession, event: Event, now: datetime, notices: Notices) -> str | None:
@@ -352,13 +352,13 @@ def message_for(event: Event, target: Target, notify: Notify, now: datetime) -> 
 def record_send(db: DBSession, event: Event, target: Target, sent: bool, notices: Notices) -> None:
     """End, uncommitted, the event by how its send went; a recurring message
     failing FAILURES_TO_TRIP times in a row trips its subscription."""
-    trigger = lock_trigger(db, target.trigger.id) if target.trigger is not None else None
+    subscription = lock_subscription(db, target.subscription.id) if target.subscription is not None else None
     failures = 0
-    if trigger is not None:
-        others = {k: v for k, v in (trigger.state or {}).items() if k != "failures"}
-        failures = (trigger.state or {}).get("failures", 0) + 1
-        trigger.state = others if sent else others | {"failures": failures}
-        # Before trip() rereads the trigger.
+    if subscription is not None:
+        others = {k: v for k, v in (subscription.state or {}).items() if k != "failures"}
+        failures = (subscription.state or {}).get("failures", 0) + 1
+        subscription.state = others if sent else others | {"failures": failures}
+        # Before trip() rereads the subscription.
         db.flush()
     if sent:
         finish(event, SENT, **late_details(event, utcnow()))
@@ -412,14 +412,14 @@ def send_time_notify(event_id: int) -> str | None:
         return (event.result or {}).get("status")
 
 
-def coalesce(db: DBSession, trigger_id: int) -> int:
+def coalesce(db: DBSession, subscription_id: int) -> int:
     """Skip, uncommitted, the subscription's ticks still waiting, which the tick
     about to be written replaces; returns how many ticks they stood for."""
     waiting = db.scalars(
         select(Event)
         .where(
             Event.kind == TICK,
-            Event.trigger_id == trigger_id,
+            Event.subscription_id == subscription_id,
             Event.routed_at.is_(None),
             # Handed off already: resends and MAX_LATENESS see to those, so a
             # lagging queue still runs its ticks.
@@ -436,47 +436,47 @@ def write_ticks(db: DBSession, now: datetime, notices: "Notices") -> int:
     """Write, uncommitted, a tick for each cron subscription due by `now`: one for
     its latest due time, counting the earlier ones it stands for as missed."""
     due = db.scalars(
-        select(AgentTrigger)
+        select(Subscription)
         .where(
-            AgentTrigger.kind == CRON,
-            AgentTrigger.enabled,
-            or_(AgentTrigger.next_at.is_(None), AgentTrigger.next_at <= now),
+            Subscription.kind == CRON,
+            Subscription.enabled,
+            or_(Subscription.next_at.is_(None), Subscription.next_at <= now),
         )
-        .order_by(AgentTrigger.id)
+        .order_by(Subscription.id)
         .with_for_update(skip_locked=True, key_share=True)
     ).all()
     written = 0
-    for trigger in due:
-        owner = db.get(User, trigger.user_id)
+    for subscription in due:
+        owner = db.get(User, subscription.user_id)
         try:
-            config = CronConfig.model_validate(trigger.config)
+            config = CronConfig.model_validate(subscription.config)
         except ValidationError:
             reason = "its cron expression is no longer valid"
-            if tripped_trigger := trip(db, trigger.id, reason):
-                notices.tripped.append((tripped_trigger, reason))
+            if tripped_subscription := trip(db, subscription.id, reason):
+                notices.tripped.append((tripped_subscription, reason))
             continue
         tz = owner.timezone if owner else "UTC"
-        if trigger.next_at is None:
-            trigger.next_at = next_cron(config.cron, tz, now)
+        if subscription.next_at is None:
+            subscription.next_at = next_cron(config.cron, tz, now)
             continue
-        scheduled, missed = trigger.next_at, 0
+        scheduled, missed = subscription.next_at, 0
         while missed < MAX_MISSED and (later := next_cron(config.cron, tz, scheduled)) <= now:
             scheduled, missed = later, missed + 1
-        missed += coalesce(db, trigger.id)
+        missed += coalesce(db, subscription.id)
         db.execute(
             insert(Event)
             .values(
                 kind=TICK,
-                trigger_id=trigger.id,
-                owner_id=trigger.user_id,
+                subscription_id=subscription.id,
+                owner_id=subscription.user_id,
                 fire_at=scheduled,
                 data={"missed": missed},
             )
             .on_conflict_do_nothing(
-                index_elements=[Event.trigger_id, Event.fire_at], index_where=Event.kind == TICK
+                index_elements=[Event.subscription_id, Event.fire_at], index_where=Event.kind == TICK
             )
         )
-        trigger.next_at = next_cron(config.cron, tz, now)
+        subscription.next_at = next_cron(config.cron, tz, now)
         written += 1
     return written
 
@@ -541,24 +541,24 @@ def run_clock() -> dict[str, int]:
     return {"ticks": ticks, "delivered": len(events)}
 
 
-def schedule_next(trigger: AgentTrigger, tz: str) -> None:
+def schedule_next(subscription: Subscription, tz: str) -> None:
     """Point an enabled cron subscription at its next tick from now."""
-    config = CronConfig.model_validate(trigger.config)
-    trigger.next_at = next_cron(config.cron, tz, utcnow())
+    config = CronConfig.model_validate(subscription.config)
+    subscription.next_at = next_cron(config.cron, tz, utcnow())
 
 
 def reschedule_user(db: DBSession, user_id: int, tz: str) -> None:
     """Move a user's enabled cron subscriptions onto their new timezone, uncommitted."""
     crons = db.scalars(
-        select(AgentTrigger).where(
-            AgentTrigger.user_id == user_id, AgentTrigger.kind == CRON, AgentTrigger.enabled
+        select(Subscription).where(
+            Subscription.user_id == user_id, Subscription.kind == CRON, Subscription.enabled
         )
     ).all()
-    for trigger in crons:
+    for subscription in crons:
         try:
-            schedule_next(trigger, tz)
+            schedule_next(subscription, tz)
         except ValidationError:
-            logger.warning("not rescheduling cron subscription %s: its config is invalid", trigger.id)
+            logger.warning("not rescheduling cron subscription %s: its config is invalid", subscription.id)
 
 
 def pending_timers(db: DBSession, user_id: int) -> list[Event]:

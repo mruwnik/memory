@@ -9,7 +9,7 @@ import asyncio
 
 from memory.common import module_settings, settings
 from memory.common.celery_app import (
-    FIRE_TRIGGER,
+    FIRE_SUBSCRIPTION,
     RUN_AGENT,
     START_TIME_RUN,
     SWEEP_WORKER_RUNS,
@@ -44,13 +44,13 @@ def run_agent(run_id: str) -> None:
     asyncio.run(execute_run(run_id))
 
 
-@app.task(name=FIRE_TRIGGER)
-def fire_trigger(trigger_id: int, deliveries: list[str]) -> str | None:
-    """Start a run of a trigger's definition for the items it matched."""
+@app.task(name=FIRE_SUBSCRIPTION)
+def fire_subscription(subscription_id: int, deliveries: list[str]) -> str | None:
+    """Start a run of a subscription's definition for the items it matched."""
     follow_module_flags()
-    from memory.agents.fire import fire_trigger as fire
+    from memory.agents.fire import fire_subscription as fire
 
-    return fire(trigger_id, deliveries)
+    return fire(subscription_id, deliveries)
 
 
 @app.task(name=START_TIME_RUN)

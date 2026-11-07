@@ -1,4 +1,4 @@
-"""Who unattended work (agent cron, triggers, scheduled notifications) acts
+"""Who unattended work (subscriptions, timers) acts
 as, re-checked each time it starts. Worker-safe: no API imports."""
 
 from memory.common.access_control import credential_scopes

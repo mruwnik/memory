@@ -21,7 +21,7 @@ from sqlalchemy.orm import sessionmaker, undefer
 from sqlalchemy.pool import NullPool
 from testcontainers.community.qdrant import QdrantContainer
 
-from memory.agents import call, triggers
+from memory.agents import call, subscriptions
 from memory.common import instance_settings, metrics, module_settings, qdrant as qdrant_module, settings, summarizer
 from memory.common.db.models import Event, LLMProviderKey, SourceItem
 from memory.common.llms import registry
@@ -1159,10 +1159,10 @@ def raw_events(db) -> list[Event]:
 
 def route_item(db, item_id: int, changes: list[str] | None = None, **event) -> list[int]:
     """Write an event for the item, as its ingester would, and route it; returns
-    the trigger ids it was delivered to."""
+    the subscription ids it was delivered to."""
     db.add(Event(kind="item", action="changed", item_id=item_id, changes=changes, **event))
     db.commit()
-    return triggers.route_events()
+    return subscriptions.route_events()
 
 
 @pytest.fixture

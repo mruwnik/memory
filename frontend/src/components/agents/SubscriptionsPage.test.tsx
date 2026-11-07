@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderWithRouter, screen, waitFor, within } from '@/test/utils'
-import { emptyTriggerConfig, type Subscription } from '@/hooks/useAgents'
+import { emptyIngestConfig, type Subscription } from '@/hooks/useAgents'
 import SubscriptionsPage from './SubscriptionsPage'
 
 const agents = {
@@ -30,7 +30,7 @@ vi.mock('@/hooks/useAgents', async (orig) => ({
   useAgents: () => agents,
 }))
 
-const config = { ...emptyTriggerConfig(), filter: { ...emptyTriggerConfig().filter, tags_any: ['ai'] } }
+const config = { ...emptyIngestConfig(), filter: { ...emptyIngestConfig().filter, tags_any: ['ai'] } }
 const queued = {
   id: 7, name: 'pr reviews', kind: 'ingest', config, definition_id: null, handler: { queue: 'prs' }, enabled: false,
   state: { tripped: { reason: 'its key was revoked', at: '2026-01-01T00:00:00Z' } }, api_key_id: 4, via_api_key: true,
@@ -43,7 +43,7 @@ beforeEach(() => {
   agents.listSubscriptions.mockResolvedValue({ subscriptions: [queued], timers: [] })
   agents.listDefinitions.mockResolvedValue([])
   agents.listSystemAgents.mockResolvedValue([])
-  agents.catalog.mockResolvedValue({ agents: [], trigger_source_types: [] })
+  agents.catalog.mockResolvedValue({ agents: [], subscription_source_types: [] })
   agents.upsertSubscription.mockResolvedValue({})
   agents.fetchSubscription.mockImplementation((_id: number, { pending }: { pending?: boolean }) => Promise.resolve({
     deliveries: pending

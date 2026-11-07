@@ -10,13 +10,13 @@ import httpx2
 import pytest
 from sqlalchemy import update
 
-from memory.agents import triggers
-from memory.agents.triggers import IngestConfig
+from memory.agents import subscriptions
+from memory.agents.subscriptions import IngestConfig
 from memory.common import embedding, settings
 from memory.common.access_control import user_can_access
 from memory.common.db.models import (
     AgentDefinition,
-    AgentTrigger,
+    Subscription,
     CalendarAccount,
     CalendarEvent,
     HumanUser,
@@ -1033,7 +1033,7 @@ def test_synced_meeting_visible_to_account_owner_not_to_non_member(
     assert user_can_access(outsider, meeting, {project.id: "manager"})
 
 
-def test_owner_trigger_fires_for_synced_meeting_before_any_reconcile(
+def test_owner_subscription_fires_for_synced_meeting_before_any_reconcile(
     scripted_llm,
     llm_key,
     sample_extraction_response,
@@ -1060,7 +1060,7 @@ def test_owner_trigger_fires_for_synced_meeting_before_any_reconcile(
     )
     db.add_all([account, definition])
     db.flush()
-    trigger = AgentTrigger(
+    subscription = Subscription(
         user_id=definition.user_id,
         name="t",
         definition_id=definition.id,
@@ -1071,16 +1071,16 @@ def test_owner_trigger_fires_for_synced_meeting_before_any_reconcile(
             {"filter": {"source_types": ["meeting"]}}
         ).model_dump(mode="json"),
     )
-    db.add(trigger)
+    db.add(subscription)
     db.commit()
 
     meetings.process_meeting(
         transcript=sample_transcript,
-        external_id="synced-trigger",
+        external_id="synced-subscription",
         transcript_account_id=account.id,
     )
 
-    assert triggers.route_events() == [trigger.id]
+    assert subscriptions.route_events() == [subscription.id]
 
 
 def test_detached_tasks_keep_their_resolved_access_control(db_session, regular_user):

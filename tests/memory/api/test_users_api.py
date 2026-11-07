@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from memory.api.users import check_single_user
-from memory.common.db.models import AgentTrigger, APIKey, APIKeyType, HumanUser, Person, UserSession
+from memory.common.db.models import Subscription, APIKey, APIKeyType, HumanUser, Person, UserSession
 from memory.common.db.models.users import verify_password
 from memory.common.modules import MODULES, MULTI_USER
 
@@ -695,7 +695,7 @@ def test_regular_user_cannot_set_another_users_timezone(regular_client: TestClie
 
 def test_changing_timezone_moves_cron_subscriptions(client: TestClient, admin_user, db_session):
     def cron(enabled):
-        return AgentTrigger(
+        return Subscription(
             user_id=admin_user.id, name=f"c{enabled}", kind="cron", enabled=enabled,
             handler={"notify": {"channel": "email", "target": "a@b.c", "message": "x"}},
             config={"cron": "0 9 * * *"}, next_at=datetime(2999, 1, 1, 9, tzinfo=timezone.utc),

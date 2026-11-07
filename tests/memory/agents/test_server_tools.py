@@ -241,7 +241,7 @@ async def test_definitions_flag_tools_that_changed_since_they_were_saved(
 
 
 @pytest.mark.asyncio
-async def test_trigger_warnings_name_external_tools_that_write(
+async def test_exposure_warnings_name_external_tools_that_write(
     db_session, regular_user, user_session, fake_mcp
 ):
     server = await connect_oauth(db_session, regular_user, fake_mcp)

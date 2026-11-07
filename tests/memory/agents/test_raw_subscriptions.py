@@ -6,16 +6,16 @@ from datetime import timedelta
 
 import pytest
 
-from memory.agents import queues, triggers
+from memory.agents import queues, subscriptions
 from memory.agents.raw_events import RawConfig
 from memory.agents.spec import MAX_TEXT_CHARS
-from memory.api.MCP.servers import subscription
+from memory.api.MCP.servers import subscription as subscription_tools
 from memory.common import settings
 from memory.common.db.models import (
     AgentRun,
     APIKey,
-    AgentTrigger,
-    AgentTriggerMatch,
+    Subscription,
+    Delivery,
     Event,
     GithubAccount,
     GithubRepo,
@@ -31,7 +31,7 @@ from tests.conftest import mcp_auth_context, route_item
 from tests.memory.agents.test_deliveries import post
 from tests.memory.agents.test_queues import QUEUE, claim, subscribe
 
-upsert = subscription.upsert.fn
+upsert = subscription_tools.upsert.fn
 
 
 @pytest.fixture(autouse=True)
@@ -62,8 +62,8 @@ def account(db, user, member=True) -> GithubAccount:
     return a
 
 
-def raw_subscription(db, user, max_per_hour=None, backlog_max=None, **raw) -> AgentTrigger:
-    t = AgentTrigger(
+def raw_subscription(db, user, max_per_hour=None, backlog_max=None, **raw) -> Subscription:
+    t = Subscription(
         user_id=user.id,
         name="raw",
         handler={"queue": QUEUE},
@@ -101,7 +101,7 @@ def delivered(
         links_items=links_items,
     )
     db.commit()
-    triggers.route_events()
+    subscriptions.route_events()
     assert event_id is not None
     return event_id
 
@@ -111,14 +111,14 @@ async def test_a_raw_delivery_reaches_its_owners_queue_with_its_payload_untruste
     db_session, regular_user, worker_session
 ):
     gh = account(db_session, regular_user)
-    trigger = raw_subscription(db_session, regular_user)
+    subscription = raw_subscription(db_session, regular_user)
     event_id = delivered(db_session, gh, payload={"action": "labeled", "label": {"name": "bug"}})
 
     claimed = await claim(worker_session.token, queue=QUEUE)
 
     assert claimed is not None
     assert claimed["ref"] == {
-        "trigger_id": trigger.id,
+        "subscription_id": subscription.id,
         "event_id": event_id,
         "source": "github",
         "type": "pull_request.labeled",
@@ -237,7 +237,7 @@ async def test_over_its_hourly_rate_a_raw_subscription_sheds_and_records_it(
     db_session, regular_user, worker_session
 ):
     gh = account(db_session, regular_user)
-    trigger = raw_subscription(db_session, regular_user, max_per_hour=1)
+    subscription = raw_subscription(db_session, regular_user, max_per_hour=1)
     delivered(db_session, gh, delivery_id="d-1")
     delivered(db_session, gh, delivery_id="d-2")
     delivered(db_session, gh, delivery_id="d-3")
@@ -245,7 +245,7 @@ async def test_over_its_hourly_rate_a_raw_subscription_sheds_and_records_it(
     first = await claim(worker_session.token, queue=QUEUE)
     second = await claim(worker_session.token, queue=QUEUE)
 
-    db_session.refresh(trigger)
+    db_session.refresh(subscription)
     runs = db_session.query(AgentRun).all()
     assert (first is not None, second) == (True, None)
     assert sorted((r.status, r.error or "") for r in runs) == [
@@ -253,7 +253,7 @@ async def test_over_its_hourly_rate_a_raw_subscription_sheds_and_records_it(
         ("failed", "skipped:shed:rate"),
         ("running", ""),
     ]
-    assert "throttled" in trigger.state
+    assert "throttled" in subscription.state
 
 
 @pytest.mark.asyncio
@@ -366,7 +366,7 @@ async def test_raw_and_filter_deliveries_on_one_queue_are_claimed_oldest_first(
     item = post(db_session, creator_id=regular_user.id)
     delivered(db_session, gh, payload={"a": 1})
     route_item(db_session, item.id)
-    [match] = db_session.query(AgentTriggerMatch).all()
+    [match] = db_session.query(Delivery).all()
     db_session.query(AgentRun).update({"created_at": match.created_at + timedelta(seconds=raw_offset)})
     db_session.commit()
 
@@ -392,7 +392,7 @@ async def test_a_stored_delivery_waits_for_the_items_it_caused(db_session, regul
     item = post(db_session, creator_id=regular_user.id)
     db_session.add(Event(kind="item", action="added", item_id=item.id, caused_by=event_id))
     db_session.commit()
-    triggers.route_events()
+    subscriptions.route_events()
 
     claimed = await claim(worker_session.token, queue=QUEUE)
 
@@ -406,12 +406,12 @@ async def test_a_stored_delivery_whose_items_never_link_goes_after_a_grace_perio
     db_session, regular_user, worker_session
 ):
     account = transcripts(db_session, regular_user)
-    trigger = raw_subscription(db_session, regular_user, source="transcripts")
+    subscription = raw_subscription(db_session, regular_user, source="transcripts")
     delivered(db_session, account, outcome="stored", event_type="transcript", container=None, links_items=True)
-    db_session.query(Event).update({"created_at": Event.created_at - triggers.CAUSED_GRACE})
-    trigger.active_since -= triggers.CAUSED_GRACE
+    db_session.query(Event).update({"created_at": Event.created_at - subscriptions.CAUSED_GRACE})
+    subscription.active_since -= subscriptions.CAUSED_GRACE
     db_session.commit()
-    triggers.route_events()
+    subscriptions.route_events()
 
     claimed = await claim(worker_session.token, queue=QUEUE)
 
@@ -438,24 +438,24 @@ def test_never_claimed_raw_deliveries_expire(db_session, regular_user):
     gh = account(db_session, regular_user)
     raw_subscription(db_session, regular_user)
     delivered(db_session, gh)
-    db_session.query(AgentRun).update({"created_at": AgentRun.created_at - triggers.DELIVERY_MAX_AGE})
+    db_session.query(AgentRun).update({"created_at": AgentRun.created_at - subscriptions.DELIVERY_MAX_AGE})
     db_session.commit()
 
-    triggers.sweep_deliveries()
+    subscriptions.sweep_deliveries()
 
     assert pending_raw(db_session) == [("failed", "expired")]
 
 
 def test_a_raw_subscription_whose_key_is_gone_trips_instead_of_delivering(db_session, regular_user):
     gh = account(db_session, regular_user)
-    trigger = raw_subscription(db_session, regular_user)
-    trigger.via_api_key = True
+    subscription = raw_subscription(db_session, regular_user)
+    subscription.via_api_key = True
     db_session.commit()
 
     delivered(db_session, gh)
 
-    db_session.refresh(trigger)
-    assert (trigger.enabled, "tripped" in trigger.state, pending_raw(db_session)) == (False, True, [])
+    db_session.refresh(subscription)
+    assert (subscription.enabled, "tripped" in subscription.state, pending_raw(db_session)) == (False, True, [])
 
 
 @pytest.mark.asyncio
@@ -463,14 +463,14 @@ async def test_a_raw_subscriptions_waiting_deliveries_show_in_its_listing_and_qu
     db_session, regular_user, worker_session
 ):
     source_account = account(db_session, regular_user)
-    trigger = raw_subscription(db_session, regular_user)
+    subscription = raw_subscription(db_session, regular_user)
     delivered(db_session, source_account)
 
     with mcp_auth_context(worker_session.token):
-        [listed] = (await subscription.list_all.fn())["subscriptions"]
+        [listed] = (await subscription_tools.list_all.fn())["subscriptions"]
 
     assert listed["activity"]["pending"] == 1
-    assert [(q["subscription_ids"], q["pending"]) for q in queues.queue_health(db_session)] == [([trigger.id], 1)]
+    assert [(q["subscription_ids"], q["pending"]) for q in queues.queue_health(db_session)] == [([subscription.id], 1)]
 
 
 @pytest.mark.asyncio
@@ -478,14 +478,14 @@ async def test_a_raw_subscriptions_history_lists_its_deliveries_waiting_and_ende
     db_session, regular_user, worker_session
 ):
     source_account = account(db_session, regular_user)
-    trigger = raw_subscription(db_session, regular_user)
+    subscription = raw_subscription(db_session, regular_user)
     first = delivered(db_session, source_account, delivery_id="d-1")
     claimed = await claim(worker_session.token, queue=QUEUE)
     second = delivered(db_session, source_account, delivery_id="d-2")
 
     with mcp_auth_context(worker_session.token):
-        waiting = (await subscription.fetch.fn(subscription_id=trigger.id, pending=True))["deliveries"]
-        ended = (await subscription.fetch.fn(subscription_id=trigger.id, pending=False))["deliveries"]
+        waiting = (await subscription_tools.fetch.fn(subscription_id=subscription.id, pending=True))["deliveries"]
+        ended = (await subscription_tools.fetch.fn(subscription_id=subscription.id, pending=False))["deliveries"]
 
     assert claimed is not None
     assert [(d["raw_event_id"], d["status"], d["run_id"]) for d in waiting] == [(second, "pending", None)]
@@ -575,13 +575,13 @@ async def test_resubscribing_by_name_with_the_same_queue_padded_is_no_change(db_
 @pytest.mark.asyncio
 async def test_raw_history_names_the_event_and_links_only_claimed_runs(db_session, regular_user, worker_session):
     source_account = account(db_session, regular_user)
-    trigger = raw_subscription(db_session, regular_user, max_per_hour=1)
+    subscription = raw_subscription(db_session, regular_user, max_per_hour=1)
     claimed_event = delivered(db_session, source_account, delivery_id="d-1")
     claimed = await claim(worker_session.token, queue=QUEUE)
     shed_event = delivered(db_session, source_account, delivery_id="d-2")
 
     with mcp_auth_context(worker_session.token):
-        ended = (await subscription.fetch.fn(subscription_id=trigger.id, pending=False))["deliveries"]
+        ended = (await subscription_tools.fetch.fn(subscription_id=subscription.id, pending=False))["deliveries"]
 
     assert claimed is not None
     assert sorted((d["raw_event_id"], d["type"], d["container"], d["status"], d["run_id"]) for d in ended) == [

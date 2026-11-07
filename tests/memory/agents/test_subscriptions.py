@@ -9,8 +9,8 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 
-from memory.agents import triggers
-from memory.agents.triggers import (
+from memory.agents import subscriptions
+from memory.agents.subscriptions import (
     IngestConfig,
     IngestFilter,
     ItemFacts,
@@ -22,12 +22,12 @@ from memory.agents.triggers import (
     posted_ref,
     regex_search,
 )
-from memory.common.celery_app import FIRE_TRIGGER
+from memory.common.celery_app import FIRE_SUBSCRIPTION
 from memory.common.db.models import (
     AgentDefinition,
     AgentRun,
-    AgentTrigger,
-    AgentTriggerMatch,
+    Subscription,
+    Delivery,
     BeeperMessage,
     BlogPost,
     DiscordBot,
@@ -441,8 +441,8 @@ def make_definition(db, user):
     return d
 
 
-def make_trigger(db, definition, enabled=True, **config):
-    t = AgentTrigger(
+def make_subscription(db, definition, enabled=True, **config):
+    t = Subscription(
         user_id=definition.user_id,
         name=next(TRIGGER_NAMES),
         definition_id=definition.id,
@@ -474,26 +474,26 @@ def blog_post(db, tags=("ai",), project_id=None, inserted_at=None):
     return post
 
 
-def test_per_item_triggers_fire_at_once(
+def test_per_item_subscriptions_fire_at_once(
     db_session, admin_user, no_celery_dispatch
 ):
     d = make_definition(db_session, admin_user)
-    on = make_trigger(db_session, d)
-    make_trigger(db_session, d, enabled=False)
-    make_trigger(db_session, d, filter={"tags_any": ["other"]})
+    on = make_subscription(db_session, d)
+    make_subscription(db_session, d, enabled=False)
+    make_subscription(db_session, d, filter={"tags_any": ["other"]})
     post = blog_post(db_session)
 
     matched = route_item(db_session, post.id)
 
     assert matched == [on.id]
     no_celery_dispatch.assert_called_once_with(
-        FIRE_TRIGGER,
+        FIRE_SUBSCRIPTION,
         args=[on.id, [f"{post.id}:{content_version(post).hex()}"]],
     )
 
 
-def test_code_slug_triggers_are_matched_and_fired(db_session, admin_user, no_celery_dispatch):
-    slugged = AgentTrigger(
+def test_code_slug_subscriptions_are_matched_and_fired(db_session, admin_user, no_celery_dispatch):
+    slugged = Subscription(
         user_id=admin_user.id,
         name="q",
         handler={"agent": "fact-check"},
@@ -506,7 +506,7 @@ def test_code_slug_triggers_are_matched_and_fired(db_session, admin_user, no_cel
 
     assert route_item(db_session, post.id) == [slugged.id]
     no_celery_dispatch.assert_called_once_with(
-        FIRE_TRIGGER, args=[slugged.id, [f"{post.id}:{content_version(post).hex()}"]]
+        FIRE_SUBSCRIPTION, args=[slugged.id, [f"{post.id}:{content_version(post).hex()}"]]
     )
 
 
@@ -523,12 +523,12 @@ def test_code_slug_triggers_are_matched_and_fired(db_session, admin_user, no_cel
         (False, {"queue": "inbox", "extra": 1}),
     ],
 )
-def test_a_triggers_handler_must_agree_with_its_definition(
+def test_a_subscriptions_handler_must_agree_with_its_definition(
     db_session, admin_user, with_definition, handler
 ):
     d = make_definition(db_session, admin_user)
     db_session.add(
-        AgentTrigger(
+        Subscription(
             user_id=admin_user.id,
             name="t",
             definition_id=d.id if with_definition else None,
@@ -538,7 +538,7 @@ def test_a_triggers_handler_must_agree_with_its_definition(
         )
     )
 
-    with pytest.raises(IntegrityError, match="agent_triggers_handler_check"):
+    with pytest.raises(IntegrityError, match="subscriptions_handler_check"):
         db_session.commit()
 
 
@@ -546,7 +546,7 @@ def test_items_the_owner_cannot_read_never_match(
     db_session, regular_user, no_celery_dispatch
 ):
     d = make_definition(db_session, regular_user)
-    make_trigger(db_session, d)
+    make_subscription(db_session, d)
     post = blog_post(db_session, project_id=None)
 
     assert route_item(db_session, post.id) == []
@@ -595,7 +595,7 @@ def test_our_own_discord_bots_never_trigger(
 ):
     """Only bots that authenticate with a token are known to post as their
     application id; a token-less row's id is just what its owner typed."""
-    make_trigger(db_session, make_definition(db_session, admin_user))
+    make_subscription(db_session, make_definition(db_session, admin_user))
     message = discord_message(db_session, author_id, bot_token)
 
     assert bool(route_item(db_session, message.id)) is fires
@@ -605,7 +605,7 @@ def test_our_own_discord_bots_never_trigger(
 def test_a_short_message_mentioning_our_bot_fires(
     db_session, admin_user, no_celery_dispatch, content, fires
 ):
-    trigger = make_trigger(
+    subscription = make_subscription(
         db_session,
         make_definition(db_session, admin_user),
         filter={"source_types": ["discord_message"], "mentions_me": True},
@@ -616,7 +616,7 @@ def test_a_short_message_mentioning_our_bot_fires(
     process_content_item(message, db_session)
 
     assert message.embed_status == "SKIPPED"
-    assert triggers.route_events() == ([trigger.id] if fires else [])
+    assert subscriptions.route_events() == ([subscription.id] if fires else [])
 
 
 def slack_message(db, owner, author_id):
@@ -667,14 +667,14 @@ def test_the_owners_slack_user_triggers_only_without_exclude_own_and_bot_users_n
     db_session, admin_user, no_celery_dispatch, exclude_own, author_id, fires
 ):
     f = {"tags_any": ["ai"]} | ({} if exclude_own is None else {"exclude_own": exclude_own})
-    make_trigger(db_session, make_definition(db_session, admin_user), filter=f)
+    make_subscription(db_session, make_definition(db_session, admin_user), filter=f)
     message = slack_message(db_session, admin_user, author_id)
 
     assert bool(route_item(db_session, message.id)) is fires
 
 
 def delivery(item_id, version, edited=False, changes=()):
-    return AgentTriggerMatch(
+    return Delivery(
         item_id=item_id, content_hash=version, edited=edited, changes=list(changes)
     )
 
@@ -684,9 +684,9 @@ def test_dedupe_keys_ignore_order_and_change_with_the_claimed_version():
     b = delivery(5, b"\x05" * 32)
     b_edited = delivery(5, b"\x06" * 32, edited=True)
 
-    assert triggers.dedupe_key(3, [b, a]) == triggers.dedupe_key(3, [a, b])
-    assert triggers.dedupe_key(3, [b]) == f"3:5:{'05' * 8}"
-    assert triggers.dedupe_key(3, [b]) != triggers.dedupe_key(3, [b_edited])
+    assert subscriptions.dedupe_key(3, [b, a]) == subscriptions.dedupe_key(3, [a, b])
+    assert subscriptions.dedupe_key(3, [b]) == f"3:5:{'05' * 8}"
+    assert subscriptions.dedupe_key(3, [b]) != subscriptions.dedupe_key(3, [b_edited])
 
 
 @pytest.mark.parametrize(
@@ -709,7 +709,7 @@ def test_dedupe_keys_ignore_order_and_change_with_the_claimed_version():
     ],
 )
 def test_changes_by_item_merges_each_items_deliveries(deliveries, expected):
-    assert triggers.changes_by_item(deliveries) == expected
+    assert subscriptions.changes_by_item(deliveries) == expected
 
 
 def test_content_versions_follow_what_an_agent_sees():
@@ -769,7 +769,7 @@ def test_content_version_ignores_label_and_assignee_order():
 def test_reprocessing_a_matched_item_matches_nothing(
     db_session, admin_user, no_celery_dispatch, delivery, on_edit
 ):
-    trigger = make_trigger(
+    subscription = make_subscription(
         db_session,
         make_definition(db_session, admin_user),
         delivery=delivery,
@@ -780,8 +780,8 @@ def test_reprocessing_a_matched_item_matches_nothing(
     first = route_item(db_session, post.id)
     again = route_item(db_session, post.id)
 
-    assert (first, again) == ([trigger.id], [])
-    assert db_session.query(AgentTriggerMatch).count() == 1
+    assert (first, again) == ([subscription.id], [])
+    assert db_session.query(Delivery).count() == 1
 
 
 def edit(db, item):
@@ -794,7 +794,7 @@ def edit(db, item):
 def test_an_edit_fires_again_only_with_on_edit(
     db_session, admin_user, no_celery_dispatch, on_edit, runs
 ):
-    make_trigger(db_session, make_definition(db_session, admin_user), on_edit=on_edit)
+    make_subscription(db_session, make_definition(db_session, admin_user), on_edit=on_edit)
     post = blog_post(db_session)
 
     route_item(db_session, post.id)
@@ -803,13 +803,13 @@ def test_an_edit_fires_again_only_with_on_edit(
     route_item(db_session, post.id)
 
     assert no_celery_dispatch.call_count == runs
-    assert db_session.query(AgentTriggerMatch).count() == runs
+    assert db_session.query(Delivery).count() == runs
 
 
 def test_on_changes_limits_which_edits_fire(
     db_session, admin_user, no_celery_dispatch
 ):
-    trigger = make_trigger(
+    subscription = make_subscription(
         db_session, make_definition(db_session, admin_user), on_edit=True, on_changes=["commits"]
     )
     post = blog_post(db_session)
@@ -820,8 +820,8 @@ def test_on_changes_limits_which_edits_fire(
     unknown = route_item(db_session, post.id)
     pushed = route_item(db_session, post.id, changes=["comments", "commits"])
 
-    assert (new, commented, unknown, pushed) == ([trigger.id], [], [], [trigger.id])
-    assert sorted(m.changes for m in db_session.query(AgentTriggerMatch)) == [
+    assert (new, commented, unknown, pushed) == ([subscription.id], [], [], [subscription.id])
+    assert sorted(m.changes for m in db_session.query(Delivery)) == [
         ["comments", "commits"],
         ["new", "state"],
     ]
@@ -830,7 +830,7 @@ def test_on_changes_limits_which_edits_fire(
 def test_a_batch_holds_each_version_of_an_item_edited_while_waiting(
     db_session, admin_user, no_celery_dispatch
 ):
-    trigger = make_trigger(
+    subscription = make_subscription(
         db_session,
         make_definition(db_session, admin_user),
         delivery={"mode": "batch", "window_sec": 60, "max_items": 10},
@@ -842,18 +842,18 @@ def test_a_batch_holds_each_version_of_an_item_edited_while_waiting(
     edit(db_session, post)
     edited = route_item(db_session, post.id)
 
-    assert (first, edited) == ([trigger.id], [trigger.id])
-    assert sorted(m.edited for m in db_session.query(AgentTriggerMatch)) == [False, True]
+    assert (first, edited) == ([subscription.id], [subscription.id])
+    assert sorted(m.edited for m in db_session.query(Delivery)) == [False, True]
 
 
 @pytest.mark.parametrize("on_edit", [False, True])
-def test_items_stored_before_the_trigger_was_active_never_match(
+def test_items_stored_before_the_subscription_was_active_never_match(
     db_session, admin_user, no_celery_dispatch, on_edit
 ):
-    trigger = make_trigger(
+    subscription = make_subscription(
         db_session, make_definition(db_session, admin_user), on_edit=on_edit
     )
-    old = blog_post(db_session, inserted_at=trigger.active_since - timedelta(minutes=1))
+    old = blog_post(db_session, inserted_at=subscription.active_since - timedelta(minutes=1))
 
     before = route_item(db_session, old.id)
     edit(db_session, old)
@@ -865,14 +865,14 @@ def test_an_edit_to_an_item_matched_long_ago_still_fires(
     db_session, admin_user, no_celery_dispatch
 ):
     long_ago = datetime.now(timezone.utc) - timedelta(days=60)
-    trigger = make_trigger(
+    subscription = make_subscription(
         db_session, make_definition(db_session, admin_user), on_edit=True
     )
-    trigger.active_since = long_ago
+    subscription.active_since = long_ago
     post = blog_post(db_session, inserted_at=long_ago)
     db_session.add(
-        AgentTriggerMatch(
-            trigger_id=trigger.id,
+        Delivery(
+            subscription_id=subscription.id,
             item_id=post.id,
             content_hash=content_version(post),
             created_at=long_ago,
@@ -883,7 +883,7 @@ def test_an_edit_to_an_item_matched_long_ago_still_fires(
     unchanged = route_item(db_session, post.id)
     edit(db_session, post)
 
-    assert (unchanged, route_item(db_session, post.id)) == ([], [trigger.id])
+    assert (unchanged, route_item(db_session, post.id)) == ([], [subscription.id])
 
 
 @pytest.mark.parametrize(
@@ -898,7 +898,7 @@ def test_an_edit_to_an_item_matched_long_ago_still_fires(
 def test_old_claims_are_purged_but_on_edit_and_on_remove_keep_each_present_items_newest(
     db_session, admin_user, keeps_newest, kept
 ):
-    trigger = make_trigger(db_session, make_definition(db_session, admin_user), **keeps_newest)
+    subscription = make_subscription(db_session, make_definition(db_session, admin_user), **keeps_newest)
     fresh, stale, edited, stuck, gone = (blog_post(db_session) for _ in range(5))
     now = datetime.now(timezone.utc)
     claims = [
@@ -911,36 +911,36 @@ def test_old_claims_are_purged_but_on_edit_and_on_remove_keep_each_present_items
         (gone, b"gone newest", now - timedelta(days=31), "done"),
     ]
     db_session.add_all(
-        AgentTriggerMatch(
-            trigger_id=trigger.id, item_id=item.id, content_hash=version, created_at=at, status=status
+        Delivery(
+            subscription_id=subscription.id, item_id=item.id, content_hash=version, created_at=at, status=status
         )
         for item, version, at, status in claims
     )
     db_session.delete(gone)
     db_session.commit()
 
-    purged = triggers.purge_matches(db_session, timedelta(days=30))
+    purged = subscriptions.purge_deliveries(db_session, timedelta(days=30))
 
     assert purged == len(claims) - len(kept)
-    assert {bytes(m.content_hash) for m in db_session.query(AgentTriggerMatch)} == kept
+    assert {bytes(m.content_hash) for m in db_session.query(Delivery)} == kept
 
 
 def test_items_older_than_claim_retention_never_match(
     db_session, admin_user, no_celery_dispatch
 ):
-    trigger = make_trigger(db_session, make_definition(db_session, admin_user))
-    trigger.active_since = datetime.now(timezone.utc) - timedelta(days=60)
+    subscription = make_subscription(db_session, make_definition(db_session, admin_user))
+    subscription.active_since = datetime.now(timezone.utc) - timedelta(days=60)
     db_session.commit()
     old = blog_post(
         db_session,
-        inserted_at=datetime.now(timezone.utc) - triggers.MATCH_RETENTION - timedelta(hours=1),
+        inserted_at=datetime.now(timezone.utc) - subscriptions.DELIVERY_RETENTION - timedelta(hours=1),
     )
 
     assert route_item(db_session, old.id) == []
 
 
-def queue_trigger(db, owner, **filter_fields):
-    t = AgentTrigger(
+def queue_subscription(db, owner, **filter_fields):
+    t = Subscription(
         user_id=owner.id,
         name=next(TRIGGER_NAMES),
         handler={"queue": "inbox"},
@@ -959,8 +959,8 @@ def test_only_queue_handlers_see_their_owners_own_slack_messages_by_default(
     db_session, admin_user, no_celery_dispatch, queue_filter, queue_sees_it
 ):
     """For a bot its owner talks to, the owner's messages are the input."""
-    agent_handled = make_trigger(db_session, make_definition(db_session, admin_user))
-    queued = queue_trigger(db_session, admin_user, **queue_filter)
+    agent_handled = make_subscription(db_session, make_definition(db_session, admin_user))
+    queued = queue_subscription(db_session, admin_user, **queue_filter)
     message = slack_message(db_session, admin_user, "U_OWNER")
 
     matched = route_item(db_session, message.id)
@@ -970,17 +970,17 @@ def test_only_queue_handlers_see_their_owners_own_slack_messages_by_default(
 
 @pytest.fixture
 def stranger(db_session):
-    """A non-admin who isn't the trigger's owner."""
+    """A non-admin who isn't the subscription's owner."""
     user = HumanUser(name="S", email="s@example.com", password_hash="x", scopes=["read"])
     db_session.add(user)
     db_session.commit()
     return user
 
 
-def known_people_trigger(db, owner):
+def known_people_subscription(db, owner):
     owner.scopes = ["read"]
     db.commit()
-    return make_trigger(
+    return make_subscription(
         db, make_definition(db, owner), filter={"tags_any": ["ai"], "known_people_only": True}
     )
 
@@ -1004,7 +1004,7 @@ def test_known_people_only_trusts_persons_the_owner_or_an_admin_recorded(
     request, db_session, regular_user, no_celery_dispatch, made_by, fires
 ):
     """A non-admin could record a Person under anyone's account."""
-    known_people_trigger(db_session, regular_user)
+    known_people_subscription(db_session, regular_user)
     maker = request.getfixturevalue(made_by)
     message = message_by_person(db_session, regular_user, creator_id=maker.id)
 
@@ -1013,7 +1013,7 @@ def test_known_people_only_trusts_persons_the_owner_or_an_admin_recorded(
 
 def test_persons_ingest_made_vouch_for_nobody(db_session, regular_user, no_celery_dispatch):
     """Ingest makes a Person for everyone it sees."""
-    known_people_trigger(db_session, regular_user)
+    known_people_subscription(db_session, regular_user)
     message = message_by_person(db_session, regular_user)
 
     assert route_item(db_session, message.id) == []
@@ -1022,17 +1022,17 @@ def test_persons_ingest_made_vouch_for_nobody(db_session, regular_user, no_celer
 def test_persons_linked_to_a_user_are_known(
     db_session, regular_user, stranger, no_celery_dispatch
 ):
-    trigger = known_people_trigger(db_session, regular_user)
+    subscription = known_people_subscription(db_session, regular_user)
     message = message_by_person(db_session, regular_user, user_id=stranger.id)
 
-    assert route_item(db_session, message.id) == [trigger.id]
+    assert route_item(db_session, message.id) == [subscription.id]
 
 
 @pytest.mark.parametrize("slack_user,fires", [("U_OTHER", True), ("U_ELSE", False)])
 def test_known_people_only_finds_slack_authors_by_their_slack_id(
     db_session, admin_user, no_celery_dispatch, slack_user, fires
 ):
-    make_trigger(
+    make_subscription(
         db_session,
         make_definition(db_session, admin_user),
         filter={"tags_any": ["ai"], "known_people_only": True},
@@ -1079,7 +1079,7 @@ def slack_thread(db, owner, root_author, reply_thread_ts):
 def test_threads_im_in_match_slack_threads_my_user_or_bot_posted_in(
     db_session, admin_user, no_celery_dispatch, root_author, thread_ts, fires
 ):
-    make_trigger(
+    make_subscription(
         db_session,
         make_definition(db_session, admin_user),
         filter={"source_types": ["slack_message"], "threads_im_in": True},
@@ -1093,7 +1093,7 @@ def test_threads_im_in_match_slack_threads_my_user_or_bot_posted_in(
 def test_threads_im_in_match_discord_threads_my_bot_started(
     db_session, admin_user, no_celery_dispatch, starter_author, fires
 ):
-    make_trigger(
+    make_subscription(
         db_session,
         make_definition(db_session, admin_user),
         filter={"source_types": ["discord_message"], "threads_im_in": True},
@@ -1126,7 +1126,7 @@ def test_threads_im_in_match_discord_threads_my_bot_started(
 def test_dms_to_me_match_direct_messages_through_my_slack_app(
     request, db_session, admin_user, no_celery_dispatch, app_owner, fires
 ):
-    make_trigger(db_session, make_definition(db_session, admin_user), filter={"dms_to_me": True})
+    make_subscription(db_session, make_definition(db_session, admin_user), filter={"dms_to_me": True})
     message = slack_message(db_session, admin_user, "U_OTHER")
     app = db_session.query(SlackApp).one()
     app.created_by_user_id = request.getfixturevalue(app_owner).id
@@ -1142,7 +1142,7 @@ def test_dms_to_me_match_direct_messages_through_my_slack_app(
 def test_dms_to_me_match_discord_dms_to_my_bot(
     request, db_session, admin_user, no_celery_dispatch, bot_owner, fires
 ):
-    make_trigger(db_session, make_definition(db_session, admin_user), filter={"dms_to_me": True})
+    make_subscription(db_session, make_definition(db_session, admin_user), filter={"dms_to_me": True})
     message = discord_message(db_session, 100, owner=request.getfixturevalue(bot_owner))
     db_session.add(DiscordChannel(id=30, name="alice", channel_type="dm", bot_id=200))
     db_session.flush()
@@ -1159,7 +1159,7 @@ def test_dms_to_me_match_discord_dms_to_my_bot(
 def test_changes_only_excluded_identities_made_never_fire(
     db_session, admin_user, no_celery_dispatch, changes, delivered
 ):
-    make_trigger(
+    make_subscription(
         db_session,
         make_definition(db_session, admin_user),
         filter={"tags_any": ["ai"], "exclude_changed_by": ["review-bot"]},
@@ -1168,7 +1168,7 @@ def test_changes_only_excluded_identities_made_never_fire(
 
     route_item(db_session, post.id, changes=changes, actors={"review": ["Review-Bot"]})
 
-    assert [m.changes for m in db_session.query(AgentTriggerMatch)] == delivered
+    assert [m.changes for m in db_session.query(Delivery)] == delivered
 
 
 @pytest.mark.parametrize(
@@ -1187,15 +1187,15 @@ def test_items_name_themselves_as_a_report_names_what_it_posted(item, ref):
     assert posted_ref(item) == ref
 
 
-def posted_run(db, trigger, posted, age=timedelta(0)):
+def posted_run(db, subscription, posted, age=timedelta(0)):
     run = AgentRun(
-        user_id=trigger.user_id,
+        user_id=subscription.user_id,
         spec=SPEC,
         input="x",
         trigger_kind="ingest",
         trigger_ref={},
         max_cost_usd=1,
-        trigger_id=trigger.id,
+        subscription_id=subscription.id,
         status="done",
         posted=posted,
         created_at=datetime.now(timezone.utc) - age,
@@ -1215,11 +1215,11 @@ def posted_run(db, trigger, posted, age=timedelta(0)):
         ([{"source": "slack", "external_id": "C1:1.0"}], timedelta(days=8), True),
     ],
 )
-def test_what_a_triggers_runs_posted_never_triggers_it_again(
+def test_what_a_subscriptions_runs_posted_never_triggers_it_again(
     db_session, admin_user, no_celery_dispatch, posted, age, poster_fires
 ):
     d = make_definition(db_session, admin_user)
-    poster, other = make_trigger(db_session, d), make_trigger(db_session, d)
+    poster, other = make_subscription(db_session, d), make_subscription(db_session, d)
     posted_run(db_session, poster, posted, age)
     message = slack_message(db_session, admin_user, "U_OTHER")
 
@@ -1236,6 +1236,6 @@ def test_a_regex_is_checked_by_the_engine_that_matches_it():
 
 def test_a_regex_the_engine_refuses_at_match_time_matches_nothing(caplog):
     with caplog.at_level("WARNING"):
-        assert regex_search("(", "anything", trigger_id=7) is False
+        assert regex_search("(", "anything", subscription_id=7) is False
 
-    assert [r.getMessage() for r in caplog.records] == ["trigger 7's regex could not be matched"]
+    assert [r.getMessage() for r in caplog.records] == ["subscription 7's regex could not be matched"]

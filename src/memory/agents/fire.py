@@ -1,5 +1,5 @@
-"""Start a run for an ingest trigger's pending deliveries. Caps defer and then shed
-deliveries; broken credentials or an invalid definition trip the trigger's breaker."""
+"""Start a run for an ingest subscription's pending deliveries. Caps defer and then shed
+deliveries; broken credentials or an invalid definition trip the subscription's breaker."""
 
 import logging
 from datetime import datetime, timedelta, timezone
@@ -10,8 +10,8 @@ from memory.agents.caps import CapExceeded, RateExceeded
 from memory.agents.enqueue import TriggerInfo, enqueue_run
 from memory.agents.prebuilt import code_agent
 from memory.agents.spec import MAX_TEXT_CHARS, AgentSpec
-from memory.agents.trigger_input import render_input
-from memory.agents.triggers import (
+from memory.agents.subscription_input import render_input
+from memory.agents.subscriptions import (
     DONE,
     FAILED,
     INGEST,
@@ -30,21 +30,21 @@ from memory.agents.triggers import (
     deliverable_ids,
     delivery_ref,
     episode_over,
-    lock_trigger,
+    lock_subscription,
     removals,
     parse_ref,
     posted_among,
     tell_owner,
     tell_throttled,
     throttled,
-    trigger_key,
+    acting_key,
 )
 from memory.common import settings
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import (
     AgentDefinition,
-    AgentTrigger,
-    AgentTriggerMatch,
+    Subscription,
+    Delivery,
     SourceItem,
     User,
 )
@@ -52,29 +52,29 @@ from memory.common.db.models import (
 logger = logging.getLogger(__name__)
 
 
-def trip(db: DBSession, trigger_id: int, owner: User, reason: str) -> bool:
-    """Disable the trigger and tell its owner, rather than failing every later delivery.
+def trip(db: DBSession, subscription_id: int, owner: User, reason: str) -> bool:
+    """Disable the subscription and tell its owner, rather than failing every later delivery.
 
     Only the first of several concurrent fires to trip it notifies; returns whether
     this call did.
     """
-    trigger = lock_trigger(db, trigger_id)
-    if trigger is None or not trigger.enabled:
+    subscription = lock_subscription(db, subscription_id)
+    if subscription is None or not subscription.enabled:
         db.commit()
         return False
-    trigger.enabled = False
-    trigger.state = (trigger.state or {}) | {
+    subscription.enabled = False
+    subscription.state = (subscription.state or {}) | {
         "tripped": {"reason": reason, "at": datetime.now(timezone.utc).isoformat()}
     }
     db.commit()
-    name = trigger.definition.name if trigger.definition else trigger.name
-    logger.warning("agent trigger %s (%s) tripped: %s", trigger.id, name, reason)
+    name = subscription.definition.name if subscription.definition else subscription.name
+    logger.warning("agent subscription %s (%s) tripped: %s", subscription.id, name, reason)
     tell_owner(
         db,
         owner,
-        subject=f"Agent trigger paused: {name}",
+        subject=f"Agent subscription paused: {name}",
         message=(
-            f"Trigger {trigger.id} ('{name}') was disabled: {reason}\n"
+            f"Subscription {subscription.id} ('{name}') was disabled: {reason}\n"
             "Re-enable it once that's resolved. Enabling it with "
             "resume also delivers what it missed while paused."
         ),
@@ -82,36 +82,36 @@ def trip(db: DBSession, trigger_id: int, owner: User, reason: str) -> bool:
     return True
 
 
-def due_deliveries(db: DBSession, trigger_id: int, refs: list[str]) -> list[AgentTriggerMatch]:
+def due_deliveries(db: DBSession, subscription_id: int, refs: list[str]) -> list[Delivery]:
     """The deliveries among `refs` still pending and not deferred, locked."""
     return list(
         db.scalars(
-            select(AgentTriggerMatch)
+            select(Delivery)
             .where(
-                AgentTriggerMatch.trigger_id == trigger_id,
-                tuple_(AgentTriggerMatch.item_id, AgentTriggerMatch.content_hash).in_(
+                Delivery.subscription_id == subscription_id,
+                tuple_(Delivery.item_id, Delivery.content_hash).in_(
                     [parse_ref(r) for r in refs]
                 ),
-                AgentTriggerMatch.status == PENDING,
+                Delivery.status == PENDING,
                 or_(
-                    AgentTriggerMatch.not_before.is_(None),
-                    AgentTriggerMatch.not_before <= datetime.now(timezone.utc),
+                    Delivery.not_before.is_(None),
+                    Delivery.not_before <= datetime.now(timezone.utc),
                 ),
             )
-            .order_by(AgentTriggerMatch.item_id)
+            .order_by(Delivery.item_id)
             .with_for_update()
         )
     )
 
 
 def handler_agent(
-    db: DBSession, trigger: AgentTrigger, owner: User
+    db: DBSession, subscription: Subscription, owner: User
 ) -> tuple[AgentSpec, AgentDefinition | None, str | None]:
     """The spec an agent handler runs, with its definition or code slug."""
-    agent = trigger.handler["agent"]
+    agent = subscription.handler["agent"]
     if isinstance(agent, str):
         return code_agent(db, owner.id, agent), None, agent
-    definition = trigger.definition
+    definition = subscription.definition
     if definition is None:
         raise ValueError("its agent definition no longer exists")
     return AgentSpec.model_validate(definition.spec), definition, None
@@ -119,20 +119,20 @@ def handler_agent(
 
 def start_run(
     db: DBSession,
-    trigger: AgentTrigger,
+    subscription: Subscription,
     owner: User,
-    deliveries: list[AgentTriggerMatch],
+    deliveries: list[Delivery],
 ) -> str | None:
-    """Enqueue the run for the deliveries the trigger can still read, marking them
+    """Enqueue the run for the deliveries the subscription can still read, marking them
     done in the run's transaction. The unreadable ones, and those a run of the
-    trigger reported posting since they were routed, are skipped first, in their
+    subscription reported posting since they were routed, are skipped first, in their
     own, so a cap that stops the run can't hold them back too."""
-    config = IngestConfig.model_validate(trigger.config)
-    key = trigger_key(db, trigger, owner)
-    removed = removals(db, trigger.id, {d.item_id for d in deliveries if bytes(d.content_hash) == REMOVED_VERSION})
+    config = IngestConfig.model_validate(subscription.config)
+    key = acting_key(db, subscription, owner)
+    removed = removals(db, subscription.id, {d.item_id for d in deliveries if bytes(d.content_hash) == REMOVED_VERSION})
     allowed = deliverable_ids(db, owner, key, [d.item_id for d in deliveries], removed)
     candidates = db.query(SourceItem).filter(SourceItem.id.in_(allowed)).all()
-    posted = posted_among(db, trigger.id, candidates)
+    posted = posted_among(db, subscription.id, candidates)
     skipped = {d.item_id: SKIPPED_INACCESSIBLE for d in deliveries if d.item_id not in allowed}
     skipped |= {item_id: SKIPPED_POSTED for item_id in posted}
     readable = [
@@ -142,22 +142,22 @@ def start_run(
         for d in deliveries:
             d.status = skipped.get(d.item_id, d.status)
         db.commit()
-        handler = trigger.handler
-        relocked = lock_trigger(db, trigger.id)
+        handler = subscription.handler
+        relocked = lock_subscription(db, subscription.id)
         # Disabled, deleted or moved meanwhile: what's left waits for it, or goes with it.
         if relocked is None or not relocked.enabled or relocked.handler != handler:
             return None
-    delivered = due_deliveries(db, trigger.id, readable) if readable else []
+    delivered = due_deliveries(db, subscription.id, readable) if readable else []
     if not delivered:
         return None
     for d in delivered:
         d.status = DONE
-    if THROTTLED in trigger.state and episode_over(trigger.state, datetime.now(timezone.utc)):
-        trigger.state = {k: v for k, v in trigger.state.items() if k != THROTTLED}
+    if THROTTLED in subscription.state and episode_over(subscription.state, datetime.now(timezone.utc)):
+        subscription.state = {k: v for k, v in subscription.state.items() if k != THROTTLED}
     item_ids = sorted(d.item_id for d in delivered)
     items = db.query(SourceItem).filter(SourceItem.id.in_(item_ids)).order_by(SourceItem.id).all()
     changes = changes_by_item(delivered)
-    spec, definition, slug = handler_agent(db, trigger, owner)
+    spec, definition, slug = handler_agent(db, subscription, owner)
     run = enqueue_run(
         db,
         user_id=owner.id,
@@ -165,10 +165,10 @@ def start_run(
         input=render_input(config.template, items, MAX_TEXT_CHARS, changes, removed & set(item_ids)),
         trigger=TriggerInfo(
             kind=INGEST,
-            ref={"trigger_id": trigger.id, "item_ids": item_ids, "changes": changes}
+            ref={"subscription_id": subscription.id, "item_ids": item_ids, "changes": changes}
             | coalesced_ref(delivered),
-            dedupe_key=dedupe_key(trigger.id, delivered),
-            trigger_id=trigger.id,
+            dedupe_key=dedupe_key(subscription.id, delivered),
+            subscription_id=subscription.id,
         ),
         definition=definition,
         agent=slug,
@@ -182,42 +182,42 @@ def start_run(
     return run.id
 
 
-def hold_back(db: DBSession, trigger_id: int, refs: list[str], cap: CapExceeded) -> None:
+def hold_back(db: DBSession, subscription_id: int, refs: list[str], cap: CapExceeded) -> None:
     """Defer the deliveries a cap stopped by THROTTLE_WINDOW, and shed those it
     stops a second time."""
-    trigger = lock_trigger(db, trigger_id)
-    if trigger is None:
+    subscription = lock_subscription(db, subscription_id)
+    if subscription is None:
         return
     shed_as = SHED_RATE if isinstance(cap, RateExceeded) else SHED_BUDGET
     retry_at = datetime.now(timezone.utc) + THROTTLE_WINDOW
     shed = 0
-    for d in due_deliveries(db, trigger_id, refs):
+    for d in due_deliveries(db, subscription_id, refs):
         if d.not_before is None:
             d.not_before, d.dispatched_at, d.sends = retry_at, None, 0
         else:
             d.status = shed_as
             shed += 1
     reason = str(cap)
-    episode = throttled(trigger, reason)
+    episode = throttled(subscription, reason)
     db.commit()
     if shed:
-        logger.warning("agent trigger %s shed %d deliveries over its caps", trigger_id, shed)
+        logger.warning("agent subscription %s shed %d deliveries over its caps", subscription_id, shed)
     if episode:
-        tell_throttled(db, trigger, reason)
+        tell_throttled(db, subscription, reason)
 
 
 def count_failure(
     db: DBSession,
-    trigger_id: int,
+    subscription_id: int,
     refs: list[str],
     error: Exception,
     retry_after: timedelta | None = None,
 ) -> None:
     """Count a failed fire against its deliveries; after EVENT_MAX_ATTEMPTS they
     fail. With `retry_after`, the rest wait that long for their next attempt."""
-    lock_trigger(db, trigger_id)
+    lock_subscription(db, subscription_id)
     retry_at = None if retry_after is None else datetime.now(timezone.utc) + retry_after
-    for d in due_deliveries(db, trigger_id, refs):
+    for d in due_deliveries(db, subscription_id, refs):
         d.attempts += 1
         if d.attempts >= settings.EVENT_MAX_ATTEMPTS:
             d.status, d.error = FAILED, type(error).__name__
@@ -226,34 +226,34 @@ def count_failure(
     db.commit()
 
 
-def fire_trigger(trigger_id: int, refs: list[str]) -> str | None:
-    """Enqueue one run for these deliveries (triggers.delivery_ref) if they are still
+def fire_subscription(subscription_id: int, refs: list[str]) -> str | None:
+    """Enqueue one run for these deliveries (subscriptions.delivery_ref) if they are still
     due; returns its id, or None if nothing ran.
 
-    The run's trigger ref is {"trigger_id", "item_ids": [readable ids], "changes":
-    {"<item id>": [Change tags delivered for it]}}, plus triggers.coalesced_ref.
+    The run's trigger_ref is {"subscription_id", "item_ids": [readable ids], "changes":
+    {"<item id>": [Change tags delivered for it]}}, plus subscriptions.coalesced_ref.
     """
     with make_session() as db:
-        trigger = lock_trigger(db, trigger_id)
-        # A disabled trigger's deliveries wait for it to be enabled again, or expire.
-        if trigger is None or not trigger.enabled or trigger.kind != INGEST:
+        subscription = lock_subscription(db, subscription_id)
+        # A disabled subscription's deliveries wait for it to be enabled again, or expire.
+        if subscription is None or not subscription.enabled or subscription.kind != INGEST:
             return None
-        owner = db.get(User, trigger.user_id)
-        deliveries = due_deliveries(db, trigger_id, refs)
-        if "agent" not in trigger.handler or owner is None or not deliveries:
+        owner = db.get(User, subscription.user_id)
+        deliveries = due_deliveries(db, subscription_id, refs)
+        if "agent" not in subscription.handler or owner is None or not deliveries:
             return None
         try:
-            return start_run(db, trigger, owner, deliveries)
+            return start_run(db, subscription, owner, deliveries)
         except CapExceeded as e:
             db.rollback()
-            hold_back(db, trigger_id, refs, e)
+            hold_back(db, subscription_id, refs, e)
         # An invalid spec or config and revoked credentials (all ValueErrors) trip the
         # breaker: a visible stop beats failing every later delivery.
         except ValueError as e:
             db.rollback()
-            trip(db, trigger_id, owner, str(e))
+            trip(db, subscription_id, owner, str(e))
         except Exception as e:
             db.rollback()
-            count_failure(db, trigger_id, refs, e)
+            count_failure(db, subscription_id, refs, e)
             raise
         return None

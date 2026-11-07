@@ -43,7 +43,7 @@ CAUSING_EVENT: ContextVar[int | None] = ContextVar("causing_event", default=None
 
 class Event(Base):
     """Something that happened, written in the transaction that made it happen;
-    pending until memory.agents.triggers.route_events routes it. Ticks and timers
+    pending until memory.agents.subscriptions.route_events routes it. Ticks and timers
     are pending until memory.agents.clock delivers them, from `fire_at` on; their
     `result` says how that went."""
 
@@ -68,11 +68,11 @@ class Event(Base):
     )
     routed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # A tick's cron subscription.
-    trigger_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("agent_triggers.id", ondelete="CASCADE")
+    subscription_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("subscriptions.id", ondelete="CASCADE")
     )
     fire_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    # A timer's handler, shaped as AgentTrigger.handler.
+    # A timer's handler, shaped as Subscription.handler.
     handler: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     # A tick's missed count; a timer's run input and the API key that set it.
     data: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
@@ -115,7 +115,7 @@ class Event(Base):
             name="events_raw_check",
         ),
         CheckConstraint(
-            "kind <> 'tick' OR (trigger_id IS NOT NULL AND owner_id IS NOT NULL "
+            "kind <> 'tick' OR (subscription_id IS NOT NULL AND owner_id IS NOT NULL "
             "AND fire_at IS NOT NULL)",
             name="events_tick_check",
         ),
@@ -134,7 +134,7 @@ class Event(Base):
         Index("events_payload_age_idx", "created_at", postgresql_where=text("payload IS NOT NULL")),
         Index(
             "events_tick_key",
-            "trigger_id",
+            "subscription_id",
             "fire_at",
             unique=True,
             postgresql_where=text("kind = 'tick'"),

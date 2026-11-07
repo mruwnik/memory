@@ -155,7 +155,7 @@ def add_discord_message(
 
     ``link_by_username`` is off for pushed messages, whose author names are
     only as trustworthy as the pushing bot's owner. ``backfill`` marks history
-    read below what was stored, which triggers don't react to.
+    read below what was stored, which subscriptions don't react to.
     """
     logger.debug(f"Adding Discord message {message_id}")
 
