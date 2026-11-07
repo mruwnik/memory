@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from memory.agents.caps import (
     CapExceeded,
+    check_hourly_rate,
     check_run_rate,
     check_trigger_rate,
     children_cost,
@@ -253,6 +254,14 @@ def enqueue_run(
         check_trigger_rate(db, subscription)
     if definition is not None:
         check_run_rate(db, definition, spec.max_runs_per_hour)
+    elif agent is not None:
+        check_hourly_rate(
+            db,
+            (AgentRun.user_id == user_id) & (AgentRun.agent == agent),
+            spec.max_runs_per_hour,
+            "agent",
+            "max_runs_per_hour",
+        )
     if provider_key is None or not starts_on_server(spec):
         # Workers spend their own credentials; a fallback to the server is budgeted then.
         max_cost = Decimal(0)

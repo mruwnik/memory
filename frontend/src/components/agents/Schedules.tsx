@@ -8,7 +8,7 @@ import { Badge, Button, ConfirmButton, EmptyState, Field, FieldRow, FormActions,
 const isCron = (cron: string) => cron.trim().split(/\s+/).length === 5
 
 export function Schedules({ definitionId }: { definitionId: number }) {
-  const { listSchedules, saveSchedule, deleteSchedule } = useAgents()
+  const { listSchedules, saveSchedule, deleteSubscription } = useAgents()
   const [schedules, setSchedules] = useState<AgentSchedule[] | null>(null)
   const [cron, setCron] = useState('0 9 * * *')
   const [input, setInput] = useState('')
@@ -60,7 +60,7 @@ export function Schedules({ definitionId }: { definitionId: number }) {
                   onClick={() => act(s.id, () => saveSchedule({ definitionId, enabled: !s.enabled, scheduleId: s.id }))}>
                   {busyId === s.id ? 'Saving...' : s.enabled ? 'Pause' : 'Resume'}
                 </Button>
-                <ConfirmButton confirm="Delete this schedule and its history?" onConfirm={() => act(s.id, () => deleteSchedule(s.id))} />
+                <ConfirmButton confirm="Delete this schedule and its history?" onConfirm={() => act(s.id, () => deleteSubscription(s.id))} />
               </>}
             />
           ))}

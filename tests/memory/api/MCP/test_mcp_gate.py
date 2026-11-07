@@ -6,7 +6,10 @@ import pytest
 
 from memory.common.db.models import APIKey, APIKeyType, HumanUser
 
-WORK_TOOLS = {"agent_work_claim", "agent_work_submit", "agent_work_queues"}
+WORK_TOOLS = {
+    *("agent_work_claim", "agent_work_submit", "agent_work_queues"),
+    *("subscription_upsert", "subscription_list_all", "subscription_fetch", "subscription_delete"),
+}
 
 
 def make_key(db, user_scopes: list[str], key_scopes: list[str]) -> str:

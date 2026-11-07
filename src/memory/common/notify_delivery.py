@@ -8,9 +8,9 @@ from typing import Any
 
 from memory.common import discord as discord_utils
 from memory.common.db.connection import make_session
-from memory.common.db.models import DiscordBot, EmailAccount
+from memory.common.db.models import EmailAccount
 from memory.common.db.models.slack import SlackUserCredentials
-from memory.common.discord_data import discord_target_is_channel
+from memory.common.discord_data import discord_target_is_channel, get_user_bots
 from memory.common.email_sender import (
     PASSWORD_RESET_HEADER,
     get_account_by_address,
@@ -39,15 +39,11 @@ class NotificationParams:
 
 
 def resolve_discord_bot_id(session, params: NotificationParams) -> int | None:
-    bot_id = params.data.get("discord_bot_id")
-    if bot_id:
-        return bot_id
-    bot = (
-        session.query(DiscordBot)
-        .filter(DiscordBot.created_by_user_id == params.user_id)
-        .first()
-    )
-    if bot:
+    """The stored bot when it is the user's own (older rows may name anyone's), else
+    the user's default bot."""
+    bots = get_user_bots(session, params.user_id)
+    stored = params.data.get("discord_bot_id")
+    if bot := next((b for b in bots if b.id == stored), None) or next(iter(bots), None):
         return bot.id
     logger.error(f"No Discord bot found for user {params.user_id}")
     return None

@@ -290,7 +290,7 @@ class AgentTrigger(Base):
     cascades its deletion), {"agent": "<code agent slug>"}, {"queue": "<name>"},
     whose deliveries the owner's workers claim (memory.agents.queues), or
     {"notify": {...}} (memory.agents.clock.Notify), which only cron subscriptions
-    take; code slugs don't fire yet.
+    take.
 
     A cron subscription's `next_at` is its next tick, in its owner's timezone.
     """

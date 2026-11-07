@@ -267,6 +267,7 @@ export const emptyTriggerConfig = (): TriggerConfig => ({
 
 export interface AgentSchedule {
   id: number
+  kind: 'cron'
   name: string
   config: { cron: string; input: string }
   next_at: string | null
@@ -353,40 +354,56 @@ export const useAgents = () => {
   )
   const catalog = useCallback(() => call<Catalog>('agent_catalog'), [call])
 
-  const listSchedules = useCallback(
+  // A definition's cron subscriptions and filter subscriptions, which the editor shows apart.
+  const listSubscriptions = useCallback(
     async (definitionId: number) =>
-      (await call<{ schedules: AgentSchedule[] }>('scheduler_list_all', { definition_id: definitionId })).schedules,
+      (await call<{ subscriptions: (AgentSchedule | AgentTrigger)[] }>('subscription_list_all', { definition_id: definitionId }))
+        .subscriptions,
     [call],
   )
-  // An update names only the schedule, so pausing never re-checks the definition.
-  const saveSchedule = useCallback(
-    (body: { definitionId: number; input?: string; cron?: string; enabled?: boolean; scheduleId?: number }) =>
-      call<AgentSchedule>('scheduler_upsert', {
-        ...(body.scheduleId !== undefined ? { schedule_id: body.scheduleId } : { definition_id: body.definitionId }),
-        ...(body.input !== undefined ? { input: body.input } : {}),
-        ...(body.cron !== undefined ? { cron_expression: body.cron } : {}),
-        ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
+  // An update names only the subscription, so pausing never re-checks the definition.
+  const saveSubscription = useCallback(
+    <T,>(definitionId: number, subscriptionId: number | undefined, source: object | undefined, enabled: boolean | undefined) =>
+      call<T>('subscription_upsert', {
+        ...(subscriptionId !== undefined ? { subscription_id: subscriptionId } : { handler: { agent: definitionId } }),
+        ...(source !== undefined ? { source } : {}),
+        ...(enabled !== undefined ? { enabled } : {}),
       }),
     [call],
   )
-  const deleteSchedule = useCallback((scheduleId: number) => call('scheduler_delete', { schedule_id: scheduleId }), [call])
+  const deleteSubscription = useCallback(
+    (subscriptionId: number) => call('subscription_delete', { subscription_id: subscriptionId }),
+    [call],
+  )
+
+  const listSchedules = useCallback(
+    async (definitionId: number) =>
+      (await listSubscriptions(definitionId)).filter((s): s is AgentSchedule => s.kind === 'cron'),
+    [listSubscriptions],
+  )
+  const saveSchedule = useCallback(
+    (body: { definitionId: number; input?: string; cron?: string; enabled?: boolean; scheduleId?: number }) => {
+      const source = {
+        ...(body.cron !== undefined ? { cron: body.cron } : {}),
+        ...(body.input !== undefined ? { input: body.input } : {}),
+      }
+      return saveSubscription<AgentSchedule>(
+        body.definitionId, body.scheduleId, Object.keys(source).length ? source : undefined, body.enabled,
+      )
+    },
+    [saveSubscription],
+  )
 
   const listTriggers = useCallback(
     async (definitionId: number) =>
-      (await call<{ triggers: AgentTrigger[] }>('agent_triggers', { definition_id: definitionId })).triggers,
-    [call],
+      (await listSubscriptions(definitionId)).filter((s): s is AgentTrigger => s.kind === 'ingest'),
+    [listSubscriptions],
   )
   const saveTrigger = useCallback(
     (body: { definitionId: number; config?: TriggerConfig; enabled?: boolean; triggerId?: number }) =>
-      call<AgentTrigger & { warnings?: string[] }>('agent_trigger_upsert', {
-        definition_id: body.definitionId,
-        ...(body.config !== undefined ? { config: body.config } : {}),
-        ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
-        ...(body.triggerId !== undefined ? { trigger_id: body.triggerId } : {}),
-      }),
-    [call],
+      saveSubscription<AgentTrigger & { warnings?: string[] }>(body.definitionId, body.triggerId, body.config, body.enabled),
+    [saveSubscription],
   )
-  const deleteTrigger = useCallback((triggerId: number) => call('agent_trigger_delete', { trigger_id: triggerId }), [call])
 
   const listServers = useCallback(
     async () => (await call<{ servers: ExternalServer[] }>('agent_server_list')).servers,
@@ -438,7 +455,7 @@ export const useAgents = () => {
 
   return {
     listDefinitions, listSystemAgents, getDefinition, saveDefinition, deleteDefinition, startRun, waitRun, listRuns, cancelRun, starRun, catalog,
-    listSchedules, saveSchedule, deleteSchedule, listTriggers, saveTrigger, deleteTrigger,
+    listSchedules, saveSchedule, listTriggers, saveTrigger, deleteSubscription,
     listServers, upsertServer, authorizeServer, refreshServerTools, disconnectServer, deleteServer,
     listKeys, upsertKey, deleteKey,
   }

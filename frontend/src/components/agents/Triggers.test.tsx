@@ -5,11 +5,11 @@ import { Triggers, describeTrigger } from './Triggers'
 
 const listTriggers = vi.fn()
 const saveTrigger = vi.fn()
-const deleteTrigger = vi.fn()
+const deleteSubscription = vi.fn()
 
 vi.mock('@/hooks/useAgents', async (orig) => ({
   ...(await orig<typeof import('@/hooks/useAgents')>()),
-  useAgents: () => ({ listTriggers, saveTrigger, deleteTrigger }),
+  useAgents: () => ({ listTriggers, saveTrigger, deleteSubscription }),
 }))
 
 const config = {
@@ -20,7 +20,7 @@ const config = {
 beforeEach(() => {
   listTriggers.mockReset()
   saveTrigger.mockReset()
-  deleteTrigger.mockReset()
+  deleteSubscription.mockReset()
 })
 
 describe('Triggers', () => {

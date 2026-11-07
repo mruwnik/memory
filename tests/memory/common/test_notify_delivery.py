@@ -4,7 +4,7 @@ from unittest.mock import Mock
 import pytest
 
 from memory.common import notify_delivery
-from memory.common.db.models.discord import DiscordChannel, DiscordServer
+from memory.common.db.models.discord import DiscordBot, DiscordChannel, DiscordServer
 from memory.workers.tasks import notifications
 
 
@@ -202,3 +202,27 @@ def test_send_notification_task_delivers_its_arguments(monkeypatch):
         "discord", "123456789", message="**Hi**\n\nthere", user_id=5, topic="Hi",
         data={"discord_bot_id": 7},
     )]
+
+
+@pytest.mark.parametrize(
+    "stored, owner_bots, sends_with",
+    [
+        ("own", 1, "own"),
+        ("foreign", 1, "own"),
+        ("foreign", 0, None),
+        (None, 1, "own"),
+    ],
+)
+def test_a_stored_discord_bot_is_used_only_if_the_owner_may_use_it(
+    db_session, admin_user, regular_user, stored, owner_bots, sends_with
+):
+    own = DiscordBot(application_id=1, name="own", created_by_user_id=regular_user.id)
+    foreign = DiscordBot(application_id=2, name="foreign", created_by_user_id=admin_user.id)
+    db_session.add_all([foreign, *[own][:owner_bots]])
+    db_session.commit()
+    ids = {"own": own.id, "foreign": foreign.id, None: None}
+    params = make_notification_params(
+        "discord", "123", user_id=regular_user.id, data={"discord_bot_id": ids[stored]}
+    )
+
+    assert notify_delivery.resolve_discord_bot_id(db_session, params) == ids[sends_with]

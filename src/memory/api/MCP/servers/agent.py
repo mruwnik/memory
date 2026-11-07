@@ -11,7 +11,6 @@ themselves; the run stays its owner's.
 import asyncio
 import json
 import logging
-import re
 import secrets
 import time
 from dataclasses import asdict
@@ -22,7 +21,7 @@ from typing import Annotated, Any
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_access_token
 from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, ValidationError
-from sqlalchemy import and_, func, or_, select, tuple_
+from sqlalchemy import and_, func, or_, tuple_
 from sqlalchemy.exc import IntegrityError
 
 from memory.agents.cancel import cancel_tree
@@ -46,16 +45,14 @@ from memory.agents.external import (
     save,
 )
 from memory.agents.mcp_client import calling_run, memory_tools
-from memory.agents.prebuilt import PREBUILT_AGENTS
+from memory.agents.prebuilt import PREBUILT_AGENTS, code_agent
 from memory.agents.queues import backlog, can_read, is_delivery, ready_to_claim, take_from_queue
 from memory.agents.provider_keys import (
     KeyUnavailable,
     check_key,
     choose_key,
-    default_key,
     resolve_key_ref,
     system_key,
-    usable,
 )
 from memory.agents.spec import (
     DEFAULT_AGENT_MODEL,
@@ -71,15 +68,9 @@ from memory.agents.spec import (
     uses_server,
 )
 from memory.agents.system import SYSTEM_AGENTS, SystemAgent
-from memory.agents.trigger_input import check_template
 from memory.agents.triggers import (
     INGEST,
     POSTED,
-    RESUME,
-    THROTTLED,
-    IngestConfig,
-    PerItem,
-    resume_from_trip,
     source_types,
 )
 from memory.agents.work import HELD_OUT
@@ -349,7 +340,7 @@ async def delete(definition_id: int) -> dict:
             Event.kind == TIMER,
             Event.owner_id == user_id,
             Event.routed_at.is_(None),
-            Event.handler["agent"].as_integer() == definition_id,
+            Event.handler.contains({"agent": definition_id}),
         )
         for timer in timers.with_for_update():
             finish(timer, SKIPPED_CANCELLED)
@@ -433,16 +424,6 @@ async def fetch(definition_id: int) -> dict:
         return definition.serialize() | {"changed_tools": changed_tools(db, definition)}
 
 
-def caller_model(db: DBSession, user_id: int, models: tuple[str, ...]) -> str:
-    """The first of `models` the caller has a usable default key for; else one they
-    have any default key for, so a refusal names that key."""
-    keys = {m: default_key(db, user_id, split_model(m)[0]) for m in models}
-    return next(
-        (m for m in models if usable(keys[m]) is not None),
-        next((m for m in models if keys[m] is not None), models[0]),
-    )
-
-
 def named_definition(db: DBSession, user_id: int, name: str) -> AgentDefinition | None:
     return (
         db.query(AgentDefinition)
@@ -464,14 +445,9 @@ def resolve_agent(
     if isinstance(agent, int):
         definition = owned_definition(db, agent, user_id)
         return parse_spec(definition.spec), definition, None
-    if (system := SYSTEM_AGENTS.get(agent)) is not None:
-        model = caller_model(db, user_id, system.models)
-        return parse_spec(system.spec_dict(model)), None, agent
-    if (definition := named_definition(db, user_id, agent)) is not None:
+    if agent not in SYSTEM_AGENTS and (definition := named_definition(db, user_id, agent)):
         return parse_spec(definition.spec), definition, None
-    if (prebuilt := PREBUILT_AGENTS.get(agent)) is not None:
-        return prebuilt.spec(caller_model(db, user_id, prebuilt.models)), None, agent
-    raise ValueError(f"unknown agent {agent!r}")
+    return code_agent(db, user_id, agent), None, agent
 
 
 def placement_overrides(
@@ -853,8 +829,8 @@ async def work_claim(
     """Take the oldest of your own runs placed on workers whose requirements you meet,
     to execute yourself with your own models and tools. Returns {"run": null} if none.
 
-    With `queue`, take instead the next delivery of your triggers whose handler is
-    that queue, which needs the read scope. It comes as a run with "queue" and "ref"
+    With `queue`, take instead the next delivery of your subscriptions whose handler
+    is that queue (subscription_upsert), which needs the read scope. It comes as a run with "queue" and "ref"
     ({"trigger_id", "item_ids", "changes": {"<item id>": [change tags]}, and
     "coalesced": {"<item id>": [ids of items whose deliveries were folded into it]}
     when any were}), its input rendered from the trigger's template and the items as
@@ -999,7 +975,7 @@ async def work_submit(
 @agent_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_AGENTS_WORK))
 async def work_queues() -> dict:
-    """Your triggers' queues (agent_work_claim's `queue`), each with how many deliveries
+    """Your subscriptions' queues (agent_work_claim's `queue`), each with how many deliveries
     are waiting to be claimed and the oldest one's age in seconds (null when none).
     Deliveries no worker's key can read wait here and end `expired`."""
     user_id = worker_caller()
@@ -1054,27 +1030,8 @@ async def catalog() -> dict:
     }
 
 
-def owned_trigger(db: DBSession, trigger_id: int, user_id: int) -> AgentTrigger:
-    trigger = db.get(AgentTrigger, trigger_id)
-    # Cron subscriptions are the scheduler_* tools'.
-    if trigger is None or trigger.user_id != user_id or trigger.kind != INGEST:
-        raise ValueError(f"unknown trigger {trigger_id}")
-    return trigger
-
-
-def check_trigger_cap(db: DBSession, user_id: int, exclude_id: int | None) -> None:
-    query = db.query(AgentTrigger).filter(AgentTrigger.user_id == user_id, AgentTrigger.enabled)
-    if exclude_id is not None:
-        query = query.filter(AgentTrigger.id != exclude_id)
-    if query.count() >= settings.AGENT_MAX_TRIGGERS_PER_USER:
-        raise ValueError(
-            f"at most {settings.AGENT_MAX_TRIGGERS_PER_USER} of your triggers can be "
-            "enabled at once (AGENT_MAX_TRIGGERS_PER_USER); pause or delete one first"
-        )
-
-
 async def exposure_warnings(spec: AgentSpec) -> list[str]:
-    """Tools a trigger would hand to content nobody vetted: writes and egress."""
+    """Tools a subscription would hand to content nobody vetted: writes and egress."""
     egress = sorted(set(spec.tools) & BUILTIN_TOOLS)
     names = [n for n in spec.tools if n not in BUILTIN_TOOLS]
     writes = []
@@ -1087,228 +1044,10 @@ async def exposure_warnings(spec: AgentSpec) -> list[str]:
     if not (egress or writes):
         return []
     return [
-        "this trigger feeds external content to an agent that can "
+        "this subscription feeds external content to an agent that can "
         f"write or reach outside memory ({', '.join(writes + egress)}); "
         "content could steer those tools, so keep the caps tight"
     ]
-
-
-# Default names carry the trigger's id, so no other trigger may take one.
-DEFAULT_TRIGGER_NAME = re.compile(r"trigger-\d+")
-
-
-def next_trigger_id(db: DBSession) -> int:
-    """Drawn before the insert, so a new trigger's default name can carry its id."""
-    sequence = func.pg_get_serial_sequence("agent_triggers", "id")
-    return db.execute(select(func.nextval(sequence))).scalar_one()
-
-
-def trigger_name(db: DBSession, user_id: int, name: str, trigger_id: int) -> str:
-    """`name` stripped, refused if empty or already another of the user's triggers'."""
-    name = name.strip()
-    if not name:
-        raise ValueError("name must not be empty")
-    taken = db.query(AgentTrigger).filter(
-        AgentTrigger.user_id == user_id, AgentTrigger.name == name, AgentTrigger.id != trigger_id
-    )
-    if db.query(taken.exists()).scalar():
-        raise ValueError(f"you already have a trigger named '{name}'")
-    return name
-
-
-@agent_mcp.tool()
-@visible_when(require_scopes(SCOPE_AGENTS))
-async def trigger_upsert(
-    definition_id: int,
-    config: dict | None = None,
-    enabled: bool | None = None,
-    trigger_id: int | None = None,
-    name: str | None = None,
-    max_per_hour: int | None = None,
-    backlog_max: int | None = None,
-    resume: bool = False,
-) -> dict:
-    """Create or update an ingest trigger: run one of your definitions when newly stored items match.
-
-    name: unique among your triggers; defaults to "trigger-<id>". max_per_hour: the
-    most runs this trigger starts in an hour (default AGENT_MAX_RUNS_PER_HOUR), on
-    top of the definition's own max_runs_per_hour. backlog_max: the most matches
-    waiting to run; beyond it the oldest are dropped. Omitted on update, these are kept.
-
-    config: {"filter": {source_types, tags_any, channel_ids, exclude_channel_ids,
-    text_contains, regex, authors_any, exclude_authors, known_people_only, changed_by_any,
-    exclude_changed_by, exclude_own, repos, mentions_me, threads_im_in, dms_to_me}, "delivery": {"mode": "per_item"} or {"mode": "batch",
-    "window_sec", "max_items"}, "template": the run's input, "on_edit": bool, "on_changes": [...]}. Set filter values must all
-    hold; within a list, any value matches. exclude_channel_ids drops items in
-    those channels and their threads; a Discord thread whose parent isn't known
-    yet still matches until a thread listing or thread event records it. Beeper
-    messages match by their beeper_chat_id and sender. repos: GitHub "owner/name",
-    case-insensitive. mentions_me: true matches Discord and Slack messages that
-    @-mention one of your Discord bots or your Slack app's bot user. authors_any
-    keeps only items by those authors, named by ids the platform vouches for:
-    Discord and Slack user ids, Beeper sender ids, GitHub logins (case-insensitive);
-    display names never match. Email never passes authors_any or
-    known_people_only: its From header is the sender's to write. known_people_only
-    keeps only items whose author is linked to a Person that is linked to a user,
-    or that you or an admin recorded (not the ones ingest makes for everyone it
-    sees). changed_by_any / exclude_changed_by filter by who made each change, named
-    the same way: a new item or edit is made by its author, a GitHub comments or
-    review change by whoever wrote the new comments or reviews, commits by the head
-    commit's author; other changes have no known maker, which changed_by_any never
-    passes and exclude_changed_by never drops. Changes dropped this way aren't
-    delivered, and an event left with none doesn't match. threads_im_in: Discord and
-    Slack thread messages where you (your Slack user, your linked Discord accounts)
-    or one of your bots posted. dms_to_me: direct messages that reached your
-    Discord bots or Slack apps. Every stored
-    item is matched, however short. Only items stored since it was last enabled
-    match, each at most once, and only if you can read them; so does an older item
-    once its sync reports news about it (commits, comments, review, checks_complete
-    or state; with on_changes, one of those it names). Labels, assignees, draft,
-    checks and plain edits aren't news.
-
-    Template placeholders: {items} renders each item with its type, id, changes, url
-    and its type's ids (repo/number, Slack channel_id/ts/thread_ts, Discord
-    guild/channel/message ids, meeting summary/action items/attendees, email
-    headers) plus a text preview; {items_json} is a JSON list of the short fields;
-    with per_item delivery, {item.<field>} is one field (an unknown field is refused,
-    listing the valid ones). A template without placeholders gets {items} appended.
-    Text people wrote arrives inside <untrusted_item id=… field=…> delimiters.
-
-    With "on_edit": true, an item this trigger has matched fires again each time its
-    title or text changes (its changes then say "edited"); reprocessing
-    unchanged content never does. Edits to items it never matched don't fire.
-    "on_changes" (needs on_edit) limits that to edits reporting one of: "edited",
-    "commits", "comments", "review", "checks", "checks_complete", "state", "labels",
-    "assignees", "draft", or for meeting tasks "title", "due", "priority"
-    (tasks also report "assignees" and "state"); an edit that reports
-    nothing counts as "edited". The run's trigger_ref.changes lists each item's
-    changes, with "new" for a first match.
-
-    Loop protection: posts by our own Discord bots and by connected Slack apps' bot
-    users never match; nor do your own Slack user's, unless "exclude_own": false.
-    Items a run of this trigger reported posting (agent_work_submit's `posted`) never match it. An on_edit agent that edits the
-    item it was given re-fires itself, and anything else an agent writes that
-    gets ingested again (email, GitHub, Beeper) is only stopped by the caps. Over a
-    cap (max_per_hour, the definition's max_runs_per_hour or a daily cost pool), a
-    match waits an hour and is dropped if still over; you're notified once per
-    episode, which ends after two hours with nothing held back. A trigger whose
-    credentials or definition stop working disables itself and notifies you;
-    enabling it again clears that, and with resume=true (and enabled=true) it also
-    gets the matches it missed while disabled (as far back as events are kept),
-    as if it had never stopped, instead of starting from now. The response's `warnings`
-    lists the definition's tools that write or reach outside memory, which a
-    trigger exposes to whatever content arrives.
-
-    Runs act with the credentials that created the trigger (an API key's scopes, if
-    one was used); edits keep them, and an API key can only edit triggers it created.
-    At most AGENT_MAX_TRIGGERS_PER_USER of your triggers can be enabled at once.
-    To pause, pass only trigger_id and enabled=false; that always works. Any other
-    change (config is required to create; omitted on update, it's kept) re-checks
-    the definition's tools against your access.
-    """
-    user_id, _ = caller()
-    if trigger_id is not None and enabled is False and config is None:
-        return pause_trigger(trigger_id, user_id)
-    if max_per_hour is not None and max_per_hour < 1:
-        raise ValueError("max_per_hour must be at least 1")
-    if backlog_max is not None and backlog_max < 1:
-        raise ValueError("backlog_max must be at least 1")
-    if name is not None and DEFAULT_TRIGGER_NAME.fullmatch(name.strip()):
-        raise ValueError('names like "trigger-<number>" are reserved for default names')
-    token, _ = caller_token()
-    with make_session() as db:
-        definition = owned_definition(db, definition_id, user_id)
-        existing = owned_trigger(db, trigger_id, user_id) if trigger_id is not None else None
-        if config is None:
-            if existing is None:
-                raise ValueError("config is required to create a trigger")
-            config = existing.config
-        try:
-            parsed = IngestConfig.model_validate(config)
-        except ValidationError as e:
-            raise ValueError(f"invalid trigger config: {e}") from e
-        check_template(
-            parsed.template, parsed.filter.source_types, isinstance(parsed.delivery, PerItem)
-        )
-        spec = parse_spec(definition.spec)
-        await check_spec(spec)
-        key = token_api_key(token, db)
-        if existing is not None and key is not None and existing.api_key_id != key.id:
-            raise ValueError("this trigger is bound to another credential")
-        was_enabled = existing is not None and existing.enabled
-        will_be_enabled = was_enabled if enabled is None and existing else enabled is not False
-        if resume and not will_be_enabled:
-            raise ValueError("resume only applies when enabling a tripped trigger: pass enabled=true")
-        if will_be_enabled and not was_enabled:
-            check_trigger_cap(db, user_id, exclude_id=trigger_id)
-        trigger = existing or AgentTrigger(
-            id=next_trigger_id(db), user_id=user_id, kind=INGEST, state={}
-        )
-        if existing is None or name is not None:
-            default = f"trigger-{trigger.id}"
-            trigger.name = trigger_name(db, user_id, default if name is None else name, trigger.id)
-        if max_per_hour is not None:
-            trigger.max_per_hour = max_per_hour
-        if backlog_max is not None:
-            trigger.backlog_max = backlog_max
-        db.add(trigger)
-        trigger.definition_id = definition.id
-        trigger.handler = {"agent": definition.id}
-        trigger.config = parsed.model_dump(mode="json")
-        if existing is None:
-            trigger.api_key_id, trigger.via_api_key = (key.id, True) if key else (None, False)
-        trigger.enabled = will_be_enabled
-        if will_be_enabled and not was_enabled:
-            if resume:
-                resume_from_trip(db, trigger)
-            else:
-                # The database clock, which also stamps items' inserted_at.
-                trigger.active_since = func.now()
-            # A replay left from an earlier resume would deliver what "from now" skips.
-            stale = {"tripped", THROTTLED} | (set() if resume else {RESUME})
-            trigger.state = {k: v for k, v in (trigger.state or {}).items() if k not in stale}
-        try:
-            db.flush()
-        except IntegrityError as e:
-            if "agent_triggers_user_name_key" not in str(e.orig):
-                raise
-            raise ValueError(f"you already have a trigger named '{trigger.name}'") from e
-        return trigger.serialize() | {"warnings": await exposure_warnings(spec)}
-
-
-def pause_trigger(trigger_id: int, user_id: int) -> dict:
-    """Disabling never re-checks access: it must work even after access is lost."""
-    with make_session() as db:
-        trigger = owned_trigger(db, trigger_id, user_id)
-        trigger.enabled = False
-        db.flush()
-        return trigger.serialize()
-
-
-@agent_mcp.tool(annotations=READ_ONLY)
-@visible_when(require_scopes(SCOPE_AGENTS))
-async def triggers(definition_id: int) -> dict:
-    """The triggers of one of your definitions, including any tripped breaker's reason."""
-    user_id, _ = caller()
-    with make_session() as db:
-        owned_definition(db, definition_id, user_id)
-        found = (
-            db.query(AgentTrigger)
-            .filter(AgentTrigger.definition_id == definition_id, AgentTrigger.kind == INGEST)
-            .order_by(AgentTrigger.id)
-            .all()
-        )
-        return {"triggers": [t.serialize() for t in found]}
-
-
-@agent_mcp.tool()
-@visible_when(require_scopes(SCOPE_AGENTS))
-async def trigger_delete(trigger_id: int) -> dict:
-    """Delete one of your triggers."""
-    user_id, _ = caller()
-    with make_session() as db:
-        db.delete(owned_trigger(db, trigger_id, user_id))
-    return {"deleted": trigger_id}
 
 
 # --- External MCP servers -------------------------------------------------

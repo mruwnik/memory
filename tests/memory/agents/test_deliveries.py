@@ -128,6 +128,25 @@ def test_a_delivery_routed_but_never_sent_is_sent_by_the_sweep(
     assert (delivery.status, delivery.run_id) == ("done", run_id)
 
 
+def test_a_code_slug_subscriptions_batch_is_sent_and_its_backlog_shed(
+    db_session, admin_user, no_celery_dispatch
+):
+    config = {"filter": {"tags_any": ["ai"]}, "delivery": BATCH}
+    trigger = AgentTrigger(
+        user_id=admin_user.id, name="t", handler={"agent": "echo"}, kind="ingest", backlog_max=1,
+        config=triggers.IngestConfig.model_validate(config).model_dump(mode="json"),
+    )
+    db_session.add(trigger)
+    db_session.commit()
+    for _ in range(2):
+        route_item(db_session, post(db_session).id)
+        age(db_session, trigger, timedelta(minutes=2))
+
+    swept = triggers.sweep_deliveries()
+
+    assert (swept["shed"], swept["sent"]) == (1, 1)
+
+
 def test_a_lost_fire_is_resent_and_both_copies_start_one_run(
     db_session, admin_user, fake_providers, admin_keys, no_celery_dispatch, no_grace
 ):

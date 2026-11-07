@@ -33,10 +33,9 @@ DEFAULT_AGENT_MODEL = "anthropic/claude-sonnet-5-5"
 DEFAULT_MAX_OUTPUT_TOKENS = 16_000
 MAX_TEXT_CHARS = 200_000
 MAX_NAME_CHARS = 100
-# agent_* and the scheduler writes: a run must not manage agents, runs or
-# schedules, which would escape its caps and let content it read plant lasting work.
-DENIED_TOOL_PREFIXES = ("agent_",)
-DENIED_TOOLS = frozenset({"scheduler_upsert", "scheduler_delete"})
+# A run must not manage agents, runs or subscriptions, which would escape its
+# caps and let content it read plant lasting work.
+DENIED_TOOL_PREFIXES = ("agent_", "subscription_")
 # 64: the strictest provider limit on tool names (OpenAI function names).
 TOOL_NAME = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 MAX_RESULT_SCHEMA_BYTES = 64 * 1024
@@ -147,7 +146,7 @@ def uses_server(spec: AgentSpec) -> bool:
 
 def is_denied(tool: str) -> bool:
     """Tools a run may never call, whichever server exposes them."""
-    return tool.startswith(DENIED_TOOL_PREFIXES) or tool in DENIED_TOOLS
+    return tool.startswith(DENIED_TOOL_PREFIXES)
 
 
 # Memory's own child-run tools, which a spec may opt in to: they act only on the

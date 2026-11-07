@@ -53,7 +53,7 @@ def test_all_servers_in_enum():
         "polling",
         "projects",
         "reports",
-        "scheduler",
+        "subscription",
         "slack",
         "teams",
     }

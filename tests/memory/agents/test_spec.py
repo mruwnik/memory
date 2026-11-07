@@ -88,7 +88,7 @@ def test_defaults_are_valid_on_the_default_model():
         ],
         *[
             ({"tools": [tool]}, f"tool '{tool}' can never be used inside a run")
-            for tool in ("scheduler_upsert", "scheduler_delete")
+            for tool in ("subscription_upsert", "subscription_list_all")
         ],
         (
             {"mcp_servers": [{"server_id": 3, "tools": ["agent_run"]}]},

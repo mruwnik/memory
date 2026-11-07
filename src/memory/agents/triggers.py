@@ -773,11 +773,11 @@ def accessible_ids(
     )
 
 
-# Code-slug handlers don't fire yet: matching them would claim items nothing delivers.
+# Notify handlers take only ticks and timers.
 LIVE_INGEST = (
     AgentTrigger.kind == INGEST,
     AgentTrigger.enabled,
-    or_(AgentTrigger.definition_id.is_not(None), AgentTrigger.handler.has_key("queue")),
+    or_(AgentTrigger.handler.has_key("agent"), AgentTrigger.handler.has_key("queue")),
 )
 
 
@@ -1458,7 +1458,7 @@ def sweep_deliveries() -> dict[str, int]:
         newly_throttled: list[tuple[AgentTrigger, str]] = []
         for trigger in waiting:
             queued = handler_queue(trigger) is not None
-            if not (trigger.kind == INGEST and trigger.enabled and (trigger.definition_id or queued)):
+            if not (trigger.kind == INGEST and trigger.enabled and ({"agent", "queue"} & set(trigger.handler))):
                 continue
             if n := shed_backlog(db, trigger):
                 logger.warning("agent trigger %s shed %d deliveries over its backlog", trigger.id, n)

@@ -7,7 +7,7 @@ const saveSchedule = vi.fn()
 
 vi.mock('@/hooks/useAgents', async (orig) => ({
   ...(await orig<typeof import('@/hooks/useAgents')>()),
-  useAgents: () => ({ listSchedules, saveSchedule, deleteSchedule: vi.fn() }),
+  useAgents: () => ({ listSchedules, saveSchedule, deleteSubscription: vi.fn() }),
 }))
 
 beforeEach(() => {
@@ -30,7 +30,7 @@ describe('Schedules', () => {
 
   it('shows why a tripped schedule paused and resumes it by id', async () => {
     listSchedules.mockResolvedValue([{
-      id: 5, name: 'schedule-5', config: { cron: '0 9 * * *', input: 'digest' }, next_at: null,
+      id: 5, kind: 'cron', name: 'schedule-5', config: { cron: '0 9 * * *', input: 'digest' }, next_at: null,
       enabled: false, state: { tripped: { reason: 'the API key was deleted', at: '2026-11-07T00:00:00Z' } },
     }])
     const { user } = renderWithRouter(<Schedules definitionId={1} />)

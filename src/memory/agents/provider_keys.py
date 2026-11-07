@@ -115,6 +115,16 @@ def usable(key: LLMProviderKey | None) -> LLMProviderKey | None:
     return key if key is not None and key.status == KeyStatus.OK else None
 
 
+def preferred_model(db: DBSession, user_id: int, models: tuple[str, ...]) -> str:
+    """The first of `models` the user has a usable default key for; else one they
+    have any default key for, so a refusal names that key."""
+    keys = {m: default_key(db, user_id, split_model(m)[0]) for m in models}
+    return next(
+        (m for m in models if usable(keys[m]) is not None),
+        next((m for m in models if keys[m] is not None), models[0]),
+    )
+
+
 def personal_key(db: DBSession, user_id: int, agent: SystemAgent) -> LLMProviderKey | None:
     """The user's first usable default key among `agent`'s providers: what their
     searches and their own items use."""

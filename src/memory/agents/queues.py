@@ -80,7 +80,7 @@ def is_delivery(run: AgentRun) -> bool:
 def subscription_key(db: DBSession, trigger: AgentTrigger, owner: User) -> APIKey | None:
     """The key a trigger reads through; raises PrincipalRevoked once it can't. A queue
     subscription only hands items over, so reading is all it needs."""
-    if trigger.definition_id is not None:
+    if "agent" in trigger.handler:
         return trigger_key(db, trigger, owner)
     if trigger.via_api_key and trigger.api_key_id is None:
         raise PrincipalRevoked("the API key that set up this trigger was deleted")

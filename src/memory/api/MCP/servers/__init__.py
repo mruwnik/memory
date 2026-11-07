@@ -33,8 +33,8 @@ class MCPServer(str, Enum):
     POLLING = "polling"
     PROJECTS = "projects"
     REPORTS = "reports"
-    SCHEDULER = "scheduler"
     SLACK = "slack"
+    SUBSCRIPTION = "subscription"
     TEAMS = "teams"
 
 
@@ -160,14 +160,14 @@ def get_server_instance(server: MCPServer) -> "FastMCP":
             from memory.api.MCP.servers.reports import reports_mcp
 
             return reports_mcp
-        case MCPServer.SCHEDULER:
-            from memory.api.MCP.servers.scheduler import scheduler_mcp
-
-            return scheduler_mcp
         case MCPServer.SLACK:
             from memory.api.MCP.servers.slack import slack_mcp
 
             return slack_mcp
+        case MCPServer.SUBSCRIPTION:
+            from memory.api.MCP.servers.subscription import subscription_mcp
+
+            return subscription_mcp
         case MCPServer.TEAMS:
             from memory.api.MCP.servers.teams import teams_mcp
 

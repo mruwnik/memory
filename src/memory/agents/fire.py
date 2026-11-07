@@ -8,6 +8,7 @@ from sqlalchemy import or_, select, tuple_
 
 from memory.agents.caps import CapExceeded, RateExceeded
 from memory.agents.enqueue import TriggerInfo, enqueue_run
+from memory.agents.prebuilt import code_agent
 from memory.agents.spec import MAX_TEXT_CHARS, AgentSpec
 from memory.agents.trigger_input import render_input
 from memory.agents.triggers import (
@@ -101,10 +102,22 @@ def due_deliveries(db: DBSession, trigger_id: int, refs: list[str]) -> list[Agen
     )
 
 
+def handler_agent(
+    db: DBSession, trigger: AgentTrigger, owner: User
+) -> tuple[AgentSpec, AgentDefinition | None, str | None]:
+    """The spec an agent handler runs, with its definition or code slug."""
+    agent = trigger.handler["agent"]
+    if isinstance(agent, str):
+        return code_agent(db, owner.id, agent), None, agent
+    definition = trigger.definition
+    if definition is None:
+        raise ValueError("its agent definition no longer exists")
+    return AgentSpec.model_validate(definition.spec), definition, None
+
+
 def start_run(
     db: DBSession,
     trigger: AgentTrigger,
-    definition: AgentDefinition,
     owner: User,
     deliveries: list[AgentTriggerMatch],
 ) -> str | None:
@@ -126,9 +139,10 @@ def start_run(
         for d in deliveries:
             d.status = skipped.get(d.item_id, d.status)
         db.commit()
+        handler = trigger.handler
         relocked = lock_trigger(db, trigger.id)
         # Disabled, deleted or moved meanwhile: what's left waits for it, or goes with it.
-        if relocked is None or not relocked.enabled or relocked.definition_id != definition.id:
+        if relocked is None or not relocked.enabled or relocked.handler != handler:
             return None
     delivered = due_deliveries(db, trigger.id, readable) if readable else []
     if not delivered:
@@ -140,10 +154,11 @@ def start_run(
     item_ids = sorted(d.item_id for d in delivered)
     items = db.query(SourceItem).filter(SourceItem.id.in_(item_ids)).order_by(SourceItem.id).all()
     changes = changes_by_item(delivered)
+    spec, definition, slug = handler_agent(db, trigger, owner)
     run = enqueue_run(
         db,
         user_id=owner.id,
-        spec=AgentSpec.model_validate(definition.spec),
+        spec=spec,
         input=render_input(config.template, items, MAX_TEXT_CHARS, changes),
         trigger=TriggerInfo(
             kind=INGEST,
@@ -153,6 +168,7 @@ def start_run(
             trigger_id=trigger.id,
         ),
         definition=definition,
+        agent=slug,
         api_key=key,
         deliveries=delivered,
     )
@@ -215,13 +231,12 @@ def fire_trigger(trigger_id: int, refs: list[str]) -> str | None:
         # A disabled trigger's deliveries wait for it to be enabled again, or expire.
         if trigger is None or not trigger.enabled or trigger.kind != INGEST:
             return None
-        definition = trigger.definition
         owner = db.get(User, trigger.user_id)
         deliveries = due_deliveries(db, trigger_id, refs)
-        if definition is None or owner is None or not deliveries:
+        if "agent" not in trigger.handler or owner is None or not deliveries:
             return None
         try:
-            return start_run(db, trigger, definition, owner, deliveries)
+            return start_run(db, trigger, owner, deliveries)
         except CapExceeded as e:
             db.rollback()
             hold_back(db, trigger_id, refs, e)

@@ -274,7 +274,7 @@ async def notify_user(
         scheduled_time: ISO datetime string (e.g., "2024-12-20T15:30:00Z").
                        Without an offset it is read in your timezone (see get_user).
                        If None, sends immediately. If set, a timer sends it then
-                       (cancel it with scheduler_delete(timer_id=notification_id)).
+                       (cancel it with subscription_delete(timer_id=notification_id)).
 
     Returns:
         For a scheduled send: ``{"success": True, "scheduled": True, ...}`` — the

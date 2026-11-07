@@ -20,6 +20,7 @@ from memory.agents.clock import (
     utcnow,
 )
 from memory.agents.enqueue import TriggerInfo, enqueue_run
+from memory.agents.prebuilt import code_agent
 from memory.agents.principal import standing_key
 from memory.agents.spec import AgentSpec
 from memory.agents.triggers import DONE, SHED_BUDGET, SHED_RATE, SKIPPED_DISABLED
@@ -52,9 +53,14 @@ def time_ref(db: DBSession, event: Event) -> dict:
 
 def start(db: DBSession, event: Event, target: Target) -> AgentRun:
     agent = target.handler["agent"]
-    definition = db.get(AgentDefinition, agent) if isinstance(agent, int) else None
-    if definition is None or definition.user_id != target.owner.id:
+    slug = agent if isinstance(agent, str) else None
+    definition = None if slug else db.get(AgentDefinition, agent)
+    if slug is not None:
+        spec = code_agent(db, target.owner.id, slug)
+    elif definition is None or definition.user_id != target.owner.id:
         raise ValueError("its agent definition no longer exists")
+    else:
+        spec = AgentSpec.model_validate(definition.spec)
     bound_key(db, target)
     key = standing_key(db, target.owner, target.api_key_id, SCOPE_AGENTS)
     # Ended in the run's own transaction, which enqueue_run commits.
@@ -62,7 +68,7 @@ def start(db: DBSession, event: Event, target: Target) -> AgentRun:
     run = enqueue_run(
         db,
         user_id=target.owner.id,
-        spec=AgentSpec.model_validate(definition.spec),
+        spec=spec,
         input=target.input,
         trigger=TriggerInfo(
             kind=CRON if event.kind == TICK else TIMER,
@@ -71,6 +77,7 @@ def start(db: DBSession, event: Event, target: Target) -> AgentRun:
             trigger_id=event.trigger_id,
         ),
         definition=definition,
+        agent=slug,
         api_key=key,
     )
     event.result = {"status": DONE, "run_id": run.id, **late_details(event, utcnow())}

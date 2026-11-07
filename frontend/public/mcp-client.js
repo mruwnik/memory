@@ -335,22 +335,22 @@
       delete: (report_id) => call('reports_delete', { report_id }),
     },
 
-    // Scheduler
-    scheduler: {
-      listAll: (params) => call('scheduler_list_all', params),
-      upsert: (params) => call('scheduler_upsert', params),
-      pause: (schedule_id) => call('scheduler_upsert', { schedule_id, enabled: false }),
-      delete: (schedule_id) => call('scheduler_delete', { schedule_id }),
-      cancelTimer: (timer_id) => call('scheduler_delete', { timer_id }),
-      history: (schedule_id, params) => call('scheduler_history', { schedule_id, ...params }),
-    },
-
     // Slack
     slack: {
       send: (params) => call('slack_send', params),
       addReaction: (params) => call('slack_add_reaction', params),
       listChannels: (params) => call('slack_list_channels', params),
       getChannelHistory: (params) => call('slack_get_channel_history', params),
+    },
+
+    // Subscriptions
+    subscription: {
+      listAll: (params) => call('subscription_list_all', params),
+      upsert: (params) => call('subscription_upsert', params),
+      pause: (subscription_id) => call('subscription_upsert', { subscription_id, enabled: false }),
+      fetch: (subscription_id, params) => call('subscription_fetch', { subscription_id, ...params }),
+      delete: (subscription_id) => call('subscription_delete', { subscription_id }),
+      cancelTimer: (timer_id) => call('subscription_delete', { timer_id }),
     },
 
     // Teams

@@ -6,6 +6,7 @@ import pytest
 
 from memory.agents import cron
 from memory.agents.cron import start_time_run
+from memory.common import settings
 from memory.common.celery_app import RUN_AGENT
 from memory.common.db.models import AgentDefinition, AgentRun, AgentTrigger, APIKey, Event
 
@@ -111,6 +112,33 @@ def test_a_timer_runs_its_definition_with_its_input(db_session, owner, fake_prov
     assert (run.input, run.trigger_kind, run.trigger_id, run.trigger_ref) == (
         "once", "timer", None, {"event_id": e.id, "time": e.fire_at.isoformat()},
     )
+
+
+@pytest.mark.parametrize("slug", ["echo", "system:echo"])
+def test_a_timer_runs_a_code_agent_by_slug(db_session, owner, code_agents, slug):
+    e = Event(kind="timer", owner_id=owner.id, fire_at=now(), handler={"agent": slug}, data={"input": "x"})
+    db_session.add(e)
+    db_session.commit()
+
+    run = db_session.get_one(AgentRun, start_time_run(e.id))
+
+    assert (run.agent, run.definition_id, run.input) == (slug, None, "x")
+
+
+def test_a_code_agents_hourly_cap_sheds_its_timers(db_session, owner, code_agents, monkeypatch):
+    monkeypatch.setattr(settings, "AGENT_MAX_RUNS_PER_HOUR", 1)
+    timers = [
+        Event(kind="timer", owner_id=owner.id, fire_at=now(), handler={"agent": "echo"}, data={"input": "x"})
+        for _ in range(2)
+    ]
+    db_session.add_all(timers)
+    db_session.commit()
+
+    for t in timers:
+        start_time_run(t.id)
+
+    db_session.expire_all()
+    assert [t.result["status"] for t in timers] == ["done", "skipped:shed:rate"]
 
 
 def test_a_redelivery_does_nothing(db_session, owner, fake_providers):

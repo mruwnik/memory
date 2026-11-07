@@ -1,9 +1,12 @@
+from dataclasses import replace
 from datetime import datetime, timedelta
 
 import pytest
 import pytest_asyncio
 from sse_starlette.sse import AppStatus
 
+from memory.agents.prebuilt import FACT_CHECK, PREBUILT_AGENTS
+from memory.agents.system import SYSTEM_AGENTS
 from memory.common.db.models import HumanUser, LLMProviderKey, UserSession
 from memory.common.llms import registry
 from memory.common import safe_http
@@ -64,6 +67,18 @@ def fake_providers(monkeypatch, db_session, regular_user):
     ScriptedProvider.requests = []
     ScriptedProvider.keys = default_keys(db_session, regular_user)
     yield ScriptedProvider
+
+
+@pytest.fixture
+def code_agents(monkeypatch, fake_providers):
+    """A prebuilt agent ("echo") and a system agent ("system:echo") on the fake model."""
+    monkeypatch.setitem(
+        PREBUILT_AGENTS, "echo", replace(FACT_CHECK, slug="echo", tools=(), models=("anthropic/m",))
+    )
+    summarise = SYSTEM_AGENTS["system:summarise"]
+    monkeypatch.setitem(
+        SYSTEM_AGENTS, "system:echo", replace(summarise, slug="system:echo", models=("anthropic/m",))
+    )
 
 
 @pytest.fixture

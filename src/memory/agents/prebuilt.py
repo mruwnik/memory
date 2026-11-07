@@ -4,7 +4,10 @@ paid with their own key, without creating a definition first."""
 from dataclasses import dataclass
 from typing import Any
 
+from memory.agents.provider_keys import preferred_model
 from memory.agents.spec import AgentSpec
+from memory.agents.system import SYSTEM_AGENTS
+from memory.common.db.connection import DBSession
 
 
 @dataclass(frozen=True)
@@ -80,3 +83,12 @@ FACT_CHECK = PrebuiltAgent(
 )
 
 PREBUILT_AGENTS: dict[str, PrebuiltAgent] = {a.slug: a for a in (FACT_CHECK,)}
+
+
+def code_agent(db: DBSession, user_id: int, slug: str) -> AgentSpec:
+    """A prebuilt or system agent's spec, on the model `user_id`'s keys pay for."""
+    if (system := SYSTEM_AGENTS.get(slug)) is not None:
+        return AgentSpec.model_validate(system.spec_dict(preferred_model(db, user_id, system.models)))
+    if (prebuilt := PREBUILT_AGENTS.get(slug)) is not None:
+        return prebuilt.spec(preferred_model(db, user_id, prebuilt.models))
+    raise ValueError(f"unknown agent {slug!r}")

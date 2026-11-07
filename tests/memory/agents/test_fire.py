@@ -130,6 +130,19 @@ def test_a_fire_starts_one_run_with_the_rendered_input(
     no_celery_dispatch.assert_called_once_with(RUN_AGENT, args=[run.id], task_id=run.id)
 
 
+def test_a_code_slug_trigger_runs_that_agent(db_session, admin_user, code_agents, admin_keys):
+    trigger = AgentTrigger(
+        user_id=admin_user.id, name="t", handler={"agent": "echo"}, kind="ingest", config=CONFIG
+    )
+    db_session.add(trigger)
+    db_session.commit()
+    item = post(db_session)
+
+    run = db_session.get_one(AgentRun, fire_trigger(trigger.id, claimed(db_session, trigger, item)))
+
+    assert (run.agent, run.definition_id, run.input) == ("echo", None, "New:\n" + rendered(item))
+
+
 @pytest.mark.parametrize(
     "delivery,inputs",
     [

@@ -98,7 +98,7 @@ function TriggerForm({ initial, sourceTypes, onSave, onCancel }: {
 }
 
 export function Triggers({ definitionId, sourceTypes }: { definitionId: number; sourceTypes: string[] }) {
-  const { listTriggers, saveTrigger, deleteTrigger } = useAgents()
+  const { listTriggers, saveTrigger, deleteSubscription } = useAgents()
   const [triggers, setTriggers] = useState<AgentTrigger[] | null>(null)
   const [editing, setEditing] = useState<AgentTrigger | 'new' | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -167,7 +167,7 @@ export function Triggers({ definitionId, sourceTypes }: { definitionId: number; 
                   {busyId === t.id ? 'Saving...' : t.enabled ? 'Pause' : 'Resume'}
                 </Button>
                 <Button size="sm" onClick={() => { setWarnings([]); setEditing(t) }}>Edit</Button>
-                <ConfirmButton confirm="Delete this trigger?" onConfirm={() => act(t.id, () => deleteTrigger(t.id))} />
+                <ConfirmButton confirm="Delete this trigger?" onConfirm={() => act(t.id, () => deleteSubscription(t.id))} />
               </>}
             />
           ))}
