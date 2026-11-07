@@ -322,7 +322,7 @@ const WebhookModal = ({ account, onRefresh, onClose }: { account: GithubAccount;
             </p>
             <DetailList items={[
               ['Payload URL', <span className="flex items-center gap-2"><code className="break-all">{account.webhook_url}</code><CopyButton text={account.webhook_url} /></span>],
-              ['Secret', hint ? `Set, ending in …${hint}` : 'Not set (deliveries are rejected)'],
+              ['Secret', hint ? `Set, ending in …${hint}` : 'None yet. Install on all repos creates one; generate it here only to add hooks by hand.'],
             ]} />
             {secret && (
               <Notice tone="success">
