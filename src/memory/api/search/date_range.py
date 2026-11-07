@@ -60,7 +60,10 @@ EVENT_TIMES = {
 # Types without an event time match on inserted_at. Tasks match on either:
 # "tasks from this week" means created or due then.
 INSERTED_AT_TYPES_EXCLUDED = [
-    model.__mapper__.polymorphic_identity for model in EVENT_TIMES if model is not Task
+    mapper.polymorphic_identity
+    for model in EVENT_TIMES
+    if model is not Task
+    for mapper in model.__mapper__.self_and_descendants
 ]
 
 

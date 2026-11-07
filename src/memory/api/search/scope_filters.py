@@ -67,7 +67,11 @@ def content_date_clause(compare: Callable):
         ids_of(model, compare(func.coalesce(column, model.inserted_at)))
         for model, column in CONTENT_DATES
     ]
-    identities = [model.__mapper__.polymorphic_identity for model, _ in CONTENT_DATES]
+    identities = [
+        mapper.polymorphic_identity
+        for model, _ in CONTENT_DATES
+        for mapper in model.__mapper__.self_and_descendants
+    ]
     undated = and_(
         or_(SourceItem.type.is_(None), SourceItem.type.notin_(identities)),
         compare(SourceItem.inserted_at),

@@ -54,7 +54,7 @@ def test_verify_orphans_dispatches_tasks(
     # Mock grouping
     mock_group.return_value = {
         ("mail_message", 100): [item1, item2],
-        ("github_item", 200): [item3],
+        ("github_pr", 200): [item3],
     }
 
     # Mock task creation
@@ -78,7 +78,7 @@ def test_verify_orphans_dispatches_tasks(
     assert result["tasks"][0]["task_id"] == "task-uuid-1"
 
     # Verify second task
-    assert result["tasks"][1]["source_type"] == "github_item"
+    assert result["tasks"][1]["source_type"] == "github_pr"
     assert result["tasks"][1]["key"] == "200"
     assert result["tasks"][1]["items"] == 1
     assert result["tasks"][1]["task_id"] == "task-uuid-2"
@@ -86,7 +86,7 @@ def test_verify_orphans_dispatches_tasks(
     # Verify delay was called correctly
     assert mock_verify_batch.delay.call_count == 2
     mock_verify_batch.delay.assert_any_call("mail_message", 100, [1, 2])
-    mock_verify_batch.delay.assert_any_call("github_item", 200, [3])
+    mock_verify_batch.delay.assert_any_call("github_pr", 200, [3])
 
 
 @patch("memory.workers.tasks.verification.select_items_for_verification")
@@ -128,10 +128,10 @@ def test_verify_orphans_filters_by_source_types(mock_make_session, mock_select):
     mock_make_session.return_value.__enter__.return_value = mock_session
     mock_select.return_value = []
 
-    verification.verify_orphans(source_types=["mail_message", "github_item"])
+    verification.verify_orphans(source_types=["mail_message", "github_pr"])
 
     call_args = mock_select.call_args[1]
-    assert call_args["source_types"] == ["mail_message", "github_item"]
+    assert call_args["source_types"] == ["mail_message", "github_pr"]
 
 
 @patch("memory.workers.tasks.verification.verify_source_batch")
@@ -151,8 +151,8 @@ def test_verify_orphans_handles_multiple_groups(
     mock_group.return_value = {
         ("mail_message", 1): items[:2],
         ("mail_message", 2): items[2:4],
-        ("github_item", 3): items[4:7],
-        ("github_item", 4): items[7:9],
+        ("github_pr", 3): items[4:7],
+        ("github_pr", 4): items[7:9],
         ("blog_post", 5): items[9:],
     }
 
@@ -241,7 +241,7 @@ def test_verify_source_batch_unknown_source_type():
     assert "No verifier for unknown_type" in result["error"]
 
 
-@patch("memory.workers.tasks.verification.VERIFIERS", {"github_item": MagicMock()})
+@patch("memory.workers.tasks.verification.VERIFIERS", {"github_pr": MagicMock()})
 @patch("memory.workers.tasks.verification.verify_items")
 @patch("memory.workers.tasks.verification.make_session")
 def test_verify_source_batch_with_errors(mock_make_session, mock_verify_items):
@@ -255,7 +255,7 @@ def test_verify_source_batch_with_errors(mock_make_session, mock_verify_items):
     mock_result.deleted = 1
     mock_verify_items.return_value = mock_result
 
-    result = verification.verify_source_batch("github_item", 200, [10, 20, 30])
+    result = verification.verify_source_batch("github_pr", 200, [10, 20, 30])
 
     assert result["status"] == "completed"
     assert result["errors"] == 1
@@ -354,7 +354,7 @@ def test_verify_source_batch_empty_item_list(mock_make_session, mock_verify_item
 
 @pytest.mark.parametrize(
     "source_type",
-    ["mail_message", "github_item", "blog_post", "calendar_event"],
+    ["mail_message", "github_pr", "blog_post", "calendar_event"],
 )
 @patch("memory.workers.tasks.verification.verify_items")
 @patch("memory.workers.tasks.verification.make_session")

@@ -151,7 +151,7 @@ def verify_emails(
 def get_github_batch_key(item: SourceItem) -> tuple[str, Any]:
     """Return batch key for grouping GitHub items by repo."""
     gh_item = cast(GithubItem, item)
-    return ("github_item", gh_item.repo_id)
+    return (cast(str, gh_item.type), gh_item.repo_id)
 
 
 def verify_github_items(
@@ -234,7 +234,8 @@ VerifyFn = Callable[[DBSession, int, Sequence[SourceItem]], dict[int, Verificati
 
 VERIFIERS: dict[str, tuple[BatchKeyFn, VerifyFn]] = {
     "mail_message": (get_email_batch_key, verify_emails),
-    "github_item": (get_github_batch_key, verify_github_items),
+    "github_pr": (get_github_batch_key, verify_github_items),
+    "github_issue": (get_github_batch_key, verify_github_items),
 }
 
 

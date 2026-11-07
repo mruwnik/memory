@@ -21,7 +21,9 @@ from memory.common.db.models.source_items import (
     BlogPost,
     CalendarEvent,
     EmailAttachment,
+    GithubIssue,
     GithubItem,
+    GithubPR,
     GoogleDoc,
     MailMessage,
     Meeting,
@@ -1343,6 +1345,27 @@ def meeting_task(db_session: Session, owner: HumanUser):
 def blog_post(db_session: Session, owner: HumanUser):
     feed = ArticleFeed(user_id=owner.id, url=f"https://feed.example.com/{owner.id}")
     return BlogPost(sha256=unique_sha256("blog"), modality="blog", feed=feed)
+
+
+def test_github_items_load_as_the_type_of_their_kind(db_session: Session):
+    db_session.add_all(
+        [
+            cls(sha256=unique_sha256(kind), modality="github", kind=kind, repo_path="o/r")
+            for cls, kind in [(GithubPR, "pr"), (GithubIssue, "issue"), (GithubItem, "comment")]
+        ]
+    )
+    db_session.commit()
+    db_session.expunge_all()
+
+    loaded = db_session.query(GithubItem).order_by(GithubItem.id).all()
+
+    assert [(type(i), i.type, i.kind) for i in loaded] == [
+        (GithubPR, "github_pr", "pr"),
+        (GithubIssue, "github_issue", "issue"),
+        (GithubItem, "github_item", "comment"),
+    ]
+    assert [i.kind for i in db_session.query(GithubPR)] == ["pr"]
+    assert [i.kind for i in db_session.query(GithubIssue)] == ["issue"]
 
 
 SOURCE_OWNED_ITEMS = [

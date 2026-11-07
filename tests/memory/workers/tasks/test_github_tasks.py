@@ -4,7 +4,7 @@ import pytest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, Mock, patch
 
-from memory.common.db.models import GithubItem
+from memory.common.db.models import GithubIssue, GithubItem, GithubPR
 from memory.common.db.models.sources import GithubAccount, GithubRepo
 from memory.workers.tasks import github
 from memory.workers.tasks.github import (
@@ -529,7 +529,8 @@ def test_sync_github_item_new_issue(mock_issue_data, github_repo, db_session, qd
         .filter_by(repo_path="testorg/testrepo", number=42)
         .first()
     )
-    assert item is not None
+    assert type(item) is GithubIssue
+    assert item.type == "github_issue"
     assert item.title == "Test Issue Title"
     assert item.kind == "issue"
     assert item.state == "open"
@@ -556,7 +557,8 @@ def test_sync_github_item_new_pr(mock_pr_data, github_repo, db_session, qdrant):
         .filter_by(repo_path="testorg/testrepo", number=123, kind="pr")
         .first()
     )
-    assert item is not None
+    assert type(item) is GithubPR
+    assert item.type == "github_pr"
     assert item.title == "Add new feature"
     assert item.kind == "pr"
     assert item.diff_summary == "+100 -50"

@@ -28,6 +28,7 @@ a new, empty `## Unreleased` above it.
 - The install re-runs on secret generate/rotate, when a repo is added or resumed under an account with a secret, and daily at 03:15 (`ensure-github-webhooks` beat entry) to repair drift. Removing the secret deletes Memory's repo hooks (best effort).
 - GitHub App accounts: the installation token can't manage repo hooks, so Memory PATCHes the App's own webhook (`/app/hook/config`, URL + secret) with an app JWT from the stored private key. The App's active flag and subscribed events stay in the App's settings.
 - New endpoint `POST /github/accounts/{id}/webhooks/install` (queues; returns `{"status": "queued", "task_id"}`). Repo responses carry `webhook_status` and `webhook_checked_at`.
+- GitHub pull requests and issues are separate source types, `github_pr` and `github_issue` (comments and project cards stay `github_item`). Ingest trigger `source_types` can name either; trigger template fields `head_sha`, `checks`, `diff_summary` and `files` are offered for `github_pr` only.
 
 ### Other changes for operators
 
@@ -35,10 +36,13 @@ a new, empty `## Unreleased` above it.
 - App accounts: in the App's settings keep the webhook active and subscribe to Pull request, Pull request review, Pull request review comment, Issue comment, Issues, Check run, Check suite and Status (the last three need Checks and Commit statuses read permissions). Several Memory accounts sharing one App overwrite each other's App webhook URL.
 - `SERVER_URL` must be publicly reachable or GitHub rejects the hook (status "Rejected by GitHub").
 - After deploying, existing accounts with a secret get their hooks at the next 03:15 pass, or immediately via **Install on all repos**.
+- Orphan verification batches GitHub PRs and issues separately per repo (`source_type` `github_pr` / `github_issue` in `verify_orphans` results); `verify_orphans(source_types=["github_item"])` now selects nothing.
+- `reingest_item` / `update_metadata_for_source_items` take `github_pr` / `github_issue` (or `GithubPR` / `GithubIssue`).
 
 ### Migrations
 
 - `20261207_github_webhook_status`: adds nullable `github_repos.webhook_status` and `github_repos.webhook_checked_at` (`ADD COLUMN IF NOT EXISTS`). Fast.
+- `20261207_github_pr_issue_types`: sets `source_item.type` to `github_pr` / `github_issue` from `github_item.kind` (one UPDATE over the GitHub rows; no schema change), and adds both types to every ingest trigger whose `filter.source_types` names `github_item`. Fast.
 
 ## v0.4.10 (2026-11-06)
 

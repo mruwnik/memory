@@ -1552,6 +1552,14 @@ class GithubItem(SourceItem):
         return []
 
 
+class GithubPR(GithubItem):
+    __mapper_args__ = {"polymorphic_identity": "github_pr"}
+
+
+class GithubIssue(GithubItem):
+    __mapper_args__ = {"polymorphic_identity": "github_issue"}
+
+
 class GithubPRData(Base):
     """PR-specific data linked to GithubItem. Not a SourceItem - not indexed separately."""
 

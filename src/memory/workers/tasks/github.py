@@ -18,7 +18,14 @@ from memory.common.celery_app import (
     SYNC_GITHUB_PROJECTS,
 )
 from memory.common.db.connection import make_session
-from memory.common.db.models import GithubItem, GithubPRData, Project, GithubProject
+from memory.common.db.models import (
+    GithubIssue,
+    GithubItem,
+    GithubPR,
+    GithubPRData,
+    GithubProject,
+    Project,
+)
 from memory.common.db.models.sources import (
     GithubAccount,
     GithubRepo,
@@ -53,6 +60,9 @@ logger = logging.getLogger(__name__)
 
 # The order item_changes reports changes in.
 CHANGES = ("edited", "commits", "comments", "review", "checks", "state")
+# Items are looked up by kind, and GitHub numbers a repo's issues and PRs from
+# one sequence, so a stored item never changes class.
+CLASSES: dict[str, type[GithubItem]] = {"pr": GithubPR, "issue": GithubIssue}
 
 
 def account_client(account: GithubAccount) -> GithubClient:
@@ -279,7 +289,7 @@ def _create_github_item(
 
     repo_tags = cast(list[str], repo.tags) or []
 
-    github_item = GithubItem(
+    github_item = CLASSES.get(issue_data["kind"], GithubItem)(
         modality="github",
         sha256=create_content_hash(content),
         content=content,

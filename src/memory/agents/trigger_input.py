@@ -16,6 +16,7 @@ from memory.common.db.models import (
     DiscordMessage,
     ForumPost,
     GithubItem,
+    GithubPR,
     MailMessage,
     Meeting,
     SlackMessage,
@@ -117,17 +118,17 @@ COMMON: dict[str, Getter] = {
     "content": item_body,
 }
 
-# head_sha and checks are read with getattr so this module works before the
-# columns that hold them exist.
 BY_TYPE: dict[type[SourceItem], dict[str, Getter]] = {
     GithubItem: {
         "repo": lambda i: i.repo_path,
         "number": lambda i: i.number if i.number is not None else i.parent_number,
         "kind": lambda i: i.kind,
         "state": lambda i: i.state,
-        "head_sha": lambda i: getattr(i, "head_sha", None),
-        "checks": lambda i: getattr(i, "checks", None),
         "labels": lambda i: i.labels,
+    },
+    GithubPR: {
+        "head_sha": lambda i: i.head_sha,
+        "checks": lambda i: i.checks,
         "diff_summary": lambda i: i.diff_summary,
         "files": pr_files,
     },

@@ -14,7 +14,8 @@ from memory.common.db.models import (
     DiscordChannel,
     DiscordMessage,
     DiscordUser,
-    GithubItem,
+    GithubIssue,
+    GithubPR,
     GithubPRData,
     MailMessage,
     Meeting,
@@ -29,9 +30,8 @@ WHEN = datetime(2026, 11, 6, 12, 0, tzinfo=timezone.utc)
 
 
 def github_pr():
-    item = GithubItem(
+    return GithubPR(
         id=1,
-        type="github_item",
         kind="pr",
         repo_path="acme/app",
         number=42,
@@ -42,12 +42,25 @@ def github_pr():
         diff_summary="2 files",
         content="PR body",
         inserted_at=WHEN,
+        head_sha="abc123",
+        checks={"ci": "success"},
         pr_data=GithubPRData(files=[{"filename": "a.py", "additions": 3, "deletions": 1}]),
     )
-    # Set as plain attributes, so this holds whether or not the columns exist yet.
-    setattr(item, "head_sha", "abc123")
-    setattr(item, "checks", {"ci": "success"})
-    return item
+
+
+def github_issue():
+    return GithubIssue(
+        id=7,
+        kind="issue",
+        repo_path="acme/app",
+        number=43,
+        state="open",
+        title="Login broken",
+        labels=["bug"],
+        author="alice",
+        content="Issue body",
+        inserted_at=WHEN,
+    )
 
 
 def slack_reply():
@@ -126,7 +139,7 @@ def blog_post():
 
 
 @pytest.mark.parametrize(
-    "make", [github_pr, slack_reply, discord_message, meeting, email, blog_post]
+    "make", [github_pr, github_issue, slack_reply, discord_message, meeting, email, blog_post]
 )
 def test_every_allow_listed_field_resolves_on_a_real_item(make):
     item = make()
@@ -258,6 +271,7 @@ def test_render_input_is_clipped_to_the_run_input_limit():
     [
         ("{item.repo}", ["blog_post"], True, "unknown field {item.repo}; valid fields: author,"),
         ("{item.nope}", [], True, "unknown field {item.nope}"),
+        ("{item.head_sha}", ["github_issue"], True, "unknown field {item.head_sha}"),
         ("{foo}", [], True, "unknown placeholder {foo}"),
         ("{item.url}", [], False, "needs per_item delivery"),
     ],
@@ -271,6 +285,8 @@ def test_bad_placeholders_are_named(template, source_types, per_item, error):
     "template,source_types,per_item",
     [
         ("{item.repo}#{item.number} {item.changes}", ["github_item"], True),
+        ("{item.repo}#{item.number} {item.state}", ["github_pr", "github_issue"], True),
+        ("{item.head_sha} {item.checks} {item.files}", ["github_pr"], True),
         ("{item.repo} {item.ts}", [], True),
         ('{items} {items_json} {"json": "braces"}', [], False),
     ],

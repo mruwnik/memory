@@ -31,7 +31,8 @@ from memory.common.db.models import (
     DiscordMessage,
     DiscordServer,
     DiscordUser,
-    GithubItem,
+    GithubIssue,
+    GithubPR,
     GithubPRData,
     SlackChannel,
     SlackMessage,
@@ -153,9 +154,24 @@ def test_message_facts_carry_the_ids_they_mention(item, mentions):
 
 
 def test_github_facts_carry_the_repo():
-    item = GithubItem(type="github_item", repo_path="EquiStamp/Memory", author="al")
+    item = GithubPR(kind="pr", repo_path="EquiStamp/Memory", author="al")
 
     assert item_facts(item).repo == "equistamp/memory"
+
+
+@pytest.mark.parametrize(
+    "source_types,item,expected",
+    [
+        (["github_pr"], GithubPR(kind="pr", repo_path="o/r"), True),
+        (["github_pr"], GithubIssue(kind="issue", repo_path="o/r"), False),
+        (["github_issue"], GithubIssue(kind="issue", repo_path="o/r"), True),
+        (["github_issue"], GithubPR(kind="pr", repo_path="o/r"), False),
+    ],
+)
+def test_source_types_tell_prs_from_issues(source_types, item, expected):
+    f = IngestFilter.model_validate({"source_types": source_types})
+
+    assert matches(f, item_facts(item)) is expected
 
 
 def test_beeper_facts_carry_chat_and_sender():
@@ -580,7 +596,7 @@ def test_content_versions_follow_what_an_agent_sees():
 def test_content_version_counts_what_a_github_sync_reports(changed):
     def pr(**overrides):
         fields = {"title": "T", "content": "body", "head_sha": "a", "state": "open", "checks": {"tests": "failure"}}
-        return GithubItem(**{**fields, **overrides})
+        return GithubPR(**{**fields, **overrides})
 
     assert content_version(pr()) == content_version(pr())
     assert content_version(pr()) != content_version(pr(**changed))

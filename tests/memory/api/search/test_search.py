@@ -838,9 +838,11 @@ def subclasses(cls: type) -> list[type]:
 def column_backed_titles() -> set[tuple[type, str]]:
     """(class, column) for each SourceItem subclass whose title is a column of its
     own table: a ``title`` column, or the one attribute its ``title`` property
-    returns (``return self.subject``)."""
+    returns (``return self.subject``). Single-table subclasses share their parent's."""
     backed = set()
     for cls in subclasses(SourceItem):
+        if cls.__mapper__.single:
+            continue
         own = {c.key for c in cls.__table__.columns}
         if "title" in own:
             backed.add((cls, "title"))

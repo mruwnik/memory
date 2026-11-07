@@ -7,6 +7,7 @@ from memory.api.search.date_range import date_bounds, source_ids_in_range
 from memory.common.access_control import AccessFilter
 from memory.common.db.models import (
     CalendarEvent,
+    GithubPR,
     MailMessage,
     Meeting,
     Note,
@@ -70,6 +71,10 @@ def items(db_session):
         "task_due_in": Task(sha256=sha("task_due_in"), modality="test", task_title="t", due_date=at(20), inserted_at=at(25)),
         "task_created_in": Task(sha256=sha("task_created_in"), modality="test", task_title="t", inserted_at=at(20)),
         "task_out": Task(sha256=sha("task_out"), modality="test", task_title="t", due_date=at(1), inserted_at=at(1)),
+        "pr_out": GithubPR(
+            sha256=sha("pr_out"), modality="github", kind="pr", repo_path="o/r",
+            created_at=at(1), inserted_at=at(20),
+        ),
         "note_in": Note(sha256=sha("note_in"), modality="test", inserted_at=at(20)),
         "note_out": Note(sha256=sha("note_out"), modality="test", inserted_at=at(1)),
     }
@@ -95,7 +100,7 @@ def items(db_session):
             },
         ),
         (at(27, 0), None, {"event_future"}),
-        (None, at(2, 0), {"mail_out", "slack_out", "task_out", "note_out"}),
+        (None, at(2, 0), {"mail_out", "slack_out", "pr_out", "task_out", "note_out"}),
     ],
 )
 def test_source_ids_in_range_uses_each_types_event_time(db_session, items, start, end, expected):

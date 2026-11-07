@@ -88,7 +88,7 @@ def verify_source_batch(
     Verify a batch of items from a single source/account.
 
     Args:
-        source_type: Type of source (mail_message, github_item, etc.)
+        source_type: Type of source (mail_message, github_pr, etc.)
         batch_key: Account/repo ID for grouping
         item_ids: Database IDs of items to verify
 

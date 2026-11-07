@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from memory.common import settings
-from memory.common.db.models import GithubItem, MailMessage
+from memory.common.db.models import GithubIssue, GithubPR, MailMessage
 from memory.common.db.models.sources import EmailAccount, GithubAccount, GithubRepo
 from memory.workers.verification import (
     BatchVerificationResult,
@@ -73,13 +73,13 @@ def test_get_email_batch_key():
     assert key == ("mail_message", 42)
 
 
-def test_get_github_batch_key():
-    item = Mock(spec=GithubItem)
-    item.repo_id = 123
+@pytest.mark.parametrize("cls,source_type", [(GithubPR, "github_pr"), (GithubIssue, "github_issue")])
+def test_get_github_batch_key(cls, source_type):
+    item = cls(kind="pr", repo_path="o/r", repo_id=123)
 
     key = get_github_batch_key(item)
 
-    assert key == ("github_item", 123)
+    assert key == (source_type, 123)
 
 
 # =============================================================================
@@ -94,9 +94,9 @@ def test_verifiers_registry_contains_mail_message():
     assert verify_fn == verify_emails
 
 
-def test_verifiers_registry_contains_github_item():
-    assert "github_item" in VERIFIERS
-    get_batch_key, verify_fn = VERIFIERS["github_item"]
+@pytest.mark.parametrize("source_type", ["github_pr", "github_issue"])
+def test_verifiers_registry_contains_github_prs_and_issues(source_type):
+    get_batch_key, verify_fn = VERIFIERS[source_type]
     assert get_batch_key == get_github_batch_key
     assert verify_fn == verify_github_items
 
@@ -124,13 +124,13 @@ def test_group_items_by_batch_key_single_type():
 
 def test_group_items_by_batch_key_mixed_types():
     email1 = Mock(spec=MailMessage, type="mail_message", email_account_id=1, id=10)
-    github1 = Mock(spec=GithubItem, type="github_item", repo_id=5, id=20)
+    github1 = Mock(spec=GithubPR, type="github_pr", repo_id=5, id=20)
 
     groups = group_items_by_batch_key([email1, github1])
 
     assert len(groups) == 2
     assert ("mail_message", 1) in groups
-    assert ("github_item", 5) in groups
+    assert ("github_pr", 5) in groups
 
 
 def test_group_items_by_batch_key_unknown_type():
@@ -410,7 +410,7 @@ def mail_messages(db_session, email_account):
 @pytest.fixture
 def github_items(db_session, github_repo):
     items = [
-        GithubItem(
+        GithubIssue(
             modality="github",
             sha256=f"ghash{i}".encode(),
             repo_id=github_repo.id,
@@ -498,7 +498,7 @@ def test_group_items_from_database(db_session, mail_messages, github_items):
 
     assert len(groups) == 2
     mail_key = ("mail_message", mail_messages[0].email_account_id)
-    github_key = ("github_item", github_items[0].repo_id)
+    github_key = ("github_issue", github_items[0].repo_id)
     assert mail_key in groups
     assert github_key in groups
     assert len(groups[mail_key]) == 3

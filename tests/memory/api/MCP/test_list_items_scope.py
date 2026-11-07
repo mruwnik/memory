@@ -11,7 +11,7 @@ from memory.common.db.models import (
     DiscordServer,
     DiscordUser,
     ForumPost,
-    GithubItem,
+    GithubIssue,
     MailMessage,
     SlackChannel,
     SlackMessage,
@@ -80,7 +80,7 @@ def corpus(db_session):
             sent_at=NOW - timedelta(days=3),
             **STORED,
         ),
-        "gh_memory_alice": GithubItem(
+        "gh_memory_alice": GithubIssue(
             sha256=unique_sha256("g"),
             modality="github",
             content="issue",
