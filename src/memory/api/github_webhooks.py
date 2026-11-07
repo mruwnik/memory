@@ -35,7 +35,6 @@ router = APIRouter(prefix="/github", tags=["github"])
 MAX_BODY_BYTES = 25 * 1024 * 1024
 # GitHub redelivers on request for up to three days; two cover automatic retries.
 DELIVERY_TTL_SECONDS = 48 * 3600
-PR_ACTIONS = {"opened", "synchronize", "reopened", "edited", "closed", "ready_for_review"}
 
 
 def signature_matches(secret: str, body: bytes, signature: str) -> bool:
@@ -67,9 +66,7 @@ def numbers_at_head(db: Session, repo: GithubRepo, sha: str | None, listed: list
 def event_targets(db: Session, repo: GithubRepo, event: str, payload: dict) -> list[tuple[int, str]]:
     """The (number, kind) of each issue or PR the event changed."""
     action = payload.get("action")
-    if event == "pull_request" and action in PR_ACTIONS:
-        return [(payload["pull_request"]["number"], "pr")]
-    if event in ("pull_request_review", "pull_request_review_comment"):
+    if event in ("pull_request", "pull_request_review", "pull_request_review_comment"):
         return [(payload["pull_request"]["number"], "pr")]
     if event in ("issues", "issue_comment"):
         issue = payload["issue"]

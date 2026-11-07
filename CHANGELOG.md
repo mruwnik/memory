@@ -29,6 +29,7 @@ a new, empty `## Unreleased` above it.
 - GitHub App accounts: the installation token can't manage repo hooks, so Memory PATCHes the App's own webhook (`/app/hook/config`, URL + secret) with an app JWT from the stored private key. The App's active flag and subscribed events stay in the App's settings.
 - New endpoint `POST /github/accounts/{id}/webhooks/install` (queues; returns `{"status": "queued", "task_id"}`). Repo responses carry `webhook_status` and `webhook_checked_at`.
 - GitHub pull requests and issues are separate source types, `github_pr` and `github_issue` (comments and project cards stay `github_item`). Ingest trigger `source_types` can name either; trigger template fields `head_sha`, `checks`, `diff_summary` and `files` are offered for `github_pr` only.
+- Every `pull_request` webhook action refetches the PR, so labels, assignees and milestone changes (labeled/unlabeled, assigned/unassigned, milestoned/demilestoned, review_requested, converted_to_draft, ...) are stored within the refetch debounce instead of at the next gap-fill poll.
 
 ### Other changes for operators
 

@@ -184,6 +184,10 @@ def test_check_run_routes_by_its_listed_pull_requests(client, repo, no_celery_di
 @pytest.mark.parametrize(
     "event, payload, expected",
     [
+        *[
+            ("pull_request", pr_event(action, number=3), [3, "pr"])
+            for action in ("labeled", "assigned", "converted_to_draft", "milestoned", "review_requested")
+        ],
         ("pull_request_review", {"action": "submitted", "pull_request": {"number": 3}}, [3, "pr"]),
         ("pull_request_review_comment", {"action": "created", "pull_request": {"number": 3}}, [3, "pr"]),
         ("issue_comment", {"action": "created", "issue": {"number": 4, "pull_request": {}}}, [4, "pr"]),
@@ -200,7 +204,6 @@ def test_events_queue_a_refetch_of_their_item(client, repo, no_celery_dispatch, 
 @pytest.mark.parametrize(
     "event, payload",
     [
-        ("pull_request", pr_event("labeled")),
         ("check_run", {"action": "created", "check_run": {"head_sha": "f00", "pull_requests": [{"number": 1}]}}),
         ("push", {"ref": "refs/heads/main"}),
     ],
