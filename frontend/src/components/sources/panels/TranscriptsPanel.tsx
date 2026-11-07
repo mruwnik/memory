@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSources, TranscriptAccount, LLMKeyChoice } from '@/hooks/useSources'
 import { useModule } from '@/hooks/useModule'
 import { useProjects, Project } from '@/hooks/useProjects'
-import { ProjectField, SensitivitySelect, SourceRow, TagsInput } from '../shared'
+import { ProjectField, PUSH_CAUSES, PushBadge, SensitivitySelect, SourceRow, TagsInput } from '../shared'
 import { RowError, Button, ConfirmButton, DetailList, EmptyState, ErrorState, Field, FieldRow, FormActions, Input, List, LoadingState, Modal, Notice, Section, Select, useActionNotice, CopyButton, NewTabLink } from '@/components/shared/ui'
 import { useSourcesContext } from '../context'
 import { LLMKeyField, llmKeyLabel } from '../LLMKeyField'
@@ -114,6 +114,8 @@ export const TranscriptsPanel = () => {
               onEdit={() => setEditingAccount(account)}
               onDelete={() => handleDelete(account.id)}
               onSync={account.polls ? () => handleSync(account.id) : undefined}
+              badges={<PushBadge setup={account.webhook_secret_hint ? 'ok' : 'none'} causes={PUSH_CAUSES.transcripts}
+                detail={account.webhook_secret_hint ? undefined : account.polls ? 'Meetings arrive with the next check.' : "Push only: nothing arrives until it's set up."} />}
               additionalActions={<>
                 {account.polls && (
                   <Button size="sm"
@@ -131,8 +133,6 @@ export const TranscriptsPanel = () => {
               meta={[
                 !!account.tags?.length && `Tags: ${account.tags.join(', ')}`,
                 `Sensitivity: ${account.sensitivity}`,
-                account.webhook_secret_hint && 'Push enabled',
-                account.provider === 'fireflies' && !account.webhook_secret_hint && 'Webhook not set up: meetings arrive once a day',
                 `LLM: ${llmKeyLabel(account.llm_key)}`,
               ]}
             >

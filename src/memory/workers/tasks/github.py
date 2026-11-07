@@ -34,6 +34,7 @@ from memory.common.db.models.sources import (
 )
 from memory.common.people import find_person_by_github, link_github_user_to_person
 from memory.common.github import (
+    GITHUB_API_URL,
     GithubClient,
     GithubCredentials,
     GithubIssueData,
@@ -42,7 +43,9 @@ from memory.common.github import (
     GithubPRDataDict,
     extract_status_priority,
     hook_config,
+    org_hooks,
     parse_github_date,
+    repo_hooks,
     serialize_issue_data,
     webhook_url,
 )
@@ -997,21 +1000,33 @@ def sync_github_projects(
 def hook_failure(error: requests.RequestException) -> str:
     """The webhook_status for a failed hook call. GitHub answers 404 to a token
     that can see the repo but lacks the hooks permission."""
-    code = error.response.status_code if error.response is not None else None
+    code = status_code(error)
     if code in (403, 404):
         return "missing_permission"
     return "rejected" if code == 422 else "error"
 
 
+def our_hook(hooks: list[dict[str, Any]], url: str) -> dict[str, Any] | None:
+    # A hook added by hand may carry a trailing slash.
+    return next((h for h in hooks if (h.get("config") or {}).get("url", "").rstrip("/") == url), None)
+
+
+def status_code(error: requests.RequestException) -> int | None:
+    return error.response.status_code if error.response is not None else None
+
+
+def ensure_hook(client: GithubClient, hooks_url: str, config: dict[str, str]) -> None:
+    """Update the hook pointing at us, or add one. Hooks on other URLs are never touched."""
+    ours = our_hook(client.list_hooks(hooks_url), config["url"])
+    if ours:
+        client.update_hook(hooks_url, ours["id"], config)
+    else:
+        client.create_hook(hooks_url, config)
+
+
 def ensure_repo_hook(client: GithubClient, repo: GithubRepo, config: dict[str, str]) -> str:
-    owner, name = cast(str, repo.owner), cast(str, repo.name)
     try:
-        hooks = client.list_repo_hooks(owner, name)
-        ours = next((h for h in hooks if (h.get("config") or {}).get("url") == config["url"]), None)
-        if ours:
-            client.update_repo_hook(owner, name, ours["id"], config)
-        else:
-            client.create_repo_hook(owner, name, config)
+        ensure_hook(client, repo_hooks(repo.owner, repo.name), config)
     except requests.RequestException as e:
         status = hook_failure(e)
         logger.warning("github webhook install failed repo=%s status=%s", repo.id, status)
@@ -1019,14 +1034,57 @@ def ensure_repo_hook(client: GithubClient, repo: GithubRepo, config: dict[str, s
     return "installed"
 
 
-def ensure_app_hook(client: GithubClient, account: GithubAccount, config: dict[str, str]) -> str:
-    """An installation token can't manage repo hooks; the App has one webhook of its own."""
+def ensure_org_hook(client: GithubClient, org: str, config: dict[str, str]) -> str | None:
+    """'org_hook' once a hook on the org delivers to us, None when GitHub refuses the org
+    (the owner is a user, or the credential lacks access) so each repo needs its own.
+    Any other failure is the status: repo hooks then could double a working org hook."""
+    hooks_url = org_hooks(org)
     try:
-        client.update_app_hook_config(config)
+        ours = our_hook(client.list_hooks(hooks_url), config["url"])
+    except requests.RequestException as e:
+        return None if status_code(e) in (403, 404) else hook_failure(e)
+    try:
+        if ours:
+            client.update_hook(hooks_url, ours["id"], config)
+        else:
+            client.create_hook(hooks_url, config)
+    except requests.RequestException as e:
+        if not ours and status_code(e) in (403, 404, 422):
+            return None
+        status = hook_failure(e)
+        logger.warning("github org webhook install failed hook=%s status=%s", ours and ours["id"], status)
+        return status
+    return "org_hook"
+
+
+def drop_hook(client: GithubClient, hooks_url: str, url: str) -> bool:
+    """Delete our hook at ``hooks_url``, if there is one, best effort."""
+    try:
+        ours = our_hook(client.list_hooks(hooks_url), url)
+        if ours:
+            client.delete_hook(hooks_url, ours["id"])
     except requests.RequestException:
-        logger.warning("github app webhook config failed account=%s", account.id)
-        return "app_settings"
-    return "app_hook"
+        logger.warning("github webhook removal failed")
+        return False
+    return ours is not None
+
+
+def install_owner_hooks(client: GithubClient, repos: list[GithubRepo], config: dict[str, str]) -> dict[int, str]:
+    """One hook on the owner's org covers all its repos; failing that, one per repo."""
+    status = ensure_org_hook(client, repos[0].owner, config)
+    if status is None:
+        return {r.id: ensure_repo_hook(client, r, config) for r in repos}
+    if status == "org_hook":
+        for repo in repos:
+            drop_hook(client, repo_hooks(repo.owner, repo.name), config["url"])
+    return {r.id: status for r in repos}
+
+
+def by_owner(repos: list[GithubRepo]) -> dict[str, list[GithubRepo]]:
+    owners: dict[str, list[GithubRepo]] = {}
+    for repo in repos:
+        owners.setdefault(repo.owner.lower(), []).append(repo)
+    return owners
 
 
 def install_hooks(
@@ -1037,10 +1095,11 @@ def install_hooks(
     except requests.RequestException:
         logger.warning("github client unavailable for webhook install account=%s", account.id)
         return {r.id: "error" for r in repos}
-    if account.auth_type != "app":
-        return {r.id: ensure_repo_hook(client, r, config) for r in repos}
-    status = ensure_app_hook(client, account, config)
-    return {r.id: status for r in repos}
+    return {
+        repo_id: status
+        for owned in by_owner(repos).values()
+        for repo_id, status in install_owner_hooks(client, owned, config).items()
+    }
 
 
 @app.task(name=ENSURE_GITHUB_WEBHOOKS)
@@ -1080,25 +1139,21 @@ def ensure_all_github_webhooks() -> dict[str, Any]:
 @app.task(name=REMOVE_GITHUB_WEBHOOKS)
 @tracked_task
 def remove_github_webhooks(account_id: int) -> dict[str, Any]:
-    """Delete the repo hooks pointing at the account, best effort. Hooks on other URLs stay."""
+    """Delete the org and repo hooks pointing at the account, best effort. Hooks on other URLs stay."""
     with make_session() as session:
         account = session.get(GithubAccount, account_id)
         # A secret generated since the removal was queued wants the hooks kept.
         if not account or account.webhook_secret:
             return {"status": "skipped", "account_id": account_id}
         url = webhook_url(account.id)
-        removed = []
-        if account.auth_type == "pat":
+        owners = {r.owner.lower(): r.owner for r in account.repos}.values()
+        targets = [org_hooks(o) for o in owners] + [repo_hooks(r.owner, r.name) for r in account.repos]
+        try:
             client = account_client(account)
-            for repo in account.repos:
-                owner, name = cast(str, repo.owner), cast(str, repo.name)
-                try:
-                    for hook in client.list_repo_hooks(owner, name):
-                        if (hook.get("config") or {}).get("url") == url:
-                            client.delete_repo_hook(owner, name, hook["id"])
-                            removed.append(repo.id)
-                except requests.RequestException:
-                    logger.warning("github webhook removal failed repo=%s", repo.id)
+        except requests.RequestException:
+            logger.warning("github client unavailable for webhook removal account=%s", account.id)
+            client = None
+        removed = [t.removeprefix(GITHUB_API_URL) for t in targets if client and drop_hook(client, t, url)]
         now = datetime.now(timezone.utc)
         for repo in account.repos:
             repo.webhook_status = None

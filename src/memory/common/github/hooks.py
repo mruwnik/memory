@@ -1,8 +1,6 @@
-"""Repo webhooks, and the App's single webhook, pointed at Memory's ingest endpoint."""
+"""Org and repo webhooks pointed at Memory's ingest endpoint."""
 
 from typing import Any
-
-import requests
 
 from memory.common import settings
 
@@ -35,40 +33,30 @@ def hook_config(account_id: int, secret: str) -> dict[str, str]:
     }
 
 
-class HooksMixin(GithubClientCore):
-    def repo_hooks_url(self, owner: str, repo: str) -> str:
-        return f"{GITHUB_API_URL}/repos/{owner}/{repo}/hooks"
+def repo_hooks(owner: str, repo: str) -> str:
+    return f"{GITHUB_API_URL}/repos/{owner}/{repo}/hooks"
 
-    def list_repo_hooks(self, owner: str, repo: str) -> list[dict[str, Any]]:
-        response = self.session.get(
-            self.repo_hooks_url(owner, repo), params={"per_page": 100}, timeout=30
-        )
+
+def org_hooks(org: str) -> str:
+    return f"{GITHUB_API_URL}/orgs/{org}/hooks"
+
+
+class HooksMixin(GithubClientCore):
+    """Hooks at ``hooks_url``, either ``repo_hooks(...)`` or ``org_hooks(...)``."""
+
+    def list_hooks(self, hooks_url: str) -> list[dict[str, Any]]:
+        response = self.session.get(hooks_url, params={"per_page": 100}, timeout=30)
         response.raise_for_status()
         return response.json()
 
-    def create_repo_hook(self, owner: str, repo: str, config: dict[str, str]) -> None:
+    def create_hook(self, hooks_url: str, config: dict[str, str]) -> None:
         body = {"name": "web", "active": True, "events": HOOK_EVENTS, "config": config}
-        self.session.post(self.repo_hooks_url(owner, repo), json=body, timeout=30).raise_for_status()
+        self.session.post(hooks_url, json=body, timeout=30).raise_for_status()
 
-    def update_repo_hook(self, owner: str, repo: str, hook_id: int, config: dict[str, str]) -> None:
+    def update_hook(self, hooks_url: str, hook_id: int, config: dict[str, str]) -> None:
         # GitHub never returns the secret, so the whole config is sent every time.
         body = {"active": True, "events": HOOK_EVENTS, "config": config}
-        url = f"{self.repo_hooks_url(owner, repo)}/{hook_id}"
-        self.session.patch(url, json=body, timeout=30).raise_for_status()
+        self.session.patch(f"{hooks_url}/{hook_id}", json=body, timeout=30).raise_for_status()
 
-    def delete_repo_hook(self, owner: str, repo: str, hook_id: int) -> None:
-        url = f"{self.repo_hooks_url(owner, repo)}/{hook_id}"
-        self.session.delete(url, timeout=30).raise_for_status()
-
-    def update_app_hook_config(self, config: dict[str, str]) -> None:
-        """Point the GitHub App's one webhook at us. Needs the app JWT, not the installation token."""
-        response = requests.patch(
-            f"{GITHUB_API_URL}/app/hook/config",
-            json=config,
-            headers={
-                "Authorization": f"Bearer {self._generate_app_jwt()}",
-                "Accept": "application/vnd.github+json",
-            },
-            timeout=30,
-        )
-        response.raise_for_status()
+    def delete_hook(self, hooks_url: str, hook_id: int) -> None:
+        self.session.delete(f"{hooks_url}/{hook_id}", timeout=30).raise_for_status()

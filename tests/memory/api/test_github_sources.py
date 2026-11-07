@@ -774,7 +774,7 @@ def test_repo_responses_carry_the_webhook_health(client, db_session, user):
 
 @pytest.mark.parametrize(
     "status, hours_since_event, stale",
-    [("installed", 1, False), ("app_hook", None, True), (None, None, False), ("missing_permission", 48, False)],
+    [("installed", 1, False), ("org_hook", None, True), (None, None, False), ("missing_permission", 48, False)],
 )
 def test_a_hooked_repo_without_recent_events_is_flagged_stale(client, db_session, user, status, hours_since_event, stale):
     account = hooked_account(db_session, user)
@@ -783,5 +783,22 @@ def test_a_hooked_repo_without_recent_events_is_flagged_stale(client, db_session
     db_session.commit()
 
     (listed,) = client.get(f"/github/accounts/{account.id}").json()["repos"]
+
+    assert listed["push_stale"] is stale
+
+
+@pytest.mark.parametrize(
+    "repo_events, stale",
+    [([1], False), ([48], True), ([None], True), ([48, 1], False), ([], True)],
+)
+def test_an_account_without_recent_events_on_any_repo_is_flagged_stale(client, db_session, user, repo_events, stale):
+    account = hooked_account(db_session, user)
+    now = datetime.now(timezone.utc)
+    for i, hours in enumerate(repo_events):
+        last_event = hours and now - timedelta(hours=hours)
+        db_session.add(GithubRepo(account_id=account.id, owner="o", name=f"r{i}", last_event_at=last_event))
+    db_session.commit()
+
+    listed = client.get(f"/github/accounts/{account.id}").json()
 
     assert listed["push_stale"] is stale

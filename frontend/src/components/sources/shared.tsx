@@ -47,6 +47,8 @@ export const SyncFailingBadge = ({ status }: { status: SyncStatus }) =>
 export const PUSH_CAUSES = {
   github: 'the webhook was deleted or disabled on GitHub, its secret was rotated outside Memory, or a proxy blocks /github/webhook/',
   slack: "the app's event subscriptions were turned off, its bot left the channels, or a proxy blocks /slack/events/",
+  transcripts: "the webhook was removed in the provider's settings, or its secret was rotated outside Memory",
+  discord: "the app's event webhook was turned off in the Discord developer portal, or a proxy blocks the events URL",
 }
 
 /** Flags a source whose push channel polling caught missing events, for a Row's badges. */
@@ -55,6 +57,29 @@ export const PushMissedBadge = ({ status, causes }: { status: PushHealth; causes
   const since = formatUserDateTime(new Date(status.push_missing_since))
   const tip = `Push missed events since ${since}; last miss ${formatRelativeTime(status.push_last_miss_at)}. Likely causes: ${causes}.`
   return <Badge tone="warning" title={tip}><span aria-hidden="true">⚠ </span>Missing events</Badge>
+}
+
+export type PushSetup = 'ok' | 'none' | 'error'
+export type PushDeliveries = PushHealth & { last_event_at: string | null }
+
+/** A push channel at a glance, on the row of every source that has one. `deliveries`
+ * is left out where Memory doesn't track what arrives. `detail` leads the tooltip, or for
+ * 'none' replaces it, since how changes arrive without push differs per source. */
+export const PushBadge = ({ setup, deliveries, causes, detail }: {
+  setup: PushSetup
+  deliveries?: PushDeliveries
+  causes: string
+  detail?: string
+}) => {
+  const tip = (text: string) => [detail, text].filter(Boolean).join(' ')
+  if (setup === 'none') return <Badge tone="neutral" title={detail ?? 'Changes arrive with the next poll.'}>No webhook</Badge>
+  if (setup === 'error') return <Badge tone="danger" title={tip('Open the webhook settings for why.')}>Webhook error</Badge>
+  if (!deliveries) return <Badge tone="info" title={tip("Memory doesn't track deliveries for this source.")}>Webhook set</Badge>
+  if (deliveries.push_missing_since) return <PushMissedBadge status={deliveries} causes={causes} />
+  if (deliveries.push_stale) {
+    return <Badge tone="warning" title={tip(`No event lately (last ${formatRelativeTime(deliveries.last_event_at)}): a quiet source, or ${causes}.`)}>No recent events</Badge>
+  }
+  return <Badge tone="success" title={tip(`Last event ${formatRelativeTime(deliveries.last_event_at)}.`)}>Webhook active</Badge>
 }
 
 /** The latest sync error and when the failing streak began, for a Row's body. */
@@ -398,6 +423,7 @@ interface SourceRowProps {
   /** Feeds record attempts, not successes, so they say "Last checked". */
   lastSyncLabel?: string
   sync?: SyncStatus
+  badges?: React.ReactNode
   onToggleActive?: () => void
   onEdit?: () => void
   onDelete?: () => void
@@ -414,6 +440,7 @@ export const SourceRow = ({
   lastSyncAt,
   lastSyncLabel = 'Last sync',
   sync,
+  badges,
   onToggleActive,
   onEdit,
   onDelete,
@@ -424,7 +451,7 @@ export const SourceRow = ({
   <Row
     title={title}
     muted={!active}
-    badges={<><StatusBadge active={active} />{sync && <SyncFailingBadge status={sync} />}</>}
+    badges={<><StatusBadge active={active} />{sync && <SyncFailingBadge status={sync} />}{badges}</>}
     meta={[subtitle, `${lastSyncLabel}: ${formatRelativeTime(lastSyncAt)}`, ...meta]}
     actions={<>
       {onSync && <SyncButton onSync={onSync} disabled={!active} />}

@@ -309,18 +309,28 @@ describe('SlackPanel - workspace actions', () => {
 })
 
 describe('SlackPanel - event setup', () => {
-  it('marks a workspace whose app has no push events as polling only', async () => {
+  it('marks a workspace whose app has no push events as having no webhook', async () => {
     listWorkspaces.mockResolvedValue([workspace({ apps: [draftApp] })])
     renderWithUser(<SlackPanel />)
-    expect(await screen.findByText('Polling only')).toBeInTheDocument()
+    expect(await screen.findByText('No webhook')).toHaveAttribute('title', expect.stringMatching(/^Push events aren't set up for Acme app/))
     expect(screen.getByText('Collecting')).toBeInTheDocument()
   })
 
-  it.each(['live', 'degraded'])('does not mark a %s app as polling only', async (setup_state) => {
+  it.each([
+    [{ collect_messages: false }],
+    [{ poll_blocker: 'Slack app 4 is inactive' }],
+  ])('marks no missing webhook on a workspace that is not collecting: %o', async (fields) => {
+    listWorkspaces.mockResolvedValue([workspace({ apps: [draftApp], ...fields })])
+    renderWithUser(<SlackPanel />)
+    await screen.findByText('Acme')
+    expect(screen.queryByText('No webhook')).not.toBeInTheDocument()
+  })
+
+  it.each(['live', 'degraded'])('marks a %s app as having a webhook', async (setup_state) => {
     listWorkspaces.mockResolvedValue([workspace({ apps: [{ ...draftApp, setup_state }] })])
     renderWithUser(<SlackPanel />)
     await screen.findByText('Acme')
-    expect(screen.queryByText('Polling only')).not.toBeInTheDocument()
+    expect(screen.queryByText('No webhook')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Finish event setup' })).not.toBeInTheDocument()
   })
 
@@ -336,14 +346,13 @@ describe('SlackPanel - event setup', () => {
   })
 
   it.each([
-    ['healthy push', { push_missing_since: null, push_stale: false }, 0],
-    ['quiet push', { push_missing_since: null, push_stale: true }, 1],
-  ])('shows no marker for %s', async (_name, health, hints) => {
+    ['healthy push', { push_missing_since: null, push_stale: false }, 'Webhook active'],
+    ['quiet push', { push_missing_since: null, push_stale: true }, 'No recent events'],
+  ])('shows no missed-events marker for %s', async (_name, health, label) => {
     listWorkspaces.mockResolvedValue([workspace({ apps: [{ ...draftApp, setup_state: 'live', ...health }] })])
     renderWithUser(<SlackPanel />)
-    await screen.findByText('Acme')
+    expect(await screen.findByText(label)).toHaveAttribute('title', expect.stringMatching(/^Acme app:/))
     expect(screen.queryByText('Missing events')).not.toBeInTheDocument()
-    expect(screen.queryAllByText(/No recent push events for Acme app/)).toHaveLength(hints)
   })
 
   it('shows when the newest event arrived', async () => {
@@ -414,7 +423,7 @@ describe('SlackPanel - event setup', () => {
   it('offers no setup action to someone who does not own the app', async () => {
     listWorkspaces.mockResolvedValue([workspace({ apps: [{ ...draftApp, is_owner: false }] })])
     renderWithUser(<SlackPanel />)
-    expect(await screen.findByText('Polling only')).toBeInTheDocument()
+    expect(await screen.findByText('No webhook')).toHaveAttribute('title', expect.stringMatching(/Ask the app's owner/))
     expect(screen.queryByRole('button', { name: 'Finish event setup' })).not.toBeInTheDocument()
   })
 })

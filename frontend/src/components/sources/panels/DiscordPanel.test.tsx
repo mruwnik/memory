@@ -17,6 +17,7 @@ const bot: DiscordBot = {
   api_base_url: 'https://discord.com/api/v10',
   events_url: 'https://memory.example.com/discord/events/bot-1',
   last_event_at: null,
+  push_stale: true,
   last_sync_at: null,
   created_at: '',
   updated_at: '2030-01-01T00:00:00Z',
@@ -31,6 +32,7 @@ const webhookBot: DiscordBot = {
   public_key: 'ab'.repeat(32),
   events_url: 'https://memory.example.com/discord/events/bot-2',
   last_event_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+  push_stale: false,
   connected: false,
 }
 
@@ -289,11 +291,25 @@ describe('DiscordPanel tokenless bot', () => {
 })
 
 describe('DiscordPanel webhook bot row', () => {
+  it('flags a webhook bot with no recent events', async () => {
+    mockFetchRoutes(routes({ bots: [{ ...webhookBot, push_stale: true }] }))
+    renderWithUser(<DiscordPanel />)
+    expect(await screen.findByText('No recent events')).toBeInTheDocument()
+    expect(screen.queryByText('Webhook active')).not.toBeInTheDocument()
+  })
+
+  it('gives a paused webhook bot no push badge', async () => {
+    mockFetchRoutes(routes({ bots: [{ ...webhookBot, is_active: false }] }))
+    renderWithUser(<DiscordPanel />)
+    await waitFor(() => expect(screen.getByText('Hooked')).toBeInTheDocument())
+    expect(screen.queryByText('Webhook active')).not.toBeInTheDocument()
+  })
+
   it('shows delivery, the last event and the events URL instead of the gateway state', async () => {
     mockFetchRoutes(routes({ bots: [webhookBot] }))
     renderWithUser(<DiscordPanel />)
     await waitFor(() => expect(screen.getByText('Hooked')).toBeInTheDocument())
-    expect(screen.getByText('Webhook')).toBeInTheDocument()
+    expect(screen.getByText('Webhook active')).toBeInTheDocument()
     expect(screen.queryByText('Disconnected')).not.toBeInTheDocument()
     expect(screen.getByText(/Last event: 5m ago/)).toBeInTheDocument()
     expect(screen.getByDisplayValue(webhookBot.events_url)).toBeInTheDocument()

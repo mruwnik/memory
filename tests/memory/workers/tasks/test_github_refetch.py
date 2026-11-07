@@ -298,11 +298,8 @@ def test_refetch_skips_untracked_kind(db_session, repo, github_serves, trigger_m
 
 # --- Polls that find what the webhook should have delivered ---
 
-NOW = datetime.now(timezone.utc)
-
-
 def ago(minutes: int) -> datetime:
-    return NOW - timedelta(minutes=minutes)
+    return datetime.now(timezone.utc) - timedelta(minutes=minutes)
 
 
 @pytest.fixture

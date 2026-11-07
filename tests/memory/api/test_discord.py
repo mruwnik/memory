@@ -1,5 +1,5 @@
 import base64
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock, patch
 
 import pytest
@@ -132,6 +132,18 @@ def test_a_webhook_bot_shows_its_events_url(client, db_session, user):
     assert body["events_url"].endswith(f"/discord/events/{body['id']}")
     bot = db_session.get(DiscordBot, int(body["id"]))
     assert (bot.application_id, bot.runs_gateway) == (33333, False)
+
+
+@pytest.mark.parametrize("hours_since_event, stale", [(None, True), (1, False), (48, True)])
+def test_a_webhook_bot_without_recent_events_is_flagged_stale(client, db_session, user, hours_since_event, stale):
+    bot_id = client.post("/discord/bots", json={"name": "Hooked"} | webhook_bot_body(33335)).json()["id"]
+    bot = db_session.get(DiscordBot, int(bot_id))
+    bot.last_event_at = hours_since_event and datetime.now(timezone.utc) - timedelta(hours=hours_since_event)
+    db_session.commit()
+
+    body = client.patch(f"/discord/bots/{bot_id}", json={"name": "Hooked"}).json()
+
+    assert body["push_stale"] is stale
 
 
 def test_a_bot_runs_the_gateway_by_default(client, db_session, user):

@@ -40,6 +40,7 @@ from memory.common.db.models.discord import (
     DiscordServer,
 )
 from memory.common.discord_events import hand_off_server
+from memory.common.push_health import push_stale
 from memory.common.discord_data import (
     fetch_servers,
     get_bot_for_user,
@@ -95,6 +96,7 @@ class DiscordBotResponse(BaseModel):
     # Where webhook delivery posts; shown before switching a bot to it
     events_url: str
     last_event_at: str | None
+    push_stale: bool
     last_sync_at: str | None
     created_at: str | None
     updated_at: str | None
@@ -211,6 +213,7 @@ def bot_to_response(
         api_base_url=bot.api_base_url,
         events_url=events_url_for(bot),
         last_event_at=bot.last_event_at.isoformat() if bot.last_event_at else None,
+        push_stale=push_stale(bot.last_event_at),
         last_sync_at=bot.last_sync_at.isoformat() if bot.last_sync_at else None,
         created_at=bot.created_at.isoformat() if bot.created_at else None,
         updated_at=bot.updated_at.isoformat() if bot.updated_at else None,

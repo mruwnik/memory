@@ -14,7 +14,7 @@ from memory.common.notify import notify_user_now
 # redeliveries and our refetch debounce) before a poll counts it as missed.
 PUSH_GRACE = timedelta(minutes=10)
 # The webhook_status values of a repo whose events reach us.
-GITHUB_PUSH_STATUSES = ("installed", "app_hook")
+GITHUB_PUSH_STATUSES = ("installed", "org_hook")
 
 
 def push_stale(last_event_at: datetime | None) -> bool:

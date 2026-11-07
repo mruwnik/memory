@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useDiscord, DiscordBot, DiscordBotCreate, DiscordBotUpdate, DiscordRealtime, DiscordServer, DiscordChannel, DiscordChannelUpdate, DiscordServerUpdate } from '@/hooks/useDiscord'
 import { useModule } from '@/hooks/useModule'
 import { useProjects, Project } from '@/hooks/useProjects'
-import { AccessSelects, CollectSelect, PauseButton, PopupBlockedNotice, StatusBadge, SyncButton, formatRelativeTime, lazySubList, openPopup, useBusy } from '../shared'
+import { AccessSelects, CollectSelect, PauseButton, PopupBlockedNotice, PUSH_CAUSES, PushBadge, StatusBadge, SyncButton, formatRelativeTime, lazySubList, openPopup, useBusy } from '../shared'
 import { LLMKeyField } from '../LLMKeyField'
 import { Badge, Button, ConfirmButton, Disclosure, EmptyState, ErrorState, ExpandToggle, Field, Fieldset, FormActions, Input, List, LoadingState, Modal, Notice, Row, RowError, Section, SubList, ToggleGroup, useActionNotice, useSubmit } from '@/components/shared/ui'
 import { useSourcesContext } from '../context'
@@ -251,9 +251,10 @@ const BotRow = ({
       muted={!bot.is_active}
       badges={<>
         <StatusBadge active={bot.is_active} />
-        <Badge tone="info" title={webhook ? 'Live messages arrive as webhook events' : 'Live messages arrive over the WebSocket gateway'}>
-          {webhook ? 'Webhook' : 'Gateway'}
-        </Badge>
+        {webhook
+          ? bot.is_active && <PushBadge setup="ok" causes={PUSH_CAUSES.discord} detail="Live messages arrive as webhook events."
+              deliveries={{ push_missing_since: null, push_last_miss_at: null, push_stale: bot.push_stale, last_event_at: bot.last_event_at }} />
+          : <Badge tone="info" title="Live messages arrive over the WebSocket gateway">Gateway</Badge>}
         {!webhook && bot.is_active && <Badge tone={bot.connected ? 'success' : 'danger'}>{bot.connected ? 'Connected' : 'Disconnected'}</Badge>}
       </>}
       meta={[

@@ -116,6 +116,8 @@ class GithubAccountResponse(BaseModel):
     created_at: str
     updated_at: str
     repos: list[GithubRepoResponse]
+    # No event on any active repo within PUSH_STALE_HOURS, whatever installed the hooks.
+    push_stale: bool
     llm_key: LLMKeyView
 
 
@@ -216,6 +218,7 @@ def account_to_response(
         created_at=account.created_at.isoformat() if account.created_at else "",
         updated_at=account.updated_at.isoformat() if account.updated_at else "",
         repos=[repo_to_response(repo) for repo in account.repos],
+        push_stale=push_stale(max((r.last_event_at for r in account.repos if r.active and r.last_event_at), default=None)),
         llm_key=llm_key_view(db, user, account),
     )
 
@@ -412,7 +415,7 @@ def delete_webhook_secret(
     db: Session = Depends(get_session),
 ) -> GithubAccountResponse:
     """Remove the webhook secret, which makes every delivery for the account fail,
-    and delete the repo hooks pointing at it."""
+    and delete the org and repo hooks pointing at it."""
     account = get_user_account(db, GithubAccount, account_id, user)
     account.webhook_secret = None
     db.commit()
@@ -427,7 +430,7 @@ def install_webhooks(
     user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> dict[str, str]:
-    """Install or refresh the webhook on every active repo, generating a secret if there is none.
+    """Install or refresh the webhook on each active repo's org, or on the repo itself, generating a secret if there is none.
     Each repo's outcome appears as its webhook_status."""
     account = get_user_account(db, GithubAccount, account_id, user)
     if not account.webhook_secret:

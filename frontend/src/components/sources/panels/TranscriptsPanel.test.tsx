@@ -294,10 +294,14 @@ describe('TranscriptsPanel - push ingest', () => {
     expect(screen.queryByText('No API key set')).not.toBeInTheDocument()
   })
 
-  it('flags a Fireflies account whose webhook is not set up', async () => {
-    listTranscriptAccounts.mockResolvedValue([account()])
+  it.each([
+    [{ webhook_secret_hint: null }, 'No webhook', /^Meetings arrive with the next check/],
+    [{ webhook_secret_hint: null, provider: 'generic', polls: false }, 'No webhook', /^Push only: nothing arrives/],
+    [{ webhook_secret_hint: 'abcd', provider: 'generic', polls: false }, 'Webhook set', /^Memory doesn't track deliveries/],
+  ])('labels the push channel of account %o', async (fields, label, tip) => {
+    listTranscriptAccounts.mockResolvedValue([account(fields)])
     renderWithRouter(<TranscriptsPanel />)
-    expect(await screen.findByText(/Webhook not set up/)).toBeInTheDocument()
+    expect(await screen.findByText(label)).toHaveAttribute('title', expect.stringMatching(tip))
   })
 
   it.each([

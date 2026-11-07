@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useSources, GithubAccount, GithubProject, GithubWebhookStatus, AvailableRepo, AvailableProject } from '@/hooks/useSources'
-import { TagsInput, PauseButton, PUSH_CAUSES, PushMissedBadge, ScheduleButton, SyncScheduleFields, StatusBadge, SyncButton, SyncFailingBadge, SyncFailure, formatRelativeTime } from '../shared'
+import { useSources, GithubAccount, GithubProject, GithubRepo, GithubWebhookStatus, AvailableRepo, AvailableProject } from '@/hooks/useSources'
+import { TagsInput, PauseButton, PUSH_CAUSES, PushBadge, PushMissedBadge, type PushSetup, ScheduleButton, SyncScheduleFields, StatusBadge, SyncButton, SyncFailingBadge, SyncFailure, formatRelativeTime } from '../shared'
 import { Badge, Button, Checkbox, ConfirmButton, CopyButton, DetailList, Disclosure, EmptyState, ErrorState, Field, FormActions, Input, List, LoadingState, Modal, Notice, Row, RowError, Section, SubList, cx, useActionNotice, Fieldset, NewTabLink } from '@/components/shared/ui'
 import { useDebounce } from '@/hooks/useDebounce'
 import { useSourcesContext } from '../context'
@@ -108,27 +108,20 @@ export const GitHubPanel = () => {
       {accounts.length === 0 ? (
         <EmptyState message="No GitHub accounts yet. Add a GitHub account first." />
       ) : (
-        <List>
+        <List separate>
           {accounts.map(account => {
             const projects = accountProjects[account.id] || []
             const missing = account.repos.filter(r => r.push_missing_since)
-            // The account's outage spans its repos': from the first repo's miss to the latest.
-            const accountPush = {
-              push_missing_since: missing.map(r => r.push_missing_since!).sort()[0] ?? null,
-              push_last_miss_at: missing.map(r => r.push_last_miss_at ?? '').sort().at(-1) || null,
-              push_stale: false,
-            }
             return (
               <Row
                 key={account.id}
                 title={account.name}
                 muted={!account.active}
-                badges={<><StatusBadge active={account.active} /><PushMissedBadge status={accountPush} causes={PUSH_CAUSES.github} /></>}
+                badges={<><StatusBadge active={account.active} /><AccountPushBadge account={account} /></>}
                 meta={[
                   account.auth_type === 'pat' ? 'Personal access token' : 'GitHub App',
                   account.verified_login ? `verified as ${account.verified_login}` : 'unverified',
                   `LLM: ${llmKeyLabel(account.llm_key)}`,
-                  account.webhook_secret_hint ? 'webhook set' : 'no webhook',
                 ]}
                 actions={<>
                   {missing.length > 0 && <Button size="sm" onClick={() => handleReinstallHooks(account.id)}>Reinstall webhooks</Button>}
@@ -240,37 +233,69 @@ export const GitHubPanel = () => {
 const WEBHOOK_EVENTS = 'Pull requests, Pull request reviews, Pull request review comments, Issue comments, Issues, Check runs, Check suites, Statuses'
 
 const HOOK_STATUS: Record<GithubWebhookStatus, [string, 'success' | 'warning' | 'danger']> = {
-  installed: ['Installed', 'success'],
+  installed: ['Repo webhook', 'success'],
+  org_hook: ['Org webhook', 'success'],
   missing_permission: ['Missing permission', 'danger'],
   rejected: ['Rejected by GitHub', 'danger'],
   error: ['Failed', 'warning'],
-  app_hook: ['Via the App webhook', 'success'],
-  app_settings: ['Set in App settings', 'warning'],
 }
+const HOOK_OK: (GithubWebhookStatus | null)[] = ['installed', 'org_hook']
+const HOOK_FAILED: (GithubWebhookStatus | null)[] = ['missing_permission', 'rejected', 'error']
 
 const HookStatusBadge = ({ status }: { status: GithubWebhookStatus | null }) => {
   const [label, tone] = status ? HOOK_STATUS[status] : ['Not installed', 'neutral' as const]
   return <Badge tone={tone}>{label}</Badge>
 }
 
-// GitHub's App settings name events in the singular, unlike the repo webhook form.
-const APP_EVENTS = 'Pull request, Pull request review, Pull request review comment, Issue comment, Issues, Check run, Check suite, Status'
+const activeRepos = (account: GithubAccount) =>
+  account.repos.filter(r => r.active).sort((a, b) => a.repo_path.localeCompare(b.repo_path))
+
+const AccountPushBadge = ({ account }: { account: GithubAccount }) => {
+  const repos = activeRepos(account)
+  const ok = repos.filter(r => HOOK_OK.includes(r.webhook_status))
+  const failed = repos.filter(r => HOOK_FAILED.includes(r.webhook_status))
+  const missing = repos.filter(r => r.push_missing_since)
+  const lastEvent = repos.map(r => r.last_event_at).filter(Boolean).sort().at(-1) ?? null
+  // A hook added by hand, which Install hasn't found yet, still shows by its deliveries.
+  const setup: PushSetup = !account.webhook_secret_hint ? 'none' : failed.length ? 'error' : ok.length || lastEvent ? 'ok' : 'none'
+  const deliveries = {
+    // The account's outage spans its repos': from the first repo's miss to the latest.
+    push_missing_since: missing.map(r => r.push_missing_since!).sort()[0] ?? null,
+    push_last_miss_at: missing.map(r => r.push_last_miss_at ?? '').sort().at(-1) || null,
+    push_stale: account.push_stale,
+    last_event_at: lastEvent,
+  }
+  const detail = failed.length ? `${failed.length} of ${repos.length} repos: ${HOOK_STATUS[failed[0].webhook_status!][0].toLowerCase()}.` : undefined
+  return <PushBadge setup={setup} deliveries={deliveries} causes={PUSH_CAUSES.github} detail={detail} />
+}
+
+const PERMISSION_HELP = {
+  app: 'The GitHub App needs permission to manage webhooks: Organization permissions → Webhooks: Read and write for one org webhook, or Repository permissions → Webhooks: Read and write for one per repo. Set it in the App\'s settings → Permissions & events, accept the new permissions on the installation, then install again.',
+  pat: 'The token needs permission to manage webhooks. Classic token: admin:org_hook for one org webhook (its owner must be an org owner), or admin:repo_hook for one per repo. Fine-grained token: Organization permissions → Webhooks: Read and write, or Repository permissions → Webhooks: Read and write.',
+}
 
 type HookHelp = ['info' | 'warning', string]
 
 const hookHelp = (account: GithubAccount): HookHelp | null => {
-  const statuses = new Set(account.repos.filter(r => r.active).map(r => r.webhook_status))
-  if (account.auth_type === 'app' && statuses.has('app_settings')) {
-    return ['warning', `Memory couldn't point the App's webhook here. On GitHub, open the App's settings → General → Webhook: mark it active, paste the payload URL and secret from "Set it up by hand", then do the step below.\n\nPermissions & events → Subscribe to events: tick ${APP_EVENTS}.`]
-  }
-  if (account.auth_type === 'app') {
-    return ['info', `This account uses a GitHub App. Install points the App's webhook at Memory, but only you can choose which events it sends. Once, on GitHub: App settings → Permissions & events → Subscribe to events, tick ${APP_EVENTS}. (A box only appears once the App can read that kind of thing, e.g. Pull requests: Read.)`]
-  }
-  if (statuses.has('missing_permission')) {
-    return ['warning', 'The access token needs permission to manage webhooks: the admin:repo_hook scope for a classic token, or Webhooks: Read and write for a fine-grained one.']
-  }
+  const statuses = new Set(activeRepos(account).map(r => r.webhook_status))
+  if (statuses.has('missing_permission')) return ['warning', PERMISSION_HELP[account.auth_type]]
   if (statuses.has('rejected')) return ['warning', 'GitHub rejected the payload URL. It must be reachable from the public internet.']
   return null
+}
+
+const listed = (names: string[]) => names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`
+
+// Whether an owner is an org or a person is only known to GitHub, so the plan covers both.
+const installPlan = (owners: string[]) => {
+  const where = owners.length === 1 ? `on ${owners[0]}, if it's an org` : `on each of ${listed(owners)} that is an org`
+  return `Adds (or updates) one webhook pointing at Memory ${where}, covering all its repos; otherwise, or if the org hook isn't permitted, one on each repo. Other webhooks are left alone. Safe to run again.`
+}
+
+// GitHub logins are case-insensitive, and the install groups them that way too.
+const byOwner = (repos: GithubRepo[]): [string, GithubRepo[]][] => {
+  const owners = new Map<string, GithubRepo[]>()
+  repos.forEach(r => owners.set(r.owner.toLowerCase(), [...owners.get(r.owner.toLowerCase()) ?? [], r]))
+  return [...owners.values()].map(owned => [owned[0].owner, owned])
 }
 
 const WebhookModal = ({ account, onRefresh, onClose }: { account: GithubAccount; onRefresh: () => Promise<void>; onClose: () => void }) => {
@@ -278,13 +303,15 @@ const WebhookModal = ({ account, onRefresh, onClose }: { account: GithubAccount;
   const [secret, setSecret] = useState<string | null>(null)
   const { run, notice } = useActionNotice()
   const hint = account.webhook_secret_hint
-  const repos = account.repos.filter(r => r.active).sort((a, b) => a.repo_path.localeCompare(b.repo_path))
+  const repos = activeRepos(account)
+  const owners = byOwner(repos)
+  const plan = installPlan(owners.map(([owner]) => owner))
   const help = hookHelp(account)
 
   const install = () => run(async () => {
     await installGithubWebhooks(account.id)
     await onRefresh()
-  }, 'Installing. Refresh in a few seconds to see each repo’s result.')
+  }, 'Installing. Refresh in a few seconds to see the result.')
 
   const generate = () => run(async () => {
     const result = await generateGithubWebhookSecret(account.id)
@@ -302,27 +329,31 @@ const WebhookModal = ({ account, onRefresh, onClose }: { account: GithubAccount;
     <Modal title={`Webhook for ${account.name}`} onClose={onClose}>
       <div className="space-y-4">
         {notice}
-        <p className="text-sm text-slate-600">
-          With a webhook on each tracked repo, changes arrive within seconds; polling still fills any gaps.
-        </p>
+        {repos.length === 0
+          ? <Notice tone="info">This account tracks no repos, so there's nothing to install yet. Add a repo first.</Notice>
+          : <p className="text-sm text-slate-600">{plan} Changes then arrive within seconds; polling still fills any gaps.</p>}
         {repos.length > 0 && (
           <List>
-            {repos.map(repo => (
-              <Row key={repo.id} compact title={repo.repo_path} badges={<HookStatusBadge status={repo.webhook_status} />}
-                meta={[repo.webhook_checked_at && `checked ${formatRelativeTime(repo.webhook_checked_at)}`]} />
-            ))}
+            {owners.map(([owner, owned]) => owned.every(r => r.webhook_status === 'org_hook')
+              ? <Row key={owner} compact title={`${owner} org`} badges={<HookStatusBadge status="org_hook" />}
+                  meta={[`covers ${owned.length} tracked ${owned.length === 1 ? 'repo' : 'repos'}`, owned[0].webhook_checked_at && `checked ${formatRelativeTime(owned[0].webhook_checked_at)}`]} />
+              : owned.map(repo => (
+                <Row key={repo.id} compact title={repo.repo_path} badges={<HookStatusBadge status={repo.webhook_status} />}
+                  meta={[repo.webhook_checked_at && `checked ${formatRelativeTime(repo.webhook_checked_at)}`]} />
+              )))}
           </List>
         )}
         {help && <Notice tone={help[0]}>{help[1]}</Notice>}
         <Disclosure summary="Set it up by hand">
           <div className="space-y-3">
             <p className="text-sm text-slate-600">
-              Add a webhook to each tracked repo (or its org) with this payload URL, content type
-              {' '}<code>application/json</code> and the secret, sending: {WEBHOOK_EVENTS}.
+              On the org, an owner opens Settings → Webhooks → Add webhook; one org webhook covers all its repos.
+              Without org access, add one in each tracked repo's Settings → Webhooks instead.
+              Use this payload URL, content type <code>application/json</code> and the secret, and send: {WEBHOOK_EVENTS}.
             </p>
             <DetailList items={[
               ['Payload URL', <span className="flex items-center gap-2"><code className="break-all">{account.webhook_url}</code><CopyButton text={account.webhook_url} /></span>],
-              ['Secret', hint ? `Set, ending in …${hint}` : 'None yet. Install on all repos creates one; generate it here only to add hooks by hand.'],
+              ['Secret', hint ? `Set, ending in …${hint}` : 'None yet. Install webhook creates one; generate it here only to add hooks by hand.'],
             ]} />
             {secret && (
               <Notice tone="success">
@@ -338,9 +369,10 @@ const WebhookModal = ({ account, onRefresh, onClose }: { account: GithubAccount;
           </div>
         </Disclosure>
         <FormActions>
-          {hint && <ConfirmButton size="md" confirm="Remove the secret? Memory deletes its repo hooks, and deliveries will be rejected." confirmLabel="Remove" onConfirm={remove}>Remove secret</ConfirmButton>}
+          {hint && <ConfirmButton size="md" confirm="Remove the secret? Memory deletes the org and repo hooks pointing at it, and deliveries will be rejected." confirmLabel="Remove" onConfirm={remove}>Remove secret</ConfirmButton>}
           <Button onClick={() => run(onRefresh)}>Refresh</Button>
-          <Button variant="primary" onClick={install} disabled={repos.length === 0}>Install on all repos</Button>
+          <Button variant="primary" onClick={install} disabled={repos.length === 0}
+            title={repos.length === 0 ? 'No tracked repos: add one first.' : plan}>Install webhook</Button>
           <Button onClick={onClose}>Done</Button>
         </FormActions>
       </div>

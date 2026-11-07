@@ -18,6 +18,8 @@ export interface DiscordBot {
   // Where webhook delivery posts events
   events_url: string
   last_event_at: string | null
+  // No event within PUSH_STALE_HOURS: a quiet bot, or broken delivery.
+  push_stale: boolean
   // When the bot last listed its servers (gateway READY, a refresh, or the daily catch-up)
   last_sync_at: string | null
   created_at: string | null

@@ -16,7 +16,7 @@ Example:
 """
 
 from .core import GithubClientCore
-from .hooks import HOOK_EVENTS, HooksMixin, hook_config, webhook_url
+from .hooks import HOOK_EVENTS, HooksMixin, hook_config, org_hooks, repo_hooks, webhook_url
 from .issues import IssuesMixin
 from .projects import ProjectsMixin, extract_status_priority
 from .types import (
@@ -45,7 +45,7 @@ class GithubClient(IssuesMixin, ProjectsMixin, HooksMixin, GithubClientCore):
     - GithubClientCore: Authentication, GraphQL, rate limiting
     - IssuesMixin: Issue/PR fetching, parsing, mutations
     - ProjectsMixin: GitHub Projects (v2) management
-    - HooksMixin: repo and App webhooks
+    - HooksMixin: org and repo webhooks
     """
 
     pass
@@ -71,6 +71,8 @@ __all__ = [
     "serialize_issue_data",
     "extract_status_priority",
     "hook_config",
+    "org_hooks",
+    "repo_hooks",
     "webhook_url",
     # Constants
     "GITHUB_API_URL",

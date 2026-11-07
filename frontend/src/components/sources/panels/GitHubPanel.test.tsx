@@ -531,16 +531,23 @@ describe('GitHubPanel webhook modal', () => {
     return { mock, user, dialog: screen.getByRole('dialog') }
   }
 
-  it("lists each repo's webhook status and the permission a failed one needs", async () => {
-    const { dialog } = await openModal([hooked()])
+  it.each([
+    ['pat', /admin:org_hook.+admin:repo_hook/],
+    ['app', /Organization permissions → Webhooks: Read and write.+Repository permissions → Webhooks: Read and write/],
+  ])("lists each repo's webhook status and the permission a %s account needs", async (auth_type, permission) => {
+    const { dialog } = await openModal([hooked({ auth_type })])
     expect(within(dialog).getByText('Missing permission')).toBeInTheDocument()
-    expect(within(dialog).getByText('Installed')).toBeInTheDocument()
-    expect(within(dialog).getByText(/admin:repo_hook/)).toBeInTheDocument()
+    expect(within(dialog).getByText('Repo webhook')).toBeInTheDocument()
+    expect(within(dialog).getByText(permission)).toBeInTheDocument()
   })
 
-  it('installs on all repos with a POST', async () => {
+  it('says what install does and installs with a POST', async () => {
     const { mock, user, dialog } = await openModal([hooked()])
-    await user.click(within(dialog).getByRole('button', { name: 'Install on all repos' }))
+    const plan = /^Adds \(or updates\) one webhook pointing at Memory on octocat, if it's an org, covering all its repos; otherwise, or if the org hook isn't permitted, one on each repo\. Other webhooks are left alone\. Safe to run again\./
+    expect(within(dialog).getByText(plan)).toBeInTheDocument()
+    const button = within(dialog).getByRole('button', { name: 'Install webhook' })
+    expect(button).toHaveAttribute('title', expect.stringMatching(plan))
+    await user.click(button)
     await waitFor(() => {
       const install = mock.mock.calls.find(
         ([url, init]) => String(url).includes('/github/accounts/4/webhooks/install') && (init as RequestInit)?.method === 'POST',
@@ -549,10 +556,47 @@ describe('GitHubPanel webhook modal', () => {
     })
   })
 
-  it("points App accounts at the App's own settings for events", async () => {
-    const { dialog } = await openModal([hooked({ auth_type: 'app', repos: [{ ...repo, webhook_status: 'app_hook' }] })])
-    expect(within(dialog).getByText('Via the App webhook')).toBeInTheDocument()
-    expect(within(dialog).getByText(/App's settings/)).toBeInTheDocument()
+  it('groups owners whatever their case', async () => {
+    const mixed = [repo, { ...repo, id: 51, owner: 'OctoCat', repo_path: 'OctoCat/other' }]
+    const { dialog } = await openModal([hooked({ repos: mixed })])
+    expect(within(dialog).getByText(/^Adds \(or updates\) one webhook pointing at Memory on octocat,/)).toBeInTheDocument()
+  })
+
+  it('sums up an org webhook as one row instead of one per repo', async () => {
+    const covered = [{ ...repo, webhook_status: 'org_hook' }, { ...repo, id: 51, repo_path: 'octocat/other', webhook_status: 'org_hook' }]
+    const { dialog } = await openModal([hooked({ auth_type: 'app', repos: covered })])
+    expect(within(dialog).getByText('octocat org')).toBeInTheDocument()
+    expect(within(dialog).getByText(/covers 2 tracked repos/)).toBeInTheDocument()
+    expect(within(dialog).queryByText('octocat/other')).not.toBeInTheDocument()
+  })
+
+  it('says why install is disabled for an account with no repos', async () => {
+    const { dialog } = await openModal([hooked({ repos: [] })])
+    const button = within(dialog).getByRole('button', { name: 'Install webhook' })
+    expect(button).toBeDisabled()
+    expect(button).toHaveAttribute('title', expect.stringMatching(/No tracked repos/))
+    expect(within(dialog).getByText(/tracks no repos/)).toBeInTheDocument()
+  })
+})
+
+describe('GitHubPanel account push badge', () => {
+  const at = (hoursAgo: number) => new Date(Date.now() - hoursAgo * 3600_000).toISOString()
+
+  it.each([
+    ['no secret', { webhook_secret_hint: null }, [{ webhook_status: 'org_hook' }], 'No webhook'],
+    ['nothing installed', {}, [{ webhook_status: null }], 'No webhook'],
+    ['a hand-made hook delivering', {}, [{ webhook_status: null, last_event_at: at(1) }], 'Webhook active'],
+    ['an org hook', {}, [{ webhook_status: 'org_hook', last_event_at: at(1) }], 'Webhook active'],
+    ['a failed install', {}, [{ webhook_status: 'org_hook' }, { webhook_status: 'missing_permission' }], 'Webhook error'],
+    ['a quiet hook', { push_stale: true }, [{ webhook_status: 'installed', last_event_at: at(48) }], 'No recent events'],
+    ['a hand-made hook gone quiet', { push_stale: true }, [{ webhook_status: null, last_event_at: at(48) }], 'No recent events'],
+    ['missed events', {}, [{ webhook_status: 'installed', push_missing_since: at(5), push_last_miss_at: at(1) }], 'Missing events'],
+  ])('labels an account with %s', async (_name, fields, repoFields, label) => {
+    const repos = repoFields.map((f, i) => ({ ...repo, id: 50 + i, repo_path: `octocat/r${i}`, push_stale: false, ...f }))
+    mockFetchRoutes(routes([account({ webhook_secret_hint: 'abcd', push_stale: false, repos, ...fields })]))
+    renderWithUser(<GitHubPanel />)
+    const row = (await screen.findByText('octocat/r0')).closest('ul')!.closest('li')!
+    expect(within(row).getAllByText(label)[0]).toBeInTheDocument()
   })
 })
 
@@ -561,7 +605,7 @@ describe('GitHubPanel push health', () => {
   const healthy = { ...repo, id: 51, repo_path: 'octocat/other', webhook_status: 'installed', push_missing_since: null, push_stale: false }
 
   it('flags a repo whose webhook missed events, and its account, with a reinstall action', async () => {
-    const mock = mockFetchRoutes({ '/github/accounts/4/webhooks/install': { json: { status: 'queued' } }, ...routes([account({ repos: [missed, healthy] })]) })
+    const mock = mockFetchRoutes({ '/github/accounts/4/webhooks/install': { json: { status: 'queued' } }, ...routes([account({ webhook_secret_hint: 'abcd', repos: [missed, healthy] })]) })
     const { user } = renderWithUser(<GitHubPanel />)
     await screen.findByText('octocat/hello')
     expect(screen.getAllByText('Missing events')).toHaveLength(2)  // the account and the one repo

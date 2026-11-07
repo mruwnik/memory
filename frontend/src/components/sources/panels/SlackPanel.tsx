@@ -3,7 +3,7 @@ import { useSlack, SlackWorkspace, SlackWorkspaceApp, SlackChannel, SlackChannel
 import { useSlackWizard, SlackAppResponse } from '@/hooks/useSlackWizard'
 import { useModule } from '@/hooks/useModule'
 import { useProjects, Project } from '@/hooks/useProjects'
-import { AccessSelects, CollectSelect, PauseButton, PUSH_CAUSES, PushMissedBadge, SyncButton, SyncFailure, formatRelativeTime, lazySubList, useBusy } from '../shared'
+import { AccessSelects, CollectSelect, PauseButton, PUSH_CAUSES, PushBadge, SyncButton, SyncFailure, formatRelativeTime, lazySubList, useBusy } from '../shared'
 import { LLMKeyField } from '../LLMKeyField'
 import { Field, Select, Hint, Badge, Button, ConfirmButton, EmptyState, ErrorState, ExpandToggle, List, LoadingState, Row, RowError, Section, SubList, Tone, cx, useActionNotice, useSubmit } from '@/components/shared/ui'
 import { useSourcesContext } from '../context'
@@ -283,12 +283,12 @@ const WorkspaceRow = ({
       title={workspace.name}
       badges={<>
         {status ? <Badge tone={STATUS_TONES[status]}>{status}</Badge> : <Badge>Paused</Badge>}
-        {workspace.collect_messages && !workspace.poll_blocker && eventlessApps.map(app => (
-          <Badge key={app.id} tone="info" title={`Push events aren't set up for ${app.name}, so new messages arrive on the periodic poll.${app.is_owner ? '' : " Ask the app's owner to finish its setup."}`}>
-            Polling only
-          </Badge>
-        ))}
-        {workspace.apps.map(app => <PushMissedBadge key={app.id} status={app} causes={PUSH_CAUSES.slack} />)}
+        {workspace.apps.map(app => EVENTS_LIVE.includes(app.setup_state)
+          ? <PushBadge key={app.id} setup="ok" deliveries={app} causes={PUSH_CAUSES.slack} detail={`${app.name}:`} />
+          : workspace.collect_messages && !workspace.poll_blocker && (
+            <PushBadge key={app.id} setup="none" causes={PUSH_CAUSES.slack}
+              detail={`Push events aren't set up for ${app.name}, so new messages arrive on the periodic poll.${app.is_owner ? '' : " Ask the app's owner to finish its setup."}`} />
+          ))}
       </>}
       meta={[
         workspace.domain && `${workspace.domain}.slack.com`,
@@ -296,7 +296,6 @@ const WorkspaceRow = ({
         `${workspace.connected_users} connected users`,
         workspace.last_sync_at && `Last sync: ${formatRelativeTime(workspace.last_sync_at)}`,
         lastEventAt && `Last event: ${formatRelativeTime(lastEventAt)}`,
-        ...workspace.apps.filter(app => app.push_stale && !app.push_missing_since).map(app => `No recent push events for ${app.name}`),
       ]}
       actions={<>
         <AccessSelects projectId={workspace.project_id} sensitivity={workspace.sensitivity} projects={projects} disabled={update.busy}

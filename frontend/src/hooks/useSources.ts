@@ -199,7 +199,7 @@ export interface GithubRepo extends SyncStatus, PushHealth {
   last_event_at: string | null
 }
 
-export type GithubWebhookStatus = 'installed' | 'missing_permission' | 'rejected' | 'error' | 'app_hook' | 'app_settings'
+export type GithubWebhookStatus = 'installed' | 'org_hook' | 'missing_permission' | 'rejected' | 'error'
 
 export interface GithubAccount {
   id: number
@@ -218,6 +218,8 @@ export interface GithubAccount {
   created_at: string
   updated_at: string
   repos: GithubRepo[]
+  /** No event on any active repo lately, however its hooks were installed. */
+  push_stale: boolean
   llm_key: LLMKeyView
 }
 

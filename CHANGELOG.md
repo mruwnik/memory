@@ -25,7 +25,12 @@ a new, empty `## Unreleased` above it.
 ### Changes
 
 - Discord MCP tools name the server: `discord_list_channels` returns `server_name` by default, and `discord_channel_history` gives the channel's `server_id` and `server_name`.
-- GitHub webhook dialog: for App accounts, a plain note on where in the App's settings to tick the events (only the App's owner can); an unset secret no longer reads as an error, since Install creates one.
+- GitHub webhook install no longer overwrites a GitHub App's own webhook. For App and token accounts alike it adds or updates one webhook on each org (finding one already pointing at Memory, such as one added by hand), falling back to one per repo when the org hook isn't permitted; other webhooks are left alone. The dialog says this up front, sums an org webhook up in one row, and names the exact permission an App or token is missing.
+- Sources rows show the push channel at a glance: "Webhook active", "No webhook", "Webhook error", "No recent events" or "Missing events", on GitHub accounts, Slack workspaces, Discord webhook bots and transcript accounts. GitHub accounts are spaced apart as separate cards.
+
+### Migrations
+
+- `20261209_github_org_hooks`: clears the retired `app_hook` / `app_settings` repo webhook statuses. Fast.
 
 ## v0.4.11 (2026-11-07)
 
