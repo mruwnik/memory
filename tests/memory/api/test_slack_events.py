@@ -635,6 +635,9 @@ def test_a_secret_pasted_while_an_old_signed_request_is_handled_stays_draft(
          ("message", GOOD_CHANNEL_ID, "stored", None), 1),
         ({"type": "message", "subtype": "message_deleted", "deleted_ts": "12.2", "channel": GOOD_CHANNEL_ID},
          ("message.message_deleted", GOOD_CHANNEL_ID, "stored", None), 1),
+        # Its message is stored too, so its text never sits in a payload.
+        ({"type": "app_mention", "user": "U1", "text": "<@U2> hi", "channel": GOOD_CHANNEL_ID},
+         ("app_mention", GOOD_CHANNEL_ID, "stored", None), 0),
         ({"type": "team_renamed", "channel": GOOD_CHANNEL_ID},
          ("team_renamed", GOOD_CHANNEL_ID, "no_item_type", event_callback({"type": "team_renamed", "channel": GOOD_CHANNEL_ID})
           | {"event_id": "Ev1"}), 0),
@@ -787,3 +790,26 @@ def test_event_records_when_it_arrived(client, db_session, events_app, last_miss
     db_session.refresh(events_app)
     assert events_app.last_event_at is not None
     assert (events_app.push_missing_since == missing_since) is still_missing
+
+
+
+@pytest.mark.parametrize(
+    "event, links_items",
+    [
+        ({"type": "message", "ts": "17.1", "user": "U1", "text": "x", "channel": GOOD_CHANNEL_ID}, True),
+        ({"type": "message", "subtype": "message_deleted", "deleted_ts": "17.2", "channel": GOOD_CHANNEL_ID}, True),
+        ({"type": "app_mention", "user": "U1", "text": "<@U2> hi", "channel": GOOD_CHANNEL_ID}, False),
+        # Their tasks update what's stored without writing item events.
+        ({"type": "reaction_added", "user": "U1", "reaction": "tada",
+          "item": {"type": "message", "channel": GOOD_CHANNEL_ID, "ts": "17.3"}}, False),
+        ({"type": "channel_rename", "channel": {"id": GOOD_CHANNEL_ID, "name": "renamed"}}, False),
+    ],
+)
+def test_a_raw_event_says_whether_an_ingest_task_will_link_its_items(client, db_session, events_app, user, event, links_items):
+    connect_workspace(db_session, events_app, user)
+
+    with _capture_send_task():
+        post_signed(client, f"/slack/events/{events_app.id}", event_callback(event))
+
+    (raw,) = raw_events(db_session)
+    assert bool((raw.data or {}).get("links_items")) is links_items

@@ -1,16 +1,20 @@
 import {
-  emptyFilter, emptyTriggerConfig, type Handler, type NotifyHandler, type Subscription, type SubscriptionUpsert, type Timer, type TriggerConfig,
+  emptyFilter, emptyTriggerConfig, type Handler, type NotifyHandler, type RawConfig, type RawOutcome, type RawSource,
+  type Subscription, type SubscriptionUpsert, type Timer, type TriggerConfig,
 } from '@/hooks/useAgents'
 import type { Tone } from '@/components/shared/ui'
+import { WEBHOOK_SOURCE_NAMES } from '@/hooks/useWebhookLog'
 
-export type SourceKind = 'filter' | 'cron' | 'at'
+export type SourceKind = 'filter' | 'raw' | 'cron' | 'at'
 export type HandlerKind = 'agent' | 'queue' | 'notify'
 
-export const SOURCE_LABELS: Record<SourceKind, string> = { filter: 'Items', cron: 'Schedule', at: 'Timer' }
+export const SOURCE_LABELS: Record<SourceKind, string> = { filter: 'Items', raw: 'Webhooks', cron: 'Schedule', at: 'Timer' }
 export const HANDLER_LABELS: Record<HandlerKind, string> = { agent: 'Agent', queue: 'Queue', notify: 'Message' }
 // What each source can be handed to (subscription_upsert's check_combination).
 export const HANDLERS_FOR: Record<SourceKind, HandlerKind[]> = {
   filter: ['agent', 'queue'],
+  // A webhook delivery is rendered when a worker claims it.
+  raw: ['queue'],
   cron: ['agent', 'notify'],
   at: ['agent', 'notify'],
 }
@@ -32,7 +36,19 @@ export const deliveryLabel = (status: string) => {
 
 export const handlerKind = (handler: Handler): HandlerKind =>
   'queue' in handler ? 'queue' : 'notify' in handler ? 'notify' : 'agent'
-export const sourceKind = (s: Subscription): SourceKind => (s.kind === 'cron' ? 'cron' : 'filter')
+export const sourceKind = (s: Subscription): SourceKind => (s.kind === 'ingest' ? 'filter' : s.kind)
+
+export const RAW_OUTCOME_LABELS: Record<RawOutcome, string> = { stored: 'stored items', no_item_type: 'stored nothing' }
+
+/** `accountNames` by "source:account id". */
+export const describeRaw = ({ source, account_id, types, outcome }: RawConfig['raw'], accountNames: Record<string, string> = {}): string =>
+  [
+    account_id === null
+      ? `every ${WEBHOOK_SOURCE_NAMES[source]} account`
+      : `${WEBHOOK_SOURCE_NAMES[source]} ${accountNames[`${source}:${account_id}`] ?? `account ${account_id}`}`,
+    types.length > 0 ? `types: ${types.join(', ')}` : 'any type',
+    outcome.length === 1 && RAW_OUTCOME_LABELS[outcome[0]],
+  ].filter(Boolean).join(' · ')
 
 export const describeHandler = (handler: Handler, agentNames: Record<string, string> = {}) => {
   if ('queue' in handler) return `queue ${handler.queue}`
@@ -96,6 +112,8 @@ export interface SubscriptionForm {
   backlogMax: string
   coalesce: 'none' | 'latest'
   orderBy: 'none' | 'item' | 'thread'
+  // A webhook source: types as typed, comma-separated; no account means every one.
+  raw: { source: RawSource; accountId: string; types: string; outcome: RawOutcome[] }
 }
 
 const emptyNotify = (): NotifyHandler => ({ channel: 'email', target: '', message: '', subject: '' })
@@ -115,6 +133,7 @@ export const newForm = (agent?: string): SubscriptionForm => ({
   backlogMax: '',
   coalesce: 'none',
   orderBy: 'item',
+  raw: { source: 'github', accountId: '', types: '', outcome: ['stored', 'no_item_type'] },
 })
 
 export const formFor = (s: Subscription): SubscriptionForm => {
@@ -138,9 +157,19 @@ export const formFor = (s: Subscription): SubscriptionForm => {
     backlogMax: s.backlog_max?.toString() ?? '',
     coalesce: s.coalesce_mode,
     orderBy: s.order_by,
+    raw: s.kind === 'raw'
+      ? {
+          source: s.config.raw.source,
+          accountId: s.config.raw.account_id?.toString() ?? '',
+          types: s.config.raw.types.join(', '),
+          outcome: s.config.raw.outcome,
+        }
+      : base.raw,
   }
 }
 
+// Sources whose deliveries take a rate and backlog cap.
+const capped = (source: SourceKind) => source === 'filter' || source === 'raw'
 const isCron = (cron: string) => cron.trim().split(/\s+/).length === 5
 // Empty, for the default, or a whole number.
 const isCount = (value: string) => /^\d*$/.test(value.trim())
@@ -155,9 +184,10 @@ export const formProblem = (form: SubscriptionForm, takenNames: string[] = []): 
   if (form.handler === 'notify' && !(form.notify.target.trim() && form.notify.message.trim())) return 'A message needs a recipient and text'
   if (form.source === 'cron' && !isCron(form.cron)) return 'Use five cron fields: minute hour day-of-month month day-of-week'
   if (form.source === 'at' && !form.at) return 'Pick when the timer fires'
-  if (form.source !== 'filter' && form.handler === 'agent' && !form.input.trim()) return 'Say what each run should do'
-  if (form.source === 'filter' && !isCount(form.maxPerHour)) return 'Deliveries per hour must be a whole number'
-  if (form.source === 'filter' && !isCount(form.backlogMax)) return 'Most waiting must be a whole number'
+  if (form.source === 'raw' && form.raw.outcome.length === 0) return 'Tick at least one of Deliveries that'
+  if ((form.source === 'cron' || form.source === 'at') && form.handler === 'agent' && !form.input.trim()) return 'Say what each run should do'
+  if (capped(form.source) && !isCount(form.maxPerHour)) return 'Deliveries per hour must be a whole number'
+  if (capped(form.source) && !isCount(form.backlogMax)) return 'Most waiting must be a whole number'
   return null
 }
 
@@ -176,19 +206,28 @@ const handlerOf = (form: SubscriptionForm, updating: boolean): Handler => {
 
 const count = (value: string) => (value.trim() ? Number(value) : undefined)
 
+const rawSource = (raw: SubscriptionForm['raw']): RawConfig['raw'] => ({
+  source: raw.source,
+  account_id: raw.accountId ? Number(raw.accountId) : null,
+  types: raw.types.split(',').map(t => t.trim()).filter(Boolean),
+  outcome: raw.outcome,
+})
+
 /** subscription_upsert's arguments for the form, creating or updating `existing`. */
 export const toUpsert = (form: SubscriptionForm, existing?: Subscription): SubscriptionUpsert => {
   const runs = form.handler === 'agent'
   const source = form.source === 'filter'
     ? form.config
-    : form.source === 'cron'
-      ? { cron: form.cron.trim(), ...(runs ? { input: form.input } : {}) }
-      : { at: form.at, ...(runs ? { input: form.input } : {}) }
+    : form.source === 'raw'
+      ? { raw: rawSource(form.raw) }
+      : form.source === 'cron'
+        ? { cron: form.cron.trim(), ...(runs ? { input: form.input } : {}) }
+        : { at: form.at, ...(runs ? { input: form.input } : {}) }
   // On update, 0 clears a cap left empty.
   const cleared = existing ? 0 : undefined
-  const shaping = form.source !== 'filter' ? {} : {
-    max_per_hour: count(form.maxPerHour) ?? cleared,
-    backlog_max: count(form.backlogMax) ?? cleared,
+  const caps = { max_per_hour: count(form.maxPerHour) ?? cleared, backlog_max: count(form.backlogMax) ?? cleared }
+  const shaping = form.source === 'raw' ? caps : form.source !== 'filter' ? {} : {
+    ...caps,
     coalesce: form.coalesce,
     ...(form.handler === 'queue' ? { order_by: form.orderBy } : {}),
   }

@@ -55,7 +55,7 @@ READ_ONLY_TOOLS = {
     *("people_fetch", "people_list_all", "people_tidbit_list"),
     *("polling_fetch", "polling_list_polls"),
     *("projects_fetch", "projects_list_all"),
-    *("subscription_fetch", "subscription_list_all"),
+    *("subscription_fetch", "subscription_list_all", "subscription_test"),
     *("slack_get_channel_history", "slack_list_channels", "slack_thread"),
     *("teams_fetch", "teams_list_all", "teams_project_list_access"),
 }

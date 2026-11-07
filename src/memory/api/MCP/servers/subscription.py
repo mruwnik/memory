@@ -1,17 +1,18 @@
-"""MCP subserver for subscriptions: a source (items that match a filter, a cron
-expression, or a one-off time) handed to a handler (an agent, a queue your workers
-drain, or a message)."""
+"""MCP subserver for subscriptions: a source (items that match a filter, webhook
+deliveries, a cron expression, or a one-off time) handed to a handler (an agent, a
+queue your workers drain, or a message)."""
 
+import asyncio
 import re
 from datetime import timezone
 from typing import Any, Literal
 
 from fastmcp import FastMCP
 from pydantic import ValidationError
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.exc import IntegrityError
 
-from memory.agents.activity import subscription_activity
+from memory.agents.activity import run_outcome, subscription_activity
 from memory.agents.clock import (
     CHANNELS,
     CRON,
@@ -25,9 +26,21 @@ from memory.agents.clock import (
     schedule_next,
 )
 from memory.agents.prebuilt import code_agent
+from memory.agents.raw_events import RawConfig, account_owner
 from memory.agents.spec import MAX_NAME_CHARS, MAX_TEXT_CHARS, AgentSpec
 from memory.agents.trigger_input import check_template
-from memory.agents.triggers import INGEST, PENDING, RESUME, THROTTLED, IngestConfig, PerItem, resume_from_trip
+from memory.agents.triggers import (
+    INGEST,
+    PENDING,
+    RAW_WAITING,
+    RESUME,
+    THROTTLED,
+    IngestConfig,
+    PerItem,
+    accessible_ids,
+    dry_run,
+    resume_from_trip,
+)
 from memory.api.auth import token_api_key
 from memory.api.MCP.access import get_mcp_current_user
 from memory.api.MCP.servers.agent import (
@@ -43,9 +56,18 @@ from memory.api.MCP.visibility import READ_ONLY, require_scopes, visible_when
 from memory.common import settings
 from memory.common.dates import parse_wall_clock_utc
 from memory.common.db.connection import DBSession, make_session
-from memory.common.db.models import AgentDefinition, AgentRun, AgentTrigger, AgentTriggerMatch, APIKey, Event, User
+from memory.common.db.models import (
+    AgentDefinition,
+    AgentRun,
+    AgentTrigger,
+    AgentTriggerMatch,
+    APIKey,
+    Event,
+    SourceItem,
+    User,
+)
 from memory.common.db.models.agents import iso
-from memory.common.db.models.events import TICK, TIMER
+from memory.common.db.models.events import NOT_COLLECTED, RAW, TICK, TIMER
 from memory.common.scopes import (
     SCOPE_ADMIN,
     SCOPE_AGENTS,
@@ -61,7 +83,9 @@ WRITERS = (SCOPE_AGENTS, SCOPE_AGENTS_WORK, SCOPE_SCHEDULE_WRITE)
 READERS = (*WRITERS, SCOPE_SCHEDULE)
 # Default names carry the subscription's id, so no other subscription may take one.
 DEFAULT_NAME = re.compile(r"(subscription|trigger|schedule)-\d+")
-SOURCE_KINDS = {"filter": INGEST, "cron": CRON, "at": TIMER}
+SOURCE_KINDS = {"filter": INGEST, "raw": RAW, "cron": CRON, "at": TIMER}
+# Sources whose subscriptions say what is read, which schedule keys don't see.
+READING_KINDS = (INGEST, RAW)
 NOTIFY_FIELDS = ("channel", "target", "message", "subject")
 FIRED_TIMERS_LISTED = 50
 MAX_HISTORY = 100
@@ -99,7 +123,7 @@ def owned(db: DBSession, subscription_id: int, user_id: int) -> AgentTrigger:
     if (
         trigger is None
         or trigger.user_id != user_id
-        or trigger.kind != CRON and not reads_filters(set(caller_token()[1]))
+        or trigger.kind in READING_KINDS and not reads_filters(set(caller_token()[1]))
     ):
         raise ValueError(f"unknown subscription {subscription_id}")
     return trigger
@@ -147,7 +171,7 @@ def check_cap(db: DBSession, user_id: int, exclude_id: int) -> None:
 def source_kind(source: dict[str, Any]) -> str:
     found = [SOURCE_KINDS[k] for k in SOURCE_KINDS if k in source]
     if len(found) != 1:
-        raise ValueError('source takes exactly one of "filter", "cron" or "at"')
+        raise ValueError('source takes exactly one of "filter", "raw", "cron" or "at"')
     return found[0]
 
 
@@ -220,18 +244,35 @@ def checked_input(handler: dict[str, Any], input: str | None) -> str:
 
 
 def check_combination(kind: str, handler: dict[str, Any], shaping: dict[str, Any]) -> None:
-    if "notify" in handler and kind == INGEST:
-        raise ValueError("notify handlers take cron and timer sources")
-    if "queue" in handler and kind != INGEST:
-        raise ValueError("queue handlers take filter sources")
     given = sorted(k for k, v in shaping.items() if v is not None)
-    if kind != INGEST and given:
+    if kind == RAW:
+        # A raw delivery is rendered at claim, which only a worker's queue does.
+        if "queue" not in handler:
+            raise ValueError("raw sources take queue handlers")
+        if unshaped := [k for k in given if k not in ("max_per_hour", "backlog_max")]:
+            raise ValueError(f"{', '.join(unshaped)} apply to filter sources")
+    if "notify" in handler and kind in READING_KINDS:
+        raise ValueError("notify handlers take cron and timer sources")
+    if "queue" in handler and kind not in READING_KINDS:
+        raise ValueError("queue handlers take filter and raw sources")
+    if kind not in READING_KINDS and given:
         raise ValueError(f"{', '.join(given)} apply to filter sources")
     if "agent" in handler and shaping["order_by"] not in (None, "none"):
         raise ValueError("order_by applies to queue handlers: agent deliveries aren't ordered")
     for field in ("max_per_hour", "backlog_max"):
         if shaping[field] is not None and shaping[field] < 0:
             raise ValueError(f"{field} must be at least 0")
+
+
+def checked_raw(db: DBSession, user_id: int, config: dict[str, Any]) -> dict[str, Any]:
+    """A raw source, for one of the caller's own accounts if it names one."""
+    try:
+        raw = RawConfig.model_validate(config.get("raw"))
+    except ValidationError as e:
+        raise ValueError(f"invalid raw source: {e}") from e
+    if raw.account_id is not None and account_owner(db, raw.source, raw.account_id) != user_id:
+        raise ValueError(f"unknown {raw.source} account {raw.account_id}")
+    return {"raw": raw.model_dump()}
 
 
 def checked_config(kind: str, config: dict[str, Any], handler: dict[str, Any], cron_changed: bool) -> dict[str, Any]:
@@ -254,8 +295,9 @@ def merged_source(stored: dict[str, Any], given: dict[str, Any], handler: dict[s
     """`given` over the stored source, a filter key by key, since a dropped key would
     widen what matches. Only an agent runs with an input."""
     merged = stored | given
-    if isinstance(stored.get("filter"), dict) and isinstance(given.get("filter"), dict):
-        merged["filter"] = stored["filter"] | given["filter"]
+    for part in ("filter", "raw"):
+        if isinstance(stored.get(part), dict) and isinstance(given.get(part), dict):
+            merged[part] = stored[part] | given[part]
     if "agent" not in handler and "input" not in given:
         merged.pop("input", None)
     return merged
@@ -300,7 +342,7 @@ def apply_enabled(
         check_cap(db, trigger.user_id, exclude_id=trigger.id)
         if resume:
             resume_from_trip(db, trigger)
-        elif trigger.kind == INGEST:
+        elif trigger.kind in READING_KINDS:
             # The database clock, which also stamps items' inserted_at.
             trigger.active_since = func.now()
         # A replay left from an earlier resume would deliver what "from now" skips.
@@ -370,7 +412,25 @@ async def upsert(
       the subscription matches once its sync reports news about it (commits,
       comments, review, checks_complete or state). Our own bots' posts, your own
       Slack messages (except for queue handlers; set filter.exclude_own) and items
-      the subscription's runs reported posting never match.
+      the subscription's runs reported posting never match. on_remove: an item
+      the subscription was delivered is delivered again once removed, as its id
+      with the change "removed".
+    - {"raw": {"source": github|slack|discord|transcripts, "account_id", "types",
+      "outcome"}}: webhook deliveries to your own accounts of that source (one, with
+      account_id) from now on, whether or not anything was stored (queue handlers).
+      types: "event" or "event.action" (e.g. "pull_request", "reaction_added");
+      outcome: "stored" and/or "no_item_type" (default both). Deliveries for
+      channels or repos that aren't collected never arrive. A claimed one's ref has
+      the event's id, source, type, outcome, account and container, and the items
+      it stored that you can read (not for GitHub, whose refetches aren't linked to
+      deliveries); its input, the payload (kept only when nothing was stored, for 7
+      days) inside <untrusted_item>, or "payload withheld" unless both the
+      subscription's key and yours could read the items filed where it came from.
+      Anything that becomes an item is better taken as a filter source, which
+      gap-fill polling also feeds. Takes max_per_hour (default
+      AGENT_MAX_RUNS_PER_HOUR) and backlog_max (default 1000 waiting): deliveries
+      over either are shed at once, recorded as failed runs. Unclaimed ones expire
+      after 7 days. The queue can't change.
     - {"cron": "<5 fields>", "input"}: a tick each time it is due, in your
       timezone (meta_get_user), at most every MIN_CRON_INTERVAL_MINUTES (agent and
       notify handlers). An agent's input is required; its run's trigger_ref has the
@@ -435,6 +495,11 @@ async def upsert(
             elif kind == INGEST and set(handler) != set(existing.handler):
                 # Its waiting deliveries are shaped for the handler kind they were routed to.
                 raise ValueError("a filter subscription's handler kind can't change: delete it and subscribe again")
+            elif kind == RAW and handler != existing.handler and {
+                k: v.strip() if isinstance(v, str) else v for k, v in handler.items()
+            } != existing.handler:
+                # Its waiting deliveries are runs already on the old queue.
+                raise ValueError("a raw subscription's queue can't change: delete it and subscribe again")
             elif isinstance(handler.get("notify"), dict) and "notify" in stored_handler:
                 handler = {"notify": stored_handler["notify"] | handler["notify"]}
         elif handler is None:
@@ -444,7 +509,7 @@ async def upsert(
         else:
             kind = source_kind(source)
         stored, spec, definition = await checked_handler(db, user_id, set(scopes), handler)
-        if kind != INGEST and "agent" in stored:
+        if kind in (CRON, TIMER) and "agent" in stored:
             need(set(scopes), "an agent on a schedule", SCOPE_SCHEDULE_WRITE)
         check_combination(kind, stored, shaping)
         if resume and kind != INGEST:
@@ -457,7 +522,8 @@ async def upsert(
             return add_one_off(db, user_id, key, stored, source or {})
         stored_config = existing.config if existing else {}
         cron_changed = existing is None or (source or {}).get("cron", stored_config.get("cron")) != stored_config.get("cron")
-        config = checked_config(kind, merged_source(stored_config, source or {}, stored), stored, cron_changed)
+        merged = merged_source(stored_config, source or {}, stored)
+        config = checked_raw(db, user_id, merged) if kind == RAW else checked_config(kind, merged, stored, cron_changed)
         was_enabled = existing is not None and existing.enabled
         trigger = existing or new_subscription(db, user_id, kind, key)
         trigger.enabled = was_enabled if enabled is None and existing else enabled is not False
@@ -506,7 +572,7 @@ async def list_all(
     with make_session() as db:
         query = select(AgentTrigger).where(AgentTrigger.user_id == user_id)
         if not reads_filters(set(caller_token()[1])):
-            query = query.where(AgentTrigger.kind == CRON)
+            query = query.where(AgentTrigger.kind.not_in(READING_KINDS))
         if definition_id is not None:
             query = query.where(AgentTrigger.definition_id == definition_id)
         if queue is not None:
@@ -545,6 +611,30 @@ def delivery(match: AgentTriggerMatch, run_status: str | None) -> dict[str, Any]
         "error": match.error,
         "run_id": match.run_id,
         "run_status": run_status,
+    }
+
+
+def raw_event_id(run: AgentRun) -> int | None:
+    """The raw event a raw delivery run is of, from its dedupe key, which a failed
+    run keeps when its ref is cleared."""
+    event_id = (run.dedupe_key or "").rpartition(":raw:")[2]
+    return int(event_id) if event_id.isdigit() else None
+
+
+def raw_delivery(run: AgentRun, event: Event | None) -> dict[str, Any]:
+    """A raw subscription's delivery, which is its run, linked once a worker claimed it."""
+    claimed = run.started_at is not None
+    shown = event is not None and event.outcome != NOT_COLLECTED
+    return {
+        "raw_event_id": raw_event_id(run),
+        "type": event.type if shown and event else None,
+        "container": event.container if shown and event else None,
+        "account_id": event.account_id if event else None,
+        "status": PENDING if not claimed and run.status == PENDING else run_outcome(run),
+        "created_at": iso(run.created_at),
+        "error": None if run.error == run_outcome(run) else run.error,
+        "run_id": run.id if claimed else None,
+        "run_status": run.status if claimed else None,
     }
 
 
@@ -588,6 +678,16 @@ async def fetch(
         if trigger.kind == CRON:
             ticks = select(Event).where(Event.kind == TICK, Event.trigger_id == trigger.id)
             deliveries = [tick(e) for e in db.scalars(ticks.order_by(Event.fire_at.desc()).limit(limit))]
+        elif trigger.kind == RAW:
+            raw_runs = select(AgentRun).where(AgentRun.trigger_id == trigger.id)
+            if pending is not None:
+                waiting = and_(*RAW_WAITING)
+                raw_runs = raw_runs.where(waiting if pending else ~waiting)
+            order = AgentRun.created_at if pending else AgentRun.created_at.desc()
+            listed = db.scalars(raw_runs.order_by(order, AgentRun.id).limit(limit)).all()
+            event_ids = [i for r in listed if (i := raw_event_id(r)) is not None]
+            events = {e.id: e for e in db.scalars(select(Event).where(Event.id.in_(event_ids)))}
+            deliveries = [raw_delivery(r, events.get(raw_event_id(r) or 0)) for r in listed]
         else:
             matches = (
                 select(AgentTriggerMatch, AgentRun.status)
@@ -612,6 +712,37 @@ async def fetch(
             "deliveries": deliveries,
             "runs": [run_summary(r) for r in db.scalars(ordered_runs)],
         }
+
+
+@subscription_mcp.tool(annotations=READ_ONLY)
+@visible_when(require_scopes(*READERS))
+async def test(subscription_id: int, item_id: int) -> dict:
+    """Dry run: whether one of your filter subscriptions would take an item you can
+    read, as the item is now. `failed` names the first check it fails, else null:
+    a filter field (source_types, tags_any, channel_ids, exclude_channel_ids,
+    exclude_authors, authors_any, repos, mentions_me, dms_to_me, text_contains,
+    regex), or own_authors (our bots' and syncs' posts), readable (the
+    subscription's credential can't read it), exclude_own, threads_im_in,
+    known_people_only, posted (one of its runs reported posting it), credentials
+    (its key no longer works) or config (it no longer validates). Whether an event
+    would count (active_since, on_edit, on_changes, changed_by_any) is not checked."""
+    user_id, _ = caller()
+    token, _ = caller_token()
+    # Off the event loop: matching queries the database and runs the filter's regex.
+    return await asyncio.to_thread(try_item, user_id, token, subscription_id, item_id)
+
+
+def try_item(user_id: int, token: str, subscription_id: int, item_id: int) -> dict:
+    with make_session() as db:
+        trigger = owned(db, subscription_id, user_id)
+        if trigger.kind != INGEST:
+            raise ValueError("only filter subscriptions take items")
+        key = token_api_key(token, db)
+        item = db.get(SourceItem, item_id)
+        if item is None or not accessible_ids(db, db.get_one(User, user_id), key, [item_id]):
+            raise ValueError(f"unknown item {item_id}")
+        failed = dry_run(db, trigger, item)
+        return {"subscription_id": trigger.id, "item_id": item_id, "matches": failed is None, "failed": failed}
 
 
 @subscription_mcp.tool()

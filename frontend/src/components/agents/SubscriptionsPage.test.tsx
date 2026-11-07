@@ -14,6 +14,17 @@ const agents = {
   catalog: vi.fn(),
 }
 
+vi.mock('@/hooks/useWebhookLog', async (orig) => ({
+  ...(await orig<typeof import('@/hooks/useWebhookLog')>()),
+  useWebhookLog: () => ({
+    listAccounts: () => Promise.resolve([
+      { source: 'slack', account_id: 3, name: 'team app', last_event_id: null, last_event_at: null, own: true },
+      { source: 'slack', account_id: 5, name: 'someone else', last_event_id: null, last_event_at: null, own: false },
+      { source: 'discord', account_id: 4, name: 'bot', last_event_id: null, last_event_at: null, own: true },
+    ]),
+  }),
+}))
+
 vi.mock('@/hooks/useAgents', async (orig) => ({
   ...(await orig<typeof import('@/hooks/useAgents')>()),
   useAgents: () => agents,
@@ -95,5 +106,88 @@ describe('SubscriptionsPage', () => {
 
     expect(screen.getByText('You already have a subscription named pr reviews')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled()
+  })
+
+  it('creates a webhook subscription on one of my accounts, handed to a queue', async () => {
+    const { user } = renderWithRouter(<SubscriptionsPage />)
+    await user.click(await screen.findByRole('button', { name: 'New subscription' }))
+
+    // The page's own source filter comes first.
+    await user.click(screen.getAllByRole('button', { name: 'Webhooks' }).at(-1)!)
+    await user.selectOptions(screen.getByLabelText('Sent by'), 'slack')
+    await user.selectOptions(screen.getByLabelText('Account'), await screen.findByRole('option', { name: 'team app' }))
+    await user.type(screen.getByLabelText(/Event types/), 'reaction_added')
+    await user.click(screen.getByLabelText('stored items'))
+    await user.type(screen.getByLabelText('Queue'), 'hooks')
+    await user.click(screen.getByRole('button', { name: 'Create' }))
+
+    await waitFor(() => expect(agents.upsertSubscription).toHaveBeenCalledWith({
+      create_only: true,
+      handler: { queue: 'hooks' },
+      source: { raw: { source: 'slack', account_id: 3, types: ['reaction_added'], outcome: ['no_item_type'] } },
+    }))
+    expect(screen.queryByRole('option', { name: 'bot' })).not.toBeInTheDocument()
+    // An admin sees other people's accounts in the log, but can't subscribe to them.
+    expect(screen.queryByRole('option', { name: 'someone else' })).not.toBeInTheDocument()
+  })
+
+  it('says a webhook source with none of my accounts will never fire', async () => {
+    const { user } = renderWithRouter(<SubscriptionsPage />)
+    await user.click(await screen.findByRole('button', { name: 'New subscription' }))
+
+    await user.click(screen.getAllByRole('button', { name: 'Webhooks' }).at(-1)!)
+    await user.selectOptions(screen.getByLabelText('Sent by'), 'transcripts')
+
+    expect(await screen.findByText(/You have no Transcripts accounts/)).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'GitHub' })).toBeInTheDocument()
+  })
+
+  it('shows a refused save by the buttons, without the tool call prefix', async () => {
+    agents.upsertSubscription.mockRejectedValue(new Error("Error calling tool 'upsert': unknown slack account 9"))
+    const { user } = renderWithRouter(<SubscriptionsPage />)
+    await user.click(await screen.findByRole('button', { name: 'New subscription' }))
+    await user.type(screen.getByLabelText('Queue'), 'hooks')
+
+    await user.click(screen.getByRole('button', { name: 'Create' }))
+
+    const refusal = await screen.findByText('unknown slack account 9')
+    expect(refusal.closest('[data-form-error]')).not.toBeNull()
+  })
+
+  it('names a webhook delivery by its event and shows its run instead of a done badge', async () => {
+    const raw = {
+      ...queued, id: 8, name: 'hooks', kind: 'raw', handler: { queue: 'hooks' }, enabled: true, state: {},
+      config: { raw: { source: 'github', account_id: 1, types: [], outcome: ['stored', 'no_item_type'] } },
+    } as unknown as Subscription
+    agents.listSubscriptions.mockResolvedValue({ subscriptions: [raw], timers: [] })
+    agents.fetchSubscription.mockImplementation((_id: number, { pending }: { pending?: boolean }) => Promise.resolve({
+      deliveries: pending ? [] : [{
+        raw_event_id: 41, type: 'pull_request.closed', container: '42', account_id: 1, status: 'done', created_at: null,
+        error: null, run_id: 'r2', run_status: 'done',
+      }],
+    }))
+    const { user } = renderWithRouter(<SubscriptionsPage />)
+
+    await user.click(await screen.findByRole('button', { name: 'hooks' }))
+
+    const recent = (await screen.findByText('Recent deliveries')).parentElement!.parentElement!
+    expect(await within(recent).findByText('pull_request.closed')).toBeInTheDocument()
+    expect(within(recent).getByRole('link', { name: 'webhook log' })).toHaveAttribute('href', '/sources/webhook-log?account=github%3A1')
+    expect(within(recent).getByRole('link', { name: /run/ })).toHaveAttribute('href', '/agents/runs/r2')
+    expect(within(recent).queryByText('done')).not.toBeInTheDocument()
+  })
+
+  it('keeps a saved account the picker no longer lists', async () => {
+    const raw = {
+      ...queued, id: 8, name: 'hooks', kind: 'raw', handler: { queue: 'hooks' }, enabled: true, state: {},
+      config: { raw: { source: 'slack', account_id: 99, types: [], outcome: ['stored', 'no_item_type'] } },
+    } as unknown as Subscription
+    agents.listSubscriptions.mockResolvedValue({ subscriptions: [raw], timers: [] })
+    const { user } = renderWithRouter(<SubscriptionsPage />)
+
+    await user.click(await screen.findByRole('button', { name: 'Edit' }))
+
+    const saved = await screen.findByRole('option', { name: 'Slack account 99 (not one of yours now)' })
+    expect((saved as HTMLOptionElement).selected).toBe(true)
   })
 })

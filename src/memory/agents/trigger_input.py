@@ -11,7 +11,7 @@ import re
 from datetime import datetime
 from typing import Any, Callable, Collection, Mapping
 
-from memory.agents.triggers import item_body, item_title
+from memory.agents.triggers import REMOVED_CHANGE, item_body, item_title
 from memory.common.db.models import (
     DiscordMessage,
     ForumPost,
@@ -249,15 +249,18 @@ def as_text(value: Any) -> str:
     return str(value)
 
 
+def escaped(text: str) -> str:
+    """The text with the delimiter escaped, so it can't open or end a block."""
+    return DELIMITER.sub(lambda m: f"&lt;{m.group(1)}{m.group(2)}", text)
+
+
 def untrusted(item_id: Any, field: str, text: str) -> str:
-    """Escapes the delimiter inside the text so it can't end the block early."""
-    safe = DELIMITER.sub(lambda m: f"&lt;{m.group(1)}{m.group(2)}", text)
-    return f"<untrusted_item id={item_id} field={field}>{safe}</untrusted_item>"
+    return f"<untrusted_item id={item_id} field={field}>{escaped(text)}</untrusted_item>"
 
 
 def bare(text: str) -> str:
     # Single line and short, so a name can't pass for the input's structure.
-    return " ".join(text.split())[:BARE_CHARS]
+    return " ".join(escaped(text).split())[:BARE_CHARS]
 
 
 def field_text(item_id: int, field: str, value: Any) -> str:
@@ -313,13 +316,17 @@ def render_input(
     items: list[SourceItem],
     max_chars: int,
     changes: Mapping[Any, list[str]] = {},
+    removed: Collection[int] = (),
 ) -> str:
     """Fill the template in one pass, so item text can't add placeholders of its own.
+    `removed` items, which are gone, are named by id alone.
 
     A template without placeholders gets the default rendering appended. Clipped
     rather than refused: an oversized input would trip the trigger.
     """
-    all_fields = [item_fields(i, changes_for(i.id, changes)) for i in items]
+    present = [item_fields(i, changes_for(i.id, changes)) for i in items]
+    gone = [{"id": i, "type": "item", "changes": [REMOVED_CHANGE]} for i in sorted(removed)]
+    all_fields = present + gone
     first = all_fields[0] if all_fields else {}
 
     def fill(match: re.Match) -> str:

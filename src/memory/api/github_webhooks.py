@@ -128,7 +128,8 @@ def handle_delivery(db: Session, account_id: int, body: bytes, request: Request)
     changed = event_targets(db, repo, event, payload) if repo else []
     targets = [(n, kind) for n, kind in changed if repo and tracks(repo, kind)]
     if event == "ping":
-        status, outcome = "pong", NO_ITEM_TYPE
+        # A ping for a repo that isn't collected is as untracked as any other event.
+        status, outcome = "pong", NO_ITEM_TYPE if repo is not None else NOT_COLLECTED
     elif not account.active:
         status, outcome = "ignored", NOT_COLLECTED
     elif repo is None:

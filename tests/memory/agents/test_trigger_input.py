@@ -314,3 +314,7 @@ def test_bad_placeholders_are_named(template, source_types, per_item, error):
 )
 def test_good_placeholders_pass(template, source_types, per_item):
     check_template(template, source_types, per_item)
+
+
+def test_removed_items_are_named_by_id_in_order():
+    assert render_input("{items}", [], 10_000, removed={3, 1}) == "- [item #1] removed\n- [item #3] removed"

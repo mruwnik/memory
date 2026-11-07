@@ -23,13 +23,15 @@ from memory.agents.triggers import (
     THROTTLE_WINDOW,
     THROTTLED,
     IngestConfig,
-    accessible_ids,
+    REMOVED_VERSION,
     changes_by_item,
     coalesced_ref,
     dedupe_key,
+    deliverable_ids,
     delivery_ref,
     episode_over,
     lock_trigger,
+    removals,
     parse_ref,
     posted_among,
     tell_owner,
@@ -127,7 +129,8 @@ def start_run(
     own, so a cap that stops the run can't hold them back too."""
     config = IngestConfig.model_validate(trigger.config)
     key = trigger_key(db, trigger, owner)
-    allowed = set(accessible_ids(db, owner, key, [d.item_id for d in deliveries]))
+    removed = removals(db, trigger.id, {d.item_id for d in deliveries if bytes(d.content_hash) == REMOVED_VERSION})
+    allowed = deliverable_ids(db, owner, key, [d.item_id for d in deliveries], removed)
     candidates = db.query(SourceItem).filter(SourceItem.id.in_(allowed)).all()
     posted = posted_among(db, trigger.id, candidates)
     skipped = {d.item_id: SKIPPED_INACCESSIBLE for d in deliveries if d.item_id not in allowed}
@@ -159,7 +162,7 @@ def start_run(
         db,
         user_id=owner.id,
         spec=spec,
-        input=render_input(config.template, items, MAX_TEXT_CHARS, changes),
+        input=render_input(config.template, items, MAX_TEXT_CHARS, changes, removed & set(item_ids)),
         trigger=TriggerInfo(
             kind=INGEST,
             ref={"trigger_id": trigger.id, "item_ids": item_ids, "changes": changes}

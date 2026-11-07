@@ -130,6 +130,26 @@ def test_a_fire_starts_one_run_with_the_rendered_input(
     no_celery_dispatch.assert_called_once_with(RUN_AGENT, args=[run.id], task_id=run.id)
 
 
+def test_a_removal_starts_a_run_naming_the_item_removed(
+    db_session, admin_user, fake_providers, admin_keys, no_celery_dispatch
+):
+    trigger = setup(db_session, admin_user, config=CONFIG | {"on_remove": True})
+    p = post(db_session)
+    item_id = p.id
+    route_item(db_session, item_id)
+    fire_dispatched(no_celery_dispatch)
+    db_session.delete(p)
+    db_session.commit()
+
+    triggers.route_events()
+    fire_dispatched(no_celery_dispatch)
+
+    runs = db_session.query(AgentRun).filter(AgentRun.trigger_id == trigger.id).order_by(AgentRun.created_at)
+    [first, removal] = runs.all()
+    assert [r.trigger_ref["changes"] for r in (first, removal)] == [{str(item_id): ["new"]}, {str(item_id): ["removed"]}]
+    assert removal.input == f"New:\n- [item #{item_id}] removed"
+
+
 def test_a_code_slug_trigger_runs_that_agent(db_session, admin_user, code_agents, admin_keys):
     trigger = AgentTrigger(
         user_id=admin_user.id, name="t", handler={"agent": "echo"}, kind="ingest", config=CONFIG

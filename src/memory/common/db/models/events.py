@@ -33,6 +33,8 @@ STORED, NOT_COLLECTED, NO_ITEM_TYPE, REJECTED = "stored", "not_collected", "no_i
 TICK, TIMER = "tick", "timer"
 TIME_KINDS = (TICK, TIMER)
 ADDED, CHANGED, REMOVED = "added", "changed", "removed"
+# A raw event's data key: an ingest task linking its item events was sent.
+LINKS_ITEMS = "links_items"
 # session.info key: ids of the items this transaction inserted.
 INSERTED_ITEMS_KEY = "_inserted_source_items"
 # The raw event behind the task running now; item events it writes link it.
@@ -201,11 +203,14 @@ def record_raw_event(
     outcome: str,
     container: str | None = None,
     payload: Any = None,
+    links_items: bool = False,
 ) -> int | None:
     """Add, uncommitted, the raw event for one delivery; None when the account
     already recorded `delivery_id`. Until the caller commits, a concurrent repeat
     of the delivery waits on this one. A delivery not collected keeps no
-    container: an untracked channel stays unseen."""
+    container: an untracked channel stays unseen. `links_items`: the caller sends
+    an ingest task that links the item events it writes (caused_by), which a raw
+    subscription's delivery waits for."""
     values = dict(
         kind=RAW,
         source=source,
@@ -216,6 +221,7 @@ def record_raw_event(
         outcome=outcome,
         container=None if outcome == NOT_COLLECTED else container,
         payload=kept_payload(outcome, payload),
+        data={LINKS_ITEMS: True} if links_items else None,
     )
     statement = (
         insert(Event)

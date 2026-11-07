@@ -4,11 +4,19 @@ from typing import Any, cast
 
 from sqlalchemy import func, select
 
-from memory.agents.triggers import PENDING
+from memory.agents.triggers import DONE, EXPIRED, PENDING, RAW_WAITING, SHED_BACKLOG, SHED_RATE
 from memory.common.db.connection import DBSession
 from memory.common.db.models import AgentRun, AgentTrigger, AgentTriggerMatch, APIKey, Event
-from memory.common.db.models.agents import iso
-from memory.common.db.models.events import TICK
+from memory.common.db.models.agents import RunStatus, iso
+from memory.common.db.models.events import RAW, TICK
+
+
+def run_outcome(run: AgentRun) -> str:
+    """A raw delivery's status as a filter delivery's reads: done once claimed, or
+    why it ended unclaimed."""
+    if run.error in (SHED_RATE, SHED_BACKLOG, EXPIRED):
+        return cast(str, run.error)
+    return DONE if run.started_at is not None else run.status
 
 
 def last_deliveries(db: DBSession, ids: list[int]) -> dict[int, dict[str, Any]]:
@@ -31,6 +39,24 @@ def last_deliveries(db: DBSession, ids: list[int]) -> dict[int, dict[str, Any]]:
         .distinct(Event.trigger_id)
         .order_by(Event.trigger_id, Event.fire_at.desc())
     )
+    # A raw delivery is its run: the latest one that ended.
+    newest_raw = (
+        select(AgentRun)
+        .where(
+            AgentRun.trigger_id.in_(ids),
+            AgentRun.trigger_kind == RAW,
+            AgentRun.status.not_in([RunStatus.PENDING.value, RunStatus.RUNNING.value]),
+        )
+        .distinct(AgentRun.trigger_id)
+        .order_by(AgentRun.trigger_id, AgentRun.created_at.desc())
+    )
+    for run in db.scalars(newest_raw):
+        last[cast(int, run.trigger_id)] = {
+            "status": run_outcome(run),
+            "at": iso(run.created_at),
+            "run_id": run.id,
+            "run_status": run.status,
+        }
     for tick, status in db.execute(newest_tick).tuples():
         result = tick.result or {}
         last[cast(int, tick.trigger_id)] = {
@@ -60,7 +86,17 @@ def subscription_activity(
         .where(AgentTriggerMatch.trigger_id.in_(ids), AgentTriggerMatch.status == PENDING)
         .group_by(AgentTriggerMatch.trigger_id)
     )
-    backlogs = {tid: (n, oldest) for tid, n, oldest in db.execute(waiting).tuples()}
+    raw_waiting = (
+        select(AgentRun.trigger_id, func.count(), func.min(AgentRun.created_at))
+        .where(AgentRun.trigger_id.in_(ids), *RAW_WAITING)
+        .group_by(AgentRun.trigger_id)
+    )
+    # A subscription has deliveries of one kind only, filter or raw.
+    backlogs = {
+        cast(int, tid): (n, oldest)
+        for query in (waiting, raw_waiting)
+        for tid, n, oldest in db.execute(query).tuples()
+    }
     last = last_deliveries(db, ids)
     return {
         t.id: {

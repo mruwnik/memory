@@ -1,9 +1,22 @@
 """The webhook log: GET /webhook-events lists the source accounts it covers, and
 GET /webhook-events/{source}/{account_id} one account's deliveries."""
 
-import pytest
+from datetime import datetime, timezone
 
-from memory.common.db.models import AgentTrigger, AgentTriggerMatch, BlogPost, Event, GithubAccount, HumanUser, SlackApp
+import pytest
+from sqlalchemy import select, text
+
+from memory.common.db.models import (
+    AgentRun,
+    AgentTrigger,
+    AgentTriggerMatch,
+    BlogPost,
+    Event,
+    GithubAccount,
+    HumanUser,
+    SlackApp,
+)
+from memory.api.webhook_events import RAW_RUN_EVENT
 from memory.common.db.models.events import record_raw_event
 from tests.conftest import unique_sha256
 
@@ -154,3 +167,79 @@ def test_the_accounts_listed_are_the_viewers_own_with_their_latest_delivery(memb
 
 def test_an_unknown_source_is_rejected(client):
     assert client.get("/webhook-events/email/5").status_code == 422
+
+
+def test_a_delivery_shows_the_viewers_raw_subscriptions_runs_of_it(member_client, db_session, user):
+    raw_id = raw(db_session, user.id, "d1")
+    mine, theirs = (
+        AgentTrigger(user_id=u, name=n, handler={"queue": "q"}, kind="raw", config={"raw": {"source": "github"}})
+        for u, n in [(user.id, "mine"), (other_user(db_session).id, "theirs")]
+    )
+    db_session.add_all([mine, theirs])
+    db_session.flush()
+    runs = [
+        AgentRun(
+            user_id=t.user_id,
+            queue="q",
+            spec={},
+            input="",
+            max_cost_usd=0,
+            trigger_kind="raw",
+            trigger_ref={"trigger_id": t.id, "event_id": raw_id},
+            trigger_id=t.id,
+            executor="workers",
+        )
+        for t in (mine, theirs)
+    ]
+    db_session.add_all(runs)
+    db_session.commit()
+
+    [shown] = member_client.get("/webhook-events/github/5").json()
+
+    # A run nobody claimed yet isn't linked.
+    assert shown["triggered"] == [
+        {"subscription_id": mine.id, "subscription": "mine", "item_id": None, "status": "pending", "run_id": None}
+    ]
+
+
+
+@pytest.mark.parametrize("started, linked", [(True, True), (False, False)])
+def test_a_filter_delivery_links_its_run_only_once_it_started(member_client, db_session, user, started, linked):
+    raw_id = raw(db_session, user.id, "d1", outcome="stored")
+    item, event = stored_item(db_session, raw_id, user.id)
+    trigger = subscription(db_session, user.id, "mine")
+    run = AgentRun(
+        user_id=user.id, spec={}, input="", max_cost_usd=0, trigger_kind="ingest", trigger_id=trigger.id,
+        executor="workers", started_at=datetime.now(timezone.utc) if started else None,
+    )
+    db_session.add(run)
+    db_session.flush()
+    db_session.add(AgentTriggerMatch(trigger_id=trigger.id, item_id=item.id, content_hash=b"v", status="done",
+                                     event_id=event.id, run_id=run.id))
+    db_session.commit()
+
+    [shown] = member_client.get("/webhook-events/github/5").json()
+
+    assert [t["run_id"] for t in shown["triggered"]] == [run.id if linked else None]
+
+
+def test_the_raw_run_lookup_uses_its_index(db_session):
+    db_session.execute(text("SET LOCAL enable_seqscan = off"))
+    # The lookup's own filter, apart from the join a busier database may plan around.
+    lookup = select(AgentRun.id).where(AgentRun.trigger_kind == "raw", RAW_RUN_EVENT.in_([1, 2]))
+    plan = db_session.execute(
+        text("EXPLAIN " + str(lookup.compile(dialect=db_session.bind.dialect, compile_kwargs={"literal_binds": True})))
+    ).scalars().all()
+
+    assert any("agent_runs_raw_event_idx" in line for line in plan)
+
+
+def test_an_admin_sees_every_account_marked_by_whose_it_is(client, db_session, user):
+    mine = SlackApp(client_id="mine.app", name="Mine", created_by_user_id=user.id)
+    theirs = SlackApp(client_id="their.app", name="Theirs", created_by_user_id=other_user(db_session).id)
+    db_session.add_all([mine, theirs])
+    db_session.commit()
+
+    listed = [(a["account_id"], a["own"]) for a in client.get("/webhook-events").json()]
+
+    assert listed == [(mine.id, True), (theirs.id, False)]

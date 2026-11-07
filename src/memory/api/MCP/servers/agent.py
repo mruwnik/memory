@@ -46,7 +46,7 @@ from memory.agents.external import (
 )
 from memory.agents.mcp_client import calling_run, memory_tools
 from memory.agents.prebuilt import PREBUILT_AGENTS, code_agent
-from memory.agents.queues import backlog, can_read, is_delivery, ready_to_claim, take_from_queue
+from memory.agents.queues import backlog, is_delivery, ready_to_claim, take_from_queue
 from memory.agents.provider_keys import (
     KeyUnavailable,
     check_key,
@@ -71,6 +71,7 @@ from memory.agents.system import SYSTEM_AGENTS, SystemAgent
 from memory.agents.triggers import (
     INGEST,
     POSTED,
+    can_read,
     source_types,
 )
 from memory.agents.work import HELD_OUT
@@ -839,7 +840,9 @@ async def work_claim(
     deliveries skipped; ones only your key can't read are left for another worker,
     and those no worker's key can read wait and end `expired`. A
     trigger's order_by ("item" or "thread") holds a delivery back until an earlier one
-    for the same item or thread is answered. Report on it with agent_work_submit as on
+    for the same item or thread is answered. A removed item's delivery carries its id
+    with the change "removed"; a raw subscription's carries the webhook delivery
+    (see subscription_upsert). Report on it with agent_work_submit as on
     any run; capabilities don't apply. agent_work_queues shows what is waiting.
 
     `capabilities` declares what you have, as {"models": [...], "tools": ["server:tool",

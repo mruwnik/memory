@@ -810,7 +810,8 @@ export const useSubmit = () => {
       await work()
       return true
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      // A refused MCP call's message leads with which tool refused, which the form already says.
+      setError((err instanceof Error ? err.message : String(err)).replace(/^Error calling tool '[^']*':\s*/, ''))
       return false
     } finally {
       setBusy(false)

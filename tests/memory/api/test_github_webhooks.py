@@ -151,7 +151,12 @@ def test_a_delivery_that_could_not_be_queued_is_taken_on_redelivery(client, db_s
     "event, payload, expected",
     [
         ("pull_request", pr_event(), ("pull_request.synchronize", str(REPO_GITHUB_ID), "stored", None)),
-        ("ping", {"zen": "z", "hook_id": 1}, ("ping", None, "no_item_type", {"zen": "z", "hook_id": 1})),
+        ("ping", {"zen": "z", "hook_id": 1}, ("ping", None, "not_collected", None)),
+        (
+            "ping",
+            {"zen": "z", "repository": {"id": REPO_GITHUB_ID}},
+            ("ping", str(REPO_GITHUB_ID), "no_item_type", {"zen": "z", "repository": {"id": REPO_GITHUB_ID}}),
+        ),
         (
             "push",
             {"ref": "main", "repository": {"id": REPO_GITHUB_ID}},

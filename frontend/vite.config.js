@@ -46,7 +46,8 @@ export default defineConfig({
     proxy: {
       // Vite serves its own modules and the app's pages; the api answers everything else.
       '^/(?!@|src/|node_modules/|favicon\\.ico|mcp-client\\.js)': {
-        target: 'http://localhost:8000',
+        // VITE_API_PROXY_TARGET points a dev server at a throwaway api instead of the local stack.
+        target: process.env.VITE_API_PROXY_TARGET || 'http://localhost:8000',
         bypass: req => (isPageNavigation(req) ? req.url : undefined),
       },
     },

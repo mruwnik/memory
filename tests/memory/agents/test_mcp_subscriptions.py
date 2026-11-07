@@ -65,11 +65,12 @@ def post(db, user):
     return item
 
 
-upsert, list_all, fetch, delete = (
+upsert, list_all, fetch, delete, dry_run = (
     subscription.upsert.fn,
     subscription.list_all.fn,
     subscription.fetch.fn,
     subscription.delete.fn,
+    subscription.test.fn,
 )
 
 
@@ -257,7 +258,7 @@ async def test_an_agent_runs_on_a_cron_with_its_input(
         ({"handler": NOTIFY, "source": {"at": "2999-01-01T09:00:00Z"}, "enabled": False}, "can't be created paused"),
         ({"handler": NOTIFY, "source": {"at": "2999-01-01T09:00:00Z"}, "name": "x"}, "timers have no name"),
         ({"handler": NOTIFY, "source": FILTER}, "notify handlers take cron and timer sources"),
-        ({"handler": {"queue": "q"}, "source": CRON}, "queue handlers take filter sources"),
+        ({"handler": {"queue": "q"}, "source": CRON}, "queue handlers take filter and raw sources"),
         ({"handler": {"queue": " "}, "source": FILTER}, "queue name"),
         ({"handler": {"agent": "nope"}, "source": FILTER}, "unknown agent 'nope'"),
         ({"handler": {"agent": 999_999}, "source": FILTER}, "unknown agent definition"),
@@ -707,6 +708,71 @@ async def test_a_notify_handler_takes_only_its_message_fields(db_session, regula
         updated = await upsert(subscription_id=created["id"], handler={"notify": {"message": "renamed"}})
 
     assert updated["handler"] == {"notify": NOTIFY["notify"] | {"message": "renamed"}}
+
+
+# --- Dry runs --------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "filter, failed",
+    [
+        ({"tags_any": ["ai"]}, None),
+        ({"tags_any": ["other"]}, "tags_any"),
+        ({"source_types": ["blog_post"], "text_contains": ["nowhere"]}, "text_contains"),
+        ({"source_types": ["mail_message"], "text_contains": ["nowhere"]}, "source_types"),
+        ({"tags_any": ["ai"], "regex": "^y"}, "regex"),
+        ({"tags_any": ["ai"], "known_people_only": True}, "known_people_only"),
+    ],
+)
+async def test_a_dry_run_names_the_first_predicate_an_item_fails(
+    db_session, regular_user, user_session, filter, failed
+):
+    item = post(db_session, regular_user)
+    with mcp_auth_context(user_session.token):
+        queued = await upsert(handler={"queue": "q"}, source={"filter": filter})
+        result = await dry_run(subscription_id=queued["id"], item_id=item.id)
+
+    assert result == {"subscription_id": queued["id"], "item_id": item.id, "matches": failed is None, "failed": failed}
+
+
+@pytest.mark.asyncio
+async def test_a_dry_run_fails_an_item_the_subscriptions_key_cant_read(
+    db_session, regular_user, admin_user, admin_session
+):
+    item = post(db_session, regular_user)
+    key = api_key(db_session, admin_user, ["agents:work", "read"])
+    with mcp_auth_context(key.key, scopes=["agents:work", "read"]):
+        queued = await upsert(handler={"queue": "q"}, source=FILTER)
+
+    with mcp_auth_context(admin_session.token):
+        result = await dry_run(subscription_id=queued["id"], item_id=item.id)
+
+    assert (result["matches"], result["failed"]) == (False, "readable")
+
+
+@pytest.mark.asyncio
+async def test_a_dry_run_fails_a_subscription_whose_key_is_gone(db_session, regular_user, user_session):
+    item = post(db_session, regular_user)
+    key = api_key(db_session, regular_user, ["agents:work", "read"])
+    with mcp_auth_context(key.key, scopes=["agents:work", "read"]):
+        queued = await upsert(handler={"queue": "q"}, source=FILTER)
+    db_session.delete(key)
+    db_session.commit()
+
+    with mcp_auth_context(user_session.token):
+        result = await dry_run(subscription_id=queued["id"], item_id=item.id)
+
+    assert (result["matches"], result["failed"]) == (False, "credentials")
+
+
+@pytest.mark.asyncio
+async def test_a_dry_run_only_takes_items_the_caller_can_read(db_session, regular_user, admin_user, user_session):
+    hidden = post(db_session, admin_user)
+    with mcp_auth_context(user_session.token):
+        queued = await upsert(handler={"queue": "q"}, source=FILTER)
+        with pytest.raises(ValueError, match=f"unknown item {hidden.id}"):
+            await dry_run(subscription_id=queued["id"], item_id=hidden.id)
 
 
 # --- Listing, history and deleting ----------------------------------------

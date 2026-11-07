@@ -221,6 +221,12 @@ class AgentRun(Base):
             postgresql_where=text("queue IS NOT NULL AND status = 'pending'"),
         ),
         Index("agent_runs_worker_user_idx", "worker_user_id"),
+        # The webhook log's lookup of the raw subscription runs a delivery made.
+        Index(
+            "agent_runs_raw_event_idx",
+            text("((trigger_ref->>'event_id')::bigint)"),
+            postgresql_where=text("trigger_kind = 'raw'"),
+        ),
         # Runs without a trigger (cron) still dedupe per definition.
         Index(
             "agent_runs_definition_dedupe_key",
@@ -350,7 +356,7 @@ class AgentTrigger(Base):
     definition: Mapped[AgentDefinition | None] = relationship("AgentDefinition")
 
     __table_args__ = (
-        CheckConstraint("kind IN ('ingest', 'cron')", name="agent_triggers_kind_check"),
+        CheckConstraint("kind IN ('ingest', 'cron', 'raw')", name="agent_triggers_kind_check"),
         UniqueConstraint("user_id", "name", name="agent_triggers_user_name_key"),
         CheckConstraint(
             "CASE WHEN definition_id IS NOT NULL "
@@ -424,9 +430,9 @@ class AgentTriggerMatch(Base):
     trigger_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("agent_triggers.id", ondelete="CASCADE"), primary_key=True
     )
-    item_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("source_item.id", ondelete="CASCADE"), primary_key=True
-    )
+    # No foreign key: an item's removal is delivered after it is gone, and its
+    # deliveries end as recorded states rather than vanish with it.
+    item_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     content_hash: Mapped[bytes] = mapped_column(BYTEA, primary_key=True)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
     # The trigger had matched an earlier version of the item.

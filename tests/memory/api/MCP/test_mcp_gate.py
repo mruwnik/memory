@@ -9,6 +9,7 @@ from memory.common.db.models import APIKey, APIKeyType, HumanUser
 WORK_TOOLS = {
     *("agent_work_claim", "agent_work_submit", "agent_work_queues"),
     *("subscription_upsert", "subscription_list_all", "subscription_fetch", "subscription_delete"),
+    "subscription_test",
 }
 
 

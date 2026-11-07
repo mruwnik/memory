@@ -4,6 +4,9 @@ import { apiError } from './apiError'
 
 export type WebhookSource = 'github' | 'slack' | 'discord' | 'transcripts'
 export type WebhookOutcome = 'stored' | 'not_collected' | 'no_item_type' | 'rejected'
+export const WEBHOOK_SOURCE_NAMES: Record<WebhookSource, string> = {
+  github: 'GitHub', slack: 'Slack', discord: 'Discord', transcripts: 'Transcripts',
+}
 
 export interface WebhookAccount {
   source: WebhookSource
@@ -11,12 +14,15 @@ export interface WebhookAccount {
   name: string
   last_event_id: number | null
   last_event_at: string | null
+  // The caller's own; an admin also sees everyone else's.
+  own: boolean
 }
 
 export interface TriggeredDelivery {
   subscription_id: number
   subscription: string
-  item_id: number
+  // Null for a webhook subscription's delivery of the event itself.
+  item_id: number | null
   status: string
   run_id: string | null
 }

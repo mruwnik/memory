@@ -41,6 +41,7 @@ def subscribe(db, user, queue=QUEUE, delivery=None, **fields) -> AgentTrigger:
     config = {"filter": {"tags_any": ["ai"]}, "template": "Look: {items}"}
     config |= {"delivery": delivery} if delivery else {}
     config |= {"on_edit": True} if fields.pop("on_edit", False) else {}
+    config |= {"on_remove": True} if fields.pop("on_remove", False) else {}
     t = AgentTrigger(
         user_id=user.id,
         name=fields.pop("name", f"q-{queue}"),
@@ -174,6 +175,34 @@ async def test_a_queue_delivery_is_claimed_by_its_queue_rendered_now_and_reporte
     )
     assert (delivery.status, delivery.run_id) == ("done", claimed["id"])
     assert (reported["status"], reported["result"]) == ("done", {"text": "reviewed"})
+
+
+@pytest.mark.asyncio
+async def test_a_removed_item_reaches_its_queue_after_its_earlier_delivery_is_answered(
+    db_session, regular_user, worker_session
+):
+    trigger = subscribe(db_session, regular_user, on_remove=True, order_by="item")
+    item = post(db_session, creator_id=regular_user.id)
+    item_id = item.id
+    route_item(db_session, item_id)
+    first = await claim(worker_session.token, queue=QUEUE)
+    db_session.delete(item)
+    db_session.commit()
+    triggers.route_events()
+
+    held = await claim(worker_session.token, queue=QUEUE)
+    assert first is not None
+    await submit(worker_session.token, first)
+    removal = await claim(worker_session.token, queue=QUEUE)
+
+    assert held is None
+    assert removal is not None
+    assert removal["ref"] == {
+        "trigger_id": trigger.id,
+        "item_ids": [item_id],
+        "changes": {str(item_id): ["removed"]},
+    }
+    assert removal["input"] == f"Look: - [item #{item_id}] removed"
 
 
 @pytest.mark.asyncio
@@ -670,3 +699,57 @@ def test_queue_health_counts_every_owners_queues_by_id(db_session, regular_user,
     assert [set(q) for q in health] == [{"owner_id", "subscription_ids", "pending", "oldest_age_sec"}] * 2
     assert 300 <= health[0]["oldest_age_sec"] < 400
     assert health[1]["oldest_age_sec"] is None
+
+
+def removal(db, trigger, item_id: int, earlier: str | None):
+    """A removal delivery of `item_id`, after an `earlier` delivery in that state."""
+    earlier_rows = [] if earlier is None else [(b"v1", earlier, [])]
+    for version, status, changes in [*earlier_rows, (triggers.REMOVED_VERSION, "pending", ["removed"])]:
+        db.add(AgentTriggerMatch(trigger_id=trigger.id, item_id=item_id, content_hash=version, status=status,
+                                 changes=changes))
+    db.commit()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "gone, earlier, delivered",
+    [
+        (True, "done", True),
+        # Only a delivered item's removal is news, and only a gone item's.
+        (True, None, False),
+        (True, "skipped:inaccessible", False),
+        (False, "done", False),
+    ],
+)
+async def test_a_removal_is_delivered_only_for_a_gone_item_it_was_delivered(
+    db_session, regular_user, admin_user, worker_session, gone, earlier, delivered
+):
+    trigger = subscribe(db_session, regular_user, on_remove=True)
+    items = [post(db_session, creator_id=admin_user.id), post(db_session, creator_id=admin_user.id)]
+    item_id = items[0].id
+    db_session.delete(items[int(not gone)])
+    db_session.commit()
+    removal(db_session, trigger, item_id, earlier)
+
+    claimed = await claim(worker_session.token, queue=QUEUE)
+
+    assert (claimed is not None) is delivered
+
+
+@pytest.mark.asyncio
+async def test_coalescing_a_thread_never_folds_a_removal(db_session, admin_user, admin_session):
+    trigger = subscribe(db_session, admin_user, order_by="thread", coalesce_mode="latest", on_remove=True)
+    first, second = thread_messages(db_session, 2)
+    first_id = first.id
+    route_item(db_session, first_id)
+    first_claim = await claim(admin_session.token, queue=QUEUE)
+    assert first_claim is not None
+    db_session.delete(first)
+    db_session.commit()
+    triggers.route_events()
+
+    route_item(db_session, second.id)
+
+    db_session.expire_all()
+    rows = db_session.query(AgentTriggerMatch).filter_by(trigger_id=trigger.id)
+    assert sorted((m.changes, m.status) for m in rows) == [(["new"], "done"), (["new"], "pending"), (["removed"], "pending")]

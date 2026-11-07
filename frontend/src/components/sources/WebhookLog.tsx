@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { useWebhookLog, type WebhookAccount, type WebhookEvent, type WebhookOutcome, type WebhookSource } from '@/hooks/useWebhookLog'
+import { useWebhookLog, WEBHOOK_SOURCE_NAMES as SOURCE_NAMES, type WebhookAccount, type WebhookEvent, type WebhookOutcome } from '@/hooks/useWebhookLog'
 import { formatRelativeTime } from '@/components/sources/shared'
 import { formatUserDateTime } from '@/utils/timezones'
 import { deliveryLabel, deliveryTone } from '@/components/agents/subscriptions'
 import { Badge, Button, EmptyState, Field, List, LoadingState, Notice, Page, RefreshButton, Row, Select, SubList, Toolbar, type Tone } from '@/components/shared/ui'
 
 const PAGE = 50
-const SOURCE_NAMES: Record<WebhookSource, string> = { github: 'GitHub', slack: 'Slack', discord: 'Discord', transcripts: 'Transcripts' }
 export const OUTCOMES: Record<WebhookOutcome, { label: string; tone: Tone }> = {
   stored: { label: 'stored', tone: 'success' },
   no_item_type: { label: 'no item type', tone: 'info' },
@@ -46,7 +45,7 @@ const EventRow = ({ e }: { e: WebhookEvent }) => (
             compact
             title={t.subscription}
             badges={<Badge tone={deliveryTone(t.status)}>{deliveryLabel(t.status)}</Badge>}
-            meta={[`item ${t.item_id}`, t.run_id && <Link to={`/agents/runs/${t.run_id}`} className="text-primary hover:underline">run</Link>]}
+            meta={[t.item_id !== null ? `item ${t.item_id}` : 'the delivery itself', t.run_id && <Link to={`/agents/runs/${t.run_id}`} className="text-primary hover:underline">run</Link>]}
           />
         ))}
       </SubList>

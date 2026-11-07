@@ -639,6 +639,14 @@ def channel_collected(db: Session, event_type: str, data: dict) -> bool | None:
     return server is None or server.collect_messages
 
 
+def writes_items(event_type: str, data: object) -> bool:
+    """Whether the event's task writes item events: messages, edits of their text and
+    deletes. Reactions, threads and embed-only edits change what's stored without them."""
+    if event_type == "MESSAGE_UPDATE":
+        return isinstance(data, dict) and "content" in data
+    return event_type in {"MESSAGE_CREATE", *DELETE_EVENT_TYPES}
+
+
 def discord_outcome(db: Session, event_type: str, data: object) -> str:
     if not isinstance(data, dict):
         return NO_ITEM_TYPE
@@ -700,6 +708,7 @@ async def discord_events(bot_id: int, request: Request, db: Session = Depends(ge
         outcome=outcome,
         container=str(channel_id) if channel_id else None,
         payload=envelope,
+        links_items=outcome == STORED and writes_items(event_type, data),
     )
     if raw_id is None:
         db.rollback()

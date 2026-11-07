@@ -12,14 +12,13 @@ import itertools
 import json
 import logging
 import re
-import signal
-import threading
 import time
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 from functools import cached_property
 from typing import Annotated, Any, Collection, Iterable, Literal, cast
 
+import regex
 from celery.exceptions import SoftTimeLimitExceeded
 from pydantic import (
     BaseModel,
@@ -30,11 +29,13 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from sqlalchemy import case, exists, func, or_, select, update
+from sqlalchemy import and_, case, exists, func, or_, select, update
 from sqlalchemy.orm import aliased
 
 from memory.common import settings
+from memory.agents.caps import RateExceeded, check_hourly_rate
 from memory.agents.principal import PrincipalRevoked, standing_key
+from memory.agents.raw_events import DEFAULT_RAW_BACKLOG, RawConfig, raw_matches
 from memory.common.access_control import (
     UserProxy,
     apply_access_filter_to_query,
@@ -72,7 +73,8 @@ from memory.common.db.models import (
     SourceItem,
     User,
 )
-from memory.common.db.models.events import ADDED, ITEM, REMOVED, TIME_KINDS
+from memory.common.db.models.events import ADDED, ITEM, LINKS_ITEMS, RAW, REMOVED, STORED, TIME_KINDS
+from memory.common.db.models.agents import EXECUTOR_WORKERS
 from memory.common.db.models.slack import SlackUserCredentials
 from memory.common.db.models.source_items import DIRECT_CHANNEL_TYPES
 from memory.common.people import people_with_slack_id
@@ -124,6 +126,8 @@ THROTTLE_EPISODE = 2 * THROTTLE_WINDOW
 REPLAY_MARGIN = timedelta(minutes=1)
 # Deliveries pending this long (their trigger disabled, or firing down) end.
 DELIVERY_MAX_AGE = timedelta(days=7)
+# A stored raw delivery waits at most this long for the item events it causes.
+CAUSED_GRACE = timedelta(minutes=2)
 # trigger.state keys.
 THROTTLED, RESUME = "throttled", "resume"
 
@@ -220,8 +224,9 @@ class IngestFilter(BaseModel):
         if value is None:
             return None
         try:
-            re.compile(value)
-        except re.error as e:
+            # The engine regex_search matches with, whose syntax differs from re's.
+            regex.compile(value)
+        except regex.error as e:
             raise ValueError(f"regex does not compile: {e}") from e
         return value
 
@@ -277,6 +282,8 @@ class IngestConfig(BaseModel):
     on_edit: bool = False
     # Edits fire only when they report one of these changes; empty means any edit.
     on_changes: list[Change] = []
+    # A removed item is delivered, tagged "removed", if it was delivered before.
+    on_remove: bool = False
 
     @model_validator(mode="after")
     def changes_need_edits(self) -> "IngestConfig":
@@ -408,6 +415,11 @@ def github_version_part(item: GithubItem) -> str:
     )
 
 
+# The version a removal claims: no item version hashes to it.
+REMOVED_VERSION = hashlib.sha256(b"\x00removed").digest()
+REMOVED_CHANGE = "removed"
+
+
 def content_version(item: SourceItem) -> bytes:
     """What an edit changes, read off the item: not every ingester updates sha256 on an edit.
 
@@ -468,59 +480,45 @@ def item_facts(item: SourceItem, with_direct: bool = False) -> ItemFacts:
     )
 
 
-class RegexTimeout(Exception):
-    pass
+def regex_search(pattern: str, text: str, trigger_id: int | None = None) -> bool:
+    """A regex search under a time limit, on any thread; a timeout counts as no match.
 
-
-def raise_timeout(signum, frame):
-    raise RegexTimeout()
-
-
-def regex_search(pattern: str, text: str) -> bool:
-    """re.search under a SIGALRM time limit; a timeout counts as no match.
-
-    The regex engine checks for signals while backtracking, so the alarm
-    interrupts it. Signals only reach the main thread; elsewhere this refuses
-    rather than run a pattern unbounded.
+    The `regex` engine checks its timeout while backtracking, so a pathological
+    pattern stops in time, unlike `re`, which only a signal can interrupt.
     """
-    if threading.current_thread() is not threading.main_thread():
-        raise RuntimeError("trigger regexes can only be matched on the main thread")
-    previous = signal.signal(signal.SIGALRM, raise_timeout)
-    signal.setitimer(signal.ITIMER_REAL, REGEX_TIMEOUT_SEC)
     try:
-        return re.search(pattern, text[:MAX_MATCH_TEXT_CHARS]) is not None
-    except RegexTimeout:
-        logger.warning("a trigger regex timed out")
+        return regex.search(pattern, text[:MAX_MATCH_TEXT_CHARS], timeout=REGEX_TIMEOUT_SEC) is not None
+    except TimeoutError:
+        logger.warning("trigger %s's regex timed out", trigger_id)
         return False
-    finally:
-        signal.setitimer(signal.ITIMER_REAL, 0)
-        signal.signal(signal.SIGALRM, previous)
+    # Validated when set, but a later engine release may read the pattern otherwise.
+    except regex.error:
+        logger.warning("trigger %s's regex could not be matched", trigger_id)
+        return False
 
 
-def matches(f: IngestFilter, facts: ItemFacts, me: Me = Me()) -> bool:
-    """Whether the filter's criteria that the item's facts settle all hold."""
-    if f.source_types and facts.source_type not in f.source_types:
-        return False
-    if f.tags_any and not facts.tags & set(f.tags_any):
-        return False
-    if f.channel_ids and facts.channel_id not in f.channel_ids:
-        return False
-    if {facts.channel_id, facts.parent_channel_id} & set(f.exclude_channel_ids):
-        return False
-    if facts.authors & lowered(f.exclude_authors):
-        return False
-    if f.authors_any and not facts.author_ids & lowered(f.authors_any):
-        return False
-    if f.repos and facts.repo not in lowered(f.repos):
-        return False
-    if f.mentions_me and not facts.mentions & me.bots:
-        return False
-    if f.dms_to_me and not (facts.direct and facts.collector in me.collectors):
-        return False
+def failed_filter(f: IngestFilter, facts: ItemFacts, me: Me = Me(), trigger_id: int | None = None) -> str | None:
+    """The first of the filter's criteria that the item's facts settle that fails, by
+    field name; None when they all hold."""
     text = facts.text[:MAX_MATCH_TEXT_CHARS].lower()
-    if f.text_contains and not any(t.lower() in text for t in f.text_contains):
-        return False
-    return f.regex is None or regex_search(f.regex, facts.text)
+    checks = (
+        ("source_types", lambda: facts.source_type in f.source_types, f.source_types),
+        ("tags_any", lambda: bool(facts.tags & set(f.tags_any)), f.tags_any),
+        ("channel_ids", lambda: facts.channel_id in f.channel_ids, f.channel_ids),
+        (
+            "exclude_channel_ids",
+            lambda: not {facts.channel_id, facts.parent_channel_id} & set(f.exclude_channel_ids),
+            f.exclude_channel_ids,
+        ),
+        ("exclude_authors", lambda: not facts.authors & lowered(f.exclude_authors), f.exclude_authors),
+        ("authors_any", lambda: bool(facts.author_ids & lowered(f.authors_any)), f.authors_any),
+        ("repos", lambda: facts.repo in lowered(f.repos), f.repos),
+        ("mentions_me", lambda: bool(facts.mentions & me.bots), f.mentions_me),
+        ("dms_to_me", lambda: facts.direct and facts.collector in me.collectors, f.dms_to_me),
+        ("text_contains", lambda: any(t.lower() in text for t in f.text_contains), f.text_contains),
+        ("regex", lambda: regex_search(cast(str, f.regex), facts.text, trigger_id), f.regex is not None),
+    )
+    return next((name for name, holds, given in checks if given and not holds()), None)
 
 
 def changes_caused(
@@ -752,6 +750,20 @@ def trigger_key(db: DBSession, trigger: AgentTrigger, owner: User) -> APIKey | N
     return standing_key(db, owner, trigger.api_key_id, SCOPE_AGENTS)
 
 
+def subscription_key(db: DBSession, trigger: AgentTrigger, owner: User) -> APIKey | None:
+    """The key a subscription reads through; raises PrincipalRevoked once it can't. A
+    queue subscription only hands items over, so reading is all it needs."""
+    if "agent" in trigger.handler:
+        return trigger_key(db, trigger, owner)
+    if trigger.via_api_key and trigger.api_key_id is None:
+        raise PrincipalRevoked("the API key that set up this trigger was deleted")
+    return standing_key(db, owner, trigger.api_key_id, SCOPE_READ)
+
+
+def can_read(owner: User, key: APIKey | None) -> bool:
+    return bool({SCOPE_READ, SCOPE_ADMIN} & set(credential_scopes(owner, key)))
+
+
 def accessible_ids(
     db: DBSession, owner: User, key: APIKey | None, item_ids: list[int]
 ) -> list[int]:
@@ -773,12 +785,45 @@ def accessible_ids(
     )
 
 
+def removals(db: DBSession, trigger_id: int, removal_ids: Collection[int]) -> set[int]:
+    """Which of the items whose removal (REMOVED_VERSION) is up for delivery the
+    trigger may deliver as removed: those really gone, and delivered to it before.
+    Whose key read an item then isn't recorded, so its earlier delivery stands for
+    that."""
+    if not removal_ids:
+        return set()
+    present = db.scalars(select(SourceItem.id).where(SourceItem.id.in_(removal_ids)))
+    gone = set(removal_ids) - set(present)
+    shown = db.scalars(
+        select(AgentTriggerMatch.item_id).where(
+            AgentTriggerMatch.trigger_id == trigger_id,
+            AgentTriggerMatch.item_id.in_(gone),
+            AgentTriggerMatch.status == DONE,
+            AgentTriggerMatch.content_hash != REMOVED_VERSION,
+        )
+    )
+    return gone & set(shown)
+
+
+def deliverable_ids(
+    db: DBSession, owner: User, key: APIKey | None, item_ids: list[int], removed: Collection[int]
+) -> set[int]:
+    """The `item_ids` a delivery through `key` may carry: those it can read, and the
+    `removed` ones (removals()), of which nothing is left to read, while it may read
+    at all."""
+    gone = set(removed) & set(item_ids) if can_read(owner, key) else set()
+    return set(accessible_ids(db, owner, key, [i for i in item_ids if i not in gone])) | gone
+
+
 # Notify handlers take only ticks and timers.
 LIVE_INGEST = (
     AgentTrigger.kind == INGEST,
     AgentTrigger.enabled,
     or_(AgentTrigger.handler.has_key("agent"), AgentTrigger.handler.has_key("queue")),
 )
+
+
+LIVE_RAW = (AgentTrigger.kind == RAW, AgentTrigger.enabled, AgentTrigger.handler.has_key("queue"))
 
 
 def handler_queue(trigger: AgentTrigger) -> str | None:
@@ -789,8 +834,8 @@ def enabled_ingest_triggers(db: DBSession) -> list[AgentTrigger]:
     return db.query(AgentTrigger).filter(*LIVE_INGEST).order_by(AgentTrigger.id).all()
 
 
-def any_ingest_trigger(db: DBSession) -> bool:
-    return db.query(exists().where(*LIVE_INGEST)).scalar()
+def any_routed_trigger(db: DBSession) -> bool:
+    return db.query(exists().where(or_(and_(*LIVE_INGEST), and_(*LIVE_RAW)))).scalar()
 
 
 def delivery_ref(item_id: int, version: bytes) -> str:
@@ -898,7 +943,8 @@ def take_over(db: DBSession, match: AgentTriggerMatch) -> None:
     for the same item, or the same order key. It takes the oldest one's place in line
     (created_at and deferral), so a busy item isn't pushed back with every event, and
     records the items folded into it. As in changes_by_item, a replaced first sight of
-    the item stays a first sight. Deliveries a fire or sweep has locked are left to it."""
+    the item stays a first sight. Deliveries a fire or sweep has locked are left to it,
+    and removals stand: no later message says an earlier one is gone."""
     same = (
         AgentTriggerMatch.order_key == match.order_key
         if match.order_key is not None
@@ -909,6 +955,7 @@ def take_over(db: DBSession, match: AgentTriggerMatch) -> None:
         .where(
             AgentTriggerMatch.trigger_id == match.trigger_id,
             AgentTriggerMatch.status == PENDING,
+            AgentTriggerMatch.content_hash != REMOVED_VERSION,
             same,
         )
         .order_by(AgentTriggerMatch.created_at)
@@ -965,24 +1012,26 @@ def item_claims(db: DBSession, item_id: int) -> dict[int, set[bytes]]:
 
 
 def purge_matches(db: DBSession, older_than: timedelta) -> int:
-    """Forget ended claims older than `older_than`, except each item's newest under
-    an on_edit trigger: that one tells its next reprocess from an edit."""
+    """Forget ended claims older than `older_than`, except each present item's newest
+    under an on_edit or on_remove trigger: that one tells its next reprocess from an
+    edit, and its removal from news about an item it never saw."""
     cutoff = datetime.now(timezone.utc) - older_than
     newer = aliased(AgentTriggerMatch)
-    on_edit_triggers = select(AgentTrigger.id).where(
-        AgentTrigger.config["on_edit"].as_boolean()
+    keeps_newest = select(AgentTrigger.id).where(
+        or_(AgentTrigger.config["on_edit"].as_boolean(), AgentTrigger.config["on_remove"].as_boolean())
     )
     superseded = exists().where(
         newer.trigger_id == AgentTriggerMatch.trigger_id,
         newer.item_id == AgentTriggerMatch.item_id,
         newer.created_at > AgentTriggerMatch.created_at,
     )
+    gone = ~exists().where(SourceItem.id == AgentTriggerMatch.item_id)
     deleted = (
         db.query(AgentTriggerMatch)
         .filter(
             AgentTriggerMatch.created_at < cutoff,
             AgentTriggerMatch.status != PENDING,
-            or_(AgentTriggerMatch.trigger_id.not_in(on_edit_triggers), superseded),
+            or_(AgentTriggerMatch.trigger_id.not_in(keeps_newest), superseded, gone),
         )
         .delete(synchronize_session=False)
     )
@@ -1007,6 +1056,15 @@ class Claimed:
     # Per-item agent deliveries are sent at once; batch members wait for the sweep,
     # queue deliveries for a worker's claim.
     sent: bool
+    # Shed by a cap, which started a throttling episode its owner is told of.
+    throttled: str | None = None
+    # Not delivered: shed by a cap, or its subscription tripped (with the reason).
+    shed: bool = False
+    tripped: str | None = None
+
+    @property
+    def delivered(self) -> bool:
+        return not (self.shed or self.tripped)
 
 
 @dataclass(frozen=True)
@@ -1023,6 +1081,8 @@ class LiveTrigger:
     exclude_own: bool
     # Whether any of its runs reported posting something.
     posts: bool
+    # Whether its credential may read at all.
+    reads: bool
 
 
 def excludes_own(f: IngestFilter, handler: dict[str, Any] | None) -> bool:
@@ -1061,20 +1121,51 @@ def live_triggers(
                 readable,
                 excludes_own(config.filter, trigger.handler),
                 bool(db.scalar(select(posts))),
+                can_read(owner, key),
             )
         )
     return live
 
 
-def passes_lookups(db: DBSession, t: LiveTrigger, lookups: ItemLookups) -> bool:
-    """Whether the filter's criteria that need more than the item's facts hold,
-    and none of the trigger's runs posted the item."""
+def rejection(db: DBSession, t: LiveTrigger, facts: ItemFacts, lookups: ItemLookups) -> str | None:
+    """What stops the trigger taking the item: the first filter field it fails, or
+    own_authors, readable, exclude_own, threads_im_in, known_people_only or posted
+    (one of the trigger's runs posted it); None when nothing does."""
     f = t.config.filter
+    if failed := failed_filter(f, facts, t.me, t.trigger.id):
+        return failed
+    if facts.authors & t.own:
+        return "own_authors"
+    if lookups.item.id not in t.readable:
+        return "readable"
+    if t.exclude_own and facts.authors & t.me.slack_users:
+        return "exclude_own"
     if f.threads_im_in and not lookups.thread_authors & t.me.accounts:
-        return False
+        return "threads_im_in"
     if f.known_people_only and not lookups.known_to(t.trigger.user_id):
-        return False
-    return not (t.posts and posted_among(db, t.trigger.id, [lookups.item]))
+        return "known_people_only"
+    if t.posts and posted_among(db, t.trigger.id, [lookups.item]):
+        return "posted"
+    return None
+
+
+def dry_run(db: DBSession, trigger: AgentTrigger, item: SourceItem) -> str | None:
+    """rejection() of the item as it is now by the ingest trigger, or "credentials"
+    when its key no longer works and "config" when its config no longer validates.
+    Whether an event would be fresh is not asked."""
+    owner = db.get(User, trigger.user_id)
+    try:
+        if owner is None:
+            raise PrincipalRevoked("its owner is gone")
+        subscription_key(db, trigger, owner)
+    except PrincipalRevoked:
+        return "credentials"
+    live = live_triggers(db, [item.id], [trigger])
+    if not live:
+        return "config"
+    [t] = live
+    facts = item_facts(item, with_direct=t.config.filter.dms_to_me)
+    return rejection(db, t, facts, ItemLookups(db, item))
 
 
 def match_item(
@@ -1117,13 +1208,7 @@ def match_item(
         refires = config.refires(changes)
         if not may_claim(claims.get(trigger.id, set()), version, fresh=fresh, on_edit=refires):
             continue
-        if not matches(config.filter, facts, t.me):
-            continue
-        if facts.authors & t.own or item_id not in t.readable:
-            continue
-        if t.exclude_own and facts.authors & t.me.slack_users:
-            continue
-        if not passes_lookups(db, t, lookups):
+        if rejection(db, t, facts, lookups) is not None:
             continue
         batched = isinstance(config.delivery, Batch)
         sent = not batched and handler_queue(trigger) is None
@@ -1146,9 +1231,198 @@ def match_item(
     return claimed
 
 
+def match_removed(
+    db: DBSession, live: list[LiveTrigger], event: Event, replay: bool = False
+) -> list[Claimed]:
+    """Claim, uncommitted, the event's removed item for every on_remove trigger it
+    was delivered to. Nothing is left to filter or read, so the removal reaches only
+    triggers that were shown the item, and says no more than that it is gone."""
+    item_id = cast(int, event.item_id)
+    wanting = {
+        t.trigger.id: t
+        for t in live
+        if t.config.on_remove and t.reads and (replay or event.created_at >= t.trigger.active_since)
+    }
+    if not wanting:
+        return []
+    # Ordered after the trigger's last delivery of the item.
+    delivered = db.execute(
+        select(AgentTriggerMatch.trigger_id, AgentTriggerMatch.order_key)
+        .where(
+            AgentTriggerMatch.item_id == item_id,
+            AgentTriggerMatch.trigger_id.in_(wanting),
+            AgentTriggerMatch.status == DONE,
+        )
+        .order_by(AgentTriggerMatch.trigger_id, AgentTriggerMatch.created_at.desc())
+        .distinct(AgentTriggerMatch.trigger_id)
+    ).all()
+    claimed = []
+    for trigger_id, key in delivered:
+        t = wanting[trigger_id]
+        batched = isinstance(t.config.delivery, Batch)
+        sent = not batched and handler_queue(t.trigger) is None
+        match = claim(
+            db,
+            trigger_id,
+            item_id,
+            REMOVED_VERSION,
+            fresh=False,
+            on_edit=True,
+            changes=[REMOVED_CHANGE],
+            sent=sent,
+            order_key=None if batched else key,
+            event_id=event.id,
+        )
+        if match is not None:
+            claimed.append(Claimed(trigger_id, delivery_ref(item_id, REMOVED_VERSION), sent))
+    return claimed
+
+
+def live_raw_triggers(db: DBSession) -> list[tuple[AgentTrigger, RawConfig]]:
+    live = []
+    for trigger in db.scalars(select(AgentTrigger).where(*LIVE_RAW).order_by(AgentTrigger.id)):
+        try:
+            live.append((trigger, RawConfig.model_validate((trigger.config or {}).get("raw"))))
+        except ValidationError:
+            logger.warning("skipping raw subscription %s: its config is invalid", trigger.id)
+    return live
+
+
+def raw_run(trigger: AgentTrigger, event: Event) -> AgentRun:
+    """A raw delivery: a run on the trigger's queue, rendered when a worker claims it
+    (memory.agents.queues.render_raw)."""
+    return AgentRun(
+        user_id=trigger.user_id,
+        queue=handler_queue(trigger),
+        spec={},
+        input="",
+        max_cost_usd=0,
+        trigger_kind=RAW,
+        trigger_ref={"trigger_id": trigger.id, "event_id": event.id},
+        dedupe_key=f"{trigger.id}:raw:{event.id}",
+        trigger_id=trigger.id,
+        api_key_id=trigger.api_key_id,
+        executor=EXECUTOR_WORKERS,
+    )
+
+
+RAW_WAITING = (AgentRun.trigger_kind == RAW, AgentRun.status == PENDING, AgentRun.started_at.is_(None))
+
+
+def end_run(run: AgentRun, reason: str) -> None:
+    run.status, run.error, run.finished_at = FAILED, reason, datetime.now(timezone.utc)
+
+
+def shed_raw_backlog(db: DBSession, trigger: AgentTrigger) -> int:
+    """End, uncommitted, the oldest of the trigger's unclaimed raw deliveries beyond
+    its backlog_max (else DEFAULT_RAW_BACKLOG)."""
+    excess = db.scalars(
+        select(AgentRun)
+        .where(AgentRun.trigger_id == trigger.id, *RAW_WAITING)
+        .order_by(AgentRun.created_at.desc(), AgentRun.id.desc())
+        .offset(trigger.backlog_max or DEFAULT_RAW_BACKLOG)
+        .with_for_update(skip_locked=True)
+    ).all()
+    for run in excess:
+        end_run(run, SHED_BACKLOG)
+    return len(excess)
+
+
+def trip_now(db: DBSession, trigger: AgentTrigger, reason: str) -> None:
+    """Disable, uncommitted, a subscription whose credentials stopped working; its
+    owner is told once that commits (tell_tripped_later)."""
+    locked = lock_trigger(db, trigger.id)
+    if locked is None or not locked.enabled:
+        return
+    locked.enabled = False
+    locked.state = (locked.state or {}) | {"tripped": {"reason": reason, "at": datetime.now(timezone.utc).isoformat()}}
+    logger.warning("raw subscription %s tripped", trigger.id)
+
+
+def waits_for_causes(db: DBSession, event: Event) -> bool:
+    """Whether a stored delivery is held back for the item events it causes, which
+    its ingest task writes shortly after: until one exists, or CAUSED_GRACE passes."""
+    return (
+        event.outcome == STORED
+        and bool((event.data or {}).get(LINKS_ITEMS))
+        and event.created_at > datetime.now(timezone.utc) - CAUSED_GRACE
+        and not db.scalar(select(exists().where(Event.caused_by == event.id)))
+    )
+
+
+def deliver_raw(db: DBSession, trigger: AgentTrigger, event: Event) -> Claimed:
+    """Write, uncommitted, the raw event's delivery run for the subscription. One over
+    max_per_hour (default AGENT_MAX_RUNS_PER_HOUR) is written already ended, so the
+    shed is on record without counting towards the rate; beyond the backlog cap the
+    oldest waiting ones end."""
+    run = raw_run(trigger, event)
+    delivered = and_(AgentRun.trigger_id == trigger.id, AgentRun.error.is_distinct_from(SHED_RATE))
+    reason, shed = None, False
+    try:
+        check_hourly_rate(db, delivered, trigger.max_per_hour, "subscription", "max_per_hour")
+    except RateExceeded as e:
+        end_run(run, SHED_RATE)
+        reason, shed = str(e), True
+    db.add(run)
+    db.flush()
+    if not shed and shed_raw_backlog(db, trigger):
+        reason = f"more than {trigger.backlog_max or DEFAULT_RAW_BACKLOG} deliveries waiting"
+    locked = lock_trigger(db, trigger.id) if reason else None
+    throttle = reason if locked is not None and reason and throttled(locked, reason) else None
+    return Claimed(trigger.id, f"raw:{event.id}", False, throttle, shed=shed)
+
+
+def route_raw(
+    db: DBSession, live: list[tuple[AgentTrigger, RawConfig]], event: Event
+) -> list[Claimed] | None:
+    """Deliver, uncommitted, the raw event to every live raw subscription it matches;
+    None while it waits_for_causes. A subscription whose credentials stopped working
+    trips instead."""
+    owners: dict[int, User | None] = {}
+    matching = [
+        t
+        for t, config in live
+        if t.enabled and event.created_at >= t.active_since and raw_matches(config, t.user_id, event)
+    ]
+    if not matching:
+        return []
+    if waits_for_causes(db, event):
+        return None
+    claimed = []
+    for trigger in matching:
+        owner = owners.setdefault(trigger.user_id, db.get(User, trigger.user_id))
+        try:
+            if owner is None:
+                raise PrincipalRevoked("its owner is gone")
+            subscription_key(db, trigger, owner)
+        except PrincipalRevoked as e:
+            trip_now(db, trigger, str(e))
+            claimed.append(Claimed(trigger.id, "", False, tripped=str(e)))
+            continue
+        claimed.append(deliver_raw(db, trigger, event))
+    return claimed
+
+
 def matchable(event: Event) -> bool:
     """Backfills and imports bring in the past, which triggers don't react to."""
     return event.kind == ITEM and event.action != REMOVED and not event.backfill
+
+
+def event_claims(
+    db: DBSession,
+    live: list[LiveTrigger],
+    raw: list[tuple[AgentTrigger, RawConfig]],
+    event: Event,
+    replay: bool = False,
+) -> list[Claimed] | None:
+    """The claims routing the event makes, uncommitted; None when it must wait."""
+    if matchable(event):
+        return match_item(db, live, event, replay)
+    if event.kind == ITEM and event.action == REMOVED:
+        return match_removed(db, live, event, replay)
+    if event.kind == RAW:
+        return route_raw(db, raw, event)
+    return []
 
 
 def route_batch(db: DBSession, after_id: int) -> tuple[int | None, list[Claimed]]:
@@ -1162,7 +1436,7 @@ def route_batch(db: DBSession, after_id: int) -> tuple[int | None, list[Claimed]
         .limit(ROUTE_BATCH_SIZE)
         .with_for_update(skip_locked=True)
     )
-    if not any_ingest_trigger(db):
+    if not any_routed_trigger(db):
         routed = (
             update(Event)
             .where(Event.id.in_(pending.with_only_columns(Event.id).scalar_subquery()))
@@ -1175,22 +1449,27 @@ def route_batch(db: DBSession, after_id: int) -> tuple[int | None, list[Claimed]
     if not events:
         return None, []
     live = live_triggers(db, [cast(int, e.item_id) for e in events if matchable(e)])
+    raw = live_raw_triggers(db) if any(e.kind == RAW for e in events) else []
     now = datetime.now(timezone.utc)
     claimed = []
     for ev in events:
-        if matchable(ev):
-            try:
-                with db.begin_nested():
-                    claimed += match_item(db, live, ev)
-            except SoftTimeLimitExceeded:
-                raise
-            except Exception as e:
-                ev.attempts += 1
-                if ev.attempts < settings.EVENT_MAX_ATTEMPTS:
-                    logger.warning("could not route event %s, attempt %d", ev.id, ev.attempts, exc_info=True)
-                    continue
-                ev.error = type(e).__name__
-                logger.exception("giving up on routing event %s after %d attempts", ev.id, ev.attempts)
+        claims: list[Claimed] | None = []
+        try:
+            with db.begin_nested():
+                claims = event_claims(db, live, raw, ev)
+        except SoftTimeLimitExceeded:
+            raise
+        except Exception as e:
+            ev.attempts += 1
+            if ev.attempts < settings.EVENT_MAX_ATTEMPTS:
+                logger.warning("could not route event %s, attempt %d", ev.id, ev.attempts, exc_info=True)
+                continue
+            ev.error = type(e).__name__
+            logger.exception("giving up on routing event %s after %d attempts", ev.id, ev.attempts)
+        # Left pending for a later run.
+        if claims is None:
+            continue
+        claimed += claims
         ev.routed_at = now
     return events[-1].id, claimed
 
@@ -1219,21 +1498,20 @@ def replay_batch(db: DBSession, from_id: int) -> tuple[int | None, list[Claimed]
     live = live_triggers(db, [cast(int, e.item_id) for e in events if matchable(e)], [trigger])
     claimed, after, next_from = [], cursor["after"], trigger.id
     for ev in events:
-        if matchable(ev):
-            try:
-                with db.begin_nested():
-                    claimed += match_item(db, live, ev, replay=True)
-            except SoftTimeLimitExceeded:
-                raise
-            except Exception as e:
-                ev.attempts += 1
-                if ev.attempts < settings.EVENT_MAX_ATTEMPTS:
-                    logger.warning("could not replay event %s to trigger %s", ev.id, trigger.id, exc_info=True)
-                    # The next run retries it; this one moves on to other triggers.
-                    next_from = trigger.id + 1
-                    break
-                ev.error = type(e).__name__
-                logger.exception("giving up on replaying event %s to trigger %s", ev.id, trigger.id)
+        try:
+            with db.begin_nested():
+                claimed += event_claims(db, live, [], ev, replay=True) or []
+        except SoftTimeLimitExceeded:
+            raise
+        except Exception as e:
+            ev.attempts += 1
+            if ev.attempts < settings.EVENT_MAX_ATTEMPTS:
+                logger.warning("could not replay event %s to trigger %s", ev.id, trigger.id, exc_info=True)
+                # The next run retries it; this one moves on to other triggers.
+                next_from = trigger.id + 1
+                break
+            ev.error = type(e).__name__
+            logger.exception("giving up on replaying event %s to trigger %s", ev.id, trigger.id)
         after = ev.id
     trigger.state = trigger.state | {RESUME: cursor | {"after": after}}
     return next_from, claimed
@@ -1263,7 +1541,11 @@ def route_events() -> list[int]:
             for c in claimed:
                 if c.sent:
                     send(c.trigger_id, [c.ref])
-            delivered += [c.trigger_id for c in claimed]
+                if c.throttled:
+                    tell_throttled_later(c.trigger_id, c.throttled)
+                if c.tripped:
+                    tell_tripped_later(c.trigger_id, c.tripped)
+            delivered += [c.trigger_id for c in claimed if c.delivered]
             if taken is None:
                 break
             cursor = taken
@@ -1328,21 +1610,58 @@ def throttled(trigger: AgentTrigger, reason: str) -> bool:
     return new
 
 
+def tell_tripped_later(trigger_id: int, reason: str) -> None:
+    with make_session() as db:
+        trigger = db.get(AgentTrigger, trigger_id)
+        owner = db.get(User, trigger.user_id) if trigger is not None else None
+        if trigger is not None and owner is not None:
+            tell_owner(
+                db,
+                owner,
+                subject=f"Subscription paused: {trigger.name}",
+                message=f"Subscription {trigger.id} was disabled: {reason}\nEnable it again once that's resolved.",
+            )
+
+
+def tell_throttled_later(trigger_id: int, reason: str) -> None:
+    """tell_throttled, after the routing that shed a delivery has committed."""
+    with make_session() as db:
+        trigger = db.get(AgentTrigger, trigger_id)
+        if trigger is not None:
+            tell_throttled(db, trigger, reason)
+
+
 def tell_throttled(db: DBSession, trigger: AgentTrigger, reason: str) -> None:
     owner = db.get(User, trigger.user_id)
     if owner is None:
         return
+    # Raw deliveries are shed at once: a webhook delivery is news only while it's fresh.
+    held = (
+        "Its deliveries over it are shed, each recorded as a failed run."
+        if trigger.kind == RAW
+        else "Its deliveries wait up to an hour, and any still over it then are dropped."
+    )
     tell_owner(
         db,
         owner,
         subject=f"Agent trigger throttled: {trigger.name}",
         message=(
-            f"Trigger {trigger.id} is over a limit: {reason}\n"
-            "Its deliveries wait up to an hour, and any still over it then are dropped. "
+            f"Trigger {trigger.id} is over a limit: {reason}\n{held} "
             "It keeps running; this is the only notice until it has gone two hours "
             "without being held back."
         ),
     )
+
+
+def expire_raw_runs(db: DBSession, now: datetime) -> int:
+    """End, uncommitted, raw deliveries no worker claimed within DELIVERY_MAX_AGE."""
+    expired = db.execute(
+        update(AgentRun)
+        .where(*RAW_WAITING, AgentRun.created_at < now - DELIVERY_MAX_AGE)
+        .values(status=FAILED, error=EXPIRED, finished_at=now)
+        .returning(AgentRun.id)
+    )
+    return len(expired.all())
 
 
 def expire_deliveries(db: DBSession, now: datetime) -> int:
@@ -1457,7 +1776,7 @@ def sweep_deliveries() -> dict[str, int]:
             .order_by(AgentTrigger.id)
             .with_for_update(key_share=True)
         ).all()
-        expired = expire_deliveries(db, now)
+        expired = expire_deliveries(db, now) + expire_raw_runs(db, now)
         newly_throttled: list[tuple[AgentTrigger, str]] = []
         for trigger in waiting:
             queued = handler_queue(trigger) is not None

@@ -261,6 +261,14 @@ export interface TriggerConfig {
 
 export interface CronConfig { cron: string; input: string }
 
+export const RAW_SOURCES = ['github', 'slack', 'discord', 'transcripts'] as const
+export type RawSource = typeof RAW_SOURCES[number]
+export type RawOutcome = 'stored' | 'no_item_type'
+// Webhook deliveries to the owner's accounts of one source.
+export interface RawConfig {
+  raw: { source: RawSource; account_id: number | null; types: string[]; outcome: RawOutcome[] }
+}
+
 export const NOTIFY_CHANNELS = ['email', 'discord', 'slack'] as const
 export type NotifyChannel = typeof NOTIFY_CHANNELS[number]
 export interface NotifyHandler { channel: NotifyChannel; target: string; message: string; subject?: string | null }
@@ -296,6 +304,7 @@ interface SubscriptionBase {
 export type Subscription =
   | (SubscriptionBase & { kind: 'ingest'; config: TriggerConfig })
   | (SubscriptionBase & { kind: 'cron'; config: CronConfig })
+  | (SubscriptionBase & { kind: 'raw'; config: RawConfig })
 
 export interface Timer {
   id: number
@@ -319,6 +328,20 @@ export interface ItemDelivery {
   run_status: RunStatus | null
 }
 
+// A raw subscription's delivery: its run once a worker claimed it.
+export interface RawDelivery {
+  raw_event_id: number | null
+  // Null for a delivery from a channel no longer collected.
+  type: string | null
+  container: string | null
+  account_id: number | null
+  status: string
+  created_at: string | null
+  error: string | null
+  run_id: string | null
+  run_status: RunStatus | null
+}
+
 export interface TickDelivery {
   event_id: number
   time: string | null
@@ -330,7 +353,7 @@ export interface SubscriptionUpsert {
   subscription_id?: number
   name?: string
   handler?: Handler
-  source?: Partial<TriggerConfig> | Partial<CronConfig> | { at: string; input?: string }
+  source?: Partial<TriggerConfig> | Partial<CronConfig> | { at: string; input?: string } | RawConfig
   enabled?: boolean
   resume?: boolean
   max_per_hour?: number
@@ -446,7 +469,7 @@ export const useAgents = () => {
   )
   const fetchSubscription = useCallback(
     (subscriptionId: number, options: { pending?: boolean; limit?: number } = {}) =>
-      call<{ subscription: Subscription; deliveries: (ItemDelivery | TickDelivery)[]; runs: AgentRun[] }>('subscription_fetch', {
+      call<{ subscription: Subscription; deliveries: (ItemDelivery | TickDelivery | RawDelivery)[]; runs: AgentRun[] }>('subscription_fetch', {
         subscription_id: subscriptionId,
         ...(options.pending !== undefined ? { pending: options.pending } : {}),
         ...(options.limit !== undefined ? { limit: options.limit } : {}),

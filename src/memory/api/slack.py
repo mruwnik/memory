@@ -1362,7 +1362,7 @@ async def slack_events(
     # The verification token is a credential.
     logged = {k: v for k, v in envelope.items() if k != "token"}
 
-    def record(event_type: str, outcome: str, container: str | None = None) -> int | None:
+    def record(event_type: str, outcome: str, container: str | None = None, links_items: bool = False) -> int | None:
         return record_raw_event(
             db,
             source="slack",
@@ -1373,6 +1373,7 @@ async def slack_events(
             outcome=outcome,
             container=container,
             payload=logged,
+            links_items=links_items,
         )
 
     if envelope_type == "url_verification":
@@ -1426,9 +1427,12 @@ async def slack_events(
     elif not channel_collected(db, kwargs["workspace_id"], kwargs["channel_id"]):
         outcome = NOT_COLLECTED
     else:
-        outcome = STORED if task else NO_ITEM_TYPE
+        # A mention's message arrives as its own event and is stored from that.
+        outcome = STORED if task or event_type == "app_mention" else NO_ITEM_TYPE
     untracked_delete = label == "mark_deleted" and outcome == NOT_COLLECTED
-    raw_id = record(event_type, outcome, kwargs.get("channel_id"))
+    # Only these tasks write item events; reactions and channel updates change what's stored.
+    links_items = outcome == STORED and label in ("add_message", "mark_deleted")
+    raw_id = record(event_type, outcome, kwargs.get("channel_id"), links_items=links_items)
     if raw_id is None:
         # A retry of an event already taken.
         db.rollback()

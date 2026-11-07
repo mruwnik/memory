@@ -316,3 +316,12 @@ def test_never_logs_body_or_secret(client, user, db_session, sent, caplog):
     assert "very private words" not in caplog.text
     assert SECRET not in caplog.text
     assert "guess" not in caplog.text
+
+
+def test_only_a_push_that_queued_a_new_meeting_waits_for_its_items(client, user, db_session, sent):
+    account = make_account(db_session, user.id)
+    for body in (GENERIC_BODY, GENERIC_BODY | {"title": "Same meeting, sent again"}):
+        raw = json.dumps(body).encode()
+        post(client, account.id, raw, {"X-Hub-Signature": sign(raw)})
+
+    assert [bool((e.data or {}).get("links_items")) for e in raw_events(db_session)] == [True, False]

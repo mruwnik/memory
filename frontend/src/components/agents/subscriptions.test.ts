@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { emptyTriggerConfig, type Subscription, type TriggerConfig } from '@/hooks/useAgents'
-import { deliveryLabel, describeFilter, formFor, formProblem, newForm, subscriptionState, toUpsert, type SubscriptionForm } from './subscriptions'
+import {
+  deliveryLabel, describeFilter, describeRaw, formFor, formProblem, newForm, sourceKind, subscriptionState, toUpsert, type SubscriptionForm,
+} from './subscriptions'
 
 const filterConfig = { ...emptyTriggerConfig(), filter: { ...emptyTriggerConfig().filter, tags_any: ['ai'] } }
 
@@ -95,4 +97,41 @@ it('summarises a stored filter that predates newer fields', () => {
 
 it.each([['skipped:shed:rate', 'skipped (shed: rate)'], ['done', 'done']])('labels %s as %s', (status, label) => {
   expect(deliveryLabel(status)).toBe(label)
+})
+
+describe('raw subscriptions', () => {
+  const raw = { source: 'slack' as const, account_id: 3, types: ['reaction_added', 'pin'], outcome: ['no_item_type' as const] }
+  const rawSubscription = subscription({ kind: 'raw', config: { raw }, handler: { queue: 'hooks' }, max_per_hour: 5 } as Partial<Subscription>)
+
+  it('builds a webhook subscription on a queue with its caps', () => {
+    const fields: Partial<SubscriptionForm> = {
+      source: 'raw', queue: 'hooks', maxPerHour: '5',
+      raw: { source: 'slack', accountId: '3', types: 'reaction_added, pin', outcome: ['no_item_type'] },
+    }
+
+    expect(toUpsert(form(fields))).toEqual({ handler: { queue: 'hooks' }, source: { raw }, max_per_hour: 5, create_only: true })
+  })
+
+  it('edits a stored one as it was', () => {
+    expect(toUpsert(formFor(rawSubscription), rawSubscription)).toEqual({
+      subscription_id: 7, handler: { queue: 'hooks' }, source: { raw }, max_per_hour: 5, backlog_max: 0,
+    })
+  })
+
+  it.each<[Partial<SubscriptionForm>, string | null]>([
+    [{ source: 'raw', queue: 'hooks' }, null],
+    [{ source: 'raw', handler: 'agent', agent: '3' }, "Webhooks can't go to a agent"],
+    [{ source: 'raw', queue: 'hooks', raw: { source: 'discord', accountId: '', types: '', outcome: [] } }, 'Tick at least one of Deliveries that'],
+  ])('%o: %s', (fields, problem) => {
+    expect(formProblem(form(fields))).toBe(problem)
+  })
+
+  it('summarises its source by its account name', () => {
+    expect(describeRaw(raw, { 'slack:3': 'team app' })).toBe('Slack team app · types: reaction_added, pin · stored nothing')
+    expect(describeRaw({ ...raw, account_id: null, outcome: ['stored', 'no_item_type'] })).toBe('every Slack account · types: reaction_added, pin')
+  })
+
+  it('is labelled by its source kind', () => {
+    expect(sourceKind(rawSubscription)).toBe('raw')
+  })
 })

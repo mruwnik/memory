@@ -397,6 +397,30 @@ def test_removed_events_are_routed_without_deliveries(db_session, admin_user, no
 
 
 @pytest.mark.transactional_db
+@pytest.mark.parametrize(
+    "on_remove, earlier, removals",
+    [(True, "done", 1), (False, "done", 0), (True, "pending", 0), (True, "skipped:inaccessible", 0)],
+)
+def test_a_removal_reaches_on_remove_subscriptions_that_were_delivered_the_item(
+    db_session, admin_user, no_celery_dispatch, on_remove, earlier, removals
+):
+    trigger = make_trigger(db_session, admin_user)
+    trigger.config = trigger.config | {"on_remove": on_remove}
+    post = stored_post(db_session)
+    post_id = post.id
+    route_item(db_session, post_id)
+    db_session.query(AgentTriggerMatch).update({"status": earlier})
+    db_session.delete(post)
+    db_session.commit()
+
+    triggers.route_events()
+
+    db_session.expire_all()
+    removed = db_session.query(AgentTriggerMatch).filter(AgentTriggerMatch.changes == ["removed"])
+    assert [(m.item_id, m.status, m.edited) for m in removed] == [(post_id, "pending", True)] * removals
+
+
+@pytest.mark.transactional_db
 def test_without_triggers_pending_events_are_just_marked_routed(db_session, no_celery_dispatch):
     add_events(db_session, stored_post(db_session), stored_post(db_session))
 

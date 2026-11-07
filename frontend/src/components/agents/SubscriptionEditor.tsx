@@ -1,11 +1,15 @@
-import { useState } from 'react'
-import { CHANGE_TAGS, NOTIFY_CHANNELS, type IngestFilter, type NotifyChannel, type Subscription, type SubscriptionUpsert } from '@/hooks/useAgents'
+import { useEffect, useState } from 'react'
+import {
+  CHANGE_TAGS, NOTIFY_CHANNELS, RAW_SOURCES, type IngestFilter, type NotifyChannel, type RawOutcome, type RawSource,
+  type Subscription, type SubscriptionUpsert,
+} from '@/hooks/useAgents'
 import { useAuth } from '@/hooks/useAuth'
+import { useWebhookLog, WEBHOOK_SOURCE_NAMES, type WebhookAccount } from '@/hooks/useWebhookLog'
 import {
   Button, Checkbox, Field, FieldRow, Fieldset, FormActions, Input, MultiSelect, Notice, Select, Textarea, ToggleGroup, useSubmit,
 } from '@/components/shared/ui'
 import {
-  formFor, formProblem, HANDLER_LABELS, HANDLERS_FOR, newForm, SOURCE_LABELS, toUpsert,
+  formFor, formProblem, HANDLER_LABELS, HANDLERS_FOR, newForm, RAW_OUTCOME_LABELS, SOURCE_LABELS, toUpsert,
   type HandlerKind, type SourceKind, type SubscriptionForm,
 } from './subscriptions'
 
@@ -131,6 +135,69 @@ function FilterFields({ form, update, sourceTypes }: {
   )
 }
 
+function RawFields({ form, update, locked }: {
+  form: SubscriptionForm
+  update: (change: Partial<SubscriptionForm>) => void
+  // A stored subscription keeps its source.
+  locked: boolean
+}) {
+  const { listAccounts } = useWebhookLog()
+  const [accounts, setAccounts] = useState<WebhookAccount[] | null>(null)
+  useEffect(() => { listAccounts().then(setAccounts).catch(() => setAccounts([])) }, [listAccounts])
+  const loaded = accounts !== null
+  const raw = form.raw
+  const setRaw = (change: Partial<SubscriptionForm['raw']>) => update({ raw: { ...raw, ...change } })
+  const toggle = (outcome: RawOutcome, on: boolean) =>
+    setRaw({ outcome: on ? [...raw.outcome, outcome] : raw.outcome.filter(o => o !== outcome) })
+  // An admin's list also has other people's accounts, which can't carry the admin's subscriptions.
+  const own = (accounts ?? []).filter(a => a.own && a.source === raw.source)
+  const name = WEBHOOK_SOURCE_NAMES[raw.source]
+  return (
+    <>
+      <Notice tone="info">
+        Webhook deliveries to your own accounts, whether or not anything was stored. Deliveries from channels or repos that
+        aren't collected never arrive. Anything that becomes an item is better taken as an Items source, which syncs also feed.
+      </Notice>
+      <FieldRow>
+        <Field label="Sent by" hint={locked ? "A subscription's source can't change: delete it and create another." : undefined}>
+          <Select value={raw.source} disabled={locked} onChange={e => setRaw({ source: e.target.value as RawSource, accountId: '' })}>
+            {RAW_SOURCES.map(s => <option key={s} value={s}>{WEBHOOK_SOURCE_NAMES[s]}</option>)}
+          </Select>
+        </Field>
+        <Field label="Account" hint={loaded && own.length === 0
+          ? `You have no ${name} accounts, so this subscription will never fire.`
+          : undefined}>
+          <Select value={raw.accountId} onChange={e => setRaw({ accountId: e.target.value })}>
+            <option value="">Every {name} account of mine</option>
+            {/* A saved account no longer the caller's (or gone) stays chosen until they change it. */}
+            {raw.accountId && !own.some(a => String(a.account_id) === raw.accountId) && (
+              <option value={raw.accountId}>{`${name} account ${raw.accountId} (not one of yours now)`}</option>
+            )}
+            {own.map(a => <option key={a.account_id} value={String(a.account_id)}>{a.name}</option>)}
+          </Select>
+        </Field>
+        <Field label="Event types (comma-separated)" hint="An event, or event.action, such as pull_request or reaction_added. None means any.">
+          <Input value={raw.types} onChange={e => setRaw({ types: e.target.value })} />
+        </Field>
+      </FieldRow>
+      <Fieldset legend="Deliveries that" className="flex flex-col">
+        {(Object.keys(RAW_OUTCOME_LABELS) as RawOutcome[]).map(o => (
+          <Checkbox key={o} label={RAW_OUTCOME_LABELS[o]} checked={raw.outcome.includes(o)}
+            onChange={e => toggle(o, e.target.checked)} />
+        ))}
+      </Fieldset>
+      <FieldRow>
+        <Field label="Deliveries per hour" hint="Beyond it they are dropped.">
+          <Input type="number" min="1" placeholder="Server default" value={form.maxPerHour} onChange={e => update({ maxPerHour: e.target.value })} />
+        </Field>
+        <Field label="Most waiting" hint="Beyond it the oldest are dropped.">
+          <Input type="number" min="1" placeholder="1000" value={form.backlogMax} onChange={e => update({ backlogMax: e.target.value })} />
+        </Field>
+      </FieldRow>
+    </>
+  )
+}
+
 export function SubscriptionEditor({ existing, presetAgent, agents, sourceTypes, takenNames = [], onSave, onCancel }: {
   existing?: Subscription
   presetAgent?: string
@@ -146,15 +213,14 @@ export function SubscriptionEditor({ existing, presetAgent, agents, sourceTypes,
   const timezone = useAuth().user?.timezone ?? 'UTC'
   const update = (change: Partial<SubscriptionForm>) => setForm(f => ({ ...f, ...change }))
   const problem = formProblem(form, takenNames)
-  // A filter subscription keeps its handler kind; a schedule may move between agent and message.
-  const handlerKinds = existing?.kind === 'ingest' ? [form.handler] : HANDLERS_FOR[form.source]
+  // A filter or webhook subscription keeps its handler kind; a schedule may move between agent and message.
+  const handlerKinds = existing && existing.kind !== 'cron' ? [form.handler] : HANDLERS_FOR[form.source]
   const setSource = (source: SourceKind) =>
     update({ source, handler: HANDLERS_FOR[source].includes(form.handler) ? form.handler : HANDLERS_FOR[source][0] })
   const groups = [...new Set(agents.map(a => a.group))]
 
   return (
     <div className="space-y-4">
-      {error && <Notice tone="error">{error}</Notice>}
       {!existing && (
         <Fieldset legend="Source">
           <ToggleGroup label="Source" value={form.source} onChange={setSource}
@@ -183,8 +249,12 @@ export function SubscriptionEditor({ existing, presetAgent, agents, sourceTypes,
         </Field>
       )}
       {form.handler === 'queue' && (
-        <Field label="Queue" hint="Your workers claim its deliveries with agent_work_claim(queue=...).">
-          <Input value={form.queue} onChange={e => update({ queue: e.target.value })} />
+        <Field label="Queue" hint={existing?.kind === 'raw'
+          ? "A webhook subscription's queue can't change."
+          : form.source === 'raw'
+            ? "Your workers claim its deliveries with agent_work_claim(queue=...). It can't be changed later."
+            : 'Your workers claim its deliveries with agent_work_claim(queue=...).'}>
+          <Input value={form.queue} disabled={existing?.kind === 'raw'} onChange={e => update({ queue: e.target.value })} />
         </Field>
       )}
       {form.handler === 'notify' && (
@@ -219,12 +289,15 @@ export function SubscriptionEditor({ existing, presetAgent, agents, sourceTypes,
           <Input type="datetime-local" value={form.at} onChange={e => update({ at: e.target.value })} />
         </Field>
       )}
-      {form.source !== 'filter' && form.handler === 'agent' && (
+      {(form.source === 'cron' || form.source === 'at') && form.handler === 'agent' && (
         <Field label="Run input">
           <Textarea className="h-16" placeholder="What should each run do?" value={form.input} onChange={e => update({ input: e.target.value })} />
         </Field>
       )}
       {form.source === 'filter' && <FilterFields form={form} update={update} sourceTypes={sourceTypes} />}
+      {form.source === 'raw' && <RawFields form={form} update={update} locked={existing !== undefined} />}
+      {/* By the buttons: a long form's top is off screen when a save is refused. */}
+      {error && <div data-form-error role="alert"><Notice tone="error">{error}</Notice></div>}
       <FormActions>
         {problem && <span className="text-xs text-slate-600">{problem}</span>}
         <Button onClick={onCancel}>Cancel</Button>

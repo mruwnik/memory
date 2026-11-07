@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useAgents, type Catalog, type Subscription, type SubscriptionUpsert, type Timer } from '@/hooks/useAgents'
+import { useWebhookLog } from '@/hooks/useWebhookLog'
 import { formatRelativeTime } from '@/components/sources/shared'
 import { formatUserDateTime } from '@/utils/timezones'
 import {
@@ -10,7 +11,7 @@ import {
 import { SubscriptionEditor, type AgentOption } from './SubscriptionEditor'
 import { SubscriptionHistory } from './SubscriptionHistory'
 import {
-  deliveryLabel, deliveryTone, describeFilter, describeHandler, describeTimer, handlerKind, HANDLER_LABELS, origin,
+  deliveryLabel, deliveryTone, describeFilter, describeHandler, describeRaw, describeTimer, handlerKind, HANDLER_LABELS, origin,
   sourceKind, SOURCE_LABELS, subscriptionState, type HandlerKind, type SourceKind,
 } from './subscriptions'
 
@@ -18,7 +19,8 @@ type SourceFilter = 'all' | Exclude<SourceKind, 'at'>
 type HandlerFilter = 'all' | HandlerKind
 
 const SOURCE_FILTERS: { value: SourceFilter; label: string }[] = [
-  { value: 'all', label: 'All sources' }, { value: 'filter', label: SOURCE_LABELS.filter }, { value: 'cron', label: SOURCE_LABELS.cron },
+  { value: 'all', label: 'All sources' }, { value: 'filter', label: SOURCE_LABELS.filter }, { value: 'raw', label: SOURCE_LABELS.raw },
+  { value: 'cron', label: SOURCE_LABELS.cron },
 ]
 const HANDLER_FILTERS: { value: HandlerFilter; label: string }[] = [
   { value: 'all', label: 'All handlers' },
@@ -27,8 +29,11 @@ const HANDLER_FILTERS: { value: HandlerFilter; label: string }[] = [
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 
-const sourceSummary = (s: Subscription) =>
-  s.kind === 'ingest' ? describeFilter(s.config) : `${s.config.cron}${s.enabled && s.next_at ? ` · next ${formatUserDateTime(new Date(s.next_at))}` : ''}`
+const sourceSummary = (s: Subscription, accountNames: Record<string, string>) => {
+  if (s.kind === 'ingest') return describeFilter(s.config)
+  if (s.kind === 'raw') return describeRaw(s.config.raw, accountNames)
+  return `${s.config.cron}${s.enabled && s.next_at ? ` · next ${formatUserDateTime(new Date(s.next_at))}` : ''}`
+}
 
 const backlogFact = (s: Subscription) =>
   s.activity.pending > 0 && `${s.activity.pending} waiting, oldest ${formatRelativeTime(s.activity.oldest_pending_at)}`
@@ -40,6 +45,14 @@ const lastFact = (s: Subscription) => {
 
 export default function SubscriptionsPage() {
   const { listSubscriptions, upsertSubscription, deleteSubscription, cancelTimer, listDefinitions, listSystemAgents, catalog } = useAgents()
+  const { listAccounts } = useWebhookLog()
+  // Webhook sources' account names, by "source:account id".
+  const [accountNames, setAccountNames] = useState<Record<string, string>>({})
+  useEffect(() => {
+    listAccounts()
+      .then(accounts => setAccountNames(Object.fromEntries(accounts.map(a => [`${a.source}:${a.account_id}`, a.name]))))
+      .catch(() => setAccountNames({}))
+  }, [listAccounts])
   const [params, setParams] = useSearchParams()
   const agentParam = params.get('agent')
   const [subscriptions, setSubscriptions] = useState<Subscription[] | null>(null)
@@ -184,7 +197,7 @@ export default function SubscriptionsPage() {
                   <ConfirmButton confirm={`Delete ${s.name} and its waiting deliveries?`} onConfirm={() => act(`subscription:${s.id}`, () => deleteSubscription(s.id))} />
                 </>}
               >
-                <p className="text-slate-600 break-words">{sourceSummary(s)}</p>
+                <p className="text-slate-600 break-words">{sourceSummary(s, accountNames)}</p>
                 {s.state.tripped && <RowError>Tripped {formatRelativeTime(s.state.tripped.at)}: {s.state.tripped.reason}</RowError>}
                 {s.state.throttled && (
                   <p className="text-amber-800">Throttled since {formatRelativeTime(s.state.throttled.since)}: {s.state.throttled.reason}</p>

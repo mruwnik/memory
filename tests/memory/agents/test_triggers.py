@@ -18,7 +18,7 @@ from memory.agents.triggers import (
     changes_caused,
     content_version,
     item_facts,
-    matches,
+    failed_filter,
     posted_ref,
     regex_search,
 )
@@ -132,14 +132,14 @@ def test_on_changes_can_name_what_syncs_report(change):
 )
 def test_matches_every_set_criterion(f, expected):
     item = facts(repo="equistamp/memory", mentions=frozenset({"200", "u_other"}))
-    assert matches(IngestFilter.model_validate(f), item, Me(bots=frozenset({"200"}))) is expected
+    assert (failed_filter(IngestFilter.model_validate(f), item, Me(bots=frozenset({"200"}))) is None) is expected
 
 
 @pytest.mark.parametrize("mine", [frozenset(), frozenset({"u_bot"})])
 def test_mentions_me_needs_a_mention_of_one_of_mine(mine):
     f = IngestFilter.model_validate({"mentions_me": True})
 
-    assert matches(f, facts(mentions=frozenset({"200"})), Me(bots=mine)) is False
+    assert (failed_filter(f, facts(mentions=frozenset({"200"})), Me(bots=mine)) is None) is False
 
 
 @pytest.mark.parametrize(
@@ -155,7 +155,7 @@ def test_dms_to_me_are_direct_messages_that_reached_me(direct, collector, expect
     f = IngestFilter.model_validate({"dms_to_me": True})
     me = Me(collectors=frozenset({"slack_app:1"}))
 
-    assert matches(f, facts(direct=direct, collector=collector), me) is expected
+    assert (failed_filter(f, facts(direct=direct, collector=collector), me) is None) is expected
 
 
 @pytest.mark.parametrize(
@@ -313,7 +313,7 @@ def test_github_facts_carry_the_repo():
 def test_source_types_tell_prs_from_issues(source_types, item, expected):
     f = IngestFilter.model_validate({"source_types": source_types})
 
-    assert matches(f, item_facts(item)) is expected
+    assert (failed_filter(f, item_facts(item)) is None) is expected
 
 
 def test_beeper_facts_carry_chat_and_sender():
@@ -395,18 +395,16 @@ def test_beeper_facts_carry_chat_and_sender():
     ],
 )
 def test_excluded_channels_never_match(f, item, expected):
-    assert matches(IngestFilter.model_validate(f), item_facts(item)) is expected
+    assert (failed_filter(IngestFilter.model_validate(f), item_facts(item)) is None) is expected
 
 
-def test_regexes_refuse_to_run_off_the_main_thread():
-    errors = []
-    worker = threading.Thread(
-        target=lambda: errors.append(pytest.raises(RuntimeError, regex_search, "a", "a"))
-    )
+def test_regexes_match_off_the_main_thread():
+    found = []
+    worker = threading.Thread(target=lambda: found.append(regex_search("b+", "abbc")))
     worker.start()
     worker.join()
 
-    assert "main thread" in str(errors[0].value)
+    assert found == [True]
 
 
 def test_a_runaway_regex_times_out_as_no_match():
@@ -889,19 +887,19 @@ def test_an_edit_to_an_item_matched_long_ago_still_fires(
 
 
 @pytest.mark.parametrize(
-    "on_edit,kept",
+    "keeps_newest,kept",
     [
-        (False, {b"fresh", b"edited new", b"pending"}),
-        (True, {b"fresh", b"stale newest", b"edited new", b"pending"}),
+        ({}, {b"fresh", b"edited new", b"pending"}),
+        ({"on_edit": True}, {b"fresh", b"stale newest", b"edited new", b"pending"}),
+        # A removal needs to know the item was delivered.
+        ({"on_remove": True}, {b"fresh", b"stale newest", b"edited new", b"pending"}),
     ],
 )
-def test_old_claims_are_purged_but_on_edit_keeps_each_items_newest_and_pending_stay(
-    db_session, admin_user, on_edit, kept
+def test_old_claims_are_purged_but_on_edit_and_on_remove_keep_each_present_items_newest(
+    db_session, admin_user, keeps_newest, kept
 ):
-    trigger = make_trigger(
-        db_session, make_definition(db_session, admin_user), on_edit=on_edit
-    )
-    fresh, stale, edited, stuck = (blog_post(db_session) for _ in range(4))
+    trigger = make_trigger(db_session, make_definition(db_session, admin_user), **keeps_newest)
+    fresh, stale, edited, stuck, gone = (blog_post(db_session) for _ in range(5))
     now = datetime.now(timezone.utc)
     claims = [
         (fresh, b"fresh", now, "done"),
@@ -910,6 +908,7 @@ def test_old_claims_are_purged_but_on_edit_keeps_each_items_newest_and_pending_s
         (edited, b"edited old", now - timedelta(days=40), "done"),
         (edited, b"edited new", now, "done"),
         (stuck, b"pending", now - timedelta(days=40), "pending"),
+        (gone, b"gone newest", now - timedelta(days=31), "done"),
     ]
     db_session.add_all(
         AgentTriggerMatch(
@@ -917,6 +916,7 @@ def test_old_claims_are_purged_but_on_edit_keeps_each_items_newest_and_pending_s
         )
         for item, version, at, status in claims
     )
+    db_session.delete(gone)
     db_session.commit()
 
     purged = triggers.purge_matches(db_session, timedelta(days=30))
@@ -1226,3 +1226,16 @@ def test_what_a_triggers_runs_posted_never_triggers_it_again(
     matched = route_item(db_session, message.id)
 
     assert (poster.id in matched, other.id in matched) == (poster_fires, True)
+
+
+def test_a_regex_is_checked_by_the_engine_that_matches_it():
+    f = IngestFilter.model_validate({"regex": r"\p{Lu}gent"})
+
+    assert failed_filter(f, facts()) is None
+
+
+def test_a_regex_the_engine_refuses_at_match_time_matches_nothing(caplog):
+    with caplog.at_level("WARNING"):
+        assert regex_search("(", "anything", trigger_id=7) is False
+
+    assert [r.getMessage() for r in caplog.records] == ["trigger 7's regex could not be matched"]

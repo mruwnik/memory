@@ -22,6 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError, model_validator
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from memory.api.meetings import MAX_TRANSCRIPT_SIZE
@@ -29,7 +30,7 @@ from memory.api.request_body import read_request_body_with_cap
 from memory.common.celery_app import INGEST_TRANSCRIPT_MEETING, PROCESS_MEETING
 from memory.common.celery_app import app as celery_app
 from memory.common.db.connection import get_session
-from memory.common.db.models import JobType
+from memory.common.db.models import Event, JobType
 from memory.common.db.models.events import NO_ITEM_TYPE, NOT_COLLECTED, REJECTED, STORED, record_raw_event
 from memory.common.db.models.sources import TranscriptAccount
 from memory.common.jobs import dispatch_job
@@ -104,9 +105,10 @@ def secret_matches(secret: str, body: bytes, request: Request) -> bool:
     return hmac.compare_digest(secret.encode(), token.encode())
 
 
-# Records, committed, the push's raw event with an outcome; its id, or None for a
-# repeat, which is still queued: meeting and job dedupe handle it.
-Record = Callable[[str], int | None]
+# Records, committed, the push's raw event with an outcome (and whether the task it
+# queues links its items); its id, or None for a repeat, which is still queued:
+# meeting and job dedupe handle it.
+Record = Callable[..., int | None]
 
 
 def queue_fireflies_meeting(account: TranscriptAccount, payload: dict, record: Record) -> JSONResponse:
@@ -139,7 +141,7 @@ def queue_generic_transcript(
         # Built by hand: pydantic's default error includes the offending input.
         errors = [{"loc": e["loc"], "msg": e["msg"]} for e in exc.errors()]
         return JSONResponse({"detail": errors}, status_code=422)
-    raw_id = record(STORED)
+    raw_id = record(STORED, links_items=True)
 
     # Push-only sources have no poll, so "last sync" is the last accepted push.
     # Committed here because dispatch_job doesn't commit on a dedupe hit.
@@ -172,6 +174,10 @@ def queue_generic_transcript(
         # A retry from the job's params is not caused by this push.
         exclude_from_params=["caused_by"],
     )
+    if not result.is_new and raw_id is not None:
+        # The meeting was already queued, so no task links this push's items.
+        db.execute(update(Event).where(Event.id == raw_id).values(data=None))
+        db.commit()
     status = "queued" if result.is_new else result.job.status
     return JSONResponse({"status": status, "job_id": result.job.id}, status_code=202)
 
@@ -209,7 +215,7 @@ def handle_push(db: Session, account_id: int, body: bytes, request: Request) -> 
     fireflies = isinstance(payload, dict) and ("meeting_id" in payload or "meetingId" in payload)
     event_type = str(payload.get("event") or payload.get("eventType") or "meeting") if fireflies else "transcript"
 
-    def record(outcome: str) -> int | None:
+    def record(outcome: str, links_items: bool = False) -> int | None:
         # Senders give no delivery id, so a repeated body is the same delivery.
         raw_id = record_raw_event(
             db,
@@ -220,6 +226,7 @@ def handle_push(db: Session, account_id: int, body: bytes, request: Request) -> 
             delivery_id=body_sha,
             outcome=outcome,
             payload=payload,
+            links_items=links_items,
         )
         db.commit()
         return raw_id

@@ -293,3 +293,28 @@ def test_event_records_when_it_arrived(client, db_session, webhook_bot):
 
     db_session.refresh(webhook_bot)
     assert webhook_bot.last_event_at is not None
+
+
+
+@pytest.mark.parametrize(
+    "event_type, data, links_items",
+    [
+        ("MESSAGE_CREATE", {"id": "9", "channel_id": "2"}, True),
+        ("MESSAGE_UPDATE", {"id": "9", "channel_id": "2", "content": "edited"}, True),
+        # An embed-only update leaves the stored message as it was.
+        ("MESSAGE_UPDATE", {"id": "9", "channel_id": "2"}, False),
+        ("MESSAGE_DELETE", {"id": "9", "channel_id": "2"}, True),
+        ("MESSAGE_DELETE_BULK", {"ids": ["9"], "channel_id": "2"}, True),
+        ("MESSAGE_REACTION_ADD", {"message_id": "9", "channel_id": "2"}, False),
+        ("THREAD_CREATE", {"id": "2"}, False),
+        ("THREAD_UPDATE", {"id": "2"}, False),
+    ],
+)
+def test_a_raw_event_says_whether_its_task_writes_item_events(
+    client, db_session, webhook_bot, collected_channel, event_type, data, links_items
+):
+    with patch("memory.api.discord.celery_app.send_task"):
+        post_event(client, webhook_bot.id, event(event_type, data))
+
+    (raw,) = raw_events(db_session)
+    assert bool((raw.data or {}).get("links_items")) is links_items
