@@ -326,12 +326,13 @@ async def list_channels(
         name: Case-insensitive substring of the channel name
         include_dms: Include DM channels (default False; DMs are admin-only)
         fields: Fields to include for each channel.
-                Default: ["id", "name", "type", "server_id"]
+                Default: ["id", "name", "type", "server_id", "server_name"]
                 Available fields:
                 - id: Channel ID (snowflake, as string)
                 - name: Channel name
                 - type: text, voice, dm, group_dm or thread
                 - server_id: Server (guild) ID
+                - server_name: Server (guild) name
                 - category_id: Category ID
                 - collect_messages: The channel's own setting (null = inherit from server)
                 - effective_collect: Whether messages are collected (after server inheritance)

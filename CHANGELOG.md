@@ -22,6 +22,10 @@ a new, empty `## Unreleased` above it.
 
 ## Unreleased
 
+### Changes
+
+- Discord MCP tools name the server: `discord_list_channels` returns `server_name` by default, and `discord_channel_history` gives the channel's `server_id` and `server_name`.
+
 ## v0.4.11 (2026-11-07)
 
 ### Changes

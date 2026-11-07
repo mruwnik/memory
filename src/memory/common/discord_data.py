@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import and_, desc, or_
-from sqlalchemy.orm import Query
+from sqlalchemy.orm import Query, joinedload
 
 from memory.common.access_control import UserLike, has_admin_scope
 from memory.common.db.connection import DBSession
@@ -156,7 +156,12 @@ def fetch_channel_history(
         Dict with channel info, messages list, and metadata
     """
     channel = find_visible_channel(session, caller, channel_id, channel_name)
-    channel_info = {"id": str(channel.id), "name": channel.name}
+    channel_info = {
+        "id": str(channel.id),
+        "name": channel.name,
+        "server_id": CHANNEL_FIELDS["server_id"](channel),
+        "server_name": CHANNEL_FIELDS["server_name"](channel),
+    }
 
     # Build query
     query = session.query(DiscordMessage).filter(
@@ -220,6 +225,7 @@ CHANNEL_FIELDS: dict[str, Callable[[DiscordChannel], Any]] = {
     "name": lambda ch: ch.name,
     "type": lambda ch: ch.channel_type,
     "server_id": lambda ch: str(ch.server_id) if ch.server_id else None,
+    "server_name": lambda ch: ch.server.name if ch.server else None,
     "category_id": lambda ch: str(ch.category_id) if ch.category_id else None,
     "collect_messages": lambda ch: ch.collect_messages,
     "effective_collect": lambda ch: ch.should_collect,
@@ -227,7 +233,7 @@ CHANNEL_FIELDS: dict[str, Callable[[DiscordChannel], Any]] = {
     "sensitivity": lambda ch: ch.sensitivity,
 }
 
-DEFAULT_CHANNEL_FIELDS = ["id", "name", "type", "server_id"]
+DEFAULT_CHANNEL_FIELDS = ["id", "name", "type", "server_id", "server_name"]
 
 
 def fetch_channels(
@@ -249,7 +255,7 @@ def fetch_channels(
     if invalid:
         raise ValueError(f"Invalid fields: {sorted(invalid)}. Available: {sorted(CHANNEL_FIELDS)}")
 
-    query = visible_channels(session, caller)
+    query = visible_channels(session, caller).options(joinedload(DiscordChannel.server))
 
     if server is not None:
         servers = fetch_servers(session, user_id=None if has_admin_scope(caller) else caller.id)

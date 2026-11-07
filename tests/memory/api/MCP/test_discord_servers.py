@@ -214,8 +214,12 @@ async def test_list_channels_admin_sees_all(two_owners, admin_user_with_session)
     with mcp_auth_context(session.token):
         result = await get_fn(list_channels)(include_dms=True)
 
-    assert channel_names(result) == [
-        "mine-Random", "mine-general", "some dm", "theirs-Random", "theirs-general",
+    assert sorted((ch["name"], ch["server_name"]) for ch in result["channels"]) == [
+        ("mine-Random", "mine server"),
+        ("mine-general", "mine server"),
+        ("some dm", None),
+        ("theirs-Random", "theirs server"),
+        ("theirs-general", "theirs server"),
     ]
 
 
@@ -253,7 +257,7 @@ async def test_list_channels_name_filter(two_owners, name, expected):
 @pytest.mark.parametrize(
     "fields,expected",
     [
-        (None, {"id", "name", "type", "server_id"}),
+        (None, {"id", "name", "type", "server_id", "server_name"}),
         (["name", "sensitivity"], {"name", "sensitivity"}),
     ],
 )
@@ -313,7 +317,12 @@ async def test_channel_history_own_channel(two_owners, kwargs):
     with mcp_auth_context(two_owners.token):
         result = await get_fn(channel_history)(**kwargs)
 
-    assert result["channel"] == {"id": "10011", "name": "mine-general"}
+    assert result["channel"] == {
+        "id": "10011",
+        "name": "mine-general",
+        "server_id": "1001",
+        "server_name": "mine server",
+    }
 
 
 @pytest.mark.asyncio
