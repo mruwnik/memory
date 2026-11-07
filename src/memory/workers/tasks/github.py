@@ -1034,25 +1034,13 @@ def ensure_repo_hook(client: GithubClient, repo: GithubRepo, config: dict[str, s
     return "installed"
 
 
-def ensure_org_hook(client: GithubClient, org: str, config: dict[str, str]) -> str | None:
-    """'org_hook' once a hook on the org delivers to us, None when GitHub refuses the org
-    (the owner is a user, or the credential lacks access) so each repo needs its own.
-    Any other failure is the status: repo hooks then could double a working org hook."""
-    hooks_url = org_hooks(org)
+def ensure_org_hook(client: GithubClient, org: str, config: dict[str, str]) -> str:
+    """'org_hook' once a hook on the org delivers to us, else why not."""
     try:
-        ours = our_hook(client.list_hooks(hooks_url), config["url"])
+        ensure_hook(client, org_hooks(org), config)
     except requests.RequestException as e:
-        return None if status_code(e) in (403, 404) else hook_failure(e)
-    try:
-        if ours:
-            client.update_hook(hooks_url, ours["id"], config)
-        else:
-            client.create_hook(hooks_url, config)
-    except requests.RequestException as e:
-        if not ours and status_code(e) in (403, 404, 422):
-            return None
         status = hook_failure(e)
-        logger.warning("github org webhook install failed hook=%s status=%s", ours and ours["id"], status)
+        logger.warning("github org webhook install failed status=%s", status)
         return status
     return "org_hook"
 
@@ -1070,10 +1058,17 @@ def drop_hook(client: GithubClient, hooks_url: str, url: str) -> bool:
 
 
 def install_owner_hooks(client: GithubClient, repos: list[GithubRepo], config: dict[str, str]) -> dict[int, str]:
-    """One hook on the owner's org covers all its repos; failing that, one per repo."""
-    status = ensure_org_hook(client, repos[0].owner, config)
-    if status is None:
+    """One hook on an org covers all its repos; a personal account has no account-level
+    hooks, so each of its repos gets one. An org's repos never get their own, which
+    would duplicate an org hook added by hand."""
+    try:
+        owner_type = client.owner_type(repos[0].owner)
+    except requests.RequestException:
+        logger.warning("github owner type lookup failed repo=%s", repos[0].id)
+        return {r.id: "error" for r in repos}
+    if owner_type == "User":
         return {r.id: ensure_repo_hook(client, r, config) for r in repos}
+    status = ensure_org_hook(client, repos[0].owner, config)
     if status == "org_hook":
         for repo in repos:
             drop_hook(client, repo_hooks(repo.owner, repo.name), config["url"])

@@ -16,6 +16,7 @@ from memory.common.github import HOOK_EVENTS, webhook_url
 from memory.workers.tasks import github
 
 HOOK_PATH = re.compile(r"/((?:repos/[^/]+|orgs)/[^/]+)/hooks(?:/(\d+))?$")
+USER_PATH = re.compile(r"/(users/([^/]+))$")
 
 
 @pytest.fixture(autouse=True)
@@ -36,15 +37,17 @@ def response(status: int, body=None) -> requests.Response:
 
 
 class FakeGithub:
-    """GitHub's hooks API, keyed by "repos/<owner>/<name>" or "orgs/<org>". An unknown org
-    answers 404 as a user's login does, any other unknown scope `denied`; writes to a
-    `read_only` scope answer `refused`, and a `broken` one 500."""
+    """GitHub's hooks API, keyed by "repos/<owner>/<name>" or "orgs/<org>", and /users/<login>.
+    A login is an Organization when it is in `orgs` (by default: has an "orgs/" key in
+    `hooks` or `broken`), else a User. An unknown org answers 404, any other unknown scope
+    `denied`; writes to a `read_only` scope answer `refused`, and a `broken` one 500."""
 
     def __init__(
         self, hooks: dict[str, list[dict]], denied: int = 404, read_only: frozenset[str] = frozenset(),
-        refused: int = 403, broken: frozenset[str] = frozenset(),
+        refused: int = 403, broken: frozenset[str] = frozenset(), orgs: frozenset[str] | None = None,
     ):
         self.hooks = hooks
+        self.orgs = orgs if orgs is not None else {k.removeprefix("orgs/") for k in {*hooks, *broken} if k.startswith("orgs/")}
         self.denied = denied
         self.read_only = read_only
         self.refused = refused
@@ -57,6 +60,11 @@ class FakeGithub:
         self.calls.append((method, url, json))
         if url.endswith("/access_tokens"):
             return response(201, {"token": "ghs_installation"})
+        if user := USER_PATH.search(url):
+            scope, login = user.groups()
+            if scope in self.broken:
+                return response(500, {"message": "Server Error"})
+            return response(200, {"login": login, "type": "Organization" if login in self.orgs else "User"})
         scope, hook_id = HOOK_PATH.search(url).groups()  # type: ignore[union-attr]
         if scope in self.broken:
             return response(500, {"message": "Server Error"})
@@ -88,9 +96,9 @@ def serve():
 
     def start(
         hooks: dict[str, list[dict]], denied: int = 404, read_only: frozenset[str] = frozenset(),
-        refused: int = 403, broken: frozenset[str] = frozenset(),
+        refused: int = 403, broken: frozenset[str] = frozenset(), orgs: frozenset[str] | None = None,
     ) -> FakeGithub:
-        fake = FakeGithub(hooks, denied, read_only, refused, broken)
+        fake = FakeGithub(hooks, denied, read_only, refused, broken, orgs)
         p = patch.object(requests.Session, "request", lambda _self, method, url, **kw: fake.request(method, url, **kw))
         p.start()
         patches.append(p)
@@ -275,14 +283,14 @@ def test_our_repo_hooks_go_once_an_org_hook_covers_them(db_session, serve, accou
     assert fake.hooks["repos/org/a"] == [FOREIGN]
 
 
-def test_an_org_that_refuses_a_new_hook_gets_one_per_repo(db_session, serve, account):
+def test_an_org_that_hides_its_hooks_gets_no_repo_hooks(db_session, serve, account):
     repo = add_repo(db_session, account, "a")
-    fake = serve({"orgs/org": [], "repos/org/a": []}, read_only=frozenset({"orgs/org"}))
+    fake = serve({"repos/org/a": []}, orgs=frozenset({"org"}))
 
     github.ensure_github_webhooks(account.id)
 
-    assert fake.writes() == [("POST", "/orgs/org/hooks"), ("POST", "/repos/org/a/hooks")]
-    assert statuses(db_session, repo) == ["installed"]
+    assert fake.writes() == []
+    assert statuses(db_session, repo) == ["missing_permission"]
 
 
 def test_a_github_outage_on_the_org_adds_no_repo_hooks(db_session, serve, account):
@@ -295,15 +303,36 @@ def test_a_github_outage_on_the_org_adds_no_repo_hooks(db_session, serve, accoun
     assert statuses(db_session, repo) == ["error"]
 
 
-@pytest.mark.parametrize("refused, status", [(403, "installed"), (404, "installed"), (422, "installed"), (500, "error")])
-def test_a_failed_org_create_falls_back_only_when_github_refuses_it(db_session, serve, account, refused, status):
+@pytest.mark.parametrize("refused, status", [(403, "missing_permission"), (404, "missing_permission"), (422, "rejected"), (500, "error")])
+def test_an_org_that_refuses_a_new_hook_gets_no_repo_hooks(db_session, serve, account, refused, status):
     repo = add_repo(db_session, account, "a")
     fake = serve({"orgs/org": [], "repos/org/a": []}, read_only=frozenset({"orgs/org"}), refused=refused)
 
     github.ensure_github_webhooks(account.id)
 
+    assert fake.writes() == [("POST", "/orgs/org/hooks")]
     assert statuses(db_session, repo) == [status]
-    assert len(fake.hooks["repos/org/a"]) == (status == "installed")
+
+
+def test_a_personal_account_gets_one_hook_per_repo_and_no_org_calls(db_session, serve, account):
+    repos = [add_repo(db_session, account, name, owner="me") for name in ("a", "b")]
+    fake = serve({"repos/me/a": [], "repos/me/b": []})
+
+    github.ensure_github_webhooks(account.id)
+
+    assert fake.writes() == [("POST", "/repos/me/a/hooks"), ("POST", "/repos/me/b/hooks")]
+    assert not any("/orgs/" in u for _, u, _ in fake.calls)
+    assert statuses(db_session, *repos) == ["installed", "installed"]
+
+
+def test_an_unknown_owner_type_installs_nothing(db_session, serve, account):
+    repo = add_repo(db_session, account, "a")
+    fake = serve({"repos/org/a": []}, broken=frozenset({"users/org"}))
+
+    github.ensure_github_webhooks(account.id)
+
+    assert fake.writes() == []
+    assert statuses(db_session, repo) == ["error"]
 
 
 def test_each_owner_gets_its_own_outcome(db_session, serve, account):

@@ -543,7 +543,7 @@ describe('GitHubPanel webhook modal', () => {
 
   it('says what install does and installs with a POST', async () => {
     const { mock, user, dialog } = await openModal([hooked()])
-    const plan = /^Adds \(or updates\) one webhook pointing at Memory on octocat, if it's an org, covering all its repos; otherwise, or if the org hook isn't permitted, one on each repo\. Other webhooks are left alone\. Safe to run again\./
+    const plan = /^Adds \(or updates\) one webhook pointing at Memory on octocat, if it's an org, covering all its repos, and one on each repo owned by a personal account\. Other webhooks are left alone\. Safe to run again\./
     expect(within(dialog).getByText(plan)).toBeInTheDocument()
     const button = within(dialog).getByRole('button', { name: 'Install webhook' })
     expect(button).toHaveAttribute('title', expect.stringMatching(plan))

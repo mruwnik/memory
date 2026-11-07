@@ -44,6 +44,12 @@ def org_hooks(org: str) -> str:
 class HooksMixin(GithubClientCore):
     """Hooks at ``hooks_url``, either ``repo_hooks(...)`` or ``org_hooks(...)``."""
 
+    def owner_type(self, login: str) -> str:
+        """'User' or 'Organization'."""
+        response = self.session.get(f"{GITHUB_API_URL}/users/{login}", timeout=30)
+        response.raise_for_status()
+        return response.json()["type"]
+
     def list_hooks(self, hooks_url: str) -> list[dict[str, Any]]:
         response = self.session.get(hooks_url, params={"per_page": 100}, timeout=30)
         response.raise_for_status()

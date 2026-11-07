@@ -270,8 +270,8 @@ const AccountPushBadge = ({ account }: { account: GithubAccount }) => {
 }
 
 const PERMISSION_HELP = {
-  app: 'The GitHub App needs permission to manage webhooks: Organization permissions → Webhooks: Read and write for one org webhook, or Repository permissions → Webhooks: Read and write for one per repo. Set it in the App\'s settings → Permissions & events, accept the new permissions on the installation, then install again.',
-  pat: 'The token needs permission to manage webhooks. Classic token: admin:org_hook for one org webhook (its owner must be an org owner), or admin:repo_hook for one per repo. Fine-grained token: Organization permissions → Webhooks: Read and write, or Repository permissions → Webhooks: Read and write.',
+  app: "The GitHub App needs permission to manage webhooks: Organization permissions → Webhooks: Read and write for an org's repos (one org webhook), or Repository permissions → Webhooks: Read and write for a personal account's repos (one per repo). Set it in the App's settings → Permissions & events, accept the new permissions on the installation, then install again.",
+  pat: "The token needs permission to manage webhooks. Classic token: admin:org_hook for an org's repos (one org webhook; the token's owner must be an org owner), or admin:repo_hook for a personal account's repos (one per repo). Fine-grained token: Organization permissions → Webhooks: Read and write for an org, or Repository permissions → Webhooks: Read and write for a personal account.",
 }
 
 type HookHelp = ['info' | 'warning', string]
@@ -288,7 +288,7 @@ const listed = (names: string[]) => names.length < 2 ? names.join('') : `${names
 // Whether an owner is an org or a person is only known to GitHub, so the plan covers both.
 const installPlan = (owners: string[]) => {
   const where = owners.length === 1 ? `on ${owners[0]}, if it's an org` : `on each of ${listed(owners)} that is an org`
-  return `Adds (or updates) one webhook pointing at Memory ${where}, covering all its repos; otherwise, or if the org hook isn't permitted, one on each repo. Other webhooks are left alone. Safe to run again.`
+  return `Adds (or updates) one webhook pointing at Memory ${where}, covering all its repos, and one on each repo owned by a personal account. Other webhooks are left alone. Safe to run again.`
 }
 
 // GitHub logins are case-insensitive, and the install groups them that way too.
