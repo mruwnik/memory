@@ -296,8 +296,8 @@ async def upsert(
     max_cost_usd_per_day, timeout_sec, provider_key (one of your agent_key_list keys, by id
     or name; stored as its id; omit for your default key for the model's provider),
     retention_days (how long its finished runs are kept; omit for AGENT_RUN_RETENTION_DAYS),
-    placement (who executes its runs: server_only (default); runner_only, for workers,
-    i.e. anyone with the agents:work scope, who claim them with agent_work_claim; or
+    placement (who executes its runs: server_only (default); runner_only, for your own
+    workers (credentials with the agents:work scope), which claim them with agent_work_claim; or
     server_first / runner_first, which move a run nobody has claimed fallback_after
     minutes (1..720) after it was placed to the other side; omit fallback_after for never), requires (what a worker
     needs to take its runs: {"models": [globs], "tools": ["server:tool" globs],
