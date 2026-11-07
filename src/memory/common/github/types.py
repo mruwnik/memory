@@ -164,6 +164,9 @@ class GithubIssueData(TypedDict):
     base_sha: NotRequired[str | None]
     head_ref: NotRequired[str | None]
     head_repo: NotRequired[str | None]
+    draft: NotRequired[bool | None]
+    # PRs only: the head commit's check rollup (SUCCESS, FAILURE, ERROR, PENDING, EXPECTED).
+    checks_state: NotRequired[str | None]
 
 
 def parse_github_date(date_str: str | None) -> datetime | None:

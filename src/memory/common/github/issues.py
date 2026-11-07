@@ -106,6 +106,7 @@ class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
         deletions
         changedFiles
         headRefOid
+        isDraft
         baseRefOid
         headRefName
         headRepository { nameWithOwner }
@@ -113,6 +114,7 @@ class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
           nodes {
             commit {
               statusCheckRollup {
+                state
                 contexts(first: 100) {
                   nodes {
                     ... on CheckRun { name status conclusion }
@@ -505,15 +507,16 @@ class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
             base_sha=pr.get("baseRefOid"),
             head_ref=pr.get("headRefName"),
             head_repo=self._extract_nested(pr, "headRepository", "nameWithOwner"),
+            draft=pr.get("isDraft"),
+            checks_state=self._extract_nested(self.head_rollup(pr), "state"),
         )
 
-    def _parse_checks(self, pr: dict[str, Any]) -> dict[str, str]:
+    def head_rollup(self, pr: dict[str, Any]) -> dict[str, Any] | None:
         commits = self._extract_nested(pr, "commits", "nodes", default=[])
-        if not commits:
-            return {}
-        contexts = self._extract_nested(
-            commits[-1], "commit", "statusCheckRollup", "contexts", "nodes", default=[]
-        )
+        return self._extract_nested(commits[-1], "commit", "statusCheckRollup") if commits else None
+
+    def _parse_checks(self, pr: dict[str, Any]) -> dict[str, str]:
+        contexts = self._extract_nested(self.head_rollup(pr), "contexts", "nodes", default=[])
         checks = {}
         for c in contexts:
             if not c:

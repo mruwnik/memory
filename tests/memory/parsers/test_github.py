@@ -670,11 +670,13 @@ def pr_node(**overrides):
         "deletions": 0,
         "changedFiles": 1,
         "headRefOid": "abc123",
+        "isDraft": True,
         "commits": {
             "nodes": [
                 {
                     "commit": {
                         "statusCheckRollup": {
+                            "state": "PENDING",
                             "contexts": {
                                 "nodes": [
                                     {"name": "tests", "status": "COMPLETED", "conclusion": "FAILURE"},
@@ -696,17 +698,18 @@ def pr_node(**overrides):
 
 
 @pytest.mark.parametrize(
-    "commits, checks",
+    "commits, checks, state",
     [
         (
             pr_node()["commits"],
             {"tests": "failure", "lint": "in_progress", "ci/legacy": "success"},
+            "PENDING",
         ),
-        ({"nodes": []}, {}),
-        ({"nodes": [{"commit": {"statusCheckRollup": None}}]}, {}),
+        ({"nodes": []}, {}, None),
+        ({"nodes": [{"commit": {"statusCheckRollup": None}}]}, {}, None),
     ],
 )
-def test_fetch_pr_reads_head_sha_and_checks(commits, checks):
+def test_fetch_pr_reads_head_sha_and_checks(commits, checks, state):
     client = GithubClient(GithubCredentials(auth_type="pat", access_token="token"))
     response = mock_graphql_response({"repository": {"pullRequest": pr_node(commits=commits)}})
 
@@ -716,7 +719,13 @@ def test_fetch_pr_reads_head_sha_and_checks(commits, checks):
         pr = client.fetch_pr("owner", "repo", 7)
 
     assert pr is not None
-    assert (pr["number"], pr.get("head_sha"), pr.get("checks")) == (7, "abc123", checks)
+    assert (pr["number"], pr.get("head_sha"), pr.get("checks"), pr.get("checks_state"), pr.get("draft")) == (
+        7,
+        "abc123",
+        checks,
+        state,
+        True,
+    )
 
 
 REVIEW = {

@@ -1478,6 +1478,9 @@ class GithubItem(SourceItem):
     base_sha: Mapped[str | None] = mapped_column(Text, nullable=True)
     head_ref: Mapped[str | None] = mapped_column(Text, nullable=True)
     head_repo: Mapped[str | None] = mapped_column(Text, nullable=True)
+    draft: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # PRs: "<head sha>:<rollup state>" when the head commit's checks last all finished.
+    checks_complete_key: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Relationship to milestone/project
     # foreign_keys needed because SourceItem.project_id also references projects

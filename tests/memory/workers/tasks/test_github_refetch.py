@@ -75,6 +75,8 @@ def pr_data(**overrides) -> GithubIssueData:
         ),
         head_sha="a" * 40,
         checks={"tests": "in_progress"},
+        checks_state="PENDING",
+        draft=False,
     )
     return GithubIssueData(**{**data, **overrides})  # type: ignore[typeddict-item]
 
@@ -92,12 +94,20 @@ EARLIER = "2024-01-05T12:00:00Z"
         ({"comments": [comment(1, "alice", EARLIER)]}, []),
         ({"reviews": [review(5, "alice")]}, ["review"]),
         ({"reviews": [review(5, OWN)]}, []),
-        ({"checks": {"tests": "success"}}, ["checks"]),
+        ({"checks": {"tests": "success"}, "checks_state": "SUCCESS"}, ["checks", "checks_complete"]),
+        ({"checks": {"tests": "success"}}, ["checks"]),  # the rollup still waits on checks not seen
+        ({"checks_state": "EXPECTED"}, []),
+        (
+            {"head_sha": "b" * 40, "checks": {"tests": "failure"}, "checks_state": "FAILURE"},
+            ["commits", "checks", "checks_complete"],
+        ),
         ({"state": "closed"}, ["state"]),
         ({"merged_at": datetime(2024, 1, 7, tzinfo=timezone.utc)}, ["state"]),
         ({"title": "Renamed"}, ["edited"]),
         ({"body": "New body"}, ["edited"]),
-        ({"labels": ["x"]}, []),
+        ({"labels": ["x"]}, ["labels"]),
+        ({"assignees": ["bob"]}, ["assignees"]),
+        ({"draft": True}, ["draft"]),
         (
             {"head_sha": "b" * 40, "checks": {}, "comments": [comment(1, "bob", LATER)]},
             ["commits", "comments", "checks"],
@@ -111,9 +121,11 @@ def test_item_changes(changed, expected):
     assert github.item_changes(existing, pr_data(**changed), {OWN}) == expected
 
 
-@pytest.mark.parametrize("field, after", [("head_sha", "b" * 40), ("checks", {"x": "success"})])
+@pytest.mark.parametrize(
+    "field, after", [("head_sha", "b" * 40), ("checks", {"x": "success"}), ("draft", True)]
+)
 def test_item_changes_ignores_a_first_recorded_value(field, after):
-    """Items stored before head SHAs and checks were recorded must not all fire on their next sync."""
+    """Items stored before head SHAs, checks and draft were recorded must not all fire on their next sync."""
     repo = GithubRepo(id=1, owner="o", name="r", tags=[])
     existing = github._create_github_item(repo, pr_data())
     setattr(existing, field, None)
@@ -169,8 +181,14 @@ def repo(db_session, account):
     return repo
 
 
-def pr_node(head: str, updated: str = "2024-01-06T00:00:00Z", comments=(), checks=None) -> dict:
-    contexts = [{"name": n, "status": "COMPLETED", "conclusion": c.upper()} for n, c in (checks or {}).items()]
+def rollup(state: str | None, contexts: list[dict]) -> dict:
+    return {"commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": state, "contexts": {"nodes": contexts}}}}]}}
+
+
+def pr_node(
+    head: str, updated: str = "2024-01-06T00:00:00Z", comments=(), checks=None, state=None
+) -> dict:
+    contexts = [{"context": n, "state": c.upper()} for n, c in (checks or {}).items()]
     return {
         "number": 7,
         "title": "Add feature",
@@ -188,7 +206,8 @@ def pr_node(head: str, updated: str = "2024-01-06T00:00:00Z", comments=(), check
         "deletions": 0,
         "changedFiles": 1,
         "headRefOid": head,
-        "commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": {"nodes": contexts}}}}]},
+        "isDraft": False,
+        **rollup(state, contexts),
         "comments": {
             "nodes": [
                 {"databaseId": i, "author": {"login": a}, "body": f"c{i}", "createdAt": at, "updatedAt": at}
@@ -274,17 +293,84 @@ def test_refetch_ignores_own_comment(db_session, repo, qdrant, github_serves):
 
 
 def test_refetch_reports_checks_without_reembedding(db_session, repo, qdrant, github_serves):
-    github_serves(pr_node("a" * 40, checks={"tests": "failure"}))
+    github_serves(pr_node("a" * 40, checks={"tests": "failure"}, state="FAILURE"))
     github.refetch_github_item(repo.id, 7, "pr")
     forget_events(db_session)
 
-    github_serves(pr_node("a" * 40, checks={"tests": "success"}))
+    github_serves(pr_node("a" * 40, checks={"tests": "success"}, state="SUCCESS"))
     result = github.refetch_github_item(repo.id, 7, "pr")
 
     item = stored(db_session)
     assert result["status"] == "updated"
     assert item.checks == {"tests": "success"}
-    assert changes_reported(db_session) == [(item.id, ["checks"])]
+    assert changes_reported(db_session) == [(item.id, ["checks", "checks_complete"])]
+
+
+def test_checks_complete_fires_when_the_head_rollup_reaches_a_new_result(
+    db_session, repo, qdrant, github_serves
+):
+    github_serves(pr_node("a" * 40, checks={"tests": "pending"}, state="PENDING"))
+    github.refetch_github_item(repo.id, 7, "pr")
+    steps = [
+        ("a", "success", "SUCCESS", ["checks", "checks_complete"]),
+        ("a", "pending", "PENDING", ["checks"]),  # a re-run
+        ("a", "success", "SUCCESS", ["checks"]),
+        ("a", "failure", "FAILURE", ["checks", "checks_complete"]),
+        ("b", "success", "PENDING", ["commits", "checks"]),  # one check done, others not started
+        ("b", "success", "SUCCESS", ["checks_complete"]),
+    ]
+
+    reported = []
+    for head, outcome, state, _ in steps:
+        forget_events(db_session)
+        github_serves(pr_node(head * 40, checks={"tests": outcome}, state=state))
+        github.refetch_github_item(repo.id, 7, "pr")
+        reported.append([changes for _, changes in changes_reported(db_session)])
+
+    assert reported == [[changes] for *_, changes in steps]
+
+
+def test_check_runs_finishing_report_checks_complete(db_session, repo, qdrant, github_serves):
+    running = {"name": "tests", "status": "IN_PROGRESS", "conclusion": None}
+    github_serves(pr_node("a" * 40) | rollup("PENDING", [running]))
+    github.refetch_github_item(repo.id, 7, "pr")
+    forget_events(db_session)
+
+    done = {"name": "tests", "status": "COMPLETED", "conclusion": "SUCCESS"}
+    github_serves(pr_node("a" * 40) | rollup("SUCCESS", [done]))
+    github.refetch_github_item(repo.id, 7, "pr")
+
+    item = stored(db_session)
+    assert item.checks == {"tests": "success"}
+    assert changes_reported(db_session) == [(item.id, ["checks", "checks_complete"])]
+
+
+@pytest.mark.parametrize(
+    "before, after, change, metadata",
+    [
+        ({"isDraft": True}, {"isDraft": False}, "draft", (False, [], [], [])),
+        ({}, {"labels": {"nodes": [{"name": "bug"}]}}, "labels", (False, ["bug"], [], ["bug"])),
+        ({}, {"assignees": {"nodes": [{"login": "bob"}]}}, "assignees", (False, [], ["bob"], [])),
+    ],
+)
+def test_refetch_reports_metadata_changes_once_without_reembedding(
+    db_session, repo, qdrant, github_serves, before, after, change, metadata
+):
+    github_serves(pr_node("a" * 40) | before)
+    github.refetch_github_item(repo.id, 7, "pr")
+    forget_events(db_session)
+
+    github_serves(pr_node("a" * 40) | after)
+    result = github.refetch_github_item(repo.id, 7, "pr")
+    first = changes_reported(db_session)
+    forget_events(db_session)
+    github.refetch_github_item(repo.id, 7, "pr")
+
+    item = stored(db_session)
+    assert result["status"] == "updated"
+    assert first == [(item.id, [change])]
+    assert changes_reported(db_session) == []
+    assert (item.draft, item.labels, item.assignees, item.tags) == metadata
 
 
 def branch_context(base: str, head_repo: str, review_commits=()) -> dict:
@@ -414,7 +500,7 @@ def test_poll_changes_push_cannot_have_missed_leave_the_repo_unmarked(
     "polled, changed",
     [
         (False, {"title": "Renamed"}),  # a webhook refetch is push delivering
-        (True, {"checks": {"tests": "success"}}),  # checks don't date themselves
+        (True, {"checks": {"tests": "success"}, "checks_state": "SUCCESS"}),  # checks don't date themselves
         (True, {}),  # nothing new
     ],
 )

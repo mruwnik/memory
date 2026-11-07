@@ -131,6 +131,7 @@ BY_TYPE: dict[type[SourceItem], dict[str, Getter]] = {
         "base_sha": lambda i: i.base_sha,
         "head_ref": lambda i: i.head_ref,
         "head_repo": lambda i: i.head_repo,
+        "draft": lambda i: i.draft,
         "reviews": lambda i: (i.pr_data.reviews if i.pr_data else None) or [],
         "checks": lambda i: i.checks,
         "diff_summary": lambda i: i.diff_summary,

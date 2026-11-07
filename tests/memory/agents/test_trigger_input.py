@@ -47,6 +47,7 @@ def github_pr():
         head_ref="fix-login",
         head_repo="alice/app",
         checks={"ci": "success"},
+        draft=False,
         pr_data=GithubPRData(
             files=[{"filename": "a.py", "additions": 3, "deletions": 1}],
             reviews=[{"id": 5, "user": "bob", "state": "approved", "body": "ok", "commit_oid": "abc123"}],
@@ -306,7 +307,7 @@ def test_bad_placeholders_are_named(template, source_types, per_item, error):
     [
         ("{item.repo}#{item.number} {item.changes}", ["github_item"], True),
         ("{item.repo}#{item.number} {item.state}", ["github_pr", "github_issue"], True),
-        ("{item.head_sha} {item.checks} {item.files}", ["github_pr"], True),
+        ("{item.head_sha} {item.checks} {item.draft} {item.files}", ["github_pr"], True),
         ("{item.repo} {item.ts}", [], True),
         ('{items} {items_json} {"json": "braces"}', [], False),
     ],

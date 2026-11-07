@@ -63,7 +63,20 @@ from memory.common.push_health import GITHUB_PUSH_STATUSES, push_overdue, record
 logger = logging.getLogger(__name__)
 
 # The order item_changes reports changes in.
-CHANGES = ("edited", "commits", "comments", "review", "checks", "state")
+CHANGES = (
+    "edited",
+    "labels",
+    "assignees",
+    "draft",
+    "commits",
+    "comments",
+    "review",
+    "checks",
+    "checks_complete",
+    "state",
+)
+# Head commit check rollups that mean every check, including ones not created yet, has finished.
+FINISHED_ROLLUPS = frozenset({"SUCCESS", "FAILURE", "ERROR"})
 # Items are looked up by kind, and GitHub numbers a repo's issues and PRs from
 # one sequence, so a stored item never changes class.
 CLASSES: dict[str, type[GithubItem]] = {"pr": GithubPR, "issue": GithubIssue}
@@ -90,13 +103,25 @@ def has_body(existing: GithubItem, body: str) -> bool:
     return content == head or content.startswith(head + "\n\n\n---\n")
 
 
+def checks_complete_key(data: GithubIssueData) -> str | None:
+    """"<head sha>:<rollup state>" once the head commit's checks have all finished.
+    A PR with no checks has no rollup, so it never has one."""
+    head_sha, state = data.get("head_sha"), data.get("checks_state")
+    if not head_sha or state not in FINISHED_ROLLUPS:
+        return None
+    return f"{head_sha}:{state}"
+
+
 def item_changes(
     existing: GithubItem | None, new: GithubIssueData, logins: Collection[str]
 ) -> list[str]:
     """What a sync of ``new`` changes about ``existing``, as trigger change tags.
 
-    A head SHA or check summary seen for the first time is not a change, so
-    items stored before they were recorded don't all fire on their next sync.
+    A head SHA, check summary or draft flag seen for the first time is not a
+    change, so items stored before they were recorded don't all fire on their
+    next sync. ``checks_complete`` fires when the head commit's checks finish with a
+    result other than the last one recorded: a new push, or a re-run that turns
+    FAILURE into SUCCESS, fires it again; a re-run with the same result doesn't.
     """
     if existing is None:
         return ["new"]
@@ -122,9 +147,13 @@ def item_changes(
             c["user"] for c in pr["review_comments"] if c["id"] not in known_comments
         ]
 
-    head_sha, checks = new.get("head_sha"), new.get("checks")
+    head_sha, checks, draft = new.get("head_sha"), new.get("checks"), new.get("draft")
+    complete = checks_complete_key(new)
     changed = {
         "edited": existing.title != new["title"] or not has_body(existing, new["body"]),
+        "labels": set(existing.labels or []) != set(new["labels"]),
+        "assignees": set(existing.assignees or []) != set(new["assignees"]),
+        "draft": existing.draft is not None and draft is not None and draft != existing.draft,
         "commits": existing.head_sha is not None
         and head_sha is not None
         and head_sha != existing.head_sha,
@@ -133,6 +162,8 @@ def item_changes(
         "checks": existing.checks is not None
         and checks is not None
         and checks != existing.checks,
+        "checks_complete": existing.checks is not None
+        and complete not in (None, existing.checks_complete_key),
         "state": (existing.state, existing.merged_at, existing.closed_at)
         != (new["state"], new["merged_at"], new["closed_at"]),
     }
@@ -314,6 +345,8 @@ def _create_github_item(
         base_sha=issue_data.get("base_sha"),
         head_ref=issue_data.get("head_ref"),
         head_repo=issue_data.get("head_repo"),
+        draft=issue_data.get("draft"),
+        checks_complete_key=checks_complete_key(issue_data),
     )
 
     # Create PR data if this is a PR
@@ -370,6 +403,13 @@ def _update_existing_item(
     new_checks = issue_data.get("checks")
     if new_checks is not None:
         existing.checks = new_checks  # type: ignore
+    existing.checks_complete_key = checks_complete_key(issue_data) or existing.checks_complete_key
+    draft = issue_data.get("draft")
+    existing.draft = existing.draft if draft is None else draft
+    # Stored before the reindex check, so a change that isn't re-embedded doesn't report again.
+    existing.labels = issue_data["labels"]  # type: ignore
+    existing.assignees = issue_data["assignees"]  # type: ignore
+    existing.tags = (cast(list[str], repo.tags) or []) + issue_data["labels"]  # type: ignore
 
     if not _needs_reindex(existing, issue_data):
         if changes:
@@ -406,8 +446,6 @@ def _update_existing_item(
     existing.sha256 = create_content_hash(content)  # type: ignore
     existing.title = issue_data["title"]  # type: ignore
     existing.state = issue_data["state"]  # type: ignore
-    existing.labels = issue_data["labels"]  # type: ignore
-    existing.assignees = issue_data["assignees"]  # type: ignore
     existing.milestone_id = milestone_id  # type: ignore
     existing.project_id = project_id  # type: ignore
     existing.closed_at = issue_data["closed_at"]  # type: ignore
@@ -427,10 +465,6 @@ def _update_existing_item(
             existing.project_status = str(value)  # type: ignore
         elif "priority" in key_lower:
             existing.project_priority = str(value)  # type: ignore
-
-    # Update tags
-    repo_tags = cast(list[str], repo.tags) or []
-    existing.tags = repo_tags + issue_data["labels"]  # type: ignore
 
     # Update PR data if this is a PR
     if issue_data["kind"] == "pr":
@@ -490,6 +524,8 @@ def _deserialize_issue_data(data: dict[str, Any]) -> GithubIssueData:
         base_sha=data.get("base_sha"),
         head_ref=data.get("head_ref"),
         head_repo=data.get("head_repo"),
+        draft=data.get("draft"),
+        checks_state=data.get("checks_state"),
     )
 
 
@@ -675,7 +711,7 @@ def push_missed(repo: GithubRepo, data: GithubIssueData, changes: list[str]) -> 
     move an item's updated_at, so their age can't be told and they don't count."""
     if repo.webhook_status not in GITHUB_PUSH_STATUSES:
         return False
-    if not set(changes) - {"checks"}:
+    if not set(changes) - {"checks", "checks_complete"}:
         return False
     return push_overdue(data["github_updated_at"], repo.webhook_checked_at)
 
