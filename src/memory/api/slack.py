@@ -1386,7 +1386,9 @@ async def slack_events(
         # a signed event proves the same thing.
         advance_setup_state(db, app, verified_secret, "draft", "signing_verified")
         record_event_arrival(db, app)
-        if app.push_missing_since:
+        # An event shows push reaches some channel, not the one that missed,
+        # so the outage ends only once polls stop finding misses.
+        if app.push_missing_since and push_stale(app.push_last_miss_at):
             app.push_missing_since = None
             db.commit()
         # The signature only proves the app's owner sent this; an event counts

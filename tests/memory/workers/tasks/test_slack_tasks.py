@@ -2005,16 +2005,20 @@ def test_poll_storing_an_unpushed_message_marks_the_app_and_notifies_once(
 ):
     poll(pushing_app, slack_channel, sent(30))
     db_session.refresh(pushing_app)
+    db_session.refresh(slack_channel)
     first_miss = pushing_app.push_last_miss_at
     assert pushing_app.push_missing_since == first_miss is not None
+    assert slack_channel.push_since is None  # push no longer counts as covering it
     [notification] = notifications(no_celery_dispatch)
     assert "Test Slack App" in notification.kwargs["args"][2]
     assert "long enough" not in notification.kwargs["args"][2]
 
+    # Events from other channels end the outage; this channel can't start another.
+    pushing_app.push_missing_since = None
+    db_session.commit()
     poll(pushing_app, slack_channel, sent(20))
     db_session.refresh(pushing_app)
-    assert pushing_app.push_missing_since == first_miss
-    assert pushing_app.push_last_miss_at > first_miss
+    assert (pushing_app.push_missing_since, pushing_app.push_last_miss_at) == (None, first_miss)
     assert len(notifications(no_celery_dispatch)) == 1
 
 

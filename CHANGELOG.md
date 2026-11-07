@@ -37,6 +37,7 @@ a new, empty `## Unreleased` above it.
 - Editing an ingest trigger keeps the credential it was created with: a login-session edit no longer widens a key-bound trigger to full access, and an API key can only edit triggers it created.
 - A trigger bound to an API key without the `read` scope matches and renders no items.
 - A GitHub webhook delivery whose refetch couldn't be queued is processed again when GitHub retries it, instead of being answered "duplicate".
+- A Slack channel push stops reaching (bot removed from it, `message.groups` unsubscribed) no longer re-flags its app and re-notifies the owner every poll while other channels keep delivering: the miss clears that channel's `push_since` until push delivers there again, and a Slack event ends the app's outage only once `PUSH_STALE_HOURS` have passed since the last miss.
 
 ### Other changes for operators
 

@@ -784,7 +784,12 @@ def check_push_missed(channel_id: str, slack_app_id: int, message_ts: str) -> No
         sent_at = datetime.fromtimestamp(float(message_ts), timezone.utc)
         if not push_overdue(sent_at, channel.push_since):
             return
+        # Push isn't reaching this channel (bot removed, event unsubscribed), so
+        # it stops counting as covered and can't re-flag the app every poll.
+        # The next message push delivers here covers it again.
         owner_id, name = app.created_by_user_id, app.name
+        channel.push_since = None
+        session.commit()
     record_push_miss(SlackApp, slack_app_id, owner_id, f"Slack app {name}")
 
 

@@ -10,7 +10,7 @@ import hashlib
 import hmac
 import json
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
@@ -646,8 +646,17 @@ def test_an_oversized_body_is_rejected(client, events_app):
     assert response.status_code == 401
 
 
-def test_event_records_when_it_arrived(client, db_session, events_app):
-    events_app.push_missing_since = events_app.push_last_miss_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+@pytest.mark.parametrize(
+    "last_miss_hours_ago, still_missing",
+    [
+        (1, True),  # the channel that missed may still be broken while others deliver
+        (25, False),  # no poll has found a newly missed channel since
+    ],
+)
+def test_event_records_when_it_arrived(client, db_session, events_app, last_miss_hours_ago, still_missing):
+    missing_since = datetime.now(timezone.utc) - timedelta(hours=30)
+    events_app.push_missing_since = missing_since
+    events_app.push_last_miss_at = datetime.now(timezone.utc) - timedelta(hours=last_miss_hours_ago)
     db_session.commit()
 
     with _capture_send_task():
@@ -657,11 +666,11 @@ def test_event_records_when_it_arrived(client, db_session, events_app):
             {
                 "type": "event_callback",
                 "team_id": GOOD_TEAM_ID,
-                "event": {"type": "message", "ts": "9.1", "user": "U1", "text": "x",
+                "event": {"type": "message", "ts": f"9.{last_miss_hours_ago}", "user": "U1", "text": "x",
                           "channel": GOOD_CHANNEL_ID},
             },
         )
 
     db_session.refresh(events_app)
     assert events_app.last_event_at is not None
-    assert events_app.push_missing_since is None  # push delivers again: the outage is over
+    assert (events_app.push_missing_since == missing_since) is still_missing
