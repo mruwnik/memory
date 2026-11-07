@@ -253,17 +253,23 @@ const HookStatusBadge = ({ status }: { status: GithubWebhookStatus | null }) => 
   return <Badge tone={tone}>{label}</Badge>
 }
 
-const hookHelp = (account: GithubAccount): string | null => {
+// GitHub's App settings name events in the singular, unlike the repo webhook form.
+const APP_EVENTS = 'Pull request, Pull request review, Pull request review comment, Issue comment, Issues, Check run, Check suite, Status'
+
+type HookHelp = ['info' | 'warning', string]
+
+const hookHelp = (account: GithubAccount): HookHelp | null => {
   const statuses = new Set(account.repos.filter(r => r.active).map(r => r.webhook_status))
+  if (account.auth_type === 'app' && statuses.has('app_settings')) {
+    return ['warning', `Memory couldn't point the App's webhook here. On GitHub, open the App's settings → General → Webhook: mark it active, paste the payload URL and secret from "Set it up by hand", then do the step below.\n\nPermissions & events → Subscribe to events: tick ${APP_EVENTS}.`]
+  }
   if (account.auth_type === 'app') {
-    return statuses.has('app_settings')
-      ? `Memory couldn't update the App's webhook. In the App's settings, set its webhook URL to the payload URL below and the secret, mark it active, and subscribe to: ${WEBHOOK_EVENTS}.`
-      : `A GitHub App has one webhook, which Memory points here. In the App's settings, keep it active and subscribe to: ${WEBHOOK_EVENTS}.`
+    return ['info', `This account uses a GitHub App. Install points the App's webhook at Memory, but only you can choose which events it sends. Once, on GitHub: App settings → Permissions & events → Subscribe to events, tick ${APP_EVENTS}. (A box only appears once the App can read that kind of thing, e.g. Pull requests: Read.)`]
   }
   if (statuses.has('missing_permission')) {
-    return 'The access token needs permission to manage webhooks: the admin:repo_hook scope for a classic token, or Webhooks: Read and write for a fine-grained one.'
+    return ['warning', 'The access token needs permission to manage webhooks: the admin:repo_hook scope for a classic token, or Webhooks: Read and write for a fine-grained one.']
   }
-  if (statuses.has('rejected')) return 'GitHub rejected the payload URL. It must be reachable from the public internet.'
+  if (statuses.has('rejected')) return ['warning', 'GitHub rejected the payload URL. It must be reachable from the public internet.']
   return null
 }
 
@@ -307,7 +313,7 @@ const WebhookModal = ({ account, onRefresh, onClose }: { account: GithubAccount;
             ))}
           </List>
         )}
-        {help && <Notice tone="warning">{help}</Notice>}
+        {help && <Notice tone={help[0]}>{help[1]}</Notice>}
         <Disclosure summary="Set it up by hand">
           <div className="space-y-3">
             <p className="text-sm text-slate-600">
