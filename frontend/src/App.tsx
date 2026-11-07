@@ -5,7 +5,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { useOAuth } from '@/hooks/useOAuth'
 import { getNeedsAccount } from '@/hooks/useSetup'
 import { ModulesContext, type Module } from '@/hooks/useModule'
-import { Loading, LoginPrompt, AuthError, ForgotPassword, ResetPassword, Dashboard, Search, Sources, Calendar, Tasks, NotesPage, Jobs, CeleryOverview, ScheduledTasks, ReportsPage } from '@/components'
+import { Loading, LoginPrompt, AuthError, ForgotPassword, ResetPassword, Dashboard, Search, Sources, Calendar, Tasks, NotesPage, Jobs, CeleryOverview, ReportsPage } from '@/components'
 import { AgentsPage, AgentEditor, AgentRuns, RunView, AdHocRun, ServersPage, ServerDetail, KeysPage } from '@/components/agents'
 import { PollList, PollCreate, PollEdit, PollRespond, PollResults } from '@/components/polls'
 import { UserSettings, UserManagement } from '@/components/users'
@@ -120,7 +120,6 @@ const AuthWrapper = () => {
     { path: '/teams', element: <Teams />, module: 'teams' },
     { path: '/usage', element: <Suspense fallback={<LoadingState />}><Usage /></Suspense> },
     { path: '/jobs', element: <Jobs /> },
-    { path: '/scheduled-tasks', element: <ScheduledTasks /> },
     { path: '/agents', element: <AgentsPage />, scope: 'agents' },
     { path: '/keys', element: <KeysPage /> },
     { path: '/agents/servers', element: <ServersPage />, scope: 'agents' },

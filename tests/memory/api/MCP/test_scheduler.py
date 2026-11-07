@@ -1,22 +1,26 @@
-"""Tests for the scheduler MCP server (hybrid enabled property)."""
+"""The scheduler tools: cron subscriptions with notify handlers, and timers."""
 # pyright: reportFunctionMemberAccess=false
 
-import uuid
-from contextlib import nullcontext
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from memory.api.MCP.servers import scheduler
-from memory.common import settings as settings_mod
+from memory.common import settings
 from memory.common.db import connection as db_connection
-from memory.common.db.models import APIKey, ScheduledTask
+from memory.common.db.models import AgentTrigger, APIKey, Event
 from tests.conftest import mcp_auth_context
+
+MESSAGE = dict(
+    message="hi",
+    notification_channel="email",
+    notification_target="a@example.com",
+    topic="Daily ping",
+)
 
 
 @pytest.fixture(autouse=True)
 def reset_db_cache():
-    """Reset the cached database engine between tests."""
     db_connection._engine = None
     db_connection._session_factory = None
     yield
@@ -24,441 +28,206 @@ def reset_db_cache():
     db_connection._session_factory = None
 
 
-@pytest.mark.asyncio
-async def test_cancel_clears_next_scheduled_time(
-    db_session, regular_user, user_session
-):
-    task = ScheduledTask(
-        id=str(uuid.uuid4()),
-        user_id=regular_user.id,
-        task_type="notification",
-        cron_expression="0 9 * * *",
-        next_scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None),
-    )
-    db_session.add(task)
-    db_session.commit()
-
-    with mcp_auth_context(user_session.token):
-        result = await scheduler.cancel.fn(task_id=task.id)
-
-    assert result["task"]["enabled"] is False
-    assert result["task"]["next_scheduled_time"] is None
+def schedule_key(db, user, scopes=("schedule", "schedule:write")):
+    key = APIKey.create(user_id=user.id, scopes=list(scopes))
+    db.add(key)
+    db.commit()
+    return key
 
 
 @pytest.mark.asyncio
-async def test_upsert_enable_recurring_recomputes(
+async def test_a_recurring_message_is_a_cron_subscription_in_the_owners_timezone(
     db_session, regular_user, user_session
 ):
     regular_user.timezone = "Asia/Kolkata"
-    task = ScheduledTask(
-        id=str(uuid.uuid4()),
-        user_id=regular_user.id,
-        task_type="notification",
-        cron_expression="0 9 * * *",
-        next_scheduled_time=None,
+    db_session.commit()
+
+    with mcp_auth_context(user_session.token):
+        result = await scheduler.upsert.fn(cron_expression="0 9 * * *", **MESSAGE)
+
+    assert (result["kind"], result["config"], result["enabled"], result["api_key_id"]) == (
+        "cron", {"cron": "0 9 * * *", "input": ""}, True, None,
     )
-    db_session.add(task)
-    db_session.commit()
-
-    with mcp_auth_context(user_session.token):
-        result = await scheduler.upsert.fn(task_id=task.id, enabled=True)
-
-    assert result["enabled"] is True
-    assert result["next_scheduled_time"].endswith("T03:30:00Z")
-
-
-@pytest.mark.asyncio
-async def test_create_notification_recurring(db_session, regular_user, user_session):
-    regular_user.timezone = "Asia/Kolkata"
-    db_session.commit()
-    with mcp_auth_context(user_session.token):
-        result = await scheduler.upsert.fn(
-            task_type="notification",
-            topic="Daily ping",
-            message="hello",
-            cron_expression="0 9 * * *",
-            notification_channel="email",
-            notification_target="ping@example.com",
-        )
-    assert result["task_type"] == "notification"
-    assert result["cron_expression"] == "0 9 * * *"
-    assert result["next_scheduled_time"].endswith("T03:30:00Z")
-    assert result["enabled"] is True
+    assert result["handler"] == {
+        "notify": {"channel": "email", "target": "a@example.com", "message": "hi", "subject": "Daily ping"}
+    }
+    assert result["name"] == f"schedule-{result['id']}"
+    assert datetime.fromisoformat(result["next_at"]).astimezone(timezone.utc).strftime("%H:%M") == "03:30"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "scheduled_time, stored",
+    "scheduled_time, fires",
     [
-        ("2999-01-01T09:00:00Z", "2999-01-01T09:00:00Z"),
-        ("2999-01-01T09:00:00+01:00", "2999-01-01T08:00:00Z"),
-        ("2999-01-01T09:00:00", "2999-01-01T03:30:00Z"),
+        ("2999-01-01T09:00:00Z", datetime(2999, 1, 1, 9, tzinfo=timezone.utc)),
+        ("2999-01-01T09:00:00+01:00", datetime(2999, 1, 1, 8, tzinfo=timezone.utc)),
+        ("2999-01-01T09:00:00", datetime(2999, 1, 1, 3, 30, tzinfo=timezone.utc)),
     ],
 )
-async def test_create_notification_one_time(
-    db_session, regular_user, user_session, scheduled_time, stored
-):
+async def test_a_one_off_message_is_a_timer(db_session, regular_user, user_session, scheduled_time, fires):
     regular_user.timezone = "Asia/Kolkata"
     db_session.commit()
-    with mcp_auth_context(user_session.token):
-        result = await scheduler.upsert.fn(
-            task_type="notification",
-            topic="Once",
-            message="hi",
-            scheduled_time=scheduled_time,
-            notification_channel="email",
-            notification_target="a@b.c",
-        )
-    assert result["cron_expression"] is None
-    assert result["next_scheduled_time"] == stored
 
-
-@pytest.mark.asyncio
-async def test_create_rejects_bad_target_without_persisting(
-    db_session, regular_user, user_session
-):
     with mcp_auth_context(user_session.token):
-        with pytest.raises(ValueError, match="No email address found"):
-            await scheduler.upsert.fn(
-                task_type="notification",
-                message="hi",
-                cron_expression="0 9 * * *",
-                notification_channel="email",
-                notification_target="not-an-email",
-            )
-    assert (
-        db_session.query(ScheduledTask).filter_by(user_id=regular_user.id).count() == 0
+        result = await scheduler.upsert.fn(scheduled_time=scheduled_time, **MESSAGE)
+
+    timer = db_session.get_one(Event, result["id"])
+    assert (result["kind"], timer.kind, timer.fire_at, timer.handler["notify"]["message"]) == (
+        "timer", "timer", fires, "hi",
     )
 
 
 @pytest.mark.asyncio
-async def test_update_channel_change_revalidates_target(
-    db_session, regular_user, user_session
-):
-    """Changing channel without a new target must re-validate the existing one."""
-    with mcp_auth_context(user_session.token):
-        created = await scheduler.upsert.fn(
-            task_type="notification",
-            message="hi",
-            cron_expression="0 9 * * *",
-            notification_channel="email",
-            notification_target="a@example.com",
-        )
-        # An email address is not a valid Slack target — switching channel alone
-        # must error rather than silently keep the now-invalid target.
-        with pytest.raises(ValueError, match="not a known person, channel, or user id"):
-            await scheduler.upsert.fn(
-                task_id=created["id"], notification_channel="slack"
-            )
-    # The stored target is unchanged (transaction rolled back).
-    task = db_session.get(ScheduledTask, created["id"])
-    assert task.notification_channel == "email"
-    assert task.notification_target == "a@example.com"
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "kwargs,match",
+    "kwargs, match",
     [
-        (
-            dict(task_type="bogus", message="x", cron_expression="0 9 * * *"),
-            "task_type",
-        ),
-        (
-            dict(
-                task_type="notification",
-                message="x",
-                notification_channel="discord",
-                notification_target="1",
-                cron_expression="0 9 * * *",
-                scheduled_time="2999-01-01T09:00:00Z",
-            ),
-            "exactly one",
-        ),
-        (
-            dict(
-                task_type="notification",
-                message="x",
-                notification_channel="discord",
-                notification_target="1",
-            ),
-            "exactly one",
-        ),
-        (
-            dict(
-                task_type="notification",
-                message="x",
-                notification_channel="discord",
-                notification_target="1",
-                cron_expression="*/1 * * * *",
-            ),
-            "too short",
-        ),
-        (dict(task_type="notification", cron_expression="0 9 * * *"), "require"),
-        (
-            dict(task_type="agent_run", cron_expression="0 9 * * *", message="p"),
-            "agent_schedule",
-        ),
-        (
-            dict(task_type="claude_session", cron_expression="0 9 * * *", message="p"),
-            "task_type",
-        ),
+        (dict(MESSAGE, cron_expression="0 9 * * *", scheduled_time="2999-01-01T09:00:00Z"), "exactly one"),
+        (MESSAGE, "exactly one"),
+        (dict(MESSAGE, cron_expression="*/1 * * * *"), "too short"),
+        (dict(cron_expression="0 9 * * *", message="x"), "needs notification_channel"),
+        (dict(MESSAGE, cron_expression="0 9 * * *", notification_channel="sms"), "must be one of"),
+        (dict(MESSAGE, cron_expression="0 9 * * *", notification_target="not-an-email"), "No email address"),
+        (dict(MESSAGE, scheduled_time="2000-01-01T09:00:00Z"), "in the future"),
+        (dict(MESSAGE, scheduled_time="2999-01-01T09:00:00Z", enabled=False), "can't be created paused"),
+        (dict(MESSAGE, cron_expression="0 9 * * *", definition_id=1, input="x"), "not both"),
     ],
 )
-async def test_create_validation_errors(
-    db_session, regular_user, user_session, kwargs, match
-):
+async def test_create_refuses(db_session, regular_user, user_session, kwargs, match):
     with mcp_auth_context(user_session.token):
         with pytest.raises(ValueError, match=match):
             await scheduler.upsert.fn(**kwargs)
-
-
-def agent_run_task(db_session, user, enabled=True):
-    task = ScheduledTask(
-        user=user,
-        task_type="agent_run",
-        cron_expression="0 9 * * *",
-        data={"definition_id": 1, "input": "go"},
-    )
-    task.enabled = enabled
-    db_session.add(task)
-    db_session.commit()
-    return task
+    assert db_session.query(AgentTrigger).count() == db_session.query(Event).count() == 0
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "kwargs",
-    [{"message": "other"}, {"enabled": True}, {"cron_expression": "0 8 * * *"}],
-)
-async def test_agent_schedules_can_only_be_paused_here(
-    db_session, regular_user, user_session, kwargs
-):
-    task = agent_run_task(db_session, regular_user, enabled=False)
-
+async def test_update_changes_in_place_and_revalidates_the_target(db_session, regular_user, user_session):
     with mcp_auth_context(user_session.token):
-        with pytest.raises(ValueError, match="agent_schedule"):
-            await scheduler.upsert.fn(task_id=task.id, **kwargs)
+        created = await scheduler.upsert.fn(cron_expression="0 9 * * *", **MESSAGE)
+        updated = await scheduler.upsert.fn(schedule_id=created["id"], message="renamed", name="ping")
+        with pytest.raises(ValueError, match="not a known person, channel, or user id"):
+            await scheduler.upsert.fn(schedule_id=created["id"], notification_channel="slack")
+
+    assert (updated["id"], updated["name"], updated["handler"]["notify"]) == (
+        created["id"], "ping",
+        {"channel": "email", "target": "a@example.com", "message": "renamed", "subject": "Daily ping"},
+    )
 
 
 @pytest.mark.asyncio
-async def test_agent_schedules_can_be_paused_here(
+async def test_pausing_clears_the_next_tick_and_enabling_reschedules_it(db_session, regular_user, user_session):
+    with mcp_auth_context(user_session.token):
+        created = await scheduler.upsert.fn(cron_expression="0 9 * * *", **MESSAGE)
+        trigger = db_session.get_one(AgentTrigger, created["id"])
+        trigger.state = {"tripped": {"reason": "x", "at": "2026-01-01T00:00:00+00:00"}, "failures": 3}
+        db_session.commit()
+        paused = await scheduler.upsert.fn(schedule_id=created["id"], enabled=False)
+        resumed = await scheduler.upsert.fn(schedule_id=created["id"], enabled=True)
+
+    assert (paused["enabled"], paused["next_at"]) == (False, None)
+    assert (resumed["enabled"], resumed["next_at"] is not None, resumed["state"]) == (True, True, {})
+
+
+@pytest.mark.asyncio
+async def test_enabling_keeps_to_the_trigger_cap(db_session, regular_user, user_session, monkeypatch):
+    monkeypatch.setattr(settings, "AGENT_MAX_TRIGGERS_PER_USER", 1)
+    with mcp_auth_context(user_session.token):
+        paused = await scheduler.upsert.fn(cron_expression="0 9 * * *", enabled=False, **MESSAGE)
+        await scheduler.upsert.fn(cron_expression="0 10 * * *", **MESSAGE)
+        with pytest.raises(ValueError, match="AGENT_MAX_TRIGGERS_PER_USER"):
+            await scheduler.upsert.fn(schedule_id=paused["id"], enabled=True)
+
+
+@pytest.mark.asyncio
+async def test_a_key_may_change_only_what_it_set_up(db_session, regular_user, user_session):
+    key = schedule_key(db_session, regular_user)
+    with mcp_auth_context(user_session.token):
+        mine = await scheduler.upsert.fn(cron_expression="0 9 * * *", **MESSAGE)
+
+    with mcp_auth_context(key.key, scopes=["schedule", "schedule:write"]):
+        made = await scheduler.upsert.fn(cron_expression="0 10 * * *", **MESSAGE)
+        with pytest.raises(ValueError, match="another credential"):
+            await scheduler.upsert.fn(schedule_id=mine["id"], message="x")
+        with pytest.raises(ValueError, match="another credential"):
+            await scheduler.delete.fn(schedule_id=mine["id"])
+        with pytest.raises(ValueError, match="another credential"):
+            await scheduler.upsert.fn(schedule_id=mine["id"], enabled=False)
+
+    assert (made["api_key_id"], made["via_api_key"]) == (key.id, True)
+
+
+@pytest.mark.asyncio
+async def test_a_schedule_whose_key_stopped_working_can_be_paused_by_its_owner(
     db_session, regular_user, user_session
 ):
-    task = agent_run_task(db_session, regular_user)
+    key = schedule_key(db_session, regular_user)
+    with mcp_auth_context(key.key, scopes=["schedule", "schedule:write"]):
+        made = await scheduler.upsert.fn(cron_expression="0 10 * * *", **MESSAGE)
+    key.revoked = True
+    db_session.commit()
 
     with mcp_auth_context(user_session.token):
-        paused = await scheduler.upsert.fn(task_id=task.id, enabled=False)
+        paused = await scheduler.upsert.fn(schedule_id=made["id"], enabled=False)
 
     assert paused["enabled"] is False
 
 
 @pytest.mark.asyncio
-async def test_create_enforces_per_user_cap(
-    db_session, regular_user, user_session, monkeypatch
-):
-    monkeypatch.setattr(settings_mod, "MAX_SCHEDULED_TASKS_PER_USER", 1)
-    with mcp_auth_context(user_session.token):
-        await scheduler.upsert.fn(
-            task_type="notification",
-            message="a",
-            cron_expression="0 9 * * *",
-            notification_channel="email",
-            notification_target="a@example.com",
-        )
-        with pytest.raises(ValueError, match="Maximum"):
-            await scheduler.upsert.fn(
-                task_type="notification",
-                message="b",
-                cron_expression="0 10 * * *",
-                notification_channel="email",
-                notification_target="b@example.com",
-            )
-
-
-@pytest.mark.asyncio
-async def test_upsert_reenable_respects_cap(
-    db_session, regular_user, user_session, monkeypatch
-):
-    """create-disabled-then-enable must not bypass the active-task cap."""
-    monkeypatch.setattr(settings_mod, "MAX_SCHEDULED_TASKS_PER_USER", 1)
-    with mcp_auth_context(user_session.token):
-        # One active recurring task — fills the cap.
-        await scheduler.upsert.fn(
-            task_type="notification",
-            message="a",
-            cron_expression="0 9 * * *",
-            notification_channel="email",
-            notification_target="a@example.com",
-        )
-        # A second created disabled (allowed — inactive, doesn't count).
-        paused = await scheduler.upsert.fn(
-            task_type="notification",
-            message="b",
-            cron_expression="0 10 * * *",
-            notification_channel="email",
-            notification_target="b@example.com",
-            enabled=False,
-        )
-        assert paused["enabled"] is False
-        # Re-enabling it would exceed the cap — must be rejected.
-        with pytest.raises(ValueError, match="Maximum"):
-            await scheduler.upsert.fn(task_id=paused["id"], enabled=True)
-        # Re-activating via the documented cron-reschedule route is also capped.
-        with pytest.raises(ValueError, match="Maximum"):
-            await scheduler.upsert.fn(
-                task_id=paused["id"], cron_expression="0 11 * * *"
-            )
-
-
-@pytest.mark.asyncio
-async def test_upsert_create_rejects_unknown_channel(
-    db_session, regular_user, user_session
-):
-    with mcp_auth_context(user_session.token):
-        with pytest.raises(ValueError, match="Unknown notification_channel"):
-            await scheduler.upsert.fn(
-                task_type="notification",
-                message="x",
-                cron_expression="0 9 * * *",
-                notification_channel="carrier_pigeon",
-                notification_target="1",
-            )
-
-
-@pytest.mark.asyncio
-async def test_upsert_create_one_time_disabled_rejected(
-    db_session, regular_user, user_session
-):
-    """A one-time task can't be created disabled — the hybrid setter would clear
-    its next_scheduled_time, silently discarding the requested time."""
-    with mcp_auth_context(user_session.token):
-        with pytest.raises(
-            ValueError, match="one-time task cannot be created disabled"
-        ):
-            await scheduler.upsert.fn(
-                task_type="notification",
-                message="x",
-                scheduled_time="2999-01-01T09:00:00Z",
-                enabled=False,
-                notification_channel="discord",
-                notification_target="1",
-            )
-
-
-def admin_key_token(db_session, admin_user) -> str:
-    key = APIKey.create(user_id=admin_user.id, scopes=["read", "schedule:write"])
-    db_session.add(key)
-    db_session.commit()
-    return key.key
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "credential,expectation",
+    "change, moves",
     [
-        ("admin_session", nullcontext()),
-        # Only an admin credential may DM a Discord user no bot of theirs has seen.
-        ("admin_key", pytest.raises(ValueError, match="not found or not accessible")),
+        ({"message": "renamed"}, False),
+        ({"name": "renamed"}, False),
+        ({"cron_expression": "0 10 * * *"}, True),
     ],
 )
-async def test_notification_targets_are_judged_by_the_credential(
-    request, db_session, admin_user, credential, expectation
-):
-    token = (
-        admin_key_token(db_session, admin_user)
-        if credential == "admin_key"
-        else request.getfixturevalue(credential).token
+async def test_next_tick_moves_only_with_the_cron(db_session, regular_user, user_session, change, moves):
+    far = datetime(2999, 1, 1, 9, tzinfo=timezone.utc)
+    with mcp_auth_context(user_session.token):
+        created = await scheduler.upsert.fn(cron_expression="0 9 * * *", **MESSAGE)
+        trigger = db_session.get_one(AgentTrigger, created["id"])
+        trigger.next_at = far
+        db_session.commit()
+        updated = await scheduler.upsert.fn(schedule_id=created["id"], **change)
+
+    assert (datetime.fromisoformat(updated["next_at"]) != far) is moves
+
+
+@pytest.mark.asyncio
+async def test_list_delete_and_cancel(db_session, regular_user, user_session):
+    with mcp_auth_context(user_session.token):
+        cron = await scheduler.upsert.fn(cron_expression="0 9 * * *", **MESSAGE)
+        timer = await scheduler.upsert.fn(scheduled_time="2999-01-01T09:00:00Z", **MESSAGE)
+        listed = await scheduler.list_all.fn()
+        await scheduler.delete.fn(timer_id=timer["id"])
+        await scheduler.delete.fn(schedule_id=cron["id"])
+        after = await scheduler.list_all.fn()
+        with_fired = await scheduler.list_all.fn(include_fired=True)
+        with pytest.raises(ValueError, match="already fired"):
+            await scheduler.delete.fn(timer_id=timer["id"])
+
+    assert ([s["id"] for s in listed["schedules"]], [t["id"] for t in listed["timers"]]) == (
+        [cron["id"]], [timer["id"]],
     )
-    with mcp_auth_context(token), expectation:
-        await scheduler.upsert.fn(
-            task_type="notification",
-            message="x",
-            cron_expression="0 9 * * *",
-            notification_channel="discord",
-            notification_target="424242",
-        )
+    assert after == {"schedules": [], "timers": []}
+    assert [(t["id"], t["result"]) for t in with_fired["fired"]] == [
+        (timer["id"], {"status": "skipped:cancelled"})
+    ]
+    assert db_session.get_one(Event, timer["id"]).result == {"status": "skipped:cancelled"}
 
 
 @pytest.mark.asyncio
-async def test_upsert_update_rejects_scheduled_time(
-    db_session, regular_user, user_session
-):
-    """scheduled_time is create-only; passing it on update must error, not no-op."""
-    task = ScheduledTask(
-        id=str(uuid.uuid4()),
-        user_id=regular_user.id,
-        task_type="notification",
-        cron_expression="0 9 * * *",
-        next_scheduled_time=datetime.now(timezone.utc).replace(tzinfo=None),
+async def test_history_lists_ticks_newest_first(db_session, regular_user, user_session):
+    with mcp_auth_context(user_session.token):
+        cron = await scheduler.upsert.fn(cron_expression="0 9 * * *", **MESSAGE)
+    now = datetime.now(timezone.utc)
+    db_session.add_all(
+        Event(kind="tick", trigger_id=cron["id"], owner_id=regular_user.id, fire_at=at,
+              data={"missed": m}, result=r)
+        for at, m, r in [(now - timedelta(days=1), 0, {"status": "sent"}), (now, 2, None)]
     )
-    db_session.add(task)
     db_session.commit()
-    with mcp_auth_context(user_session.token):
-        with pytest.raises(
-            ValueError, match="scheduled_time can only be set when creating"
-        ):
-            await scheduler.upsert.fn(
-                task_id=task.id, scheduled_time="2999-01-01T09:00:00Z"
-            )
-
-
-@pytest.mark.asyncio
-async def test_upsert_create_then_update_in_place(
-    db_session, regular_user, user_session
-):
-    """A second upsert with the same (existing) id updates, not duplicates."""
-    fixed_id = str(uuid.uuid4())
-    with mcp_auth_context(user_session.token):
-        created = await scheduler.upsert.fn(
-            task_id=fixed_id,
-            task_type="notification",
-            message="x",
-            cron_expression="0 9 * * *",
-            notification_channel="email",
-            notification_target="x@example.com",
-        )
-        assert created["topic"] is None
-        updated = await scheduler.upsert.fn(task_id=fixed_id, topic="renamed")
-    assert updated["id"] == fixed_id
-    assert updated["topic"] == "renamed"
-    assert updated["message"] == "x"
-
-
-NOTIFICATION_TASK = dict(
-    task_type="notification",
-    message="hi",
-    cron_expression="0 9 * * *",
-    notification_channel="email",
-    notification_target="a@example.com",
-)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("via_key", [True, False])
-async def test_scheduled_work_records_the_key_it_will_act_through(
-    db_session, regular_user, user_session, via_key
-):
-    key = APIKey.create(user_id=regular_user.id, scopes=["schedule:write"])
-    db_session.add(key)
-    db_session.commit()
-    token = key.key if via_key else user_session.token
-
-    with mcp_auth_context(token, scopes=["schedule:write"]):
-        result = await scheduler.upsert.fn(**NOTIFICATION_TASK)
-
-    assert result["data"]["api_key_id"] == (key.id if via_key else None)
-
-
-@pytest.mark.asyncio
-async def test_changing_a_schedule_restamps_its_key(db_session, regular_user, user_session):
-    key = APIKey.create(user_id=regular_user.id, scopes=["schedule:write"])
-    db_session.add(key)
-    db_session.commit()
-    with mcp_auth_context(key.key, scopes=["schedule:write"]):
-        created = await scheduler.upsert.fn(**NOTIFICATION_TASK)
 
     with mcp_auth_context(user_session.token):
-        updated = await scheduler.upsert.fn(task_id=created["id"], message="New body")
+        history = await scheduler.history.fn(schedule_id=cron["id"])
 
-    assert updated["data"]["api_key_id"] is None
+    assert [(h["missed"], h["result"]) for h in history] == [(2, None), (0, {"status": "sent"})]

@@ -15,9 +15,9 @@ from sqlalchemy import (
     Index,
     Integer,
     Text,
-    text,
     event,
     inspect,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, insert
 from sqlalchemy.orm import Mapped, Session, mapped_column
@@ -29,6 +29,9 @@ from memory.common.db.models.source_item import SourceItem
 ITEM = "item"
 RAW = "raw"
 STORED, NOT_COLLECTED, NO_ITEM_TYPE, REJECTED = "stored", "not_collected", "no_item_type", "rejected"
+# A cron subscription's tick, or a timer addressed straight to a handler.
+TICK, TIMER = "tick", "timer"
+TIME_KINDS = (TICK, TIMER)
 ADDED, CHANGED, REMOVED = "added", "changed", "removed"
 # session.info key: ids of the items this transaction inserted.
 INSERTED_ITEMS_KEY = "_inserted_source_items"
@@ -38,7 +41,9 @@ CAUSING_EVENT: ContextVar[int | None] = ContextVar("causing_event", default=None
 
 class Event(Base):
     """Something that happened, written in the transaction that made it happen;
-    pending until memory.agents.triggers.route_events routes it."""
+    pending until memory.agents.triggers.route_events routes it. Ticks and timers
+    are pending until memory.agents.clock delivers them, from `fire_at` on; their
+    `result` says how that went."""
 
     __tablename__ = "events"
 
@@ -60,6 +65,19 @@ class Event(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     routed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # A tick's cron subscription.
+    trigger_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("agent_triggers.id", ondelete="CASCADE")
+    )
+    fire_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # A timer's handler, shaped as AgentTrigger.handler.
+    handler: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    # A tick's missed count; a timer's run input and the API key that set it.
+    data: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    # {"status": done | sent | failed | skipped:<reason>, ...}.
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    # Last handed to the agents queue; resent while still undelivered.
+    dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # Raw events: one webhook delivery, visible only to its source account's owner.
     source: Mapped[str | None] = mapped_column(Text)
@@ -69,6 +87,7 @@ class Event(Base):
     # The repo or channel the delivery is about, in the provider's ids.
     container: Mapped[str | None] = mapped_column(Text)
     delivery_id: Mapped[str | None] = mapped_column(Text)
+    # Whose raw event, tick or timer it is.
     owner_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"))
     outcome: Mapped[str | None] = mapped_column(Text)
     # Untrusted, and kept only by deliveries nothing stores (see record_raw_event),
@@ -93,6 +112,16 @@ class Event(Base):
             "AND delivery_id IS NOT NULL AND outcome IS NOT NULL)",
             name="events_raw_check",
         ),
+        CheckConstraint(
+            "kind <> 'tick' OR (trigger_id IS NOT NULL AND owner_id IS NOT NULL "
+            "AND fire_at IS NOT NULL)",
+            name="events_tick_check",
+        ),
+        CheckConstraint(
+            "kind <> 'timer' OR (owner_id IS NOT NULL AND fire_at IS NOT NULL "
+            "AND handler IS NOT NULL)",
+            name="events_timer_check",
+        ),
         Index("events_pending_idx", "id", postgresql_where=routed_at.is_(None)),
         Index("events_routed_at_idx", "routed_at"),
         Index(
@@ -101,7 +130,35 @@ class Event(Base):
         Index("events_account_idx", "source", "account_id", "id", postgresql_where=kind == RAW),
         Index("events_caused_by_idx", "caused_by", postgresql_where=caused_by.is_not(None)),
         Index("events_payload_age_idx", "created_at", postgresql_where=text("payload IS NOT NULL")),
+        Index(
+            "events_tick_key",
+            "trigger_id",
+            "fire_at",
+            unique=True,
+            postgresql_where=text("kind = 'tick'"),
+        ),
+        Index(
+            "events_time_due_idx",
+            "fire_at",
+            postgresql_where=text("routed_at IS NULL AND kind IN ('tick', 'timer')"),
+        ),
+        Index(
+            "events_owner_timers_idx",
+            "owner_id",
+            "fire_at",
+            postgresql_where=text("kind = 'timer'"),
+        ),
     )
+
+    def serialize_timer(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "fire_at": self.fire_at.isoformat() if self.fire_at else None,
+            "handler": self.handler,
+            "input": (self.data or {}).get("input"),
+            "result": self.result,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
 
 
 MAX_RAW_PAYLOAD_BYTES = 256 * 1024

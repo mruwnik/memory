@@ -129,11 +129,6 @@ from memory.common.db.models.users import (
     APIKey,
     APIKeyType,
 )
-from memory.common.db.models.scheduled_tasks import (
-    ScheduledTask,
-    TaskExecution,
-    compute_next_cron,
-)
 from memory.common.db.models.metrics import (
     MetricEvent,
 )
@@ -314,10 +309,6 @@ __all__ = [
     "OAuthRefreshToken",
     "APIKey",
     "APIKeyType",
-    # Scheduled Tasks
-    "ScheduledTask",
-    "TaskExecution",
-    "compute_next_cron",
     # Metrics
     "MetricEvent",
     # Telemetry

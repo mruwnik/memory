@@ -26,6 +26,7 @@ from sqlalchemy import and_, func, or_, select, tuple_
 from sqlalchemy.exc import IntegrityError
 
 from memory.agents.cancel import cancel_tree
+from memory.agents.clock import SKIPPED_CANCELLED, finish
 from memory.agents.caps import CapExceeded
 from memory.agents.enqueue import (
     SpecInvalid,
@@ -59,7 +60,6 @@ from memory.agents.provider_keys import (
 from memory.agents.spec import (
     DEFAULT_AGENT_MODEL,
     MAX_NAME_CHARS,
-    MAX_TEXT_CHARS,
     AgentSpec,
     Placement,
     Requirements,
@@ -85,11 +85,6 @@ from memory.agents.triggers import (
 from memory.agents.work import HELD_OUT
 from memory.api.auth import token_api_key
 from memory.api.MCP.access import get_mcp_current_user
-from memory.api.MCP.servers.scheduler import (
-    build_scheduled_task,
-    check_active_task_cap,
-    validate_cron_interval,
-)
 from memory.api.MCP.visibility import READ_ONLY, require_scopes, visible_when
 from memory.common import settings
 from memory.common.access_control import has_admin_scope
@@ -101,10 +96,10 @@ from memory.common.db.models import (
     AgentTrigger,
     ExternalMCPServer,
     LLMProviderKey,
-    ScheduledTask,
     ServerStatus,
     User,
 )
+from memory.common.db.models.events import TIMER, Event
 from memory.common.db.models.agents import (
     EXECUTOR_WORKERS,
     TERMINAL_STATUSES,
@@ -113,7 +108,6 @@ from memory.common.db.models.agents import (
 )
 from memory.common.db.models.mcp import TRANSPORTS
 from memory.common.db.models.provider_keys import KEY_PROVIDERS, KeyStatus
-from memory.common.db.models.scheduled_tasks import TaskType, compute_next_cron
 from memory.common.llms.neutral import BUILTIN_TOOLS, Capabilities
 from memory.common.llms.registry import PROVIDERS, all_models, split_model
 from memory.common.mcp_oauth import MCPServerError, describe, revoke
@@ -189,7 +183,7 @@ def trigger_summaries(db: DBSession, definition_ids: list[int]) -> dict[int, dic
             func.count().filter(AgentTrigger.enabled),
             func.count().filter(AgentTrigger.state.has_key("tripped")),
         )
-        .filter(AgentTrigger.definition_id.in_(definition_ids))
+        .filter(AgentTrigger.definition_id.in_(definition_ids), AgentTrigger.kind == INGEST)
         .group_by(AgentTrigger.definition_id)
         .all()
     )
@@ -337,12 +331,11 @@ async def upsert(
 @agent_mcp.tool()
 @visible_when(require_scopes(SCOPE_AGENTS))
 async def delete(definition_id: int) -> dict:
-    """Delete an agent definition and its schedules. Its past runs keep their frozen spec."""
+    """Delete an agent definition with its triggers and schedules, cancelling its
+    timers. Its past runs keep their frozen spec."""
     user_id, _ = caller()
     with make_session() as db:
         definition = owned_definition(db, definition_id, user_id)
-        for task in definition_schedules(db, user_id, definition_id):
-            db.delete(task)
         # Triggers go first, explicitly: fire_trigger locks a trigger before its
         # definition, and deleting in the same order can't deadlock against it.
         trigger_ids = [
@@ -352,6 +345,14 @@ async def delete(definition_id: int) -> dict:
             .with_for_update()
         ]
         db.query(AgentTrigger).filter(AgentTrigger.id.in_(trigger_ids)).delete()
+        timers = db.query(Event).filter(
+            Event.kind == TIMER,
+            Event.owner_id == user_id,
+            Event.routed_at.is_(None),
+            Event.handler["agent"].as_integer() == definition_id,
+        )
+        for timer in timers.with_for_update():
+            finish(timer, SKIPPED_CANCELLED)
         db.delete(definition)
     return {"deleted": definition_id}
 
@@ -1055,7 +1056,8 @@ async def catalog() -> dict:
 
 def owned_trigger(db: DBSession, trigger_id: int, user_id: int) -> AgentTrigger:
     trigger = db.get(AgentTrigger, trigger_id)
-    if trigger is None or trigger.user_id != user_id:
+    # Cron subscriptions are the scheduler_* tools'.
+    if trigger is None or trigger.user_id != user_id or trigger.kind != INGEST:
         raise ValueError(f"unknown trigger {trigger_id}")
     return trigger
 
@@ -1292,7 +1294,7 @@ async def triggers(definition_id: int) -> dict:
         owned_definition(db, definition_id, user_id)
         found = (
             db.query(AgentTrigger)
-            .filter(AgentTrigger.definition_id == definition_id)
+            .filter(AgentTrigger.definition_id == definition_id, AgentTrigger.kind == INGEST)
             .order_by(AgentTrigger.id)
             .all()
         )
@@ -1307,129 +1309,6 @@ async def trigger_delete(trigger_id: int) -> dict:
     with make_session() as db:
         db.delete(owned_trigger(db, trigger_id, user_id))
     return {"deleted": trigger_id}
-
-
-def owned_schedule(db: DBSession, task_id: str, user_id: int) -> ScheduledTask:
-    task = db.get(ScheduledTask, task_id)
-    if task is None or task.user_id != user_id or task.task_type != TaskType.AGENT_RUN:
-        raise ValueError(f"unknown schedule {task_id}")
-    return task
-
-
-def definition_schedules(
-    db: DBSession, user_id: int, definition_id: int
-) -> list[ScheduledTask]:
-    tasks = (
-        db.query(ScheduledTask)
-        .filter(
-            ScheduledTask.user_id == user_id,
-            ScheduledTask.task_type == TaskType.AGENT_RUN.value,
-        )
-        .order_by(ScheduledTask.created_at)
-        .all()
-    )
-    return [t for t in tasks if (t.data or {}).get("definition_id") == definition_id]
-
-
-def checked_input(input: str | None) -> str | None:
-    if input is None:
-        return None
-    if not input.strip():
-        raise ValueError("input is required")
-    if len(input) > MAX_TEXT_CHARS:
-        raise ValueError(f"input is longer than {MAX_TEXT_CHARS} characters")
-    return input
-
-
-@agent_mcp.tool()
-@visible_when(require_scopes(SCOPE_AGENTS))
-async def schedule(
-    definition_id: int,
-    input: str | None = None,
-    cron_expression: str | None = None,
-    scheduled_time: str | None = None,
-    enabled: bool | None = None,
-    task_id: str | None = None,
-) -> dict:
-    """Run one of your definitions on a schedule, with a fixed input.
-
-    Creating needs input and either a 5-field cron_expression (recurring) or an
-    ISO scheduled_time (once), both read in your timezone (see meta_get_user)
-    unless the time carries an offset. With task_id, updates that schedule; omitted
-    fields keep their values. Each create or update re-checks the definition's
-    tools against your access now, and later runs act with these credentials
-    (an API key's scopes, if you used one). Schedules count toward your
-    scheduled-task limit.
-    """
-    user_id, _ = caller()
-    token, _ = caller_token()
-    input = checked_input(input)
-    with make_session() as db:
-        definition = owned_definition(db, definition_id, user_id)
-        await check_spec(parse_spec(definition.spec))
-        key = token_api_key(token, db)
-        stamp = {"definition_id": definition.id, "api_key_id": key.id if key else None}
-        topic = f"agent: {definition.name}"
-        if task_id is None:
-            if input is None:
-                raise ValueError("input is required")
-            task = build_scheduled_task(
-                db,
-                user_id,
-                task_id=None,
-                task_type=TaskType.AGENT_RUN.value,
-                enabled=enabled,
-                cron_expression=cron_expression,
-                scheduled_time=scheduled_time,
-                topic=topic,
-                message=None,
-                notification_channel=None,
-                notification_target=None,
-                agent_run=stamp | {"input": input},
-            )
-            db.commit()
-            return task.serialize()
-
-        task = owned_schedule(db, task_id, user_id)
-        if scheduled_time is not None:
-            raise ValueError("scheduled_time can only be set when creating a schedule")
-        was_active = task.enabled
-        task.data = stamp | {"input": input or (task.data or {}).get("input", "")}
-        task.topic = topic
-        if cron_expression is not None:
-            validate_cron_interval(cron_expression)
-            task.cron_expression = cron_expression
-            task.next_scheduled_time = compute_next_cron(cron_expression, task.user.timezone)
-        if enabled is not None:
-            task.enabled = enabled
-        if task.enabled and not was_active:
-            check_active_task_cap(db, user_id, exclude_id=task.id)
-        db.commit()
-        return task.serialize()
-
-
-@agent_mcp.tool(annotations=READ_ONLY)
-@visible_when(require_scopes(SCOPE_AGENTS))
-async def schedules(definition_id: int) -> dict:
-    """The schedules that run one of your definitions."""
-    user_id, _ = caller()
-    with make_session() as db:
-        owned_definition(db, definition_id, user_id)
-        return {
-            "schedules": [
-                t.serialize() for t in definition_schedules(db, user_id, definition_id)
-            ]
-        }
-
-
-@agent_mcp.tool()
-@visible_when(require_scopes(SCOPE_AGENTS))
-async def unschedule(task_id: str) -> dict:
-    """Delete one of your agent schedules and its execution history."""
-    user_id, _ = caller()
-    with make_session() as db:
-        db.delete(owned_schedule(db, task_id, user_id))
-    return {"deleted": task_id}
 
 
 # --- External MCP servers -------------------------------------------------

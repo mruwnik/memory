@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy.orm import Session
 
+from memory.agents.clock import reschedule_user
 from memory.common import settings
 from memory.common.db.connection import get_session
 from memory.common.db.models import (
@@ -21,10 +22,8 @@ from memory.common.db.models import (
     HumanUser,
     OAuthRefreshToken,
     Person,
-    ScheduledTask,
     User,
     UserSession,
-    compute_next_cron,
 )
 from memory.common.db.models.users import check_timezone, hash_password, hash_token, verify_password
 from memory.common.rate_limit import check_rate_limit_spec
@@ -331,15 +330,7 @@ def update_user(
 
     if updates.timezone is not None and updates.timezone != target_user.timezone:
         target_user.timezone = updates.timezone
-        pending_crons = db.query(ScheduledTask).filter(
-            ScheduledTask.user_id == target_user.id,
-            ScheduledTask.cron_expression.isnot(None),
-            ScheduledTask.next_scheduled_time.isnot(None),
-        )
-        for task in pending_crons:
-            task.next_scheduled_time = compute_next_cron(
-                cast(str, task.cron_expression), updates.timezone
-            )
+        reschedule_user(db, target_user.id, updates.timezone)
 
     # Only admins can update scopes
     if updates.scopes is not None:

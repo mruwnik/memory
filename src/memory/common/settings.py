@@ -255,7 +255,6 @@ SSH_PUBLIC_KEY_FILE = pathlib.Path(os.getenv("SSH_PUBLIC_KEY_FILE", "/run/secret
 ACCESS_CONTROL_RECONCILE_INTERVAL = int(
     os.getenv("ACCESS_CONTROL_RECONCILE_INTERVAL", 30 * 60)
 )
-SCHEDULED_CALL_RUN_INTERVAL = int(os.getenv("SCHEDULED_CALL_RUN_INTERVAL", 60))
 TRANSCRIPTS_RESCAN_LOOKBACK_DAYS = int(
     os.getenv("TRANSCRIPTS_RESCAN_LOOKBACK_DAYS", 365)
 )  # how far back a manual full rescan looks
@@ -405,11 +404,9 @@ RATE_LIMIT_TRUSTED_PROXIES = os.getenv(
     "RATE_LIMIT_TRUSTED_PROXIES", "127.0.0.1,::1"
 )
 
-# Scheduled tasks limits
-MAX_SCHEDULED_TASKS_PER_USER = int(os.getenv("MAX_SCHEDULED_TASKS_PER_USER", 20))
+# Timers waiting to fire, per user; cron subscriptions count as triggers.
+MAX_TIMERS_PER_USER = int(os.getenv("MAX_TIMERS_PER_USER", 20))
 MIN_CRON_INTERVAL_MINUTES = int(os.getenv("MIN_CRON_INTERVAL_MINUTES", 10))
-TASK_EXECUTION_RETENTION_DAYS = int(os.getenv("TASK_EXECUTION_RETENTION_DAYS", 30))
-SCHEDULED_TASK_RETENTION_DAYS = int(os.getenv("SCHEDULED_TASK_RETENTION_DAYS", 90))
 # Celery results are only read by tools/run_celery_task.py right after a run, so
 # a week is plenty for debugging a failed task.
 TASK_RESULT_RETENTION_DAYS = int(os.getenv("TASK_RESULT_RETENTION_DAYS", 7))

@@ -45,7 +45,7 @@ describe('visibleSections', () => {
 
   it('keeps core items with every module off', () => {
     expect(titlesFor(() => true, new Set())).toEqual(
-      expect.arrayContaining(['Search', 'Agents', 'User management', 'Scheduled tasks']),
+      expect.arrayContaining(['Search', 'Agents', 'User management', 'Jobs']),
     )
   })
 })

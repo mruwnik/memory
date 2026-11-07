@@ -1,18 +1,13 @@
+# pyright: reportOptionalMemberAccess=false, reportOptionalSubscript=false, reportOptionalOperand=false
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
 
 from memory.agents import cron
-from memory.agents.cron import start_cron_run
+from memory.agents.cron import start_time_run
 from memory.common.celery_app import RUN_AGENT
-from memory.common.db.models import (
-    AgentDefinition,
-    AgentRun,
-    APIKey,
-    ScheduledTask,
-    TaskExecution,
-)
+from memory.common.db.models import AgentDefinition, AgentRun, AgentTrigger, APIKey, Event
 
 SPEC = {"system_prompt": "x", "model": "anthropic/m", "reasoning": "high"}
 
@@ -24,12 +19,21 @@ def owner(db_session, regular_user):
     return regular_user
 
 
+@pytest.fixture
+def told(monkeypatch):
+    notices = []
+    monkeypatch.setattr(
+        "memory.agents.clock.tell_owner", lambda db, owner, subject, message: notices.append(subject)
+    )
+    return notices
+
+
 def now() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return datetime.now(timezone.utc)
 
 
-def definition(db, user, spec=SPEC):
-    d = AgentDefinition(user_id=user.id, name="cron", spec=spec)
+def definition(db, user, spec=SPEC, name="cron"):
+    d = AgentDefinition(user_id=user.id, name=name, spec=spec)
     db.add(d)
     db.commit()
     return d
@@ -43,215 +47,197 @@ def api_key(db, user, scopes, revoked=False):
     return key
 
 
-def execution(db, user, definition_id, status="pending", scheduled=None, **data):
-    task = ScheduledTask(
+def subscription(db, user, d, key=None):
+    trigger = AgentTrigger(
         user_id=user.id,
-        task_type="agent_run",
-        cron_expression="0 9 * * *",
-        next_scheduled_time=now() + timedelta(hours=1),
-        data={"definition_id": definition_id, "input": "daily digest"} | data,
+        name="daily",
+        kind="cron",
+        handler={"agent": d.id},
+        definition_id=d.id,
+        config={"cron": "0 9 * * *", "input": "daily digest"},
+        api_key_id=key.id if key else None,
+        via_api_key=key is not None,
+        next_at=now() + timedelta(days=1),
     )
-    db.add(task)
-    db.flush()
-    e = TaskExecution(
-        task_id=task.id, scheduled_time=scheduled or now(), status=status
-    )
-    db.add(e)
+    db.add(trigger)
     db.commit()
-    return e
+    return trigger
 
 
-def test_cron_run_is_enqueued_and_recorded(
-    db_session, owner, fake_providers, no_celery_dispatch
-):
-    d = definition(db_session, owner)
-    e = execution(db_session, owner, d.id)
-
-    start_cron_run(e.id)
-
-    db_session.refresh(e)
-    run = db_session.query(AgentRun).one()
-    assert (e.status, e.data, e.error_message) == ("completed", {"run_id": run.id}, None)
-    assert (run.definition_id, run.input, run.trigger_kind, run.dedupe_key) == (
-        d.id,
-        "daily digest",
-        "cron",
-        e.id,
+def tick(db, trigger, fire_at=None, result=None, missed=0):
+    event = Event(
+        kind="tick", trigger_id=trigger.id, owner_id=trigger.user_id,
+        fire_at=fire_at or now(), data={"missed": missed}, result=result,
+        routed_at=now() if result else None,
     )
-    assert run.trigger_ref == {"task_id": e.task_id, "execution_id": e.id}
-    no_celery_dispatch.assert_called_once_with(RUN_AGENT, args=[run.id], task_id=run.id)
+    db.add(event)
+    db.commit()
+    return event
 
 
-def test_a_crash_after_enqueue_leaves_it_pending_and_the_redispatch_reuses_the_run(
-    db_session, owner, fake_providers, monkeypatch
-):
+def test_a_tick_starts_its_run_and_ends_done(db_session, owner, fake_providers, no_celery_dispatch):
     d = definition(db_session, owner)
-    e = execution(db_session, owner, d.id)
+    trigger = subscription(db_session, owner, d)
+    earlier = tick(db_session, trigger, now() - timedelta(days=1), result={"status": "done"})
+    e = tick(db_session, trigger, missed=2)
 
-    def worker_dies(*args):
-        raise RuntimeError("worker died")
-
-    with monkeypatch.context() as m:
-        m.setattr(cron, "complete", worker_dies)
-        with pytest.raises(RuntimeError):
-            start_cron_run(e.id)
-    db_session.refresh(e)
-    pending = e.status
-
-    run_id = start_cron_run(e.id)
+    run_id = start_time_run(e.id)
 
     db_session.refresh(e)
-    assert (pending, e.status) == ("pending", "completed")
-    assert [r.id for r in db_session.query(AgentRun)] == [run_id]
+    run = db_session.get_one(AgentRun, run_id)
+    assert e.result == {"status": "done", "run_id": run_id}
+    assert (run.definition_id, run.input, run.trigger_kind, run.trigger_id, run.dedupe_key) == (
+        d.id, "daily digest", "cron", trigger.id, f"event:{e.id}",
+    )
+    assert run.trigger_ref == {
+        "event_id": e.id,
+        "time": e.fire_at.isoformat(),
+        "trigger_id": trigger.id,
+        "missed": 2,
+        "since": earlier.fire_at.isoformat(),
+    }
+    no_celery_dispatch.assert_any_call(RUN_AGENT, args=[run_id], task_id=run_id)
 
 
-def test_an_unexpected_enqueue_error_fails_the_execution_only(
-    db_session, owner, fake_providers, monkeypatch
-):
+def test_a_timer_runs_its_definition_with_its_input(db_session, owner, fake_providers):
     d = definition(db_session, owner)
-    e = execution(db_session, owner, d.id)
+    e = Event(kind="timer", owner_id=owner.id, fire_at=now(), handler={"agent": d.id}, data={"input": "once"})
+    db_session.add(e)
+    db_session.commit()
+
+    run_id = start_time_run(e.id)
+
+    run = db_session.get_one(AgentRun, run_id)
+    assert (run.input, run.trigger_kind, run.trigger_id, run.trigger_ref) == (
+        "once", "timer", None, {"event_id": e.id, "time": e.fire_at.isoformat()},
+    )
+
+
+def test_a_redelivery_does_nothing(db_session, owner, fake_providers):
+    trigger = subscription(db_session, owner, definition(db_session, owner))
+    e = tick(db_session, trigger)
+
+    first = start_time_run(e.id)
+    second = start_time_run(e.id)
+
+    assert (first is not None, second, db_session.query(AgentRun).count()) == (True, None, 1)
+
+
+def test_a_resend_after_a_crash_reuses_the_run(db_session, owner, fake_providers):
+    trigger = subscription(db_session, owner, definition(db_session, owner))
+    e = tick(db_session, trigger)
+    run_id = start_time_run(e.id)
+    db_session.refresh(e)
+    e.routed_at, e.result = None, None
+    db_session.commit()
+
+    assert start_time_run(e.id) == run_id
+    assert db_session.query(AgentRun).count() == 1
+
+
+def test_the_creating_api_key_bounds_the_run(db_session, owner, fake_providers):
+    key = api_key(db_session, owner, ["agents", "read"])
+    trigger = subscription(db_session, owner, definition(db_session, owner), key)
+
+    run = db_session.get_one(AgentRun, start_time_run(tick(db_session, trigger).id))
+
+    assert (run.api_key_id, sorted(run.scopes)) == (key.id, ["agents", "read"])
+
+
+@pytest.mark.parametrize(
+    "case, expected",
+    [
+        ("revoked key", "no longer valid"),
+        ("key without agents scope", "'agents' scope"),
+        ("user without agents scope", "'agents' scope"),
+        ("invalid spec", "reasoning"),
+    ],
+)
+def test_a_subscription_that_can_never_run_fails_and_trips(
+    db_session, owner, fake_providers, told, case, expected
+):
+    setups = {
+        "revoked key": lambda: (SPEC, api_key(db_session, owner, ["agents"], revoked=True)),
+        "key without agents scope": lambda: (SPEC, api_key(db_session, owner, ["read"])),
+        "user without agents scope": lambda: setattr(owner, "scopes", ["read"]) or (SPEC, None),
+        "invalid spec": lambda: (SPEC | {"reasoning": "medium", "model": "openai/m"}, None),
+    }
+    spec, key = setups[case]()
+    trigger = subscription(db_session, owner, definition(db_session, owner, spec), key)
+    e = tick(db_session, trigger)
+
+    assert start_time_run(e.id) is None
+
+    db_session.refresh(e)
+    db_session.refresh(trigger)
+    assert (e.result["status"], trigger.enabled, told) == ("failed", False, ["Schedule paused: daily"])
+    assert expected in e.result["error"]
+    assert db_session.query(AgentRun).count() == 0
+
+
+def test_a_cap_sheds_the_tick_and_keeps_the_subscription(db_session, owner, fake_providers):
+    d = definition(db_session, owner, SPEC | {"max_cost_usd_per_day": "0.000001"})
+    db_session.add(
+        AgentRun(
+            user_id=owner.id, definition_id=d.id, spec=SPEC, input="earlier",
+            max_cost_usd=Decimal("1"), cost_usd=Decimal("0.01"), trigger_kind="manual", status="done",
+        )
+    )
+    db_session.commit()
+    trigger = subscription(db_session, owner, d)
+    e = tick(db_session, trigger)
+
+    start_time_run(e.id)
+
+    db_session.refresh(e)
+    db_session.refresh(trigger)
+    assert (e.result["status"], trigger.enabled) == ("skipped:shed:budget", True)
+
+
+def test_a_disabled_subscriptions_tick_is_skipped(db_session, owner, fake_providers):
+    trigger = subscription(db_session, owner, definition(db_session, owner))
+    e = tick(db_session, trigger)
+    trigger.enabled = False
+    db_session.commit()
+
+    start_time_run(e.id)
+
+    db_session.refresh(e)
+    assert e.result == {"status": "skipped:disabled"}
+
+
+def test_an_unexpected_error_leaves_the_tick_for_a_resend(db_session, owner, fake_providers, monkeypatch):
+    trigger = subscription(db_session, owner, definition(db_session, owner))
+    e = tick(db_session, trigger)
 
     def broker_down(*args, **kwargs):
         raise ConnectionError("broker unreachable")
 
     monkeypatch.setattr(cron, "enqueue_run", broker_down)
-
-    start_cron_run(e.id)
-
-    db_session.refresh(e)
-    assert (e.status, e.error_message, e.task.enabled) == (
-        "failed",
-        "broker unreachable",
-        True,
-    )
-
-
-def test_a_finished_execution_is_left_alone(db_session, owner, fake_providers):
-    d = definition(db_session, owner)
-    e = execution(db_session, owner, d.id, status="completed")
-
-    start_cron_run(e.id)
-
-    assert db_session.query(AgentRun).count() == 0
-
-
-def test_a_long_overdue_execution_is_skipped(db_session, owner, fake_providers):
-    d = definition(db_session, owner)
-    e = execution(db_session, owner, d.id, scheduled=now() - timedelta(hours=7))
-
-    start_cron_run(e.id)
+    with pytest.raises(ConnectionError):
+        start_time_run(e.id)
 
     db_session.refresh(e)
-    assert e.status == "failed"
-    assert "late" in (e.error_message or "")
-    assert db_session.query(AgentRun).count() == 0
+    db_session.refresh(trigger)
+    assert (e.routed_at, trigger.enabled) == (None, True)
 
 
-def test_the_creating_api_key_bounds_the_run(db_session, owner, fake_providers):
-    d = definition(db_session, owner)
-    key = api_key(db_session, owner, ["agents", "read"])
-    e = execution(db_session, owner, d.id, api_key_id=key.id)
-
-    start_cron_run(e.id)
-
-    run = db_session.query(AgentRun).one()
-    assert (run.api_key_id, sorted(run.scopes)) == (key.id, ["agents", "read"])
+def late_tick(db, owner, d, at):
+    return tick(db, subscription(db, owner, d), at)
 
 
-@pytest.mark.parametrize(
-    "case,expected",
-    [
-        ("foreign definition", "no longer exists"),
-        ("revoked key", "no longer valid"),
-        ("key without agents scope", "'agents' scope"),
-        ("user without agents scope", "'agents' scope"),
-    ],
-)
-def test_a_schedule_that_can_never_run_is_failed_and_disabled(
-    db_session, owner, admin_user, fake_providers, case, expected
-):
-    theirs = definition(db_session, admin_user)
-    mine = AgentDefinition(user_id=owner.id, name="mine", spec=SPEC)
-    db_session.add(mine)
-    db_session.commit()
+def late_timer(db, owner, d, at):
+    e = Event(kind="timer", owner_id=owner.id, fire_at=at, handler={"agent": d.id}, data={"input": "x"})
+    db.add(e)
+    db.commit()
+    return e
 
-    def unscoped_user():
-        owner.scopes = ["read"]
-        return execution(db_session, owner, mine.id)
 
-    setups = {
-        "foreign definition": lambda: execution(db_session, owner, theirs.id),
-        "revoked key": lambda: execution(
-            db_session,
-            owner,
-            mine.id,
-            api_key_id=api_key(db_session, owner, ["agents"], revoked=True).id,
-        ),
-        "key without agents scope": lambda: execution(
-            db_session, owner, mine.id, api_key_id=api_key(db_session, owner, ["read"]).id
-        ),
-        "user without agents scope": unscoped_user,
-    }
-    e = setups[case]()
+@pytest.mark.parametrize("make", [late_tick, late_timer])
+def test_a_start_that_waited_past_max_lateness_is_skipped(db_session, owner, fake_providers, make):
+    e = make(db_session, owner, definition(db_session, owner), now() - timedelta(hours=7))
 
-    start_cron_run(e.id)
+    assert start_time_run(e.id) is None
 
     db_session.refresh(e)
-    assert (e.status, e.task.enabled) == ("failed", False)
-    assert expected in (e.error_message or "")
-    assert db_session.query(AgentRun).count() == 0
-
-
-@pytest.mark.parametrize(
-    "spec,expected",
-    [
-        (SPEC | {"reasoning": "medium", "model": "openai/m"}, "reasoning"),
-        (SPEC | {"max_cost_usd_per_day": "0.000001"}, "definition pool"),
-    ],
-)
-def test_refused_runs_fail_the_execution_but_keep_the_schedule(
-    db_session, owner, fake_providers, spec, expected
-):
-    d = definition(db_session, owner, spec)
-    db_session.add(
-        AgentRun(
-            user_id=owner.id,
-            definition_id=d.id,
-            spec=SPEC,
-            input="earlier",
-            max_cost_usd=Decimal("1"),
-            cost_usd=Decimal("0.01"),
-            trigger_kind="manual",
-            status="done",
-        )
-    )
-    db_session.commit()
-    e = execution(db_session, owner, d.id)
-
-    start_cron_run(e.id)
-
-    db_session.refresh(e)
-    assert (e.status, e.task.enabled) == ("failed", True)
-    assert expected in (e.error_message or "")
-    assert db_session.query(AgentRun).filter(AgentRun.trigger_kind == "cron").count() == 0
-
-
-def test_a_late_recovery_of_a_started_run_completes_it(
-    db_session, owner, fake_providers, monkeypatch
-):
-    d = definition(db_session, owner)
-    e = execution(db_session, owner, d.id)
-    def worker_dies(*args):
-        raise RuntimeError("worker died")
-
-    with monkeypatch.context() as m:
-        m.setattr(cron, "complete", worker_dies)
-        with pytest.raises(RuntimeError):
-            start_cron_run(e.id)
-    e.scheduled_time = now() - timedelta(hours=7)
-    db_session.commit()
-
-    run_id = start_cron_run(e.id)
-
-    db_session.refresh(e)
-    assert (e.status, e.data) == ("completed", {"run_id": run_id})
+    assert (e.result["status"], db_session.query(AgentRun).count()) == ("skipped:late", 0)

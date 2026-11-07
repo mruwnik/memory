@@ -72,7 +72,7 @@ from memory.common.db.models import (
     SourceItem,
     User,
 )
-from memory.common.db.models.events import ADDED, ITEM, REMOVED
+from memory.common.db.models.events import ADDED, ITEM, REMOVED, TIME_KINDS
 from memory.common.db.models.slack import SlackUserCredentials
 from memory.common.db.models.source_items import DIRECT_CHANNEL_TYPES
 from memory.common.people import people_with_slack_id
@@ -1153,7 +1153,8 @@ def route_batch(db: DBSession, after_id: int) -> tuple[int | None, list[Claimed]
     last event id taken (None when none were pending) and the claims made."""
     pending = (
         select(Event)
-        .where(Event.routed_at.is_(None), Event.id > after_id)
+        # Ticks and timers are memory.agents.clock's.
+        .where(Event.routed_at.is_(None), Event.id > after_id, Event.kind.not_in(TIME_KINDS))
         .order_by(Event.id)
         .limit(ROUTE_BATCH_SIZE)
         .with_for_update(skip_locked=True)

@@ -287,9 +287,12 @@ class AgentTrigger(Base):
     `config` is validated per kind by memory.agents.triggers. `state` holds what
     the trigger machinery records, e.g. why a circuit breaker disabled it.
     `handler` is {"agent": <definition id>} (then also in definition_id, which
-    cascades its deletion), {"agent": "<code agent slug>"} or {"queue": "<name>"},
-    whose deliveries the owner's workers claim (memory.agents.queues); code slugs
-    don't fire yet.
+    cascades its deletion), {"agent": "<code agent slug>"}, {"queue": "<name>"},
+    whose deliveries the owner's workers claim (memory.agents.queues), or
+    {"notify": {...}} (memory.agents.clock.Notify), which only cron subscriptions
+    take; code slugs don't fire yet.
+
+    A cron subscription's `next_at` is its next tick, in its owner's timezone.
     """
 
     __tablename__ = "agent_triggers"
@@ -336,6 +339,7 @@ class AgentTrigger(Base):
     active_since: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+    next_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -346,7 +350,7 @@ class AgentTrigger(Base):
     definition: Mapped[AgentDefinition | None] = relationship("AgentDefinition")
 
     __table_args__ = (
-        CheckConstraint("kind IN ('ingest')", name="agent_triggers_kind_check"),
+        CheckConstraint("kind IN ('ingest', 'cron')", name="agent_triggers_kind_check"),
         UniqueConstraint("user_id", "name", name="agent_triggers_user_name_key"),
         CheckConstraint(
             "CASE WHEN definition_id IS NOT NULL "
@@ -354,7 +358,9 @@ class AgentTrigger(Base):
             "ELSE ((jsonb_typeof(handler->'agent') = 'string' AND handler->>'agent' <> '' "
             "AND handler - 'agent' = '{}'::jsonb) "
             "OR (jsonb_typeof(handler->'queue') = 'string' AND handler->>'queue' <> '' "
-            "AND handler - 'queue' = '{}'::jsonb)) IS TRUE END",
+            "AND handler - 'queue' = '{}'::jsonb) "
+            "OR (jsonb_typeof(handler->'notify') = 'object' "
+            "AND handler - 'notify' = '{}'::jsonb)) IS TRUE END",
             name="agent_triggers_handler_check",
         ),
         CheckConstraint(
@@ -370,6 +376,11 @@ class AgentTrigger(Base):
             "agent_triggers_enabled_kind_idx",
             "kind",
             postgresql_where=text("enabled"),
+        ),
+        Index(
+            "agent_triggers_cron_due_idx",
+            "next_at",
+            postgresql_where=text("kind = 'cron' AND enabled"),
         ),
     )
 
@@ -391,6 +402,7 @@ class AgentTrigger(Base):
             "api_key_id": self.api_key_id,
             "via_api_key": self.via_api_key,
             "active_since": iso(self.active_since),
+            "next_at": iso(self.next_at),
             "created_at": iso(self.created_at),
             "updated_at": iso(self.updated_at),
         }

@@ -12,7 +12,6 @@ export { default as ForgotPassword } from './auth/ForgotPassword'
 export { default as ResetPassword } from './auth/ResetPassword'
 
 export { CeleryOverview } from './celery'
-export { ScheduledTasks } from './scheduled-tasks'
 export { ReportsPage } from './reports'
 
 // Note: Metrics and Usage are lazy-loaded in App.tsx

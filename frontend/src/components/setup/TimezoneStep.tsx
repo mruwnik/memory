@@ -17,7 +17,7 @@ export const TimezoneStep = ({ userId, onDone, actions }: { userId: number; onDo
 
   return (
     <form onSubmit={save} className="space-y-4">
-      <Field label="Timezone" hint="Scheduled tasks and agent schedules run on this clock. Pick one or type any IANA name, such as Asia/Kolkata.">
+      <Field label="Timezone" hint="Schedules run on this clock. Pick one or type any IANA name, such as Asia/Kolkata.">
         <TimezoneCombobox value={timezone} onChange={setTimezone} />
       </Field>
       {error && <Notice tone="error">{error}</Notice>}

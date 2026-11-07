@@ -1,12 +1,12 @@
 """Tests for user management API endpoints."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
 
 from memory.api.users import check_single_user
-from memory.common.db.models import APIKey, APIKeyType, HumanUser, Person, ScheduledTask, UserSession
+from memory.common.db.models import AgentTrigger, APIKey, APIKeyType, HumanUser, Person, UserSession
 from memory.common.db.models.users import verify_password
 from memory.common.modules import MODULES, MULTI_USER
 
@@ -693,26 +693,25 @@ def test_regular_user_cannot_set_another_users_timezone(regular_client: TestClie
     assert target.timezone == "UTC"
 
 
-def test_changing_timezone_moves_pending_cron_runs(client: TestClient, admin_user, db_session):
-    def task(cron):
-        return ScheduledTask(
-            user_id=admin_user.id, task_type="notification", cron_expression=cron,
-            next_scheduled_time=datetime(2999, 1, 1, 9),
+def test_changing_timezone_moves_cron_subscriptions(client: TestClient, admin_user, db_session):
+    def cron(enabled):
+        return AgentTrigger(
+            user_id=admin_user.id, name=f"c{enabled}", kind="cron", enabled=enabled,
+            handler={"notify": {"channel": "email", "target": "a@b.c", "message": "x"}},
+            config={"cron": "0 9 * * *"}, next_at=datetime(2999, 1, 1, 9, tzinfo=timezone.utc),
         )
-    recurring, paused, one_off = task("0 9 * * *"), task("0 9 * * *"), task(None)
-    paused.next_scheduled_time = None
-    db_session.add_all([recurring, paused, one_off])
+    recurring, paused = cron(True), cron(False)
+    db_session.add_all([recurring, paused])
     db_session.commit()
 
     client.patch(f"/api/users/{admin_user.id}", json={"timezone": "Asia/Kolkata"})
 
     db_session.refresh(recurring)
     db_session.refresh(paused)
-    db_session.refresh(one_off)
-    assert recurring.next_scheduled_time is not None
-    assert (recurring.next_scheduled_time.hour, recurring.next_scheduled_time.minute) == (3, 30)
-    assert paused.next_scheduled_time is None
-    assert one_off.next_scheduled_time == datetime(2999, 1, 1, 9)
+    assert recurring.next_at is not None
+    moved = recurring.next_at.astimezone(timezone.utc)
+    assert (moved.hour, moved.minute) == (3, 30)
+    assert paused.next_at == datetime(2999, 1, 1, 9, tzinfo=timezone.utc)
 
 
 def test_revoke_my_api_key(client: TestClient, admin_user, db_session):

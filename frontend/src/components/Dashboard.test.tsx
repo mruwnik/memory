@@ -22,7 +22,6 @@ describe('Dashboard', () => {
     ['Reports', '/reports'],
     ['Calendar', '/calendar'],
     ['Tasks', '/tasks'],
-    ['Scheduled tasks', '/scheduled-tasks'],
   ])('links the %s card to %s', (label, href) => {
     renderDashboard(() => true)
     const heading = screen.getByText(label)

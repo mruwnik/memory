@@ -228,7 +228,7 @@ def none(*args):
     [
         ("run_agent", "memory.agents.runner.execute_run", nothing, ["run-1"]),
         ("fire_trigger", "memory.agents.fire.fire_trigger", none, [1, []]),
-        ("start_cron_run", "memory.agents.cron.start_cron_run", none, ["exec-1"]),
+        ("start_time_run", "memory.agents.cron.start_time_run", none, [1]),
     ],
 )
 def test_every_agents_task_follows_the_api_first(

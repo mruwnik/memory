@@ -339,9 +339,10 @@
     scheduler: {
       listAll: (params) => call('scheduler_list_all', params),
       upsert: (params) => call('scheduler_upsert', params),
-      cancel: (task_id) => call('scheduler_cancel', { task_id }),
-      delete: (task_id) => call('scheduler_delete', { task_id }),
-      executions: (task_id, params) => call('scheduler_executions', { task_id, ...params }),
+      pause: (schedule_id) => call('scheduler_upsert', { schedule_id, enabled: false }),
+      delete: (schedule_id) => call('scheduler_delete', { schedule_id }),
+      cancelTimer: (timer_id) => call('scheduler_delete', { timer_id }),
+      history: (schedule_id, params) => call('scheduler_history', { schedule_id, ...params }),
     },
 
     // Slack

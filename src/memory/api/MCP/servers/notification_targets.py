@@ -12,7 +12,7 @@ id at dispatch time using the same classifiers this module validates against
 validation and delivery can't drift.
 """
 
-from sqlalchemy.orm import Session as DBSession
+from memory.common.db.connection import DBSession
 
 from memory.common import people as people_mod
 from memory.common.db.models.slack import SlackChannel, SlackUserCredentials

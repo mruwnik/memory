@@ -133,7 +133,7 @@ const UserSettings = () => {
             <Field label="Email">
               <Input type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} />
             </Field>
-            <Field label="Timezone" hint="Scheduled tasks and agent schedules run on this clock. Pick one or type any IANA name, such as Asia/Kolkata.">
+            <Field label="Timezone" hint="Schedules run on this clock. Pick one or type any IANA name, such as Asia/Kolkata.">
               <TimezoneCombobox value={timezone} onChange={setTimezone} />
             </Field>
             <FormActions>

@@ -26,7 +26,7 @@ EBOOK_ROOT = "memory.workers.tasks.ebook"
 MAINTENANCE_ROOT = "memory.workers.tasks.maintenance"
 NOTES_ROOT = "memory.workers.tasks.notes"
 OBSERVATIONS_ROOT = "memory.workers.tasks.observations"
-SCHEDULED_TASKS_ROOT = "memory.workers.tasks.scheduled_tasks"
+NOTIFICATIONS_ROOT = "memory.workers.tasks.notifications"
 DISCORD_ROOT = "memory.workers.tasks.discord"
 DISCORD_BACKFILL_ROOT = "memory.workers.tasks.discord_backfill"
 SLACK_ROOT = "memory.workers.tasks.slack"
@@ -107,21 +107,18 @@ SWEEP_AGENT_RUNS = f"{MAINTENANCE_ROOT}.sweep_agent_runs"
 PURGE_AGENT_RUNS = f"{MAINTENANCE_ROOT}.purge_agent_runs"
 ROUTE_EVENTS = f"{MAINTENANCE_ROOT}.route_events"
 SWEEP_TRIGGER_DELIVERIES = f"{MAINTENANCE_ROOT}.sweep_trigger_deliveries"
+RUN_CLOCK = f"{MAINTENANCE_ROOT}.run_clock"
 CLEANUP_OLD_CLAUDE_SESSIONS = f"{MAINTENANCE_ROOT}.cleanup_old_claude_sessions"
-CLEANUP_OLD_TASK_EXECUTIONS = f"{MAINTENANCE_ROOT}.cleanup_old_task_executions"
 CLEANUP_OLD_TASK_RESULTS = f"{MAINTENANCE_ROOT}.cleanup_old_task_results"
 CLEANUP_OLD_PENDING_JOBS = f"{MAINTENANCE_ROOT}.cleanup_old_pending_jobs"
 PURGE_OLD_USAGE = f"{MAINTENANCE_ROOT}.purge_old_usage"
-CLEANUP_OLD_DONE_ONEOFF_TASKS = f"{MAINTENANCE_ROOT}.cleanup_old_done_oneoff_tasks"
 SYNC_WEBPAGE = f"{BLOGS_ROOT}.sync_webpage"
 SYNC_ARTICLE_FEED = f"{BLOGS_ROOT}.sync_article_feed"
 ADD_ARTICLE_FEED = f"{BLOGS_ROOT}.add_article_feed"
 SYNC_WEBSITE_ARCHIVE = f"{BLOGS_ROOT}.sync_website_archive"
 
-# Scheduled tasks
-EXECUTE_SCHEDULED_TASK = f"{SCHEDULED_TASKS_ROOT}.execute_scheduled_task"
-RUN_SCHEDULED_TASKS = f"{SCHEDULED_TASKS_ROOT}.run_scheduled_tasks"
-SEND_NOTIFICATION = f"{SCHEDULED_TASKS_ROOT}.send_notification"
+SEND_NOTIFICATION = f"{NOTIFICATIONS_ROOT}.send_notification"
+SEND_TIME_NOTIFY = f"{NOTIFICATIONS_ROOT}.send_time_notify"
 
 # Backup tasks
 BACKUP_PATH = f"{BACKUP_ROOT}.backup_path"
@@ -176,7 +173,7 @@ VERIFY_SOURCE_BATCH = f"{VERIFICATION_ROOT}.verify_source_batch"
 SYNC_DUE_SOURCES = f"{SYNC_SCHEDULE_ROOT}.sync_due_sources"
 
 RUN_AGENT = f"{AGENTS_ROOT}.run_agent"
-START_CRON_RUN = f"{AGENTS_ROOT}.start_cron_run"
+START_TIME_RUN = f"{AGENTS_ROOT}.start_time_run"
 FIRE_TRIGGER = f"{AGENTS_ROOT}.fire_trigger"
 SWEEP_WORKER_RUNS = f"{AGENTS_ROOT}.sweep_worker_runs"
 
@@ -364,6 +361,7 @@ app.conf.update(
         # The scheduler queue has its own worker, so long ingest tasks can't delay routing.
         ROUTE_EVENTS: {"queue": f"{settings.CELERY_QUEUE_PREFIX}-scheduler"},
         SWEEP_TRIGGER_DELIVERIES: {"queue": f"{settings.CELERY_QUEUE_PREFIX}-scheduler"},
+        RUN_CLOCK: {"queue": f"{settings.CELERY_QUEUE_PREFIX}-scheduler"},
         f"{MAINTENANCE_ROOT}.*": {
             "queue": f"{settings.CELERY_QUEUE_PREFIX}-maintenance"
         },
@@ -372,9 +370,7 @@ app.conf.update(
         f"{NOTES_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-notes"},
         f"{OBSERVATIONS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-notes"},
         f"{PHOTO_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-photos"},
-        f"{SCHEDULED_TASKS_ROOT}.*": {
-            "queue": f"{settings.CELERY_QUEUE_PREFIX}-scheduler"
-        },
+        f"{NOTIFICATIONS_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-scheduler"},
         f"{SYNC_SCHEDULE_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-scheduler"},
         f"{BACKUP_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-backup"},
         f"{GITHUB_ROOT}.*": {"queue": f"{settings.CELERY_QUEUE_PREFIX}-github"},
@@ -459,10 +455,6 @@ def build_beat_schedule() -> dict:
         },
         # The interval is a server setting, so the task checks it: beat's own intervals are fixed.
         "sync-notes-when-due": {"task": SYNC_NOTES_WHEN_DUE, "schedule": 60},
-        "run-scheduled-tasks": {
-            "task": RUN_SCHEDULED_TASKS,
-            "schedule": settings.SCHEDULED_CALL_RUN_INTERVAL,
-        },
         "backup-all": {
             "task": BACKUP_ALL,
             "schedule": crontab(hour="2", minute="0"),
@@ -492,10 +484,6 @@ def build_beat_schedule() -> dict:
             "task": CLEANUP_OLD_CLAUDE_SESSIONS,
             "schedule": crontab(hour="3", minute="30"),
         },
-        "cleanup-old-task-executions": {
-            "task": CLEANUP_OLD_TASK_EXECUTIONS,
-            "schedule": crontab(hour="3", minute="45"),
-        },
         "cleanup-old-task-results": {
             "task": CLEANUP_OLD_TASK_RESULTS,
             "schedule": crontab(hour="4", minute="50"),
@@ -512,10 +500,6 @@ def build_beat_schedule() -> dict:
             "task": PURGE_OLD_USAGE,
             "schedule": crontab(hour="4", minute="5"),
         },
-        "cleanup-old-done-oneoff-tasks": {
-            "task": CLEANUP_OLD_DONE_ONEOFF_TASKS,
-            "schedule": crontab(hour="4", minute="15"),
-        },
         "process-raw-items": {
             "task": PROCESS_RAW_ITEMS,
             "schedule": crontab(minute="25"),
@@ -529,6 +513,7 @@ def build_beat_schedule() -> dict:
         },
         # Expiring, so runs queued behind a busy worker don't pile up: the next one routes it all.
         "route-events": {"task": ROUTE_EVENTS, "schedule": 5, "options": {"expires": 5}},
+        "run-clock": {"task": RUN_CLOCK, "schedule": 10, "options": {"expires": 10}},
         "purge-agent-runs": {
             "task": PURGE_AGENT_RUNS,
             "schedule": crontab(hour="4", minute="40"),

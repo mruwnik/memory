@@ -24,7 +24,7 @@ from memory.common import (
     summarizer,
     summary_batch,
 )
-from memory.agents import triggers
+from memory.agents import clock, triggers
 from memory.agents.cancel import cancel_tree
 from memory.common.db.models.agents import EXECUTOR_SERVER, MAX_RETENTION_DAYS, RunStatus
 from memory.common.db.models.events import ITEM, REMOVED
@@ -42,11 +42,10 @@ from memory.common.celery_app import (
     DELETE_ORPHANED_SOURCE_ITEMS,
     PURGE_AGENT_RUNS,
     ROUTE_EVENTS,
+    RUN_CLOCK,
     SWEEP_AGENT_RUNS,
     SWEEP_TRIGGER_DELIVERIES,
     CLEANUP_OLD_CLAUDE_SESSIONS,
-    CLEANUP_OLD_DONE_ONEOFF_TASKS,
-    CLEANUP_OLD_TASK_EXECUTIONS,
     CLEANUP_OLD_TASK_RESULTS,
     CLEANUP_OLD_PENDING_JOBS,
     PURGE_OLD_USAGE,
@@ -77,10 +76,8 @@ from memory.common.db.models import (
     JobStatus,
     LLMSpend,
     PendingJob,
-    ScheduledTask,
     Session,
     SourceItem,
-    TaskExecution,
     TelemetryEvent,
 )
 from memory.common.db.models.source_item import EMBED_RETRY_BASE, MAX_EMBED_ATTEMPTS
@@ -1341,42 +1338,6 @@ def backfill_search_vectors(batch_size: int = 1000) -> dict[str, str | int]:
     return {"status": "success", "updated": updated}
 
 
-@app.task(name=CLEANUP_OLD_TASK_EXECUTIONS)
-@tracked_task
-def cleanup_old_task_executions(retention_days: int | None = None) -> dict:
-    """Delete finished task executions older than retention_days.
-
-    Only terminal executions (finished_at set) are removed; pending/running
-    rows are left for the dispatcher's stale-recovery logic.
-    """
-    if retention_days is None:
-        retention_days = settings.TASK_EXECUTION_RETENTION_DAYS
-
-    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=retention_days)
-    deleted = 0
-
-    with make_session() as session:
-        batch_size = 10000
-        while True:
-            subquery = (
-                select(TaskExecution.id)
-                .where(
-                    TaskExecution.finished_at.isnot(None),
-                    TaskExecution.finished_at < cutoff,
-                )
-                .limit(batch_size)
-            )
-            stmt = delete(TaskExecution).where(TaskExecution.id.in_(subquery))
-            result = cast(CursorResult, session.execute(stmt))
-            session.commit()
-            if result.rowcount == 0:
-                break
-            deleted += result.rowcount
-
-    logger.info(f"Deleted {deleted} task executions older than {retention_days} days")
-    return {"deleted": deleted, "retention_days": retention_days}
-
-
 # Small enough that each DELETE holds row locks briefly on tables with millions of rows.
 RETENTION_DELETE_BATCH_SIZE = 5000
 
@@ -1497,58 +1458,6 @@ def purge_old_usage() -> dict:
     }
     logger.info(f"Purged old usage rows: {deleted}")
     return deleted
-
-
-@app.task(name=CLEANUP_OLD_DONE_ONEOFF_TASKS)
-@tracked_task
-def cleanup_old_done_oneoff_tasks(retention_days: int | None = None) -> dict:
-    """Delete fired one-off tasks (no cron, no pending run) older than cutoff.
-
-    Cascades their executions (FK ON DELETE CASCADE). Recurring tasks — even
-    paused ones (cron set, next None) — are never touched. Tasks with a
-    non-terminal (pending/running) execution are skipped so a just-fired
-    one-off whose delivery is still in flight isn't deleted out from under
-    the worker (its created_at can already be past the cutoff if it was
-    scheduled far in the future).
-    """
-    if retention_days is None:
-        retention_days = settings.SCHEDULED_TASK_RETENTION_DAYS
-
-    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=retention_days)
-    deleted = 0
-
-    with make_session() as session:
-        batch_size = 5000
-        while True:
-            has_active_execution = (
-                select(TaskExecution.id)
-                .where(
-                    TaskExecution.task_id == ScheduledTask.id,
-                    TaskExecution.status.in_(["pending", "running"]),
-                )
-                .exists()
-            )
-            subquery = (
-                select(ScheduledTask.id)
-                .where(
-                    ScheduledTask.cron_expression.is_(None),
-                    ScheduledTask.next_scheduled_time.is_(None),
-                    ScheduledTask.created_at < cutoff,
-                    ~has_active_execution,
-                )
-                .limit(batch_size)
-            )
-            # ORM delete so the executions cascade fires per-row.
-            rows = session.query(ScheduledTask).filter(ScheduledTask.id.in_(subquery)).all()
-            if not rows:
-                break
-            for task in rows:
-                session.delete(task)
-            session.commit()
-            deleted += len(rows)
-
-    logger.info(f"Deleted {deleted} fired one-off tasks older than {retention_days} days")
-    return {"deleted": deleted, "retention_days": retention_days}
 
 
 @app.task(name=SUBMIT_SUMMARY_BATCH)
@@ -1750,6 +1659,12 @@ def purge_agent_runs() -> dict[str, int]:
 def route_events() -> dict[str, int]:
     """Write a delivery for every ingest trigger a pending event matches, and send the per-item ones."""
     return {"delivered": len(triggers.route_events())}
+
+
+@app.task(name=RUN_CLOCK)
+def run_clock() -> dict[str, int]:
+    """Write the ticks of cron subscriptions that are due and deliver due ticks and timers."""
+    return clock.run_clock()
 
 
 @app.task(name=SWEEP_TRIGGER_DELIVERIES)

@@ -1,123 +1,118 @@
-"""Cron trigger: a ScheduledTask of type agent_run starts a run of its definition."""
+"""Start the agent run of a due tick or timer (memory.agents.clock); agents queue."""
 
 import logging
-from datetime import datetime, timedelta, timezone
 
-from memory.agents.enqueue import TriggerInfo, enqueue_run
-from memory.agents.spec import AgentSpec
-from memory.agents.principal import PrincipalRevoked, standing_key
-from memory.common.db.connection import DBSession, make_session
-from memory.common.db.models import (
-    AgentDefinition,
-    AgentRun,
-    ScheduledTask,
-    TaskExecution,
-    User,
+from sqlalchemy import func, select
+
+from memory.agents.caps import CapExceeded, RateExceeded
+from memory.agents.clock import (
+    CRON,
+    SENT,
+    SKIPPED_LATE,
+    Notices,
+    Target,
+    bound_key,
+    fail,
+    finish,
+    late_details,
+    target_of,
+    too_late,
+    utcnow,
 )
-from memory.common.db.models.scheduled_tasks import ExecutionStatus
+from memory.agents.enqueue import TriggerInfo, enqueue_run
+from memory.agents.principal import standing_key
+from memory.agents.spec import AgentSpec
+from memory.agents.triggers import DONE, SHED_BUDGET, SHED_RATE, SKIPPED_DISABLED
+from memory.common.db.connection import DBSession, make_session
+from memory.common.db.models import AgentDefinition, AgentRun, Event
+from memory.common.db.models.agents import iso
+from memory.common.db.models.events import TICK, TIMER
 from memory.common.scopes import SCOPE_AGENTS
 
 logger = logging.getLogger(__name__)
 
-# After an outage, a tick this late is dropped rather than run long after the
-# moment it was meant for; the next tick runs as normal.
-MAX_LATENESS = timedelta(hours=6)
+
+def time_ref(db: DBSession, event: Event) -> dict:
+    """A tick's ref: its time, how many ticks it stands for beyond itself, and
+    since when (the last tick that was delivered)."""
+    ref = {"event_id": event.id, "time": iso(event.fire_at)}
+    if event.kind == TIMER:
+        return ref
+    since = db.scalar(
+        select(func.max(Event.fire_at)).where(
+            Event.kind == TICK,
+            Event.trigger_id == event.trigger_id,
+            Event.fire_at < event.fire_at,
+            Event.result["status"].astext.in_([DONE, SENT]),
+        )
+    )
+    missed = (event.data or {}).get("missed", 0)
+    return ref | {"trigger_id": event.trigger_id, "missed": missed, "since": iso(since)}
 
 
-def utcnow_naive() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
-
-
-def enqueue_scheduled_run(
-    db: DBSession, task: ScheduledTask, execution: TaskExecution
-) -> AgentRun:
-    data = task.data or {}
-    definition = db.get(AgentDefinition, data.get("definition_id"))
-    if definition is None or definition.user_id != task.user_id:
-        raise PrincipalRevoked(f"agent definition {data.get('definition_id')} no longer exists")
-    user = db.get(User, task.user_id)
-    if user is None:
-        raise PrincipalRevoked(f"user {task.user_id} no longer exists")
-    key = standing_key(db, user, data.get("api_key_id"), SCOPE_AGENTS)
-    return enqueue_run(
+def start(db: DBSession, event: Event, target: Target) -> AgentRun:
+    agent = target.handler["agent"]
+    definition = db.get(AgentDefinition, agent) if isinstance(agent, int) else None
+    if definition is None or definition.user_id != target.owner.id:
+        raise ValueError("its agent definition no longer exists")
+    bound_key(db, target)
+    key = standing_key(db, target.owner, target.api_key_id, SCOPE_AGENTS)
+    # Ended in the run's own transaction, which enqueue_run commits.
+    finish(event, DONE)
+    run = enqueue_run(
         db,
-        user_id=task.user_id,
+        user_id=target.owner.id,
         spec=AgentSpec.model_validate(definition.spec),
-        input=data.get("input") or "",
+        input=target.input,
         trigger=TriggerInfo(
-            kind="cron",
-            ref={"task_id": task.id, "execution_id": execution.id},
-            dedupe_key=execution.id,
+            kind=CRON if event.kind == TICK else TIMER,
+            ref=time_ref(db, event),
+            dedupe_key=f"event:{event.id}",
+            trigger_id=event.trigger_id,
         ),
         definition=definition,
         api_key=key,
     )
-
-
-def finish(
-    db: DBSession, execution_id: str, status: ExecutionStatus, **fields
-) -> None:
-    execution = db.get(TaskExecution, execution_id)
-    if execution is None:
-        return
-    execution.status = status
-    execution.finished_at = utcnow_naive()
-    execution.started_at = execution.started_at or execution.finished_at
-    for name, value in fields.items():
-        setattr(execution, name, value)
+    event.result = {"status": DONE, "run_id": run.id, **late_details(event, utcnow())}
     db.commit()
+    return run
 
 
-def fail(db: DBSession, execution_id: str, error: Exception) -> None:
-    db.rollback()
-    finish(db, execution_id, ExecutionStatus.FAILED, error_message=str(error))
-    if not isinstance(error, PrincipalRevoked):
-        return
-    execution = db.get(TaskExecution, execution_id)
-    if execution is not None:
-        execution.task.enabled = False
-        db.commit()
+def start_time_run(event_id: int) -> str | None:
+    """Enqueue the run of a tick's or timer's agent handler and end the event;
+    returns the run id. A redelivery finds the event ended and does nothing, and
+    the run's dedupe key makes a resend after a crash reuse the run.
 
-
-def start_cron_run(execution_id: str) -> str | None:
-    """Enqueue the run for one pending agent_run execution; returns the run id.
-
-    The execution stays pending (and row-locked) until the run exists, so a
-    worker dying mid-way leaves it for stuck-pending recovery, and the run's
-    dedupe key (the execution id) makes the re-dispatch reuse the same run.
-    Errors starting the run are recorded on the execution, and a schedule that
-    can never run again (definition, key or scope gone) is disabled.
+    A tick or timer that waited past MAX_LATENESS is skipped; a cap that stops
+    the run sheds it; a definition, key or scope that's gone fails it, and trips
+    a subscription.
     """
     with make_session() as db:
-        execution = db.get(TaskExecution, execution_id, with_for_update=True)
-        if execution is None or execution.status != ExecutionStatus.PENDING:
+        event = db.get(Event, event_id, with_for_update=True)
+        if event is None or event.routed_at is not None:
             return None
-        started = (
-            db.query(AgentRun)
-            .filter(AgentRun.trigger_kind == "cron", AgentRun.dedupe_key == execution_id)
-            .first()
-        )
-        if started is not None:
-            complete(db, execution_id, started.id)
-            return started.id
-        late = utcnow_naive() - execution.scheduled_time
-        if late > MAX_LATENESS:
-            finish(
-                db,
-                execution_id,
-                ExecutionStatus.FAILED,
-                error_message=f"skipped: {late} late (limit {MAX_LATENESS})",
-            )
+        target = target_of(db, event)
+        if target is None:
+            finish(event, SKIPPED_DISABLED)
+            db.commit()
+            return None
+        if too_late(event, target, utcnow()):
+            finish(event, SKIPPED_LATE, **late_details(event, utcnow()))
+            db.commit()
             return None
         try:
-            run = enqueue_scheduled_run(db, execution.task, execution)
-        except Exception as e:
-            logger.warning("cron agent run for execution %s failed to start: %s", execution_id, e)
-            fail(db, execution_id, e)
-            return None
-        complete(db, execution_id, run.id)
-        return run.id
-
-
-def complete(db: DBSession, execution_id: str, run_id: str) -> None:
-    finish(db, execution_id, ExecutionStatus.COMPLETED, data={"run_id": run_id})
+            return start(db, event, target).id
+        except CapExceeded as e:
+            db.rollback()
+            event = db.get_one(Event, event_id, with_for_update=True)
+            finish(event, SHED_RATE if isinstance(e, RateExceeded) else SHED_BUDGET, error=str(e))
+            db.commit()
+        # An invalid spec and revoked credentials are ValueErrors.
+        except ValueError as e:
+            db.rollback()
+            event = db.get_one(Event, event_id, with_for_update=True)
+            notices = Notices()
+            fail(db, event, target, str(e), notices)
+            db.commit()
+            notices.tell(db)
+        return None

@@ -15,7 +15,9 @@ from memory.api.MCP.servers.core import (
     get_current_user_access_filter,
 )
 from memory.agents.system import CHUNK_SCORE, HYDE, QUERY_ANALYSIS
-from memory.api.auth import lookup_principal
+from memory.agents.clock import Notify, add_timer
+from memory.agents.mcp_client import calling_run
+from memory.api.auth import lookup_principal, token_api_key
 from memory.api.MCP.access import get_mcp_current_user
 from memory.api.MCP.visibility import READ_ONLY, require_scopes, visible_when
 from memory.api.search.search import searcher_keys
@@ -43,10 +45,7 @@ from memory.common.notify import (
     user_info_for,
 )
 from memory.common.version import db_revision, version_info
-from memory.common.db.models import (
-    ScheduledTask,
-    SourceItem,
-)
+from memory.common.db.models import SourceItem
 
 logger = logging.getLogger(__name__)
 
@@ -250,43 +249,6 @@ async def get_user() -> dict:
 # --- Notification tools ---
 
 
-def create_notification(
-    session,
-    user_id: int,
-    channel_type: str,
-    channel_identifier: str,
-    subject: str,
-    message: str,
-    details_url: str | None,
-    scheduled_time: datetime | None,
-    extra_data: dict[str, Any] | None = None,
-) -> ScheduledTask:
-    """Create a notification record in the database."""
-    full_message = format_notification_message(subject, message, details_url)
-
-    data = {
-        "notification_type": "notify_user",
-        "subject": subject,
-        "details_url": details_url,
-    }
-    if extra_data:
-        data.update(extra_data)
-
-    scheduled_task = ScheduledTask(
-        user_id=user_id,
-        task_type="notification",
-        next_scheduled_time=scheduled_time,
-        message=full_message,
-        topic=subject,
-        notification_channel=channel_type,
-        notification_target=channel_identifier,
-        data=data,
-    )
-
-    session.add(scheduled_task)
-    return scheduled_task
-
-
 @meta_mcp.tool()
 @visible_when(require_scopes(SCOPE_WRITE))
 async def notify_user(
@@ -311,11 +273,12 @@ async def notify_user(
         channel: Override notification channel. If None, uses priority order above.
         scheduled_time: ISO datetime string (e.g., "2024-12-20T15:30:00Z").
                        Without an offset it is read in your timezone (see get_user).
-                       If None, sends immediately. If set, schedules for later.
+                       If None, sends immediately. If set, a timer sends it then
+                       (cancel it with scheduler_delete(timer_id=notification_id)).
 
     Returns:
-        For a scheduled send: ``{"success": True, "scheduled": True, ...}`` — a
-        notification row is durably committed.
+        For a scheduled send: ``{"success": True, "scheduled": True, ...}`` — the
+        timer is durably committed.
         For an immediate send: ``{"queued": True, "scheduled": False, ...}`` —
         the delivery task is enqueued but NOT confirmed delivered (fire-and-forget,
         no row/metric to read back).
@@ -346,24 +309,31 @@ async def notify_user(
         full_message = format_notification_message(subject, message, details_url)
 
         if scheduled_time:
+            # Content a run read must not be able to plant work that outlives it.
+            if calling_run(get_access_token()) is not None:
+                raise ValueError("an agent run can't set timers; notify now instead")
             scheduled_dt = parse_wall_clock_utc(scheduled_time, current_user["user"]["timezone"])
             if scheduled_dt is None:
                 raise ValueError("Invalid datetime format for scheduled_time")
 
-            current_time_naive = datetime.now(timezone.utc).replace(tzinfo=None)
-            if scheduled_dt <= current_time_naive:
-                raise ValueError("Scheduled time must be in the future")
-
-            notification = create_notification(
-                session=session,
-                user_id=user_id,
-                channel_type=channel_type,
-                channel_identifier=channel_identifier,
-                subject=subject,
-                message=message,
-                details_url=details_url,
-                scheduled_time=scheduled_dt,
-                extra_data=extra_data,
+            notify = Notify.model_validate(
+                {
+                    "channel": channel_type,
+                    "target": channel_identifier,
+                    "message": full_message,
+                    "subject": subject,
+                    "discord_bot_id": extra_data.get("discord_bot_id"),
+                    "from_address": extra_data.get("from_address"),
+                }
+            )
+            token = get_access_token()
+            key = token_api_key(token.token, session) if token else None
+            notification = add_timer(
+                session,
+                user_id,
+                scheduled_dt.replace(tzinfo=timezone.utc),
+                {"notify": notify.model_dump(exclude_none=True)},
+                key.id if key else None,
             )
             session.commit()
             return {
@@ -374,7 +344,7 @@ async def notify_user(
                 "scheduled_time": scheduled_dt.isoformat() + "Z",
             }
 
-    # Immediate send: fire-and-forget, no ScheduledTask / TaskExecution rows.
+    # Immediate send: fire-and-forget, no timer row.
     celery_app.send_task(
         SEND_NOTIFICATION,
         args=[channel_type, channel_identifier, full_message, user_id, subject, extra_data],

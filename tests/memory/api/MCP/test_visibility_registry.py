@@ -37,7 +37,7 @@ async def test_every_mounted_tool_forbids_task_execution():
 READ_ONLY_TOOLS = {
     "agent_work_queues",
     *("agent_catalog", "agent_fetch", "agent_key_list", "agent_list_all"),
-    *("agent_list_runs", "agent_schedules", "agent_server_list", "agent_system_list"),
+    *("agent_list_runs", "agent_server_list", "agent_system_list"),
     *("agent_triggers", "agent_wait"),
     "beeper_list_chats",
     *("books_fetch", "books_list_books"),
@@ -55,7 +55,7 @@ READ_ONLY_TOOLS = {
     *("people_fetch", "people_list_all", "people_tidbit_list"),
     *("polling_fetch", "polling_list_polls"),
     *("projects_fetch", "projects_list_all"),
-    *("scheduler_executions", "scheduler_list_all"),
+    *("scheduler_history", "scheduler_list_all"),
     *("slack_get_channel_history", "slack_list_channels", "slack_thread"),
     *("teams_fetch", "teams_list_all", "teams_project_list_access"),
 }

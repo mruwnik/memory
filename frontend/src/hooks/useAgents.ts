@@ -266,11 +266,12 @@ export const emptyTriggerConfig = (): TriggerConfig => ({
 })
 
 export interface AgentSchedule {
-  id: string
-  cron_expression: string | null
-  next_scheduled_time: string | null
+  id: number
+  name: string
+  config: { cron: string; input: string }
+  next_at: string | null
   enabled: boolean
-  data: { definition_id: number; input: string }
+  state: { tripped?: { reason: string; at: string } }
 }
 
 export const defaultSpec = (model: string): AgentSpec => ({
@@ -354,21 +355,21 @@ export const useAgents = () => {
 
   const listSchedules = useCallback(
     async (definitionId: number) =>
-      (await call<{ schedules: AgentSchedule[] }>('agent_schedules', { definition_id: definitionId })).schedules,
+      (await call<{ schedules: AgentSchedule[] }>('scheduler_list_all', { definition_id: definitionId })).schedules,
     [call],
   )
+  // An update names only the schedule, so pausing never re-checks the definition.
   const saveSchedule = useCallback(
-    (body: { definitionId: number; input?: string; cron?: string; enabled?: boolean; taskId?: string }) =>
-      call<AgentSchedule>('agent_schedule', {
-        definition_id: body.definitionId,
+    (body: { definitionId: number; input?: string; cron?: string; enabled?: boolean; scheduleId?: number }) =>
+      call<AgentSchedule>('scheduler_upsert', {
+        ...(body.scheduleId !== undefined ? { schedule_id: body.scheduleId } : { definition_id: body.definitionId }),
         ...(body.input !== undefined ? { input: body.input } : {}),
         ...(body.cron !== undefined ? { cron_expression: body.cron } : {}),
         ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
-        ...(body.taskId !== undefined ? { task_id: body.taskId } : {}),
       }),
     [call],
   )
-  const deleteSchedule = useCallback((taskId: string) => call('agent_unschedule', { task_id: taskId }), [call])
+  const deleteSchedule = useCallback((scheduleId: number) => call('scheduler_delete', { schedule_id: scheduleId }), [call])
 
   const listTriggers = useCallback(
     async (definitionId: number) =>

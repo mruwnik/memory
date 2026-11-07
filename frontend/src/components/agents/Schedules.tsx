@@ -13,7 +13,7 @@ export function Schedules({ definitionId }: { definitionId: number }) {
   const [cron, setCron] = useState('0 9 * * *')
   const [input, setInput] = useState('')
   const [loadError, setLoadError] = useState<string | null>(null)
-  const [busyId, setBusyId] = useState<string | null>(null)
+  const [busyId, setBusyId] = useState<number | null>(null)
   const { run, notice } = useActionNotice()
   const adding = useSubmit()
   const timezone = useAuth().user?.timezone ?? 'UTC'
@@ -24,7 +24,7 @@ export function Schedules({ definitionId }: { definitionId: number }) {
   }, [listSchedules, definitionId])
   useEffect(() => { reload() }, [reload])
 
-  const act = async (id: string, action: () => Promise<unknown>) => {
+  const act = async (id: number, action: () => Promise<unknown>) => {
     setBusyId(id)
     await run(async () => { await action(); await reload() })
     setBusyId(null)
@@ -49,19 +49,17 @@ export function Schedules({ definitionId }: { definitionId: number }) {
           {schedules.map(s => (
             <Row
               key={s.id}
-              title={<span className="font-normal break-words">{s.data.input}</span>}
+              title={<span className="font-normal break-words">{s.config.input}</span>}
               badges={<>
-                <Badge><code>{s.cron_expression ?? 'once'}</code></Badge>
-                {!s.enabled && <Badge>{s.cron_expression ? 'Paused' : 'Done'}</Badge>}
+                <Badge><code>{s.config.cron}</code></Badge>
+                {!s.enabled && <Badge>{s.state.tripped ? 'Tripped' : 'Paused'}</Badge>}
               </>}
-              meta={[s.enabled && `next ${formatRelativeTime(s.next_scheduled_time)}`]}
+              meta={[s.enabled && `next ${formatRelativeTime(s.next_at)}`, !s.enabled && s.state.tripped?.reason]}
               actions={<>
-                {(s.enabled || s.cron_expression) && (
-                  <Button size="sm" disabled={busyId !== null}
-                    onClick={() => act(s.id, () => saveSchedule({ definitionId, enabled: !s.enabled, taskId: s.id }))}>
-                    {busyId === s.id ? 'Saving...' : s.enabled ? 'Pause' : 'Resume'}
-                  </Button>
-                )}
+                <Button size="sm" disabled={busyId !== null}
+                  onClick={() => act(s.id, () => saveSchedule({ definitionId, enabled: !s.enabled, scheduleId: s.id }))}>
+                  {busyId === s.id ? 'Saving...' : s.enabled ? 'Pause' : 'Resume'}
+                </Button>
                 <ConfirmButton confirm="Delete this schedule and its history?" onConfirm={() => act(s.id, () => deleteSchedule(s.id))} />
               </>}
             />

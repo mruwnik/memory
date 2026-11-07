@@ -28,6 +28,17 @@ describe('Schedules', () => {
     expect(screen.getByRole('button', { name: 'Schedule' }).hasAttribute('disabled')).toBe(!valid)
   })
 
+  it('shows why a tripped schedule paused and resumes it by id', async () => {
+    listSchedules.mockResolvedValue([{
+      id: 5, name: 'schedule-5', config: { cron: '0 9 * * *', input: 'digest' }, next_at: null,
+      enabled: false, state: { tripped: { reason: 'the API key was deleted', at: '2026-11-07T00:00:00Z' } },
+    }])
+    const { user } = renderWithRouter(<Schedules definitionId={1} />)
+    expect(await screen.findByText('the API key was deleted')).toBeTruthy()
+    await user.click(screen.getByRole('button', { name: 'Resume' }))
+    expect(saveSchedule).toHaveBeenCalledWith({ definitionId: 1, enabled: true, scheduleId: 5 })
+  })
+
   it('disables Schedule while saving', async () => {
     saveSchedule.mockReturnValue(new Promise(() => {}))
     const { user } = renderWithRouter(<Schedules definitionId={1} />)

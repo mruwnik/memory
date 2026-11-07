@@ -1,473 +1,378 @@
-"""MCP subserver for scheduled task management."""
+"""MCP subserver for schedules: cron subscriptions, which tick on a cron expression,
+and timers, which fire once. Either sends a message or runs an agent definition."""
 
 import logging
-from datetime import datetime, timezone
+from datetime import timezone
 from typing import Any
 
-from croniter import croniter
 from fastmcp import FastMCP
-from fastmcp.server.dependencies import get_access_token
-from sqlalchemy import nullslast, select
-from sqlalchemy.exc import IntegrityError
+from pydantic import ValidationError
 
+from memory.agents.clock import (
+    CHANNELS,
+    CRON,
+    SKIPPED_CANCELLED,
+    CronConfig,
+    Notify,
+    add_timer,
+    check_cron,
+    finish,
+    pending_timers,
+    schedule_next,
+)
+from memory.agents.spec import MAX_TEXT_CHARS
+from memory.agents.triggers import RESUME, THROTTLED
 from memory.api.auth import token_api_key
 from memory.api.MCP.access import get_mcp_current_user
-from memory.common.access_control import UserProxy
+from memory.api.MCP.servers.agent import (
+    caller,
+    caller_token,
+    check_spec,
+    check_trigger_cap,
+    next_trigger_id,
+    owned_definition,
+    parse_spec,
+    trigger_name,
+)
 from memory.api.MCP.servers.notification_targets import resolve_and_validate_target
 from memory.api.MCP.visibility import READ_ONLY, require_scopes, visible_when
-from memory.common import settings
+from memory.common.access_control import UserProxy
 from memory.common.dates import parse_wall_clock_utc
-from memory.common.db.connection import make_session
-from memory.common.db.models import AgentRun, ScheduledTask, TaskExecution, User
-from memory.common.db.models.scheduled_tasks import TaskType, compute_next_cron
-from memory.common.scopes import SCOPE_SCHEDULE, SCOPE_SCHEDULE_WRITE
+from memory.common.db.connection import DBSession, make_session
+from memory.common.db.models import AgentDefinition, AgentTrigger, APIKey, Event, User
+from memory.common.db.models.events import TICK, TIMER
+from memory.common.scopes import SCOPE_ADMIN, SCOPE_AGENTS, SCOPE_SCHEDULE, SCOPE_SCHEDULE_WRITE
 
 logger = logging.getLogger(__name__)
 
 scheduler_mcp = FastMCP("memory-scheduler")
 
-
-def get_authenticated_user_id() -> int:
-    """Get the authenticated user's ID or raise."""
-    user = get_mcp_current_user()
-    if not user:
-        raise ValueError("Not authenticated")
-    user_id = getattr(user, "id", None)
-    if user_id is None:
-        raise ValueError("User not found")
-    return user_id
+NOTIFY_FIELDS = ("notification_channel", "notification_target", "message", "topic")
 
 
-def current_caller(session) -> UserProxy:
+def current_caller(db: DBSession) -> UserProxy:
     """The caller, with the scopes of the credential they called with."""
-    caller = get_mcp_current_user(session)
-    if caller is None:
+    user = get_mcp_current_user(db)
+    if user is None:
         raise ValueError("Not authenticated")
-    return caller
+    return user
 
 
-def get_owned_task(session, task_id: str, user_id: int) -> ScheduledTask:
-    """Get a scheduled task, verifying ownership."""
-    task = session.get(ScheduledTask, task_id)
-    if not task:
-        raise ValueError("Task not found")
-    if task.user_id != user_id:
-        raise ValueError("Not authorized to access this task")
-    return task
+def owned_schedule(db: DBSession, schedule_id: int, user_id: int) -> AgentTrigger:
+    trigger = db.get(AgentTrigger, schedule_id)
+    if trigger is None or trigger.user_id != user_id or trigger.kind != CRON:
+        raise ValueError(f"unknown schedule {schedule_id}")
+    return trigger
 
 
-@scheduler_mcp.tool(annotations=READ_ONLY)
-@visible_when(require_scopes(SCOPE_SCHEDULE))
-async def list_all(
-    task_type: str | None = None,
-    enabled: bool | None = None,
-    limit: int = 50,
-) -> list[dict[str, Any]]:
-    """
-    List scheduled tasks for the current user.
-
-    Args:
-        task_type: Filter by task type (notification, agent_run)
-        enabled: Filter by enabled status
-        limit: Maximum number of tasks to return (default 50)
-    """
-    user_id = get_authenticated_user_id()
-
-    with make_session() as session:
-        query = session.query(ScheduledTask).filter(ScheduledTask.user_id == user_id)
-
-        if task_type:
-            query = query.filter(ScheduledTask.task_type == task_type)
-        if enabled is not None:
-            query = query.filter(
-                ScheduledTask.enabled if enabled else ~ScheduledTask.enabled
-            )
-
-        tasks = (
-            query.order_by(nullslast(ScheduledTask.next_scheduled_time))
-            .limit(limit)
-            .all()
-        )
-        return [task.serialize() for task in tasks]
+def check_binding(bound_key_id: int | None, key: APIKey | None) -> None:
+    """An API key may change only what it set up."""
+    if key is not None and bound_key_id != key.id:
+        raise ValueError("this schedule was set up through another credential")
 
 
-TASK_TYPES = {t.value for t in TaskType}
-
-def validate_cron_interval(cron_expression: str) -> None:
-    """Validate a standard 5-field cron and enforce MIN_CRON_INTERVAL_MINUTES.
-
-    Raises ValueError on an invalid, non-5-field, or too-frequent expression.
-    """
-    if not croniter.is_valid(cron_expression):
-        raise ValueError("Invalid cron expression")
-    parts = cron_expression.strip().split()
-    if len(parts) != 5:
-        raise ValueError(f"Only 5-field cron expressions supported, got {len(parts)}")
-    cron = croniter(cron_expression)
-    first = cron.get_next(float)
-    second = cron.get_next(float)
-    interval_minutes = (second - first) / 60
-    if interval_minutes < settings.MIN_CRON_INTERVAL_MINUTES:
-        raise ValueError(
-            f"Cron interval too short ({interval_minutes:.0f}m). "
-            f"Minimum is {settings.MIN_CRON_INTERVAL_MINUTES} minutes."
-        )
-
-
-def scheduling_key_id(session) -> int | None:
-    """The API key the caller schedules through (None: a login session), which
-    the work acts with when it fires."""
-    token = get_access_token()
-    key = token_api_key(token.token, session) if token else None
-    return key.id if key else None
-
-
-def check_active_task_cap(session, user_id: int, exclude_id: str | None = None) -> None:
-    query = session.query(ScheduledTask).filter(
-        ScheduledTask.user_id == user_id, ScheduledTask.enabled
-    )
-    if exclude_id is not None:
-        query = query.filter(ScheduledTask.id != exclude_id)
-    if query.count() >= settings.MAX_SCHEDULED_TASKS_PER_USER:
-        raise ValueError(
-            f"Maximum of {settings.MAX_SCHEDULED_TASKS_PER_USER} active "
-            "scheduled tasks per user reached"
-        )
-
-
-NOTIFICATION_CHANNELS = {"discord", "slack", "email"}
-
-
-def validate_notification_channel(notification_channel: str | None) -> None:
-    """Reject unknown notification channels; None means 'unchanged'."""
-    if notification_channel is None:
+def check_pause_binding(db: DBSession, trigger: AgentTrigger, key: APIKey | None) -> None:
+    """Pausing needs the binding too, unless the key it is bound to no longer
+    works: then anyone who owns it may pause it."""
+    bound = db.get(APIKey, trigger.api_key_id) if trigger.api_key_id is not None else None
+    if trigger.via_api_key and (bound is None or not bound.is_valid()):
         return
-    if notification_channel not in NOTIFICATION_CHANNELS:
-        raise ValueError(
-            f"Unknown notification_channel '{notification_channel}'. "
-            f"Must be one of: {', '.join(sorted(NOTIFICATION_CHANNELS))}"
+    check_binding(trigger.api_key_id, key)
+
+
+def checked_input(input: str | None) -> str:
+    if input is None or not input.strip():
+        raise ValueError("input is required to run an agent")
+    if len(input) > MAX_TEXT_CHARS:
+        raise ValueError(f"input is longer than {MAX_TEXT_CHARS} characters")
+    return input
+
+
+async def runnable_definition(db: DBSession, user_id: int, definition_id: int) -> AgentDefinition:
+    """One of the caller's definitions, whose tools they may still use."""
+    _, scopes = caller_token()
+    if not {SCOPE_AGENTS, SCOPE_ADMIN} & set(scopes):
+        raise ValueError("running an agent on a schedule needs the 'agents' scope")
+    definition = owned_definition(db, definition_id, user_id)
+    await check_spec(parse_spec(definition.spec))
+    return definition
+
+
+def notify_handler(db: DBSession, fields: dict[str, str | None]) -> dict[str, Any]:
+    channel, target, message = (fields.get(f) for f in NOTIFY_FIELDS[:3])
+    if not (channel and target and message):
+        raise ValueError("a message needs notification_channel, notification_target and message")
+    if channel not in CHANNELS:
+        raise ValueError(f"notification_channel must be one of: {', '.join(CHANNELS)}")
+    resolved = resolve_and_validate_target(db, current_caller(db), channel, target)
+    try:
+        notify = Notify.model_validate(
+            {"channel": channel, "target": resolved, "message": message, "subject": fields.get("topic")}
         )
+    except ValidationError as e:
+        raise ValueError(f"invalid message: {e}") from e
+    return {"notify": notify.model_dump(exclude_none=True)}
 
 
-def build_scheduled_task(
-    session,
-    user_id: int,
-    *,
-    task_id: str | None,
-    task_type: str | None,
-    enabled: bool | None,
-    cron_expression: str | None,
-    scheduled_time: str | None,
-    topic: str | None,
-    message: str | None,
-    notification_channel: str | None,
-    notification_target: str | None,
-    agent_run: dict[str, Any] | None = None,
-) -> ScheduledTask:
-    """Build (add but do not commit) a new ScheduledTask for upsert's create path.
+def stored_notify_fields(handler: dict[str, Any]) -> dict[str, str | None]:
+    notify = handler.get("notify") or {}
+    return {
+        "notification_channel": notify.get("channel"),
+        "notification_target": notify.get("target"),
+        "message": notify.get("message"),
+        "topic": notify.get("subject"),
+    }
 
-    Supports both task types and both cadences (cron OR one-time). Validates
-    the cadence, the per-user active-task cap, and the type-specific required
-    fields. Honors an explicit task_id and a created-disabled (enabled=False)
-    task. Raises ValueError on any validation failure.
-    """
-    if task_type not in TASK_TYPES:
-        raise ValueError(
-            "Creating a task requires task_type 'notification' "
-            "(agent runs are scheduled with agent_schedule)"
-        )
-    if bool(cron_expression) == bool(scheduled_time):
-        raise ValueError("Provide exactly one of cron_expression or scheduled_time")
 
-    owner_tz = session.get_one(User, user_id).timezone
-    if cron_expression:
-        validate_cron_interval(cron_expression)
-        next_time = compute_next_cron(cron_expression, owner_tz)
-    else:
-        parsed = parse_wall_clock_utc(scheduled_time, owner_tz)
-        if parsed is None:
-            raise ValueError("Invalid datetime format for scheduled_time")
-        if parsed <= datetime.now(timezone.utc).replace(tzinfo=None):
-            raise ValueError("scheduled_time must be in the future")
-        next_time = parsed
+FIRED_TIMERS_LISTED = 50
 
-    if enabled is False and not cron_expression:
-        raise ValueError(
-            "A one-time task cannot be created disabled; enabled=False is only "
-            "meaningful for recurring (cron) tasks."
-        )
 
-    # A created-disabled recurring task gets next_scheduled_time cleared below
-    # and isn't "active", so it can't breach the cap; only enforce when active.
-    if enabled is not False:
-        check_active_task_cap(session, user_id)
-
-    task = ScheduledTask(
-        user_id=user_id,
-        task_type=task_type,
-        topic=topic,
-        cron_expression=cron_expression,
-        next_scheduled_time=next_time,
+def fired_timers(db: DBSession, user_id: int) -> list[Event]:
+    return (
+        db.query(Event)
+        .filter(Event.kind == TIMER, Event.owner_id == user_id, Event.routed_at.is_not(None))
+        .order_by(Event.routed_at.desc(), Event.id.desc())
+        .limit(FIRED_TIMERS_LISTED)
+        .all()
     )
-    if task_id:
-        task.id = task_id
 
-    if task_type == "notification":
-        if not (notification_channel and notification_target and message):
-            raise ValueError(
-                "notification tasks require notification_channel, "
-                "notification_target, and message"
-            )
-        validate_notification_channel(notification_channel)
-        task.message = message
-        task.notification_channel = notification_channel
-        task.notification_target = resolve_and_validate_target(
-            session, current_caller(session), notification_channel, notification_target
-        )
-        task.data = {
-            "notification_type": "notify_user",
-            "subject": topic,
-            "api_key_id": scheduling_key_id(session),
-        }
-    else:
-        if not agent_run:
-            raise ValueError("agent_run tasks require a definition and input")
-        task.data = agent_run
 
-    if enabled is False:
-        # Recurring + disabled (one-time+disabled is rejected above): the hybrid
-        # setter clears next_scheduled_time, so the task is created paused.
-        task.enabled = False
-
-    session.add(task)
-    return task
+def timer_payload(timer: Event) -> dict[str, Any]:
+    return timer.serialize_timer() | {"kind": TIMER}
 
 
 @scheduler_mcp.tool()
 @visible_when(require_scopes(SCOPE_SCHEDULE_WRITE))
 async def upsert(
-    task_id: str | None = None,
-    task_type: str | None = None,
-    enabled: bool | None = None,
     cron_expression: str | None = None,
     scheduled_time: str | None = None,
-    topic: str | None = None,
-    message: str | None = None,
+    definition_id: int | None = None,
+    input: str | None = None,
     notification_channel: str | None = None,
     notification_target: str | None = None,
+    message: str | None = None,
+    topic: str | None = None,
+    name: str | None = None,
+    enabled: bool | None = None,
+    schedule_id: int | None = None,
 ) -> dict[str, Any]:
+    """Create or update a schedule, which sends a message or runs one of your agent definitions.
+
+    Creating takes exactly one of cron_expression (a recurring schedule; 5 fields,
+    at most every MIN_CRON_INTERVAL_MINUTES) or scheduled_time (an ISO datetime:
+    a timer that fires once), both read in your timezone (see meta_get_user)
+    unless the time carries an offset. And either:
+    - notification_channel (discord, slack, email), notification_target and
+      message (topic is the subject), to send a message. The target may be a
+      person's name, identifier or email (resolved to their Discord/Slack id or
+      address), a Discord/Slack channel or user id, or an email address; DM or
+      channel post follows from the id.
+    - definition_id and input, to run that definition with this input (needs the
+      'agents' scope; its tools are checked against your access on every change).
+      A recurring run's trigger_ref has its `time`, `since` (the last tick that was
+      delivered) and `missed` (ticks it stands for that were skipped, e.g. while the
+      server was down; only the latest of those runs, and one more than 6 hours late
+      doesn't run at all).
+
+    With schedule_id, updates that recurring schedule; omitted fields keep their
+    values, and enabled=false alone always pauses it. Schedules act with the
+    credentials that created them (an API key's scopes, if one was used); an API
+    key can only change what it created. A schedule whose credentials stop working
+    pauses itself and notifies you; enabling it again schedules its next tick from
+    now. Recurring schedules count toward AGENT_MAX_TRIGGERS_PER_USER, one-offs
+    toward MAX_TIMERS_PER_USER. Returns the schedule (kind "cron") or timer.
     """
-    Create or update a scheduled task.
-
-    Omit task_id (or pass one that doesn't exist yet) to CREATE a task; pass an
-    existing task_id to UPDATE it in place.
-
-    Creating requires task_type and exactly one of cron_expression (recurring)
-    or scheduled_time (one-time ISO datetime — fires once, then the task is
-    Done). notification tasks also require notification_channel,
-    notification_target, and message.
-    agent_run tasks are created and changed with agent_schedule; here they can
-    only be paused (enabled=False).
-
-    Args:
-        task_id: ID of the task to update. Omit (or pass a fresh id) to create.
-        task_type: "notification" (create only; an existing task's type is immutable).
-        enabled: Whether the task is enabled (disabling clears its next run time).
-        cron_expression: Cron schedule expression (5-field), in the user's
-            timezone (see meta_get_user).
-        scheduled_time: ISO datetime for a one-time task (create only). Without
-            an offset it is read in the user's timezone (see meta_get_user).
-        topic: Topic/subject of the task.
-        message: Notification body.
-        notification_channel: Notification channel (discord, slack, email).
-        notification_target: Who/where to notify, validated and resolved to a
-            concrete id/address before saving (a clear error is returned if it
-            can't be). Accepts a person name/identifier/email (resolved to the
-            person's Discord/Slack id or email), a Discord/Slack channel id, a
-            raw Discord/Slack user id, or an email address. Delivery method
-            (DM vs channel) is derived from the resolved id.
-    """
-    user_id = get_authenticated_user_id()
-
-    with make_session() as session:
-        # A missing id means "create", not "not found" — so this intentionally
-        # diverges from get_owned_task's raise-on-missing.
-        task = session.get(ScheduledTask, task_id) if task_id else None
-        if task and task.user_id != user_id:
-            raise ValueError("Not authorized to access this task")
-
-        if task is None:
-            if task_type == TaskType.AGENT_RUN:
-                raise ValueError("create agent schedules with agent_schedule")
-            task = build_scheduled_task(
-                session,
-                user_id,
-                task_id=task_id,
-                task_type=task_type,
-                enabled=enabled,
-                cron_expression=cron_expression,
-                scheduled_time=scheduled_time,
-                topic=topic,
-                message=message,
-                notification_channel=notification_channel,
-                notification_target=notification_target,
+    user_id, _ = caller()
+    token, _ = caller_token()
+    notify_fields: dict[str, str | None] = dict(zip(NOTIFY_FIELDS, (notification_channel, notification_target, message, topic)))
+    with make_session() as db:
+        key = token_api_key(token, db)
+        if schedule_id is not None:
+            return await update(
+                db, user_id, key, schedule_id, cron_expression, scheduled_time,
+                definition_id, input, notify_fields, name, enabled,
             )
-            created_id = task.id
-            try:
-                session.commit()
-            except IntegrityError as exc:
-                session.rollback()
-                # Only relabel as "already exists" if a row with this id is
-                # actually present; otherwise re-raise so a genuinely different
-                # constraint violation isn't silently mislabeled.
-                if created_id is not None and session.get(ScheduledTask, created_id):
-                    raise ValueError("A task with this id already exists") from exc
-                raise
-            return task.serialize()
-
-        if scheduled_time is not None:
-            raise ValueError(
-                "scheduled_time can only be set when creating a task; to change "
-                "an existing task's schedule use cron_expression."
+        if bool(cron_expression) == bool(scheduled_time):
+            raise ValueError("give exactly one of cron_expression (recurring) or scheduled_time (once)")
+        definition = None
+        if definition_id is not None:
+            if any(notify_fields.values()):
+                raise ValueError("a schedule either runs an agent or sends a message, not both")
+            definition = await runnable_definition(db, user_id, definition_id)
+            handler = {"agent": definition.id}
+            input = checked_input(input)
+        else:
+            handler = notify_handler(db, notify_fields)
+            input = None
+        owner = db.get_one(User, user_id)
+        if scheduled_time:
+            if enabled is False:
+                raise ValueError("a one-off can't be created paused")
+            at = parse_wall_clock_utc(scheduled_time, owner.timezone)
+            if at is None:
+                raise ValueError("invalid datetime format for scheduled_time")
+            timer = add_timer(
+                db, user_id, at.replace(tzinfo=timezone.utc), handler,
+                key.id if key else None, input=input,
             )
-
-        # Capture activeness before any mutation: an update that flips an
-        # inactive task to active (via cron_expression OR enabled=True) must
-        # respect the per-user cap, else create-disabled-then-reactivate would
-        # bypass it. `enabled` is derived from next_scheduled_time, so we check
-        # the transition after the mutations below rather than per-field.
-        was_active = task.enabled
-
-        # Anything but pausing changes what the schedule will run, so it needs
-        # the right to run it (agent_schedule re-checks agents' scopes and tools).
-        changes = (
-            enabled,
-            cron_expression,
-            topic,
-            message,
-            notification_channel,
-            notification_target,
-        ) != (False, None, None, None, None, None)
-        if task.task_type == TaskType.AGENT_RUN and changes:
-            raise ValueError(
-                "agent schedules can only be paused here; change them with agent_schedule"
-            )
-
-        if cron_expression is not None:
-            validate_cron_interval(cron_expression)
-            task.cron_expression = cron_expression
-            task.next_scheduled_time = compute_next_cron(
-                cron_expression, task.user.timezone
-            )
-
-        if enabled is not None:
-            task.enabled = enabled
-        if topic is not None:
-            task.topic = topic
-        if message is not None:
-            task.message = message
-        channel_changed = (
-            notification_channel is not None
-            and notification_channel != task.notification_channel
+            return timer_payload(timer)
+        config = CronConfig(cron=check_cron(cron_expression or ""), input=input or "")
+        if enabled is not False:
+            check_trigger_cap(db, user_id, exclude_id=None)
+        trigger = AgentTrigger(
+            id=next_trigger_id(db),
+            user_id=user_id,
+            kind=CRON,
+            state={},
+            handler=handler,
+            definition_id=definition.id if definition else None,
+            config=config.model_dump(),
+            enabled=enabled is not False,
+            api_key_id=key.id if key else None,
+            via_api_key=key is not None,
         )
-        if notification_channel is not None:
-            validate_notification_channel(notification_channel)
-            task.notification_channel = notification_channel
-        if notification_target is not None:
-            if not task.notification_channel:
-                raise ValueError("notification_target requires a notification_channel")
-            task.notification_target = resolve_and_validate_target(
-                session, current_caller(session), task.notification_channel, notification_target
-            )
-        elif channel_changed and task.notification_target and task.notification_channel:
-            # The stored target was validated for the OLD channel; a channel
-            # change must re-resolve it (or surface a clear error) rather than
-            # leave a target that silently breaks at dispatch.
-            task.notification_target = resolve_and_validate_target(
-                session, current_caller(session), task.notification_channel, task.notification_target
-            )
-
-        if task.task_type == TaskType.NOTIFICATION and changes:
-            task.data = {**(task.data or {}), "api_key_id": scheduling_key_id(session)}
-
-        if task.enabled and not was_active:
-            # This update re-activated a previously-inactive task — enforce the
-            # active-task cap (excluding this task itself).
-            check_active_task_cap(session, user_id, exclude_id=task.id)
-
-        session.commit()
-        return task.serialize()
+        trigger.name = trigger_name(db, user_id, name or f"schedule-{trigger.id}", trigger.id)
+        if trigger.enabled:
+            schedule_next(trigger, owner.timezone)
+        db.add(trigger)
+        db.flush()
+        return trigger.serialize()
 
 
-@scheduler_mcp.tool()
-@visible_when(require_scopes(SCOPE_SCHEDULE))
-async def cancel(task_id: str) -> dict[str, Any]:
-    """
-    Cancel (disable) a scheduled task.
-
-    Args:
-        task_id: The ID of the task to cancel
-    """
-    user_id = get_authenticated_user_id()
-
-    with make_session() as session:
-        task = get_owned_task(session, task_id, user_id)
-        task.enabled = False
-        session.commit()
-        return {"success": True, "task": task.serialize()}
-
-
-@scheduler_mcp.tool()
-@visible_when(require_scopes(SCOPE_SCHEDULE_WRITE))
-async def delete(task_id: str) -> dict[str, Any]:
-    """
-    Permanently delete a scheduled task and its execution history.
-
-    Args:
-        task_id: The ID of the task to delete
-    """
-    user_id = get_authenticated_user_id()
-
-    with make_session() as session:
-        task = get_owned_task(session, task_id, user_id)
-        session.delete(task)
-        session.commit()
-        return {"deleted": True, "task_id": task_id}
+async def update(
+    db: DBSession,
+    user_id: int,
+    key: APIKey | None,
+    schedule_id: int,
+    cron_expression: str | None,
+    scheduled_time: str | None,
+    definition_id: int | None,
+    input: str | None,
+    notify_fields: dict[str, str | None],
+    name: str | None,
+    enabled: bool | None,
+) -> dict[str, Any]:
+    trigger = owned_schedule(db, schedule_id, user_id)
+    changes = (cron_expression, scheduled_time, definition_id, input, name, *notify_fields.values())
+    # Pausing never re-checks the definition or access: it must work after they're lost.
+    if enabled is False and not any(c is not None for c in changes):
+        check_pause_binding(db, trigger, key)
+        trigger.enabled, trigger.next_at = False, None
+        db.flush()
+        return trigger.serialize()
+    check_binding(trigger.api_key_id, key)
+    if scheduled_time is not None:
+        raise ValueError("scheduled_time only creates a one-off; change a schedule's cron_expression")
+    config = dict(trigger.config)
+    if cron_expression is not None:
+        config["cron"] = check_cron(cron_expression)
+    if any(v is not None for v in notify_fields.values()):
+        if definition_id is not None:
+            raise ValueError("a schedule either runs an agent or sends a message, not both")
+        merged = stored_notify_fields(trigger.handler) | {
+            k: v for k, v in notify_fields.items() if v is not None
+        }
+        trigger.handler, trigger.definition_id = notify_handler(db, merged), None
+        config.pop("input", None)
+    elif definition_id is not None or "agent" in trigger.handler:
+        definition = await runnable_definition(
+            db, user_id, definition_id if definition_id is not None else trigger.handler["agent"]
+        )
+        trigger.handler, trigger.definition_id = {"agent": definition.id}, definition.id
+        config["input"] = checked_input(input if input is not None else config.get("input"))
+    elif input is not None:
+        raise ValueError("input only applies to schedules that run an agent")
+    trigger.config = CronConfig.model_validate(config).model_dump()
+    if name is not None:
+        trigger.name = trigger_name(db, user_id, name, trigger.id)
+    was_enabled = trigger.enabled
+    trigger.enabled = was_enabled if enabled is None else enabled
+    if trigger.enabled and not was_enabled:
+        check_trigger_cap(db, user_id, exclude_id=trigger.id)
+        stale = {"tripped", "failures", THROTTLED, RESUME}
+        trigger.state = {k: v for k, v in (trigger.state or {}).items() if k not in stale}
+    if not trigger.enabled:
+        trigger.next_at = None
+    elif not was_enabled or cron_expression is not None:
+        schedule_next(trigger, db.get_one(User, user_id).timezone)
+    db.flush()
+    return trigger.serialize()
 
 
 @scheduler_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_SCHEDULE))
-async def executions(
-    task_id: str,
-    limit: int = 10,
-) -> list[dict[str, Any]]:
-    """
-    Get execution history for a scheduled task.
+async def list_all(definition_id: int | None = None, include_fired: bool = False) -> dict[str, Any]:
+    """Your recurring schedules and the timers still waiting to fire; with
+    definition_id, only those that run that agent definition. include_fired adds
+    `fired`: the latest FIRED_TIMERS_LISTED timers that ended, newest first, each
+    with its `result` (sent, done with the run_id, failed with the error, or
+    skipped:<reason>; `late_sec` when it went out late)."""
+    user_id, _ = caller()
+    with make_session() as db:
+        query = db.query(AgentTrigger).filter(
+            AgentTrigger.user_id == user_id, AgentTrigger.kind == CRON
+        )
+        timers = pending_timers(db, user_id)
+        fired = fired_timers(db, user_id) if include_fired else []
+        if definition_id is not None:
+            query = query.filter(AgentTrigger.definition_id == definition_id)
+            timers = [t for t in timers if (t.handler or {}).get("agent") == definition_id]
+            fired = [t for t in fired if (t.handler or {}).get("agent") == definition_id]
+        listed = {
+            "schedules": [t.serialize() for t in query.order_by(AgentTrigger.id)],
+            "timers": [timer_payload(t) for t in timers],
+        }
+        return listed | ({"fired": [timer_payload(t) for t in fired]} if include_fired else {})
 
-    Args:
-        task_id: The ID of the task
-        limit: Maximum number of executions to return (default 10)
-    """
-    user_id = get_authenticated_user_id()
 
-    with make_session() as session:
-        task = get_owned_task(session, task_id, user_id)
+@scheduler_mcp.tool()
+@visible_when(require_scopes(SCOPE_SCHEDULE_WRITE))
+async def delete(schedule_id: int | None = None, timer_id: int | None = None) -> dict[str, Any]:
+    """Delete one of your recurring schedules (and its tick history), or cancel a timer."""
+    if (schedule_id is None) == (timer_id is None):
+        raise ValueError("give exactly one of schedule_id or timer_id")
+    user_id, _ = caller()
+    token, _ = caller_token()
+    with make_session() as db:
+        key = token_api_key(token, db)
+        if schedule_id is not None:
+            trigger = owned_schedule(db, schedule_id, user_id)
+            check_binding(trigger.api_key_id, key)
+            db.delete(trigger)
+            return {"deleted": schedule_id}
+        timer = db.get(Event, timer_id, with_for_update=True)
+        if timer is None or timer.kind != TIMER or timer.owner_id != user_id:
+            raise ValueError(f"unknown timer {timer_id}")
+        if timer.routed_at is not None:
+            raise ValueError(f"timer {timer_id} already fired")
+        check_binding((timer.data or {}).get("api_key_id"), key)
+        finish(timer, SKIPPED_CANCELLED)
+        return {"cancelled": timer_id}
 
-        results = (
-            session.query(TaskExecution)
-            .filter(TaskExecution.task_id == task.id)
-            .order_by(TaskExecution.scheduled_time.desc())
-            .limit(limit)
+
+@scheduler_mcp.tool(annotations=READ_ONLY)
+@visible_when(require_scopes(SCOPE_SCHEDULE))
+async def history(schedule_id: int, limit: int = 10) -> list[dict[str, Any]]:
+    """A recurring schedule's latest ticks: when each was due, how many it stood for
+    that were skipped (`missed`), and its `result`: sent, done (with the run_id),
+    failed (with the error) or skipped:<reason> (late, disabled, coalesced into a
+    later tick, or a cap). A tick without a result hasn't been delivered yet."""
+    user_id, _ = caller()
+    with make_session() as db:
+        owned_schedule(db, schedule_id, user_id)
+        ticks = (
+            db.query(Event)
+            .filter(Event.kind == TICK, Event.trigger_id == schedule_id)
+            .order_by(Event.fire_at.desc())
+            .limit(max(1, min(limit, 100)))
             .all()
         )
-        # An agent run's execution outlives the run, which retention deletes.
-        run_ids = {e.id: (e.data or {}).get("run_id") for e in results}
-        kept = set(
-            session.scalars(
-                select(AgentRun.id).where(AgentRun.id.in_([r for r in run_ids.values() if r]))
-            )
-        )
         return [
-            e.serialize() | ({"run_expired": run_ids[e.id] not in kept} if run_ids[e.id] else {})
-            for e in results
+            {
+                "id": t.id,
+                "time": t.fire_at.isoformat() if t.fire_at else None,
+                "missed": (t.data or {}).get("missed", 0),
+                "result": t.result,
+            }
+            for t in ticks
         ]

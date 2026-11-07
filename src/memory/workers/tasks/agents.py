@@ -11,7 +11,7 @@ from memory.common import module_settings, settings
 from memory.common.celery_app import (
     FIRE_TRIGGER,
     RUN_AGENT,
-    START_CRON_RUN,
+    START_TIME_RUN,
     SWEEP_WORKER_RUNS,
     app,
 )
@@ -53,13 +53,13 @@ def fire_trigger(trigger_id: int, deliveries: list[str]) -> str | None:
     return fire(trigger_id, deliveries)
 
 
-@app.task(name=START_CRON_RUN)
-def start_cron_run(execution_id: str) -> str | None:
-    """Start the run for a due agent_run ScheduledTask execution."""
+@app.task(name=START_TIME_RUN)
+def start_time_run(event_id: int) -> str | None:
+    """Start the agent run of a due tick or timer."""
     follow_module_flags()
-    from memory.agents.cron import start_cron_run as start
+    from memory.agents.cron import start_time_run as start
 
-    return start(execution_id)
+    return start(event_id)
 
 
 @app.task(name=SWEEP_WORKER_RUNS)

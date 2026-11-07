@@ -100,7 +100,6 @@ def clear_item_chunks(item: SourceItem, session) -> int:
 TASK_LOGGED_PARAMS: dict[str, list[str]] = {
     "sync_account": ["account_id"],
     "process_message": ["account_id", "message_id"],
-    "execute_scheduled_call": ["scheduled_call_id"],
     "sync_lesswrong": ["since_date"],
     "sync_github_repo": ["repo_id"],
     "sync_google_account": ["account_id"],

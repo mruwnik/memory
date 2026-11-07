@@ -39,7 +39,6 @@ export const NAV_SECTIONS: NavSection[] = [
       { to: '/metrics', title: 'Metrics', description: 'System health, task performance, and API usage' },
       { to: '/usage', title: 'Usage', description: 'LLM cost and tokens by source, model, agent, key and user' },
       { to: '/jobs', title: 'Jobs', description: 'View background job status and retry failed jobs' },
-      { to: '/scheduled-tasks', title: 'Scheduled tasks', description: 'Manage automated notifications and agent runs' },
       { to: '/celery', title: 'Celery tasks', description: 'Beat schedule status and ingestion overview', scope: 'admin' },
       { to: '/server-settings', title: 'Server settings', description: 'Voyage key, modules, MCP servers and search limits for this server', scope: 'admin' },
       { to: '/ssh-keys', title: 'SSH keys', description: 'Manage SSH identities for Notes' },

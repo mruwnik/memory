@@ -363,7 +363,7 @@ const UserManagement = () => {
               />
             </Field>
 
-            <Field label="Timezone" hint="Their scheduled tasks and agent schedules run on this clock. Pick one or type any IANA name.">
+            <Field label="Timezone" hint="Their schedules run on this clock. Pick one or type any IANA name.">
               <TimezoneCombobox value={editForm.timezone || ''} onChange={(timezone) => setEditForm({ ...editForm, timezone })} />
             </Field>
 

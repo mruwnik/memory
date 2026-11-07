@@ -43,7 +43,6 @@ vi.mock('@/components', () => ({
   NotesPage: () => <div>NOTES</div>,
   Jobs: () => <div>JOBS</div>,
   CeleryOverview: () => <div>CELERY</div>,
-  ScheduledTasks: () => <div>SCHEDULED</div>,
   ReportsPage: () => <div>REPORTS</div>,
   ForgotPassword: () => <div>FORGOT_PASSWORD</div>,
   ResetPassword: () => <div>RESET_PASSWORD</div>,

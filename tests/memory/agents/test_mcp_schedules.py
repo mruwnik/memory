@@ -1,249 +1,104 @@
+"""Schedules that run an agent definition, through the scheduler tools."""
 # pyright: reportFunctionMemberAccess=false
-from datetime import datetime
 
 import pytest
 
 from memory.api.MCP.servers import agent, scheduler
-from memory.common import settings
-from memory.common.db.models import (
-    AgentDefinition,
-    AgentRun,
-    APIKey,
-    ScheduledTask,
-    TaskExecution,
-)
+from memory.common.db.models import AgentDefinition, AgentTrigger, APIKey, Event
 from tests.conftest import mcp_auth_context
 
 SPEC = {"system_prompt": "x", "model": "anthropic/m", "reasoning": "high"}
 
 
-def definition(db, user, spec=SPEC):
-    d = AgentDefinition(user_id=user.id, name="d", spec=spec)
+@pytest.fixture(autouse=True)
+def may_run_agents(db_session, regular_user):
+    regular_user.scopes = ["agents", "schedule", "schedule:write"]
+    db_session.commit()
+
+
+def definition(db, user, spec=SPEC, name="d"):
+    d = AgentDefinition(user_id=user.id, name=name, spec=spec)
     db.add(d)
     db.commit()
     return d
 
 
 @pytest.mark.asyncio
-async def test_schedule_creates_lists_updates_and_deletes(
+async def test_an_agent_schedule_is_created_updated_listed_and_goes_with_its_definition(
     db_session, regular_user, user_session, fake_providers
 ):
     d = definition(db_session, regular_user)
+    other = definition(db_session, regular_user, name="other")
 
     with mcp_auth_context(user_session.token):
-        created = await agent.schedule.fn(
-            definition_id=d.id, input="digest", cron_expression="0 9 * * *"
+        created = await scheduler.upsert.fn(definition_id=d.id, input="digest", cron_expression="0 9 * * *")
+        updated = await scheduler.upsert.fn(
+            schedule_id=created["id"], input="weekly digest", cron_expression="0 9 * * 1"
         )
-        updated = await agent.schedule.fn(
-            definition_id=d.id,
-            task_id=created["id"],
-            input="weekly digest",
-            cron_expression="0 9 * * 1",
-            enabled=False,
-        )
-        listed = await agent.schedules.fn(definition_id=d.id)
-        await agent.unschedule.fn(task_id=created["id"])
+        listed = await scheduler.list_all.fn(definition_id=d.id)
+        elsewhere = await scheduler.list_all.fn(definition_id=other.id)
+        ingest_triggers = await agent.triggers.fn(definition_id=d.id)
+        await agent.delete.fn(definition_id=d.id)
 
-    assert (created["task_type"], created["data"], created["enabled"]) == (
-        "agent_run",
-        {"definition_id": d.id, "api_key_id": None, "input": "digest"},
-        True,
+    assert (created["handler"], created["definition_id"], created["config"]) == (
+        {"agent": d.id}, d.id, {"cron": "0 9 * * *", "input": "digest"},
     )
-    assert (updated["data"]["input"], updated["cron_expression"], updated["enabled"]) == (
-        "weekly digest",
-        "0 9 * * 1",
-        False,
-    )
-    assert [t["id"] for t in listed["schedules"]] == [created["id"]]
-    assert db_session.query(ScheduledTask).count() == 0
+    assert updated["config"] == {"cron": "0 9 * * 1", "input": "weekly digest"}
+    assert ([s["id"] for s in listed["schedules"]], elsewhere["schedules"]) == ([created["id"]], [])
+    assert ingest_triggers == {"triggers": []}
+    assert db_session.query(AgentTrigger).count() == 0
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "kwargs,expected",
+    "kwargs, expected",
     [
-        ({"cron_expression": "*/1 * * * *"}, "too short"),
-        ({}, "exactly one of cron_expression or scheduled_time"),
         ({"cron_expression": "0 9 * * *", "input": ""}, "input is required"),
+        ({"cron_expression": "0 9 * * *", "input": "x", "definition_id": 999_999}, "unknown agent definition"),
     ],
 )
-async def test_schedule_validates(
+async def test_an_agent_schedule_is_validated(
     db_session, regular_user, user_session, fake_providers, kwargs, expected
 ):
     d = definition(db_session, regular_user)
 
     with mcp_auth_context(user_session.token):
         with pytest.raises(ValueError, match=expected):
-            await agent.schedule.fn(definition_id=d.id, **({"input": "x"} | kwargs))
+            await scheduler.upsert.fn(**({"definition_id": d.id} | kwargs))
 
 
 @pytest.mark.asyncio
-async def test_schedule_counts_toward_the_task_cap(
-    db_session, regular_user, user_session, fake_providers, monkeypatch
+async def test_running_an_agent_on_a_schedule_needs_the_agents_scope(
+    db_session, regular_user, fake_providers
 ):
-    monkeypatch.setattr(settings, "MAX_SCHEDULED_TASKS_PER_USER", 1)
     d = definition(db_session, regular_user)
-
-    with mcp_auth_context(user_session.token):
-        await agent.schedule.fn(definition_id=d.id, input="a", cron_expression="0 9 * * *")
-        with pytest.raises(ValueError, match="Maximum"):
-            await agent.schedule.fn(
-                definition_id=d.id, input="b", cron_expression="0 10 * * *"
-            )
-
-
-@pytest.mark.asyncio
-async def test_other_users_definitions_and_schedules_are_unknown(
-    db_session, admin_user, regular_user, user_session, fake_providers
-):
-    theirs = definition(db_session, admin_user)
-    task = ScheduledTask(
-        user_id=admin_user.id,
-        task_type="agent_run",
-        cron_expression="0 9 * * *",
-        data={"definition_id": theirs.id, "input": "x"},
-    )
-    db_session.add(task)
+    key = APIKey.create(user_id=regular_user.id, scopes=["schedule", "schedule:write"])
+    db_session.add(key)
     db_session.commit()
 
-    with mcp_auth_context(user_session.token):
-        with pytest.raises(ValueError, match="unknown agent definition"):
-            await agent.schedule.fn(
-                definition_id=theirs.id, input="x", cron_expression="0 9 * * *"
-            )
-        with pytest.raises(ValueError, match="unknown agent definition"):
-            await agent.schedules.fn(definition_id=theirs.id)
-        with pytest.raises(ValueError, match="unknown schedule"):
-            await agent.unschedule.fn(task_id=task.id)
+    with mcp_auth_context(key.key, scopes=["schedule", "schedule:write"]):
+        with pytest.raises(ValueError, match="'agents' scope"):
+            await scheduler.upsert.fn(definition_id=d.id, input="x", cron_expression="0 9 * * *")
 
 
 @pytest.mark.asyncio
-async def test_schedules_are_paused_and_resumed_without_restating_input(
-    db_session, regular_user, user_session, fake_providers
-):
-    d = definition(db_session, regular_user)
-
-    with mcp_auth_context(user_session.token):
-        created = await agent.schedule.fn(
-            definition_id=d.id, input="digest", cron_expression="0 9 * * *"
-        )
-        paused = await agent.schedule.fn(
-            definition_id=d.id, task_id=created["id"], enabled=False
-        )
-        resumed = await agent.schedule.fn(
-            definition_id=d.id, task_id=created["id"], enabled=True
-        )
-
-    assert (paused["enabled"], resumed["enabled"]) == (False, True)
-    assert resumed["data"]["input"] == "digest"
-
-
-@pytest.mark.asyncio
-async def test_resuming_respects_the_task_cap(
-    db_session, regular_user, user_session, fake_providers, monkeypatch
-):
-    d = definition(db_session, regular_user)
-    with mcp_auth_context(user_session.token):
-        paused = await agent.schedule.fn(
-            definition_id=d.id, input="a", cron_expression="0 9 * * *", enabled=False
-        )
-        await agent.schedule.fn(definition_id=d.id, input="b", cron_expression="0 10 * * *")
-    monkeypatch.setattr(settings, "MAX_SCHEDULED_TASKS_PER_USER", 1)
-
-    with mcp_auth_context(user_session.token):
-        with pytest.raises(ValueError, match="Maximum"):
-            await agent.schedule.fn(definition_id=d.id, task_id=paused["id"], enabled=True)
-
-
-@pytest.mark.asyncio
-async def test_renaming_the_definition_refreshes_the_topic_on_update(
+async def test_agent_trigger_tools_leave_schedules_alone(
     db_session, regular_user, user_session, fake_providers
 ):
     d = definition(db_session, regular_user)
     with mcp_auth_context(user_session.token):
-        created = await agent.schedule.fn(
-            definition_id=d.id, input="a", cron_expression="0 9 * * *"
-        )
-        d.name = "renamed"
-        db_session.commit()
-        updated = await agent.schedule.fn(definition_id=d.id, task_id=created["id"], input="b")
-
-    assert (created["topic"], updated["topic"]) == ("agent: d", "agent: renamed")
+        created = await scheduler.upsert.fn(definition_id=d.id, input="x", cron_expression="0 9 * * *")
+        with pytest.raises(ValueError, match="unknown trigger"):
+            await agent.trigger_delete.fn(trigger_id=created["id"])
 
 
 @pytest.mark.asyncio
-async def test_deleting_a_definition_deletes_its_schedules(
+async def test_deleting_a_definition_cancels_its_waiting_timers(
     db_session, regular_user, user_session, fake_providers
 ):
     d = definition(db_session, regular_user)
     with mcp_auth_context(user_session.token):
-        await agent.schedule.fn(definition_id=d.id, input="a", cron_expression="0 9 * * *")
+        timer = await scheduler.upsert.fn(definition_id=d.id, input="x", scheduled_time="2999-01-01T09:00:00Z")
         await agent.delete.fn(definition_id=d.id)
 
-    assert db_session.query(ScheduledTask).count() == 0
-
-
-def scoped_key(db, user, scopes):
-    key = APIKey.create(user_id=user.id, name="k", scopes=scopes)
-    db.add(key)
-    db.commit()
-    return key
-
-
-@pytest.mark.asyncio
-async def test_a_key_cannot_schedule_tools_it_could_not_run(
-    db_session, regular_user, fake_providers
-):
-    d = definition(db_session, regular_user, SPEC | {"tools": ["core_search"]})
-    key = scoped_key(db_session, regular_user, ["agents"])
-
-    with mcp_auth_context(key.key, scopes=["agents"]):
-        with pytest.raises(ValueError, match="tool 'core_search' is not visible to you"):
-            await agent.schedule.fn(
-                definition_id=d.id, input="a", cron_expression="0 9 * * *"
-            )
-
-
-@pytest.mark.asyncio
-async def test_a_schedule_remembers_the_key_that_made_it(
-    db_session, regular_user, fake_providers
-):
-    d = definition(db_session, regular_user, SPEC | {"tools": ["core_search"]})
-    key = scoped_key(db_session, regular_user, ["agents", "read"])
-
-    with mcp_auth_context(key.key, scopes=["agents", "read"]):
-        created = await agent.schedule.fn(
-            definition_id=d.id, input="a", cron_expression="0 9 * * *"
-        )
-
-    assert created["data"]["api_key_id"] == key.id
-
-
-@pytest.mark.asyncio
-async def test_executions_mark_runs_that_retention_deleted(
-    db_session, regular_user, user_session, fake_providers
-):
-    d = definition(db_session, regular_user)
-    with mcp_auth_context(user_session.token):
-        task = await agent.schedule.fn(definition_id=d.id, input="x", cron_expression="0 9 * * *")
-    kept = AgentRun(
-        user_id=regular_user.id, spec=SPEC, input="x", max_cost_usd=1, trigger_kind="cron"
-    )
-    db_session.add(kept)
-    db_session.commit()
-    for run_id in (kept.id, "purged-run"):
-        db_session.add(
-            TaskExecution(
-                task_id=task["id"], scheduled_time=datetime.now(), status="completed",
-                data={"run_id": run_id},
-            )
-        )
-    db_session.commit()
-
-    with mcp_auth_context(user_session.token):
-        listed = await scheduler.executions.fn(task_id=task["id"])
-
-    assert {e["data"]["run_id"]: e["run_expired"] for e in listed} == {
-        kept.id: False,
-        "purged-run": True,
-    }
+    assert db_session.get_one(Event, timer["id"]).result == {"status": "skipped:cancelled"}

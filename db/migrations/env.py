@@ -35,6 +35,9 @@ target_metadata = Base.metadata
 excluded_tables = {
     "celery_taskmeta",
     "celery_tasksetmeta",
+    # Converted by 20261213_time_events; kept until their drop is released.
+    "scheduled_tasks",
+    "task_executions",
 }
 
 

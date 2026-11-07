@@ -48,7 +48,7 @@ const STEPS: Step[] = [
   {
     value: 'timezone',
     title: 'Timezone',
-    description: 'Used for your scheduled tasks and agent schedules.',
+    description: 'Used for your schedules and reminders.',
   },
 ]
 
