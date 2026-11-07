@@ -125,12 +125,12 @@ def test_message_create_stores_message_with_placeholder_server_and_channel(
     assert db_session.get(DiscordUser, int(AUTHOR)).display_name == "Alice"
 
 
-def test_direct_messages_are_stored(db_session, webhook_bot, qdrant):
-    handle(webhook_bot, "MESSAGE_CREATE", message_create(guild_id=None))
+def test_direct_messages_are_not_stored_by_default(db_session, webhook_bot, qdrant):
+    result = handle(webhook_bot, "MESSAGE_CREATE", message_create(guild_id=None))
 
     channel = db_session.get(DiscordChannel, int(CHANNEL))
-    assert (channel.channel_type, channel.server_id, channel.should_collect) == ("dm", None, True)
-    assert stored(db_session).server_id is None
+    assert (channel.channel_type, channel.server_id, channel.should_collect) == ("dm", None, False)
+    assert (result["status"], db_session.query(DiscordMessage).count()) == ("skipped", 0)
 
 
 def test_a_server_switched_off_is_not_stored(db_session, webhook_bot, qdrant):

@@ -1,18 +1,25 @@
+import json
+import re
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime
-from typing import cast
+from typing import Any, cast
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
+    ForeignKey,
     Index,
     Integer,
     Text,
+    text,
     event,
     inspect,
 )
-from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, insert
 from sqlalchemy.orm import Mapped, Session, mapped_column
 from sqlalchemy.sql import func
 
@@ -20,9 +27,13 @@ from memory.common.db.models.base import Base
 from memory.common.db.models.source_item import SourceItem
 
 ITEM = "item"
+RAW = "raw"
+STORED, NOT_COLLECTED, NO_ITEM_TYPE, REJECTED = "stored", "not_collected", "no_item_type", "rejected"
 ADDED, CHANGED, REMOVED = "added", "changed", "removed"
 # session.info key: ids of the items this transaction inserted.
 INSERTED_ITEMS_KEY = "_inserted_source_items"
+# The raw event behind the task running now; item events it writes link it.
+CAUSING_EVENT: ContextVar[int | None] = ContextVar("causing_event", default=None)
 
 
 class Event(Base):
@@ -48,6 +59,22 @@ class Event(Base):
     )
     routed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    # Raw events: one webhook delivery, visible only to its source account's owner.
+    source: Mapped[str | None] = mapped_column(Text)
+    type: Mapped[str | None] = mapped_column(Text)
+    # The id of the source's account row: GithubAccount, SlackApp, DiscordBot or TranscriptAccount.
+    account_id: Mapped[int | None] = mapped_column(BigInteger)
+    # The repo or channel the delivery is about, in the provider's ids.
+    container: Mapped[str | None] = mapped_column(Text)
+    delivery_id: Mapped[str | None] = mapped_column(Text)
+    owner_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"))
+    outcome: Mapped[str | None] = mapped_column(Text)
+    # Untrusted, and kept only by deliveries nothing stores (see record_raw_event),
+    # until settings.EVENT_RAW_PAYLOAD_DAYS; deferred so routing never loads it.
+    payload: Mapped[Any] = mapped_column(JSONB(none_as_null=True), deferred=True)
+    # No foreign key: a job replayed after its raw event was purged still stores its items.
+    caused_by: Mapped[int | None] = mapped_column(BigInteger)
+
     __table_args__ = (
         CheckConstraint("kind IN ('item', 'raw', 'tick', 'timer')", name="events_kind_check"),
         CheckConstraint(
@@ -55,9 +82,100 @@ class Event(Base):
             "AND action IN ('added', 'changed', 'removed'))",
             name="events_item_check",
         ),
+        CheckConstraint(
+            "outcome IN ('stored', 'not_collected', 'no_item_type', 'rejected')",
+            name="events_outcome_check",
+        ),
+        CheckConstraint(
+            "kind <> 'raw' OR (source IS NOT NULL AND type IS NOT NULL AND account_id IS NOT NULL "
+            "AND delivery_id IS NOT NULL AND outcome IS NOT NULL)",
+            name="events_raw_check",
+        ),
         Index("events_pending_idx", "id", postgresql_where=routed_at.is_(None)),
         Index("events_routed_at_idx", "routed_at"),
+        Index(
+            "events_delivery_idx", "source", "account_id", "delivery_id", unique=True, postgresql_where=kind == RAW
+        ),
+        Index("events_account_idx", "source", "account_id", "id", postgresql_where=kind == RAW),
+        Index("events_caused_by_idx", "caused_by", postgresql_where=caused_by.is_not(None)),
+        Index("events_payload_age_idx", "created_at", postgresql_where=text("payload IS NOT NULL")),
     )
+
+
+MAX_RAW_PAYLOAD_BYTES = 256 * 1024
+UNSTORABLE_CHARS = re.compile("[\x00\ud800-\udfff]")
+
+
+def storable(value: Any) -> Any:
+    """`value` without the NULs and lone surrogates JSONB rejects."""
+    if isinstance(value, str):
+        return UNSTORABLE_CHARS.sub("", value)
+    if isinstance(value, dict):
+        return {storable(k): storable(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [storable(v) for v in value]
+    return value
+
+
+def kept_payload(outcome: str, payload: Any) -> Any:
+    """What a raw event keeps of its delivery's payload. Only a delivery that
+    stores nothing keeps it, since nothing else holds what it said; an oversized
+    or too deeply nested one keeps only a marker."""
+    if outcome != NO_ITEM_TYPE or payload is None:
+        return None
+    try:
+        payload = storable(payload)
+        size = len(json.dumps(payload))
+    except RecursionError:
+        return {"truncated": True}
+    return payload if size <= MAX_RAW_PAYLOAD_BYTES else {"truncated": True, "bytes": size}
+
+
+def record_raw_event(
+    db: Session,
+    *,
+    source: str,
+    event_type: str,
+    account_id: int,
+    owner_id: int | None,
+    delivery_id: str,
+    outcome: str,
+    container: str | None = None,
+    payload: Any = None,
+) -> int | None:
+    """Add, uncommitted, the raw event for one delivery; None when the account
+    already recorded `delivery_id`. Until the caller commits, a concurrent repeat
+    of the delivery waits on this one."""
+    values = dict(
+        kind=RAW,
+        source=source,
+        type=event_type,
+        account_id=account_id,
+        owner_id=owner_id,
+        delivery_id=delivery_id,
+        outcome=outcome,
+        container=container,
+        payload=kept_payload(outcome, payload),
+    )
+    statement = (
+        insert(Event)
+        .values(**values)
+        .on_conflict_do_nothing(
+            index_elements=["source", "account_id", "delivery_id"], index_where=Event.kind == RAW
+        )
+        .returning(Event.id)
+    )
+    return db.scalar(statement)
+
+
+@contextmanager
+def caused_by_event(event_id: int | None) -> Iterator[None]:
+    """Link the item events written inside this block to raw event `event_id`."""
+    token = CAUSING_EVENT.set(event_id)
+    try:
+        yield
+    finally:
+        CAUSING_EVENT.reset(token)
 
 
 def item_event(
@@ -67,7 +185,14 @@ def item_event(
     history import stored it."""
     inserted = session.info.get(INSERTED_ITEMS_KEY, set())
     action = ADDED if item.id in inserted else CHANGED
-    return Event(kind=ITEM, action=action, item_id=item.id, changes=changes, backfill=backfill)
+    return Event(
+        kind=ITEM,
+        action=action,
+        item_id=item.id,
+        changes=changes,
+        backfill=backfill,
+        caused_by=CAUSING_EVENT.get(),
+    )
 
 
 @event.listens_for(Session, "before_flush")
@@ -75,7 +200,12 @@ def record_removed_items(session, flush_context, instances):
     """Every ORM delete of an item writes its removed event in the same flush."""
     session.add_all(
         # The identity, as reading obj.id can reload a row that is already gone.
-        Event(kind=ITEM, action=REMOVED, item_id=cast(tuple, inspect(obj).identity)[0])
+        Event(
+            kind=ITEM,
+            action=REMOVED,
+            item_id=cast(tuple, inspect(obj).identity)[0],
+            caused_by=CAUSING_EVENT.get(),
+        )
         for obj in session.deleted
         if isinstance(obj, SourceItem)
     )

@@ -641,14 +641,6 @@ def purge_matches(db: DBSession, older_than: timedelta) -> int:
     return deleted
 
 
-def purge_events(db: DBSession, older_than: timedelta) -> int:
-    """Forget events routed more than `older_than` ago."""
-    cutoff = datetime.now(timezone.utc) - older_than
-    deleted = db.query(Event).filter(Event.routed_at < cutoff).delete(synchronize_session=False)
-    db.commit()
-    return deleted
-
-
 def send(trigger_id: int, refs: list[str]) -> None:
     """Hand deliveries to FIRE_TRIGGER; the sweep resends any that don't arrive."""
     try:

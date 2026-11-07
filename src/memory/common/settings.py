@@ -418,6 +418,8 @@ TASK_RESULT_RETENTION_DAYS = int(os.getenv("TASK_RESULT_RETENTION_DAYS", 7))
 PENDING_JOB_RETENTION_DAYS = int(os.getenv("PENDING_JOB_RETENTION_DAYS", 30))
 EVENT_RETENTION_DAYS = int(os.getenv("EVENT_RETENTION_DAYS", 30))
 EVENT_MAX_ATTEMPTS = int(os.getenv("EVENT_MAX_ATTEMPTS", 5))
+# Raw webhook payloads are untrusted and bulky: kept this long, then dropped from their events.
+EVENT_RAW_PAYLOAD_DAYS = int(os.getenv("EVENT_RAW_PAYLOAD_DAYS", 7))
 # Days of telemetry_events and llm_spend rows kept for the usage page.
 USAGE_RETENTION_DAYS = int(os.getenv("USAGE_RETENTION_DAYS", 365))
 AUDIT_RETENTION_DAYS = int(os.getenv("AUDIT_RETENTION_DAYS", 730))

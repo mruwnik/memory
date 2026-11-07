@@ -17,9 +17,10 @@ import pytest
 from sqlalchemy import update
 
 from memory.api import slack as slack_api
-from memory.api.slack import _dispatch_event_callback, _verify_slack_signature
-from memory.common.db.models.slack import SlackApp, SlackUserCredentials, SlackWorkspace
+from memory.api.slack import _verify_slack_signature, plan_event_callback
+from memory.common.db.models.slack import SlackApp, SlackChannel, SlackUserCredentials, SlackWorkspace
 from memory.common.encryption import encrypt_value
+from tests.conftest import raw_events
 
 
 def _slack_sig(secret: str, ts: str, body: bytes) -> str:
@@ -133,7 +134,7 @@ def test_verify_slack_signature_basestring_uses_colon_separator():
 
 
 # ---------------------------------------------------------------------------
-# Dispatcher routing tests — _dispatch_event_callback
+# Dispatcher routing tests — plan_event_callback
 # ---------------------------------------------------------------------------
 
 
@@ -202,46 +203,40 @@ GOOD_CHANNEL_ID = "C12345678"
 def test_dispatch_event_callback_routes_correctly(
     event, expected_task_suffix, expected_kwarg_keys
 ):
-    with _capture_send_task() as mock_send:
-        result = _dispatch_event_callback(event, slack_app_id=42)
+    label, task_name, kwargs = plan_event_callback(event, slack_app_id=42)
 
-    assert mock_send.called
-    task_name, kwargs = mock_send.call_args.args[0], mock_send.call_args.kwargs["kwargs"]
     assert task_name.endswith(expected_task_suffix)
     assert expected_kwarg_keys.issubset(kwargs.keys())
     assert kwargs["slack_app_id"] == 42
-    assert result["dispatch"]
+    assert label
 
 
 @pytest.mark.parametrize(
     "event_type, action", [("reaction_added", "add"), ("reaction_removed", "remove")]
 )
 def test_dispatch_reaction_event_passes_who_reacted_with_what(event_type, action):
-    with _capture_send_task() as mock_send:
-        _dispatch_event_callback(
-            {"event": {"type": event_type, "user": "U777", "reaction": "tada",
-                       "item": {"type": "message", "channel": GOOD_CHANNEL_ID, "ts": "5.5"}},
-             "team_id": GOOD_TEAM_ID},
-            slack_app_id=9,
-        )
+    _, _, kwargs = plan_event_callback(
+        {"event": {"type": event_type, "user": "U777", "reaction": "tada",
+                   "item": {"type": "message", "channel": GOOD_CHANNEL_ID, "ts": "5.5"}},
+         "team_id": GOOD_TEAM_ID},
+        slack_app_id=9,
+    )
 
-    kwargs = mock_send.call_args.kwargs["kwargs"]
     assert (kwargs["message_ts"], kwargs["emoji"], kwargs["user_id"], kwargs["action"]) == (
         "5.5", "tada", "U777", action,
     )
 
 
 def test_dispatch_ignores_reactions_on_files():
-    with _capture_send_task() as mock_send:
-        result = _dispatch_event_callback(
-            {"event": {"type": "reaction_added", "user": "U1", "reaction": "tada",
-                       "item": {"type": "file", "file": "F123"}},
-             "team_id": GOOD_TEAM_ID},
-            slack_app_id=9,
-        )
+    label, task, kwargs = plan_event_callback(
+        {"event": {"type": "reaction_added", "user": "U1", "reaction": "tada",
+                   "item": {"type": "file", "file": "F123"}},
+         "team_id": GOOD_TEAM_ID},
+        slack_app_id=9,
+    )
 
-    mock_send.assert_not_called()
-    assert result["dispatch"].startswith("rejected")
+    assert task is None
+    assert label.startswith("rejected")
 
 
 def test_dispatch_event_callback_ignores_unknown_event_type():
@@ -250,14 +245,13 @@ def test_dispatch_event_callback_ignores_unknown_event_type():
 
     Note: the team/channel validation runs before the type dispatch, so we
     pass a well-formed channel even though it's never used."""
-    with _capture_send_task() as mock_send:
-        result = _dispatch_event_callback(
-            {"event": {"type": "team_renamed", "channel": GOOD_CHANNEL_ID},
-             "team_id": GOOD_TEAM_ID},
-            slack_app_id=1,
-        )
-    mock_send.assert_not_called()
-    assert result["dispatch"] == "ignored"
+    label, task, kwargs = plan_event_callback(
+        {"event": {"type": "team_renamed", "channel": GOOD_CHANNEL_ID},
+         "team_id": GOOD_TEAM_ID},
+        slack_app_id=1,
+    )
+    assert task is None
+    assert label == "ignored"
 
 
 def test_dispatch_event_callback_message_changed_uses_inner_message_block():
@@ -265,25 +259,23 @@ def test_dispatch_event_callback_message_changed_uses_inner_message_block():
     `event.message`. The dispatcher must read fields from that nested
     object, not the outer event (which has type=message but may not
     carry the post-edit ts/text)."""
-    with _capture_send_task() as mock_send:
-        _dispatch_event_callback(
-            {
-                "event": {
-                    "type": "message",
-                    "subtype": "message_changed",
-                    "channel": GOOD_CHANNEL_ID,
-                    "message": {
-                        "ts": "1.5",
-                        "user": "U1",
-                        "text": "the edited content",
-                        "edited": {"ts": "1.6"},
-                    },
+    _, _, kwargs = plan_event_callback(
+        {
+            "event": {
+                "type": "message",
+                "subtype": "message_changed",
+                "channel": GOOD_CHANNEL_ID,
+                "message": {
+                    "ts": "1.5",
+                    "user": "U1",
+                    "text": "the edited content",
+                    "edited": {"ts": "1.6"},
                 },
-                "team_id": GOOD_TEAM_ID,
             },
-            slack_app_id=7,
-        )
-    kwargs = mock_send.call_args.kwargs["kwargs"]
+            "team_id": GOOD_TEAM_ID,
+        },
+        slack_app_id=7,
+    )
     assert kwargs["message_ts"] == "1.5"
     assert kwargs["content"] == "the edited content"
     assert kwargs["edited_ts"] == "1.6"
@@ -313,15 +305,14 @@ def test_dispatch_event_callback_rejects_malformed_team_id(
     """The HMAC verifies authenticity-from-Slack but not content shape.
     Garbage team_id flowing into Celery kwargs would land as junk in
     SlackMessage.workspace_id (Text col, no DB shape constraint)."""
-    with _capture_send_task() as mock_send:
-        result = _dispatch_event_callback(
-            {"event": {"type": "message", "ts": "1.0",
-                       "channel": GOOD_CHANNEL_ID},
-             "team_id": team_id_value},
-            slack_app_id=1,
-        )
-    mock_send.assert_not_called()
-    assert result["dispatch"] == expected_dispatch
+    label, task, kwargs = plan_event_callback(
+        {"event": {"type": "message", "ts": "1.0",
+                   "channel": GOOD_CHANNEL_ID},
+         "team_id": team_id_value},
+        slack_app_id=1,
+    )
+    assert task is None
+    assert label == expected_dispatch
 
 
 @pytest.mark.parametrize(
@@ -340,34 +331,31 @@ def test_dispatch_event_callback_rejects_malformed_channel_id(
     """Same defense-in-depth rationale as the team_id test, applied to
     channel_id (event.channel for messages, event.item.channel for
     reactions)."""
-    with _capture_send_task() as mock_send:
-        result = _dispatch_event_callback(
-            {"event": {"type": "message", "ts": "1.0",
-                       "channel": channel_id_value},
-             "team_id": GOOD_TEAM_ID},
-            slack_app_id=1,
-        )
-    mock_send.assert_not_called()
-    assert result["dispatch"] == expected_dispatch
+    label, task, kwargs = plan_event_callback(
+        {"event": {"type": "message", "ts": "1.0",
+                   "channel": channel_id_value},
+         "team_id": GOOD_TEAM_ID},
+        slack_app_id=1,
+    )
+    assert task is None
+    assert label == expected_dispatch
 
 
 def test_dispatch_event_callback_accepts_dict_channel_with_valid_id():
     """channel_* events deliver `event.channel` as a full channel object
     (dict). The dispatcher must extract `id` and validate that, not the
     outer dict literal."""
-    with _capture_send_task() as mock_send:
-        result = _dispatch_event_callback(
-            {
-                "event": {
-                    "type": "channel_rename",
-                    "channel": {"id": GOOD_CHANNEL_ID, "name": "renamed"},
-                },
-                "team_id": GOOD_TEAM_ID,
+    label, task, kwargs = plan_event_callback(
+        {
+            "event": {
+                "type": "channel_rename",
+                "channel": {"id": GOOD_CHANNEL_ID, "name": "renamed"},
             },
-            slack_app_id=3,
-        )
-    assert result["dispatch"] == "update_channel"
-    kwargs = mock_send.call_args.kwargs["kwargs"]
+            "team_id": GOOD_TEAM_ID,
+        },
+        slack_app_id=3,
+    )
+    assert label == "update_channel"
     assert kwargs["channel_id"] == GOOD_CHANNEL_ID
     # Full dict ships as channel_payload for downstream merging.
     assert kwargs["channel_payload"]["name"] == "renamed"
@@ -378,25 +366,23 @@ def test_dispatch_event_callback_accepts_dict_channel_with_valid_id():
     [("channel_archive", {"is_archived": True}), ("channel_unarchive", {"is_archived": False})],
 )
 def test_dispatch_archive_events_carry_only_the_archived_flag(event_type, payload):
-    with _capture_send_task() as mock_send:
-        result = _dispatch_event_callback(
-            {"event": {"type": event_type, "channel": GOOD_CHANNEL_ID, "user": "U1"}, "team_id": GOOD_TEAM_ID},
-            slack_app_id=3,
-        )
+    label, task, kwargs = plan_event_callback(
+        {"event": {"type": event_type, "channel": GOOD_CHANNEL_ID, "user": "U1"}, "team_id": GOOD_TEAM_ID},
+        slack_app_id=3,
+    )
 
-    assert (result["dispatch"], mock_send.call_args.kwargs["kwargs"]["channel_payload"]) == ("update_channel", payload)
+    assert (label, kwargs["channel_payload"]) == ("update_channel", payload)
 
 
 @pytest.mark.parametrize("event_type", ["channel_deleted", "channel_left", "channel_history_changed"])
 def test_dispatch_ignores_channel_events_that_carry_no_metadata(event_type):
-    with _capture_send_task() as mock_send:
-        result = _dispatch_event_callback(
-            {"event": {"type": event_type, "channel": GOOD_CHANNEL_ID}, "team_id": GOOD_TEAM_ID},
-            slack_app_id=3,
-        )
+    label, task, kwargs = plan_event_callback(
+        {"event": {"type": event_type, "channel": GOOD_CHANNEL_ID}, "team_id": GOOD_TEAM_ID},
+        slack_app_id=3,
+    )
 
-    mock_send.assert_not_called()
-    assert result["dispatch"] == "ignored"
+    assert task is None
+    assert label == "ignored"
 
 
 # ---------------------------------------------------------------------------
@@ -554,8 +540,8 @@ def test_a_signed_event_for_an_unconnected_workspace_verifies_the_signing_secret
     assert events_app.setup_state == after
 
 
-def connect_workspace(db_session, app, user):
-    db_session.add(SlackWorkspace(id=GOOD_TEAM_ID, name="W"))
+def connect_workspace(db_session, app, user, collect=True):
+    db_session.add(SlackWorkspace(id=GOOD_TEAM_ID, name="W", collect_messages=collect))
     db_session.flush()
     db_session.add(SlackUserCredentials(slack_app_id=app.id, workspace_id=GOOD_TEAM_ID, user_id=user.id))
     db_session.commit()
@@ -574,9 +560,11 @@ def event_callback(event: dict) -> dict:
         ("degraded", "degraded"),
     ],
 )
-def test_an_ingested_message_makes_the_app_live(client, db_session, events_app, user, state, after):
+# A fresh workspace collects nothing, yet its first message shows push works.
+@pytest.mark.parametrize("collect", [True, False])
+def test_a_pushed_message_makes_the_app_live(client, db_session, events_app, user, state, after, collect):
     events_app.setup_state = state
-    connect_workspace(db_session, events_app, user)
+    connect_workspace(db_session, events_app, user, collect=collect)
 
     with _capture_send_task():
         post_signed(client, f"/slack/events/{events_app.id}", message_event(GOOD_TEAM_ID, f"9.{state}"))
@@ -630,13 +618,134 @@ def test_a_secret_pasted_while_an_old_signed_request_is_handled_stays_draft(
             .values(signing_secret_encrypted=encrypt_value("newly-pasted"))
         )
         db_session.commit()
-        return True
+        return SIGNING_SECRET
 
-    with _capture_send_task(), patch.object(slack_api, "register_body_seen", side_effect=paste_new_secret):
+    with _capture_send_task(), patch.object(slack_api, "decrypt_value", side_effect=paste_new_secret):
         post_signed(client, f"/slack/events/{events_app.id}", envelope)
 
     db_session.refresh(events_app)
     assert (events_app.signing_secret, events_app.setup_state) == ("newly-pasted", "draft")
+
+
+@pytest.mark.parametrize(
+    "event, expected, tasks",
+    [
+        ({"type": "message", "ts": "12.1", "user": "U1", "text": "x", "channel": GOOD_CHANNEL_ID},
+         ("message", GOOD_CHANNEL_ID, "stored", None), 1),
+        ({"type": "message", "subtype": "message_deleted", "deleted_ts": "12.2", "channel": GOOD_CHANNEL_ID},
+         ("message.message_deleted", GOOD_CHANNEL_ID, "stored", None), 1),
+        ({"type": "team_renamed", "channel": GOOD_CHANNEL_ID},
+         ("team_renamed", GOOD_CHANNEL_ID, "no_item_type", event_callback({"type": "team_renamed", "channel": GOOD_CHANNEL_ID})
+          | {"event_id": "Ev1"}), 0),
+        ({"type": "message", "ts": "12.3", "user": "U1", "text": "x", "channel": "not-a-channel"},
+         ("message", None, "rejected", None), 0),
+    ],
+)
+def test_each_event_is_a_raw_event_its_task_links(client, db_session, events_app, user, event, expected, tasks):
+    connect_workspace(db_session, events_app, user)
+    # The verification token is a credential, never logged.
+    envelope = event_callback(event) | {"event_id": "Ev1", "token": "verification-token"}
+
+    with _capture_send_task() as send:
+        post_signed(client, f"/slack/events/{events_app.id}", envelope)
+
+    (raw,) = raw_events(db_session)
+    assert (raw.type, raw.container, raw.outcome, raw.payload) == expected
+    assert (raw.source, raw.account_id, raw.owner_id, raw.delivery_id) == ("slack", events_app.id, user.id, "Ev1")
+    assert [c.kwargs["kwargs"]["caused_by"] for c in send.call_args_list] == [raw.id] * tasks
+
+
+@pytest.mark.parametrize(
+    "workspace_collects, channel_collects, event",
+    [
+        # Stored channels decide for themselves; new ones follow their workspace.
+        (True, False, {"type": "message", "ts": "14.1", "user": "U1", "text": "x", "channel": GOOD_CHANNEL_ID}),
+        # Events with no item type are gated too.
+        (True, False, {"type": "app_mention", "user": "U1", "text": "<@U2>", "channel": GOOD_CHANNEL_ID}),
+        (False, None, {"type": "pin_added", "user": "U1", "channel_id": GOOD_CHANNEL_ID, "channel": GOOD_CHANNEL_ID}),
+        (False, None, {"type": "message", "ts": "14.2", "user": "U1", "text": "x", "channel": GOOD_CHANNEL_ID}),
+        (False, None, {"type": "message", "ts": "14.3", "user": "U1", "text": "x", "channel": "C99999999"}),
+        (True, False, {"type": "reaction_added", "user": "U1", "reaction": "tada",
+                       "item": {"type": "message", "channel": GOOD_CHANNEL_ID, "ts": "14.4"}}),
+        (True, False, {"type": "channel_rename", "channel": {"id": GOOD_CHANNEL_ID, "name": "renamed"}}),
+    ],
+)
+def test_events_in_channels_not_collected_leave_only_a_stub(
+    client, db_session, events_app, user, workspace_collects, channel_collects, event
+):
+    connect_workspace(db_session, events_app, user, collect=workspace_collects)
+    db_session.add(SlackChannel(id=GOOD_CHANNEL_ID, workspace_id=GOOD_TEAM_ID, name="c", channel_type="channel",
+                                collect_messages=channel_collects))
+    db_session.commit()
+
+    with _capture_send_task() as send:
+        response = post_signed(client, f"/slack/events/{events_app.id}", event_callback(event))
+
+    assert response.status_code == 200
+    send.assert_not_called()
+    assert [(e.outcome, e.payload) for e in raw_events(db_session)] == [("not_collected", None)]
+
+
+@pytest.mark.parametrize("workspace_collects, channel_collects", [(True, False), (False, None)])
+def test_a_delete_passes_whatever_the_channel_collects(
+    client, db_session, events_app, user, workspace_collects, channel_collects
+):
+    connect_workspace(db_session, events_app, user, collect=workspace_collects)
+    db_session.add(SlackChannel(id=GOOD_CHANNEL_ID, workspace_id=GOOD_TEAM_ID, name="c", channel_type="channel",
+                                collect_messages=channel_collects))
+    db_session.commit()
+    deleted = {"type": "message", "subtype": "message_deleted", "deleted_ts": "16.1", "channel": GOOD_CHANNEL_ID}
+
+    with _capture_send_task() as send:
+        post_signed(client, f"/slack/events/{events_app.id}", event_callback(deleted))
+
+    assert [c.args[0] for c in send.call_args_list] == [slack_api.MARK_SLACK_MESSAGE_DELETED]
+    assert [e.outcome for e in raw_events(db_session)] == ["stored"]
+
+
+def test_an_event_that_could_not_be_queued_is_taken_on_retry(client, db_session, events_app, user):
+    connect_workspace(db_session, events_app, user)
+    envelope = message_event(GOOD_TEAM_ID, "15.1") | {"event_id": "Ev3"}
+
+    with _capture_send_task() as send:
+        send.side_effect = [ConnectionError("broker down"), None]
+        failed = post_signed(client, f"/slack/events/{events_app.id}", envelope)
+        retried = post_signed(client, f"/slack/events/{events_app.id}", envelope)
+
+    assert (failed.status_code, retried.status_code, send.call_count) == (500, 200, 2)
+    assert [e.outcome for e in raw_events(db_session)] == ["stored"]
+
+
+def test_a_retried_event_is_taken_once(client, db_session, events_app, user):
+    connect_workspace(db_session, events_app, user)
+    envelope = message_event(GOOD_TEAM_ID, "13.1") | {"event_id": "Ev2"}
+
+    with _capture_send_task() as send:
+        post_signed(client, f"/slack/events/{events_app.id}", envelope)
+        post_signed(client, f"/slack/events/{events_app.id}", envelope | {"retry": 1})
+
+    assert send.call_count == 1
+    assert len(raw_events(db_session)) == 1
+
+
+@pytest.mark.parametrize(
+    "envelope, expected",
+    [
+        (challenge("logged"), ("url_verification", "no_item_type")),
+        (message_event(GOOD_TEAM_ID, "13.2"), ("message", "rejected")),  # no credential in that team
+    ],
+)
+def test_signed_requests_that_ingest_nothing_are_logged(client, db_session, events_app, envelope, expected):
+    with _capture_send_task():
+        post_signed(client, f"/slack/events/{events_app.id}", envelope)
+
+    assert [(e.type, e.outcome) for e in raw_events(db_session)] == [expected]
+
+
+def test_a_badly_signed_request_is_not_logged(client, db_session, events_app):
+    post_signed(client, f"/slack/events/{events_app.id}", challenge("forged"), secret="wrong")
+
+    assert raw_events(db_session) == []
 
 
 def test_an_oversized_body_is_rejected(client, events_app):

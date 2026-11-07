@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from functools import reduce
 
 import pytest
 from celery.exceptions import SoftTimeLimitExceeded
@@ -7,7 +8,7 @@ from sqlalchemy import text
 from memory.agents import triggers
 from memory.common import embedding, settings
 from memory.common.celery_app import FIRE_TRIGGER
-from memory.common.content_processing import process_content_item
+from memory.common.content_processing import process_content_item, safe_task_execution
 from memory.common.db.connection import make_session
 from memory.common.db.models import (
     AgentDefinition,
@@ -16,8 +17,9 @@ from memory.common.db.models import (
     BlogPost,
     Event,
 )
+from memory.common.db.models.events import MAX_RAW_PAYLOAD_BYTES, record_raw_event
 from memory.workers.tasks.maintenance import purge_agent_runs
-from tests.conftest import item_events, route_item, unique_sha256
+from tests.conftest import item_events, raw_events, route_item, unique_sha256
 
 
 def new_post(**fields):
@@ -110,6 +112,80 @@ def test_deleting_an_item_writes_a_removed_event_that_outlives_it(db_session):
 
     assert db_session.get(BlogPost, post_id) is None
     assert item_events(db_session) == [(post_id, "removed", None)]
+
+
+def raw_event(db, delivery_id="d-1", outcome="no_item_type", payload=None, source="github", account_id=1) -> int | None:
+    return record_raw_event(
+        db,
+        source=source,
+        event_type="push",
+        account_id=account_id,
+        owner_id=None,
+        delivery_id=delivery_id,
+        outcome=outcome,
+        payload=payload,
+    )
+
+
+def test_a_task_given_caused_by_links_the_item_events_it_writes(db_session, events_at_embed):
+    raw_id = raw_event(db_session)
+    gone = stored_post(db_session)
+    # The link outlives its raw event, as for a job replayed after the purge.
+    db_session.query(Event).filter(Event.id == raw_id).delete()
+    db_session.commit()
+
+    @safe_task_execution
+    def ingest(post):
+        process_content_item(post, db_session)
+        db_session.delete(gone)
+        db_session.commit()
+
+    ingest(new_post(), caused_by=raw_id)
+    process_content_item(new_post(), db_session)
+
+    db_session.expire_all()
+    linked = db_session.query(Event.action, Event.caused_by).filter(Event.kind == "item").order_by(Event.id)
+    assert linked.all() == [("added", raw_id), ("removed", raw_id), ("added", None)]
+
+
+def test_a_delivery_is_recorded_once_per_source_account(db_session):
+    first = raw_event(db_session)
+    again = raw_event(db_session)
+    other_account = raw_event(db_session, account_id=2)
+    other_source = raw_event(db_session, source="slack")
+    db_session.commit()
+
+    assert again is None
+    assert [e.id for e in raw_events(db_session)] == [first, other_account, other_source]
+
+
+@pytest.mark.parametrize(
+    "outcome, payload, kept, with_payload",
+    [
+        ("no_item_type", {"text": "a\x00b\ud800", "list": ["\x00"]}, {"text": "ab", "list": [""]}, 1),
+        ("no_item_type", {"text": "x" * (MAX_RAW_PAYLOAD_BYTES + 1)}, {"truncated": True, "bytes": MAX_RAW_PAYLOAD_BYTES + 13}, 1),
+        ("no_item_type", {"deep": reduce(lambda inner, _: [inner], range(5000), [])}, {"truncated": True}, 1),
+        ("stored", {"text": "in the item"}, None, 0),
+        ("not_collected", {"text": "secret"}, None, 0),
+        ("rejected", {"text": "bad"}, None, 0),
+    ],
+)
+def test_only_deliveries_that_store_nothing_keep_their_payload(db_session, outcome, payload, kept, with_payload):
+    raw_event(db_session, outcome=outcome, payload=payload)
+    db_session.commit()
+
+    assert [e.payload for e in raw_events(db_session)] == [kept]
+    assert db_session.query(Event).filter(Event.payload.is_not(None)).count() == with_payload
+
+
+@pytest.mark.transactional_db
+def test_raw_events_are_routed_without_deliveries(db_session, admin_user, no_celery_dispatch):
+    make_trigger(db_session, admin_user)
+    raw_event(db_session, payload={"a": 1})
+    db_session.commit()
+
+    assert triggers.route_events() == []
+    assert [e.routed_at is not None for e in raw_events(db_session)] == [True]
 
 
 def add_events(db, *items, action="added"):
@@ -452,3 +528,15 @@ def test_resuming_again_extends_the_replay_under_way(db_session, admin_user):
     again = trigger.state[triggers.RESUME]
     assert (again["from"], again["after"]) == (first["from"], 7)
     assert again["to"] >= first["to"]
+
+
+def test_raw_payloads_expire_but_their_events_are_kept(db_session):
+    raw_event(db_session, delivery_id="old", payload={"a": 1})
+    raw_event(db_session, delivery_id="new", payload={"a": 2})
+    db_session.query(Event).filter(Event.delivery_id == "old").update(
+        {"created_at": datetime.now(timezone.utc) - timedelta(days=settings.EVENT_RAW_PAYLOAD_DAYS + 1)}
+    )
+    db_session.commit()
+
+    assert purge_agent_runs()["purged_raw_payloads"] == 1
+    assert [(e.delivery_id, e.payload) for e in raw_events(db_session)] == [("old", None), ("new", {"a": 2})]

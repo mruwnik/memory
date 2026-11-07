@@ -243,6 +243,11 @@ class DiscordChannel(Base):
     # Relationships
     server: Mapped[DiscordServer | None] = relationship("DiscordServer", back_populates="channels")
     bot: Mapped[DiscordBot | None] = relationship("DiscordBot")
+    parent: Mapped[DiscordChannel | None] = relationship(
+        "DiscordChannel",
+        primaryjoin="foreign(DiscordChannel.parent_id) == remote(DiscordChannel.id)",
+        viewonly=True,
+    )
 
     __table_args__ = (
         Index("discord_channels_server_idx", "server_id"),
@@ -254,11 +259,14 @@ class DiscordChannel(Base):
     def should_collect(self) -> bool:
         """Determine if messages should be collected for this channel.
 
-        Returns the explicit setting if set, otherwise inherits from server.
-        For DMs/group DMs (no server), defaults to False unless explicitly enabled.
+        Returns the explicit setting if set; otherwise a thread inherits from its
+        parent channel and a channel from its server. For DMs/group DMs (no
+        server), defaults to False unless explicitly enabled.
         """
         if self.collect_messages is not None:
             return self.collect_messages
+        if self.parent:
+            return self.parent.should_collect
         if self.server:
             return self.server.collect_messages
         return False

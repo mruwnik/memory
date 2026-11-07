@@ -21,7 +21,7 @@ from memory.api.auth import (
 )
 from memory.api.https_url import HttpsUrl, require_chat_url
 from memory.api.request_body import read_request_body_with_cap
-from memory.api.webhook_events import record_event_arrival, register_body_seen
+from memory.api.webhook_events import record_event_arrival
 from memory.api.llm_keys import LLMKeyInput, LLMKeyView, apply_llm_key, llm_key_view
 from memory.common import discord as discord_client
 from memory.common import settings
@@ -34,6 +34,7 @@ from memory.common.data_source_access import (
 )
 from memory.common.db.connection import get_session
 from memory.common.db.models import User
+from memory.common.db.models.events import NO_ITEM_TYPE, NOT_COLLECTED, STORED, record_raw_event
 from memory.common.db.models.discord import (
     DiscordBot,
     DiscordChannel,
@@ -605,6 +606,48 @@ def is_fresh(timestamp: str) -> bool:
         return False
 
 
+def snowflake(value: object) -> int | None:
+    return int(value) if isinstance(value, (str, int)) and str(value).isdigit() else None
+
+
+THREAD_EVENT_TYPES = frozenset({"THREAD_CREATE", "THREAD_UPDATE"})
+DELETE_EVENT_TYPES = frozenset({"MESSAGE_DELETE", "MESSAGE_DELETE_BULK"})
+
+
+def event_channel_id(event_type: str, data: dict) -> int | None:
+    """The channel an event is about; a thread event's is the thread's own id."""
+    return snowflake(data.get("id" if event_type in THREAD_EVENT_TYPES else "channel_id"))
+
+
+def channel_collected(db: Session, event_type: str, data: dict) -> bool | None:
+    """Whether the event's channel is collected, as DiscordChannel.should_collect
+    decides; None for an event about no channel. A thread event names the thread
+    and its parent. A channel not stored yet follows its server, and one of a
+    server not stored yet is collected, as a push-only bot stores that server so."""
+    channel_id = event_channel_id(event_type, data)
+    if channel_id is None:
+        return None
+    if channel := db.get(DiscordChannel, channel_id):
+        return channel.should_collect
+    parent_id = snowflake(data.get("parent_id")) if event_type in THREAD_EVENT_TYPES else None
+    if parent_id and (parent := db.get(DiscordChannel, parent_id)):
+        return parent.should_collect
+    server_id = snowflake(data.get("guild_id"))
+    if server_id is None:
+        return False
+    server = db.get(DiscordServer, server_id)
+    return server is None or server.collect_messages
+
+
+def discord_outcome(db: Session, event_type: str, data: object) -> str:
+    if not isinstance(data, dict):
+        return NO_ITEM_TYPE
+    # A delete carries ids alone and drops whatever copy Memory has.
+    if event_type not in DELETE_EVENT_TYPES and channel_collected(db, event_type, data) is False:
+        return NOT_COLLECTED
+    return STORED if event_type in CARRIED_EVENT_TYPES else NO_ITEM_TYPE
+
+
 @router.post("/events/{bot_id}", status_code=204)
 async def discord_events(bot_id: int, request: Request, db: Session = Depends(get_session)) -> Response:
     """Receive Discord Webhook Events for one bot; the work is queued."""
@@ -618,32 +661,57 @@ async def discord_events(bot_id: int, request: Request, db: Session = Depends(ge
 
     bot = db.get(DiscordBot, bot_id)
     if bot is None or not bot.is_active or bot.realtime != "webhook" or not bot.public_key:
+        logger.warning("Discord event for an unknown or non-webhook bot %s", bot_id)
         return unauthorized
+    # Discord probes the endpoint with bad signatures when it is saved.
     if not is_fresh(timestamp) or not verify_discord_signature(bot.public_key, timestamp, body, signature):
-        logger.info("Discord event rejected for bot %s", bot_id)
+        logger.warning("Discord event rejected for bot %s", bot_id)
         return unauthorized
 
     try:
         envelope = json.loads(body)
     except (UnicodeDecodeError, json.JSONDecodeError):
+        envelope = None
+    if not isinstance(envelope, dict):
+        logger.warning("Discord event unparseable for bot %s", bot_id)
         return Response(status_code=400)
 
     if str(envelope.get("application_id")) != str(bot.application_id):
-        logger.info("Discord event for another application rejected for bot %s", bot_id)
+        logger.warning("Discord event for another application rejected for bot %s", bot_id)
         return unauthorized
 
     record_event_arrival(db, bot)
-    # Discord retries a delivery it saw fail; the events are idempotent, so a
-    # replay within the signature window is just acknowledged.
-    if not register_body_seen(hashlib.sha256(body).hexdigest(), DISCORD_EVENT_MAX_TS_SKEW_SECONDS + 60):
+    body_sha = hashlib.sha256(body).hexdigest()
+    event = envelope.get("event") if envelope.get("type") == DISCORD_EVENT else None
+    event = event if isinstance(event, dict) else {}
+    event_type = str(event.get("type") or ("PING" if envelope.get("type") == DISCORD_PING else "unknown"))
+    data = event.get("data")
+    outcome = discord_outcome(db, event_type, data)
+    channel_id = event_channel_id(event_type, data) if isinstance(data, dict) else None
+    # Discord sends no delivery id, and a retry or replay repeats the body.
+    raw_id = record_raw_event(
+        db,
+        source="discord",
+        event_type=event_type,
+        account_id=bot.id,
+        owner_id=bot.created_by_user_id,
+        delivery_id=body_sha,
+        outcome=outcome,
+        container=str(channel_id) if channel_id else None,
+        payload=envelope,
+    )
+    if raw_id is None:
+        db.rollback()
         return Response(status_code=204)
-    if envelope.get("type") != DISCORD_EVENT:
-        return Response(status_code=204)
-    event = envelope.get("event") or {}
-    event_type = event.get("type")
-    if event_type in CARRIED_EVENT_TYPES and isinstance(event.get("data"), dict):
-        celery_app.send_task(
-            HANDLE_DISCORD_EVENT,
-            kwargs={"bot_id": bot.id, "event_type": event_type, "data": event["data"]},
-        )
+    if outcome == STORED:
+        try:
+            celery_app.send_task(
+                HANDLE_DISCORD_EVENT,
+                kwargs={"bot_id": bot.id, "event_type": event_type, "data": data, "caused_by": raw_id},
+            )
+        except Exception:
+            # Discord retries a failed delivery, which must not be a duplicate.
+            db.rollback()
+            raise
+    db.commit()
     return Response(status_code=204)

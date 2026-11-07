@@ -14,6 +14,7 @@ from memory.common.celery_app import app as celery_app
 from memory.common.db.models import PendingJob
 from memory.common.db.models.sources import TranscriptAccount
 from memory.common.rate_limit import parse_limit
+from tests.conftest import raw_events
 
 SECRET = "s3cret-for-tests"
 
@@ -101,8 +102,14 @@ def test_generic_body_queues_process_meeting(client, user, db_session, sent, hea
     assert kwargs["transcript_account_id"] == account.id
     assert kwargs["source_tool"] == "generic"
     assert kwargs["tags"] == ["team"]
+    (raw,) = raw_events(db_session)
+    assert (raw.source, raw.type, raw.account_id, raw.owner_id, raw.outcome, raw.payload) == (
+        "transcripts", "transcript", account.id, user.id, "stored", None,
+    )
+    assert (raw.delivery_id, kwargs["caused_by"]) == (hashlib.sha256(body).hexdigest(), raw.id)
     job = db_session.get(PendingJob, response.json()["job_id"])
     assert job.user_id == user.id
+    assert "caused_by" not in job.params
     assert job.celery_task_id == sent[0]["task_id"]
     db_session.refresh(account)
     assert account.last_sync_at is not None
@@ -155,6 +162,9 @@ def test_fireflies_notification_queues_one_meeting_fetch(client, user, db_sessio
     assert sent == [
         {"name": INGEST_TRANSCRIPT_MEETING, "args": [account.id, "FF123", reprocessed], "kwargs": None, "task_id": None}
     ]
+    assert [(e.type, e.outcome, e.payload) for e in raw_events(db_session)] == [
+        (payload.get("event", payload.get("eventType")), "stored", None)
+    ]
 
 
 @pytest.mark.parametrize(
@@ -173,6 +183,7 @@ def test_fireflies_other_events_are_ignored(client, user, db_session, sent, payl
     assert response.status_code == 200
     assert response.json() == {"status": "ignored"}
     assert sent == []
+    assert [(e.outcome, e.payload) for e in raw_events(db_session)] == [("no_item_type", payload)]
 
 
 def test_fireflies_notification_rejected_on_generic_source(client, user, db_session, sent):
@@ -183,6 +194,7 @@ def test_fireflies_notification_rejected_on_generic_source(client, user, db_sess
 
     assert response.status_code == 422
     assert sent == []
+    assert [e.outcome for e in raw_events(db_session)] == ["rejected"]
 
 
 @pytest.mark.parametrize(
@@ -202,6 +214,7 @@ def test_bad_auth_is_401(client, user, db_session, sent, headers):
 
     assert response.status_code == 401
     assert sent == []
+    assert raw_events(db_session) == []
 
 
 def test_signature_over_different_body_is_401(client, user, db_session, sent):
@@ -233,6 +246,7 @@ def test_inactive_source_is_403(client, user, db_session, sent):
 
     assert response.status_code == 403
     assert sent == []
+    assert [(e.outcome, e.payload) for e in raw_events(db_session)] == [("not_collected", None)]
 
 
 @pytest.mark.parametrize(
@@ -255,6 +269,7 @@ def test_invalid_generic_body_is_422_without_echoing_input(client, user, db_sess
     assert response.status_code == 422
     assert all("input" not in error for error in response.json()["detail"])
     assert sent == []
+    assert [e.outcome for e in raw_events(db_session)] == ["rejected"]
 
 
 @pytest.mark.parametrize(
@@ -266,6 +281,7 @@ def test_invalid_json_is_400(client, user, db_session, sent, body):
     response = post(client, account.id, body, {"X-Hub-Signature": sign(body)})
 
     assert response.status_code == 400
+    assert raw_events(db_session) == []
 
 
 def test_oversized_body_is_413(client, user, db_session, sent):

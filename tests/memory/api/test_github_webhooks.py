@@ -13,7 +13,7 @@ from memory.common.celery_app import REFETCH_GITHUB_ITEM
 from memory.common.db.models import GithubItem
 from memory.common.db.models.sources import GithubAccount, GithubRepo
 from memory.common.github.refetch import REFETCH_DELAY_SECONDS, refetch_started
-from tests.conftest import unique_sha256
+from tests.conftest import raw_events, unique_sha256
 
 SECRET = "gh-webhook-secret"
 REPO_GITHUB_ID = 555
@@ -93,6 +93,7 @@ def test_bad_signature_is_401(client, db_session, repo, no_celery_dispatch, sign
     assert response.status_code == 401
     assert refetches(no_celery_dispatch) == []
     assert "synchronize" not in caplog.text
+    assert raw_events(db_session) == []
     db_session.refresh(repo)
     assert repo.last_event_at is None
 
@@ -108,18 +109,33 @@ def test_account_without_secret_or_unknown_account_is_401(client, db_session, re
     assert no_secret.json() == unknown.json()
 
 
-def test_redelivered_delivery_is_a_no_op(client, repo, no_celery_dispatch):
+# The signature doesn't cover X-GitHub-Delivery, so a replay may bring a new one.
+@pytest.mark.parametrize("second_delivery", ["d-1", "d-2"])
+def test_redelivered_delivery_is_a_no_op(client, db_session, repo, no_celery_dispatch, second_delivery):
     deliver(client, repo.account_id, "pull_request", pr_event(), delivery="d-1")
     refetch_started(repo.id, 7)
 
-    response = deliver(client, repo.account_id, "pull_request", pr_event(), delivery="d-1")
+    response = deliver(client, repo.account_id, "pull_request", pr_event(), delivery=second_delivery)
 
     assert response.status_code == 202
     assert response.json()["status"] == "duplicate"
     assert refetches(no_celery_dispatch) == [[repo.id, 7, "pr"]]
+    assert len(raw_events(db_session)) == 1
 
 
-def test_a_delivery_that_could_not_be_queued_is_taken_on_redelivery(client, repo, no_celery_dispatch):
+def test_the_same_delivery_to_two_accounts_is_two_events(client, db_session, repo, user):
+    other = GithubAccount(user_id=user.id, name="other", auth_type="pat", access_token="ghp_y", active=True)
+    other.webhook_secret = SECRET
+    db_session.add(other)
+    db_session.commit()
+
+    deliver(client, repo.account_id, "push", {"ref": "main"}, delivery="d-1")
+    deliver(client, other.id, "push", {"ref": "main"}, delivery="d-1")
+
+    assert [e.account_id for e in raw_events(db_session)] == [repo.account_id, other.id]
+
+
+def test_a_delivery_that_could_not_be_queued_is_taken_on_redelivery(client, db_session, repo, no_celery_dispatch):
     no_celery_dispatch.side_effect = [ConnectionError("broker down"), None]
 
     failed = deliver(client, repo.account_id, "pull_request", pr_event(), delivery="d-1")
@@ -128,6 +144,51 @@ def test_a_delivery_that_could_not_be_queued_is_taken_on_redelivery(client, repo
     assert (failed.status_code, retried.status_code) == (500, 202)
     assert retried.json()["status"] == "queued"
     assert refetches(no_celery_dispatch) == [[repo.id, 7, "pr"]] * 2
+    assert [e.outcome for e in raw_events(db_session)] == ["stored"]
+
+
+@pytest.mark.parametrize(
+    "event, payload, expected",
+    [
+        ("pull_request", pr_event(), ("pull_request.synchronize", str(REPO_GITHUB_ID), "stored", None)),
+        ("ping", {"zen": "z", "hook_id": 1}, ("ping", None, "no_item_type", {"zen": "z", "hook_id": 1})),
+        (
+            "push",
+            {"ref": "main", "repository": {"id": REPO_GITHUB_ID}},
+            ("push", str(REPO_GITHUB_ID), "no_item_type", {"ref": "main", "repository": {"id": REPO_GITHUB_ID}}),
+        ),
+    ],
+)
+def test_each_delivery_is_a_raw_event(client, db_session, repo, account, event, payload, expected):
+    deliver(client, repo.account_id, event, payload)
+
+    (raw,) = raw_events(db_session)
+    assert (raw.type, raw.container, raw.outcome, raw.payload) == expected
+    assert (raw.source, raw.account_id, raw.owner_id, raw.delivery_id) == (
+        "github", account.id, account.user_id, hashlib.sha256(json.dumps(payload).encode()).hexdigest(),
+    )
+
+
+@pytest.mark.parametrize("repo_id, active", [(999, True), (REPO_GITHUB_ID, False)])
+def test_a_delivery_not_collected_is_a_stub_without_payload(client, db_session, repo, account, repo_id, active):
+    account.active = active
+    db_session.commit()
+
+    deliver(client, repo.account_id, "pull_request", pr_event(repo_id=repo_id))
+
+    assert [(e.type, e.container, e.outcome, e.payload) for e in raw_events(db_session)] == [
+        ("pull_request.synchronize", str(repo_id), "not_collected", None)
+    ]
+
+
+@pytest.mark.parametrize("body", [b"not json", b"[1, 2]"])
+def test_an_unparseable_delivery_is_400_without_an_event(client, db_session, repo, body):
+    headers = {"X-GitHub-Event": "push", "X-GitHub-Delivery": "d-bad", "X-Hub-Signature-256": sign(body)}
+
+    response = client.post(f"/github/webhook/{repo.account_id}", content=body, headers=headers)
+
+    assert response.status_code == 400
+    assert raw_events(db_session) == []
 
 
 def test_ping_answers_without_work(client, repo, no_celery_dispatch):
@@ -240,6 +301,7 @@ def test_untracked_kind_queues_nothing(client, db_session, repo, no_celery_dispa
     deliver(client, repo.account_id, "issues", {"action": "opened", "issue": {"number": 6}, "repository": {"id": REPO_GITHUB_ID}})
 
     assert refetches(no_celery_dispatch) == []
+    assert [(e.outcome, e.payload) for e in raw_events(db_session)] == [("not_collected", None)]
 
 
 def test_webhook_secret_is_generated_write_only(client, db_session, account):

@@ -16,7 +16,7 @@ import hmac
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
@@ -30,6 +30,7 @@ from memory.common.celery_app import INGEST_TRANSCRIPT_MEETING, PROCESS_MEETING
 from memory.common.celery_app import app as celery_app
 from memory.common.db.connection import get_session
 from memory.common.db.models import JobType
+from memory.common.db.models.events import NO_ITEM_TYPE, NOT_COLLECTED, REJECTED, STORED, record_raw_event
 from memory.common.db.models.sources import TranscriptAccount
 from memory.common.jobs import dispatch_job
 from memory.common.rate_limit import check_rate_limit_spec
@@ -103,30 +104,42 @@ def secret_matches(secret: str, body: bytes, request: Request) -> bool:
     return hmac.compare_digest(secret.encode(), token.encode())
 
 
-def queue_fireflies_meeting(account: TranscriptAccount, payload: dict) -> JSONResponse:
+# Records, committed, the push's raw event with an outcome; its id, or None for a
+# repeat, which is still queued: meeting and job dedupe handle it.
+Record = Callable[[str], int | None]
+
+
+def queue_fireflies_meeting(account: TranscriptAccount, payload: dict, record: Record) -> JSONResponse:
     if account.provider != "fireflies":
+        record(REJECTED)
         raise HTTPException(status_code=422, detail="Fireflies notifications need a fireflies source")
     reprocessed = bool(payload.get("reprocessed_at"))
     events = FIREFLIES_TRANSCRIBED_EVENTS | (FIREFLIES_RESENT_EVENTS if reprocessed else set())
     if not any(payload.get(k) == v for k, v in events):
+        record(NO_ITEM_TYPE)
         return JSONResponse({"status": "ignored"}, status_code=200)
 
     meeting_id = payload.get("meeting_id") or payload.get("meetingId")
     if not isinstance(meeting_id, str) or not 0 < len(meeting_id) <= 200:
+        record(REJECTED)
         raise HTTPException(status_code=422, detail="Invalid meeting id")
+    # The meeting is fetched and stored by a later task, so its item events don't link this push.
+    record(STORED)
     celery_app.send_task(INGEST_TRANSCRIPT_MEETING, args=[account.id, meeting_id, reprocessed])
     return JSONResponse({"status": "queued"}, status_code=202)
 
 
 def queue_generic_transcript(
-    db: Session, account: TranscriptAccount, payload: Any
+    db: Session, account: TranscriptAccount, payload: Any, record: Record
 ) -> JSONResponse:
     try:
         data = GenericTranscript.model_validate(payload)
     except ValidationError as exc:
+        record(REJECTED)
         # Built by hand: pydantic's default error includes the offending input.
         errors = [{"loc": e["loc"], "msg": e["msg"]} for e in exc.errors()]
         return JSONResponse({"detail": errors}, status_code=422)
+    raw_id = record(STORED)
 
     # Push-only sources have no poll, so "last sync" is the last accepted push.
     # Committed here because dispatch_job doesn't commit on a dedupe hit.
@@ -152,9 +165,12 @@ def queue_generic_transcript(
             "external_id": external_id,
             "tags": list(account.tags or []),
             "transcript_account_id": account.id,
+            "caused_by": raw_id,
         },
         external_id=external_id,
         user_id=account.user_id,
+        # A retry from the job's params is not caused by this push.
+        exclude_from_params=["caused_by"],
     )
     status = "queued" if result.is_new else result.job.status
     return JSONResponse({"status": status, "job_id": result.job.id}, status_code=202)
@@ -177,22 +193,42 @@ def handle_push(db: Session, account_id: int, body: bytes, request: Request) -> 
     account = db.get(TranscriptAccount, account_id)
     secret = account.webhook_secret if account else None
     if account is None or not secret or not secret_matches(secret, body, request):
-        logger.info(f"transcript push rejected account={account_id}")
+        logger.warning(f"transcript push rejected account={account_id}")
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    if not account.active:
-        raise HTTPException(status_code=403, detail="Source is inactive")
     if not check_rate_limit_spec(f"transcript_ingest:{account.id}", ACCOUNT_RATE_LIMIT):
+        logger.warning(f"transcript push rate limited account={account_id}")
         raise HTTPException(status_code=429, detail="Too many pushes for this source")
 
     try:
         payload = json.loads(body)
     except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
+        logger.warning(f"transcript push unparseable account={account_id}")
         raise HTTPException(status_code=400, detail="Body must be JSON")
 
-    logger.info(
-        f"transcript push accepted account={account_id} "
-        f"body_sha256={hashlib.sha256(body).hexdigest()[:16]}"
-    )
-    if isinstance(payload, dict) and ("meeting_id" in payload or "meetingId" in payload):
-        return queue_fireflies_meeting(account, payload)
-    return queue_generic_transcript(db, account, payload)
+    body_sha = hashlib.sha256(body).hexdigest()
+    fireflies = isinstance(payload, dict) and ("meeting_id" in payload or "meetingId" in payload)
+    event_type = str(payload.get("event") or payload.get("eventType") or "meeting") if fireflies else "transcript"
+
+    def record(outcome: str) -> int | None:
+        # Senders give no delivery id, so a repeated body is the same delivery.
+        raw_id = record_raw_event(
+            db,
+            source="transcripts",
+            event_type=event_type,
+            account_id=account.id,
+            owner_id=account.user_id,
+            delivery_id=body_sha,
+            outcome=outcome,
+            payload=payload,
+        )
+        db.commit()
+        return raw_id
+
+    if not account.active:
+        record(NOT_COLLECTED)
+        raise HTTPException(status_code=403, detail="Source is inactive")
+
+    logger.info(f"transcript push accepted account={account_id} body_sha256={body_sha[:16]}")
+    if fireflies:
+        return queue_fireflies_meeting(account, payload, record)
+    return queue_generic_transcript(db, account, payload, record)

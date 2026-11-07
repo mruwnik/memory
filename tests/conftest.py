@@ -17,7 +17,7 @@ import qdrant_client.models as qdrant_models
 import voyageai
 from sqlalchemy import create_engine, event, make_url, text
 from sqlalchemy.exc import OperationalError
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, undefer
 from sqlalchemy.pool import NullPool
 from testcontainers.community.qdrant import QdrantContainer
 
@@ -1146,9 +1146,15 @@ def make_source_item(db_session, n: int, **overrides) -> SourceItem:
 
 
 def item_events(db) -> list[tuple[int | None, str | None, list[str] | None]]:
-    """(item_id, action, changes) of every event, oldest first."""
+    """(item_id, action, changes) of every item event, oldest first."""
     db.expire_all()
-    return [(e.item_id, e.action, e.changes) for e in db.query(Event).order_by(Event.id)]
+    return [(e.item_id, e.action, e.changes) for e in db.query(Event).filter(Event.kind == "item").order_by(Event.id)]
+
+
+def raw_events(db) -> list[Event]:
+    """Every raw event, with its payload, oldest first."""
+    db.expire_all()
+    return db.query(Event).filter(Event.kind == "raw").options(undefer(Event.payload)).order_by(Event.id).all()
 
 
 def route_item(db, item_id: int, changes: list[str] | None = None, **event) -> list[int]:

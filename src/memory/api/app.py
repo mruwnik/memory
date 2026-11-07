@@ -62,6 +62,7 @@ from memory.api.beeper import router as beeper_router
 from memory.api.discord import router as discord_router
 from memory.api.slack import router as slack_router
 from memory.api.source_tabs import router as source_tabs_router
+from memory.api.webhook_events import router as webhook_events_router
 from memory.api.ingestion_overview import router as ingestion_overview_router
 from memory.api.notes_source import router as notes_source_router
 from memory.api.celery_overview import router as celery_overview_router
@@ -504,6 +505,7 @@ app.include_router(email_accounts_router)
 app.include_router(article_feeds_router)
 app.include_router(github_sources_router)
 app.include_router(github_webhooks_router)
+app.include_router(webhook_events_router)
 app.include_router(calendar_accounts_router)
 app.include_router(transcript_accounts_router)
 app.include_router(transcript_ingest_router)

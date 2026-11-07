@@ -4,7 +4,9 @@ GitHub signs each delivery with the account's webhook secret
 (``X-Hub-Signature-256``). A delivery only names what changed: each issue or
 PR it touches gets a debounced refetch, so the stored item always comes from
 the GitHub API, never from the payload. Check and status events name a
-commit, and route to the tracked PRs whose head it is.
+commit, and route to the tracked PRs whose head it is. Each signed delivery
+is a raw event, deduped by its body: the signature doesn't cover the
+X-GitHub-Delivery header, so a replayed body under a new id is still a repeat.
 """
 
 import hashlib
@@ -14,16 +16,15 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-import redis
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from memory.api.request_body import read_request_body_with_cap
-from memory.common import settings
 from memory.common.db.connection import get_session
 from memory.common.db.models import GithubItem
+from memory.common.db.models.events import NO_ITEM_TYPE, NOT_COLLECTED, STORED, record_raw_event
 from memory.common.db.models.sources import GithubAccount, GithubRepo
 from memory.common.github.refetch import queue_refetch
 
@@ -33,22 +34,11 @@ router = APIRouter(prefix="/github", tags=["github"])
 
 # GitHub caps payloads at 25 MB.
 MAX_BODY_BYTES = 25 * 1024 * 1024
-# GitHub redelivers on request for up to three days; two cover automatic retries.
-DELIVERY_TTL_SECONDS = 48 * 3600
 
 
 def signature_matches(secret: str, body: bytes, signature: str) -> bool:
     expected = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected.encode(), signature.encode())
-
-
-def delivery_key(delivery_id: str) -> str:
-    return f"memory:github:delivery:{delivery_id}"
-
-
-def first_delivery(delivery_id: str) -> bool:
-    key = delivery_key(delivery_id)
-    return bool(redis.from_url(settings.REDIS_URL).set(key, 1, nx=True, ex=DELIVERY_TTL_SECONDS))
 
 
 def accepted(status: str, **extra: Any) -> JSONResponse:
@@ -100,30 +90,29 @@ async def github_webhook(
     return await run_in_threadpool(handle_delivery, db, account_id, body, request)
 
 
+def event_type(event: str, payload: dict) -> str:
+    action = payload.get("action")
+    return f"{event}.{action}" if isinstance(action, str) else event
+
+
 def handle_delivery(db: Session, account_id: int, body: bytes, request: Request) -> JSONResponse:
     account = db.get(GithubAccount, account_id)
     secret = account.webhook_secret if account else None
     signature = request.headers.get("x-hub-signature-256", "")
     if account is None or not secret or not signature_matches(secret, body, signature):
-        logger.info("github webhook rejected account=%s", account_id)
+        logger.warning("github webhook rejected account=%s", account_id)
         raise HTTPException(status_code=401, detail="Invalid signature")
 
     delivery = request.headers.get("x-github-delivery", "")
-    if not delivery:
-        raise HTTPException(status_code=400, detail="Missing X-GitHub-Delivery")
-    if not first_delivery(delivery):
-        return accepted("duplicate")
-
-    event = request.headers.get("x-github-event", "")
-    if event == "ping":
-        return accepted("pong")
     try:
         payload = json.loads(body)
     except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
-        raise HTTPException(status_code=400, detail="Body must be JSON")
-    if not isinstance(payload, dict) or not account.active:
-        return accepted("ignored")
+        payload = None
+    if not isinstance(payload, dict):
+        logger.warning("github webhook unparseable account=%s delivery=%s", account_id, delivery)
+        raise HTTPException(status_code=400, detail="Body must be a JSON object")
 
+    event = request.headers.get("x-github-event", "")
     repo_github_id = (payload.get("repository") or {}).get("id")
     repo = (
         db.query(GithubRepo)
@@ -133,25 +122,51 @@ def handle_delivery(db: Session, account_id: int, body: bytes, request: Request)
             GithubRepo.active.is_(True),
         )
         .first()
-        if repo_github_id
+        if repo_github_id and account.active
         else None
     )
+    changed = event_targets(db, repo, event, payload) if repo else []
+    targets = [(n, kind) for n, kind in changed if repo and tracks(repo, kind)]
+    if event == "ping":
+        status, outcome = "pong", NO_ITEM_TYPE
+    elif not account.active:
+        status, outcome = "ignored", NOT_COLLECTED
+    elif repo is None:
+        status, outcome = "untracked", NOT_COLLECTED
+    else:
+        status = "queued"
+        outcome = STORED if targets else NOT_COLLECTED if changed else NO_ITEM_TYPE
+
+    raw_id = record_raw_event(
+        db,
+        source="github",
+        event_type=event_type(event, payload),
+        account_id=account.id,
+        owner_id=account.user_id,
+        delivery_id=hashlib.sha256(body).hexdigest(),
+        outcome=outcome,
+        container=str(repo_github_id) if repo_github_id else None,
+        payload=payload,
+    )
+    if raw_id is None:
+        db.rollback()
+        return accepted("duplicate")
     if repo is None:
-        return accepted("untracked")
+        db.commit()
+        return accepted(status)
 
     repo.last_event_at = datetime.now(timezone.utc)
     repo.push_missing_since = None
-    db.commit()
-
-    targets = [(n, kind) for n, kind in event_targets(db, repo, event, payload) if tracks(repo, kind)]
     try:
+        # Refetches are debounced per item, so the item events they write don't link this delivery.
         queued = [n for n, kind in targets if queue_refetch(repo.id, n, kind)]
     except Exception:
-        # GitHub retries a failed delivery under the same id, which must not be a duplicate.
-        redis.from_url(settings.REDIS_URL).delete(delivery_key(delivery))
+        # GitHub retries a failed delivery, which must not be a duplicate.
+        db.rollback()
         raise
+    db.commit()
     logger.info(
         "github webhook account=%s repo=%s event=%s delivery=%s queued=%s",
         account_id, repo.id, event, delivery, queued,
     )
-    return accepted("queued", numbers=[n for n, _ in targets])
+    return accepted(status, numbers=[n for n, _ in targets])

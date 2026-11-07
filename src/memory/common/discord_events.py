@@ -213,19 +213,13 @@ def ensure_user(session: DBSession, author: dict) -> DiscordUser:
 def ensure_message_entities(
     session: DBSession, data: dict, bot_id: int, push_only: bool
 ) -> DiscordChannel:
-    """Server, channel and author rows for a message. Servers and DMs first
-    seen through a push-only bot collect everything: that bot receives only
-    what it was sent."""
+    """Server, channel and author rows for a message. Servers first seen
+    through a push-only bot collect everything: that bot receives only what
+    it was sent."""
     server_id = snowflake(data.get("guild_id"))
     if server_id is not None:
         ensure_server(session, server_id, bot_id, collect=push_only)
-    channel = ensure_channel(
-        session,
-        int(data["channel_id"]),
-        server_id,
-        bot_id,
-        collect=True if push_only and server_id is None else None,
-    )
+    channel = ensure_channel(session, int(data["channel_id"]), server_id, bot_id)
     ensure_user(session, data["author"])
     return channel
 

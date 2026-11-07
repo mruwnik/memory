@@ -287,6 +287,31 @@ def test_collectible_channels_inheritance(
     assert (10 in ids) is expected
 
 
+@pytest.mark.parametrize(
+    "server_collect, parent_collect, thread_collect, expected",
+    [
+        (True, False, None, False),  # a thread follows its parent before its server
+        (False, True, None, True),
+        (False, None, None, False),  # a parent that inherits passes the server's on
+        (True, None, None, True),
+        (True, False, True, True),  # the thread's own setting wins
+    ],
+)
+def test_threads_inherit_collection_from_their_parent(
+    db_session, server_collect, parent_collect, thread_collect, expected
+):
+    db_session.add(DiscordServer(id=1, name="s", collect_messages=server_collect))
+    db_session.add_all([
+        DiscordChannel(id=10, server_id=1, name="c", channel_type="text", collect_messages=parent_collect),
+        DiscordChannel(id=11, server_id=1, parent_id=10, name="t", channel_type="thread",
+                       collect_messages=thread_collect),
+    ])
+    db_session.commit()
+
+    assert db_session.get(DiscordChannel, 11).should_collect is expected
+    assert (11 in [cid for cid, _ in collectible_channels()]) is expected
+
+
 def test_collectible_channels_excludes_serverless_by_default(db_session):
     db_session.add(DiscordChannel(id=20, server_id=None, name="dm",
                                   channel_type="dm", collect_messages=None))

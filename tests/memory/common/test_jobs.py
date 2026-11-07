@@ -9,6 +9,7 @@ from celery import states
 from celery.exceptions import Ignore, Retry
 
 from memory.common.db.models import HumanUser, PendingJob, JobStatus, JobType
+from memory.common.db.models.events import CAUSING_EVENT
 from memory.common import jobs as job_utils
 
 
@@ -657,6 +658,12 @@ def tracked_job(outcome: str = "done") -> dict:
     return {"outcome": outcome}
 
 
+@job_utils.celery_app.task(name="test.causing_job")
+@job_utils.tracked_task
+def causing_job(note: str) -> dict:
+    return {"caused_by": CAUSING_EVENT.get()}
+
+
 @job_utils.celery_app.task(name="test.nesting_job")
 @job_utils.tracked_task
 def nesting_job() -> dict:
@@ -752,6 +759,14 @@ def test_tracked_task_redelivery_after_a_finished_start_runs_again(
     assert tracked_rows(db_session, "flow-task") == [
         ("tracked_job", JobStatus.COMPLETE.value, None, job_utils.MAX_TASK_STARTS + 1)
     ]
+
+
+def test_tracked_task_runs_under_its_cause_but_keeps_it_out_of_params(db_session):
+    result = causing_job.apply(kwargs={"note": "x", "caused_by": 42}, task_id="caused-task")
+
+    assert (result.result, CAUSING_EVENT.get()) == ({"caused_by": 42}, None)
+    job = db_session.query(PendingJob).filter(PendingJob.celery_task_id == "caused-task").one()
+    assert job.params == {"_task_name": "test.causing_job", "note": "x"}
 
 
 def test_tracked_task_called_inside_another_gets_a_row_per_call(db_session):

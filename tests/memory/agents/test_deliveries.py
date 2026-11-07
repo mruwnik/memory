@@ -227,7 +227,7 @@ def test_a_fire_that_keeps_failing_ends_the_delivery_failed(
     db_session, admin_user, fake_providers, admin_keys, no_celery_dispatch, monkeypatch, no_grace
 ):
     monkeypatch.setattr(settings, "EVENT_MAX_ATTEMPTS", 2)
-    trigger = setup(db_session, admin_user)
+    setup(db_session, admin_user)
 
     def broken(*args):
         raise RuntimeError("render bug")
@@ -316,7 +316,7 @@ def test_a_run_ends_the_throttling_episode_only_a_window_after_the_last_hold_bac
 def test_a_sustained_overload_notifies_once(
     db_session, admin_user, fake_providers, admin_keys, no_celery_dispatch
 ):
-    trigger = setup(db_session, admin_user, max_per_hour=1)
+    setup(db_session, admin_user, max_per_hour=1)
     fired, told = [], 0
     for _ in range(3):
         route_item(db_session, post(db_session).id)

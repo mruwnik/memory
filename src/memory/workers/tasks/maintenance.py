@@ -1677,7 +1677,8 @@ def fold_into_spend(runs):
 def purge_agent_runs() -> dict[str, int]:
     """Delete runs (with their transcripts) past their agent's retention_days, else
     AGENT_RUN_RETENTION_DAYS, unless they or a run that started them are starred,
-    keeping their cost and tokens in llm_spend; old trigger match claims; and old routed events."""
+    keeping their cost and tokens in llm_spend; old trigger match claims; old routed events;
+    and raw events' payloads past EVENT_RAW_PAYLOAD_DAYS."""
     retention = func.least(
         func.coalesce(
             AgentRun.spec["retention_days"].as_integer(), settings.AGENT_RUN_RETENTION_DAYS
@@ -1726,8 +1727,23 @@ def purge_agent_runs() -> dict[str, int]:
     logger.info("purged %d agent runs", purged)
     with make_session() as db:
         claims = triggers.purge_matches(db, triggers.MATCH_RETENTION)
-        events = triggers.purge_events(db, timedelta(days=settings.EVENT_RETENTION_DAYS))
-    return {"purged_runs": purged, "purged_trigger_matches": claims, "purged_events": events}
+    events = apply_in_batches(
+        delete(Event),
+        Event.id,
+        Event.routed_at < func.now() - timedelta(days=settings.EVENT_RETENTION_DAYS),
+    )
+    payloads = apply_in_batches(
+        update(Event).values(payload=None),
+        Event.id,
+        Event.payload.is_not(None),
+        Event.created_at < func.now() - timedelta(days=settings.EVENT_RAW_PAYLOAD_DAYS),
+    )
+    return {
+        "purged_runs": purged,
+        "purged_trigger_matches": claims,
+        "purged_events": events,
+        "purged_raw_payloads": payloads,
+    }
 
 
 @app.task(name=ROUTE_EVENTS)

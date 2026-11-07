@@ -638,7 +638,8 @@ def tracked_task(
     MAX_TASK_STARTS such starts the job fails and the message is dropped.
 
     The ``job_id`` kwarg is consumed by the decorator and NOT passed to the
-    wrapped function.
+    wrapped function, nor is ``caused_by`` (see safe_task_execution); neither
+    is kept in the job's params.
 
     If the task returns a dict with ``result_id`` and/or ``result_type``,
     those are forwarded to complete_job for result linking.
@@ -663,6 +664,8 @@ def tracked_task(
         def wrapper(*args: Any, **kwargs: Any) -> _R:
             # Consume job_id — don't pass it to the task function
             incoming_job_id: int | None = kwargs.pop("job_id", None)
+            # Kept out of params: a retry from them is not caused by the delivery.
+            caused_by = kwargs.pop("caused_by", None)
 
             task_self = args[0] if args and hasattr(args[0], "request") else None
             request = celery_request(task_self)
@@ -683,7 +686,7 @@ def tracked_task(
                 raise Reject(WORKER_LOST_ERROR, requeue=False)
 
             try:
-                result = safe_fn(*args, **kwargs)
+                result = safe_fn(*args, caused_by=caused_by, **kwargs)
             except Retry:
                 # Pending, not processing: the retried run reuses this row by task id
                 # and must not mistake it for one whose worker died.

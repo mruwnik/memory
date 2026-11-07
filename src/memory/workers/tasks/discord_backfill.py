@@ -9,7 +9,8 @@ import random
 from typing import Any
 
 
-from sqlalchemy import and_, or_
+from sqlalchemy import func
+from sqlalchemy.orm import aliased
 
 from memory.common import settings
 from memory.common.celery_app import (
@@ -153,21 +154,20 @@ def collectible_channels() -> list[tuple[int, str]]:
     """``(channel_id, channel_type)`` for every channel where collection is on.
 
     Mirrors ``DiscordChannel.should_collect`` in SQL: explicit channel override,
-    else server inheritance, else excluded (serverless channels need an explicit
-    True).
+    else a thread's parent channel's override, else server inheritance, else
+    excluded (serverless channels need an explicit True). A thread shares its
+    parent's server.
     """
+    parent = aliased(DiscordChannel)
     with make_session() as session:
         rows = (
             session.query(DiscordChannel.id, DiscordChannel.channel_type)
+            .outerjoin(parent, DiscordChannel.parent_id == parent.id)
             .outerjoin(DiscordServer, DiscordChannel.server_id == DiscordServer.id)
             .filter(
-                or_(
-                    DiscordChannel.collect_messages.is_(True),
-                    and_(
-                        DiscordChannel.collect_messages.is_(None),
-                        DiscordServer.collect_messages.is_(True),
-                    ),
-                )
+                func.coalesce(
+                    DiscordChannel.collect_messages, parent.collect_messages, DiscordServer.collect_messages
+                ).is_(True)
             )
             .all()
         )

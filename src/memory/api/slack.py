@@ -34,7 +34,7 @@ from memory.api.auth import (
 )
 from memory.api.https_url import HttpsUrl, require_chat_url
 from memory.api.request_body import read_request_body_with_cap
-from memory.api.webhook_events import record_event_arrival, register_body_seen
+from memory.api.webhook_events import record_event_arrival
 from memory.api.llm_keys import LLMKeyInput, LLMKeyView, apply_llm_key, llm_key_view
 from memory.api.sync_status import PushHealthResponse, SyncStatusResponse, push_health_fields, sync_status_fields
 from memory.common import settings
@@ -53,6 +53,7 @@ from memory.common.data_source_access import (
 )
 from memory.common.db.connection import get_session
 from memory.common.db.models import User
+from memory.common.db.models.events import NO_ITEM_TYPE, NOT_COLLECTED, REJECTED, STORED, record_raw_event
 from memory.common.db.models.slack import (
     DEFAULT_SLACK_API_BASE_URL,
     DEFAULT_SLACK_AUTHORIZE_URL,
@@ -1051,7 +1052,6 @@ def delete_slack_app(
 # events are small) and bounds the surface for pre-decrypt malicious traffic.
 SLACK_EVENT_MAX_BODY_BYTES = 1_048_576  # 1 MiB
 SLACK_EVENT_MAX_TS_SKEW_SECONDS = 5 * 60  # 5 min — Slack's documented window
-SLACK_EVENT_REPLAY_TTL_SECONDS = 6 * 60  # 6 min — slightly larger than skew
 
 UNIFORM_REJECT_BODY = b"invalid request"
 """All security-failure responses use this identical body (security M5 — no
@@ -1140,7 +1140,23 @@ def _slack_app_for_event(db: Session, slack_app_id: int) -> SlackApp | None:
     return db.get(SlackApp, slack_app_id)
 
 
-INGESTING_DISPATCHES = frozenset({"add_message", "mark_deleted", "update_reactions", "update_channel"})
+# A planned dispatch: a label for logs, and the task to send with its kwargs (none for a dropped event).
+SlackDispatch = tuple[str, str | None, dict]
+
+
+def slack_event_type(envelope: dict) -> str:
+    event = envelope.get("event") or {}
+    event_type, subtype = event.get("type") or "unknown", event.get("subtype")
+    return f"{event_type}.{subtype}" if subtype else str(event_type)
+
+
+def channel_collected(db: Session, workspace_id: str, channel_id: str) -> bool:
+    """Whether the channel's messages are collected; a channel not stored yet
+    follows its workspace."""
+    if channel := db.get(SlackChannel, channel_id):
+        return channel.should_collect
+    workspace = db.get(SlackWorkspace, workspace_id)
+    return bool(workspace and workspace.collect_messages)
 
 
 def channel_event_payload(event_type: str, raw_channel: object) -> dict | None:
@@ -1155,10 +1171,8 @@ def channel_event_payload(event_type: str, raw_channel: object) -> dict | None:
     return None
 
 
-def _dispatch_event_callback(body: dict, slack_app_id: int) -> dict[str, str]:
-    """Branch on event.type and enqueue the right celery task.
-
-    Returns a small status dict for logging — Slack only needs the 200.
+def plan_event_callback(body: dict, slack_app_id: int) -> SlackDispatch:
+    """Branch on event.type to the celery task that applies it.
 
     Defense-in-depth: HMAC signature proves the body came from Slack with the
     correct signing secret, but it does not prove the *content* is well-formed.
@@ -1198,78 +1212,62 @@ def _dispatch_event_callback(body: dict, slack_app_id: int) -> dict[str, str]:
             f"Rejecting event with malformed team_id "
             f"slack_app_id={slack_app_id} event_type={event_type}"
         )
-        return {"dispatch": "rejected_team_id"}
+        return "rejected_team_id", None, {}
     # channel_id is required for every dispatched task type below.
     if not channel_id or not _SLACK_CHANNEL_ID_PATTERN.fullmatch(channel_id):
         logger.warning(
             f"Rejecting event with malformed channel_id "
             f"slack_app_id={slack_app_id} event_type={event_type}"
         )
-        return {"dispatch": "rejected_channel_id"}
+        return "rejected_channel_id", None, {}
 
     if event_type == "message":
         if subtype == "message_deleted":
-            celery_app.send_task(
-                MARK_SLACK_MESSAGE_DELETED,
-                kwargs={
-                    "workspace_id": workspace_id,
-                    "channel_id": channel_id,
-                    "message_ts": (event.get("deleted_ts") or event.get("ts")),
-                    "slack_app_id": slack_app_id,
-                },
-            )
-            return {"dispatch": "mark_deleted"}
+            return "mark_deleted", MARK_SLACK_MESSAGE_DELETED, {
+                "workspace_id": workspace_id,
+                "channel_id": channel_id,
+                "message_ts": (event.get("deleted_ts") or event.get("ts")),
+                "slack_app_id": slack_app_id,
+            }
         # Both "message" and "message_changed" go through ADD_SLACK_MESSAGE,
         # which carries the merge logic from B-pre-1/B-pre-2.
         message = event if subtype != "message_changed" else event.get("message", {})
-        celery_app.send_task(
-            ADD_SLACK_MESSAGE,
-            kwargs={
-                "workspace_id": workspace_id,
-                "channel_id": channel_id,
-                "message_ts": message.get("ts"),
-                "author_id": message.get("user"),
-                "content": message.get("text", ""),
-                "thread_ts": message.get("thread_ts"),
-                "reply_count": message.get("reply_count"),
-                "subtype": subtype,
-                "edited_ts": message.get("edited", {}).get("ts"),
-                "reactions": message.get("reactions"),
-                "files": message.get("files"),
-                "slack_app_id": slack_app_id,
-            },
-        )
-        return {"dispatch": "add_message"}
+        return "add_message", ADD_SLACK_MESSAGE, {
+            "workspace_id": workspace_id,
+            "channel_id": channel_id,
+            "message_ts": message.get("ts"),
+            "author_id": message.get("user"),
+            "content": message.get("text", ""),
+            "thread_ts": message.get("thread_ts"),
+            "reply_count": message.get("reply_count"),
+            "subtype": subtype,
+            "edited_ts": message.get("edited", {}).get("ts"),
+            "reactions": message.get("reactions"),
+            "files": message.get("files"),
+            "slack_app_id": slack_app_id,
+        }
 
     if event_type in ("reaction_added", "reaction_removed"):
-        celery_app.send_task(
-            UPDATE_SLACK_REACTIONS,
-            kwargs={
-                "workspace_id": workspace_id,
-                "channel_id": channel_id,
-                "message_ts": reaction_item.get("ts"),
-                "action": "add" if event_type == "reaction_added" else "remove",
-                "emoji": event.get("reaction"),
-                "user_id": event.get("user"),
-                "slack_app_id": slack_app_id,
-            },
-        )
-        return {"dispatch": "update_reactions"}
+        return "update_reactions", UPDATE_SLACK_REACTIONS, {
+            "workspace_id": workspace_id,
+            "channel_id": channel_id,
+            "message_ts": reaction_item.get("ts"),
+            "action": "add" if event_type == "reaction_added" else "remove",
+            "emoji": event.get("reaction"),
+            "user_id": event.get("user"),
+            "slack_app_id": slack_app_id,
+        }
 
     channel_payload = channel_event_payload(event_type, raw_channel)
     if channel_payload is not None:
-        celery_app.send_task(
-            UPDATE_SLACK_CHANNEL,
-            kwargs={
-                "workspace_id": workspace_id,
-                "channel_id": channel_id,
-                "channel_payload": channel_payload,
-                "slack_app_id": slack_app_id,
-            },
-        )
-        return {"dispatch": "update_channel"}
+        return "update_channel", UPDATE_SLACK_CHANNEL, {
+            "workspace_id": workspace_id,
+            "channel_id": channel_id,
+            "channel_payload": channel_payload,
+            "slack_app_id": slack_app_id,
+        }
 
-    return {"dispatch": "ignored"}
+    return "ignored", None, {"workspace_id": workspace_id, "channel_id": channel_id}
 
 
 def advance_setup_state(db: Session, app: SlackApp, verified_secret: bytes, from_state: str, to_state: str) -> None:
@@ -1307,8 +1305,9 @@ async def slack_events(
          SlackApp's signing secret, so the OS scheduler sheds malformed
          traffic before crypto. (IP-level rate limiting is handled by the
          reverse proxy fronting this endpoint.)
-      2. Crypto layer — HMAC verify + replay-cache.
-      3. Dispatch — url_verification or event_callback fan-out to celery.
+      2. Crypto layer — HMAC verify.
+      3. Dispatch — url_verification or event_callback fan-out to celery,
+         deduped by the raw event each request records.
     """
     log = _events_logger()
 
@@ -1330,16 +1329,15 @@ async def slack_events(
 
     # 3. SlackApp lookup + signing-secret decrypt + HMAC verify.
     app = _slack_app_for_event(db, slack_app_id)
-    if app is None or not app.is_active:
+    if app is None or not app.is_active or app.signing_secret_encrypted is None:
+        log.warning("slack event for an unknown or inactive app", extra={"slack_app_id": slack_app_id})
         return _uniform_401()
     verified_secret = app.signing_secret_encrypted
-    if verified_secret is None:
-        return _uniform_401()
     signing_secret = decrypt_value(verified_secret)
     sig_header = request.headers.get("x-slack-signature", "")
     if not _verify_slack_signature(signing_secret, ts_header, body, sig_header):
         body_sha = hashlib.sha256(body).hexdigest()[:16]
-        log.info(
+        log.warning(
             "slack event rejected",
             extra={
                 "slack_app_id": slack_app_id,
@@ -1350,19 +1348,32 @@ async def slack_events(
         )
         return _uniform_401()
 
-    # 4. Replay protection: register-if-novel on the body hash.
+    # 4. Parse and dispatch. Repeats are caught by the raw event's dedupe.
     body_sha = hashlib.sha256(body).hexdigest()
-    if not register_body_seen(body_sha, SLACK_EVENT_REPLAY_TTL_SECONDS):
-        # Slack expects 200 on duplicates so its retry loop stops.
-        return PlainTextResponse(content="", status_code=200)
-
-    # 5. Parse and dispatch.
     try:
         envelope = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
+        envelope = None
+    if not isinstance(envelope, dict):
+        log.warning("slack event unparseable", extra={"slack_app_id": slack_app_id})
         return _uniform_401()
 
     envelope_type = envelope.get("type")
+    # The verification token is a credential.
+    logged = {k: v for k, v in envelope.items() if k != "token"}
+
+    def record(event_type: str, outcome: str, container: str | None = None) -> int | None:
+        return record_raw_event(
+            db,
+            source="slack",
+            event_type=event_type,
+            account_id=app.id,
+            owner_id=app.created_by_user_id,
+            delivery_id=envelope.get("event_id") or body_sha,
+            outcome=outcome,
+            container=container,
+            payload=logged,
+        )
 
     if envelope_type == "url_verification":
         nonce_qs = request.query_params.get("wizard_nonce")
@@ -1378,41 +1389,71 @@ async def slack_events(
             if not hmac.compare_digest(stored_nonce, nonce_qs):
                 return _uniform_401()
 
+        record("url_verification", NO_ITEM_TYPE)
+        db.commit()
         advance_setup_state(db, app, verified_secret, "draft", "signing_verified")
         return PlainTextResponse(content=challenge, status_code=200)
 
-    if envelope_type == "event_callback":
-        # A secret rotated outside the wizard gets no new url_verification;
-        # a signed event proves the same thing.
-        advance_setup_state(db, app, verified_secret, "draft", "signing_verified")
-        record_event_arrival(db, app)
-        # An event shows push reaches some channel, not the one that missed,
-        # so the outage ends only once polls stop finding misses.
-        if app.push_missing_since and push_stale(app.push_last_miss_at):
-            app.push_missing_since = None
-            db.commit()
-        # The signature only proves the app's owner sent this; an event counts
-        # only for a workspace the app was authorized into.
-        if not app_has_workspace(db, app.id, envelope.get("team_id")):
-            log.info("slack event for an unconnected workspace dropped", extra={"slack_app_id": slack_app_id})
-            return PlainTextResponse(content="", status_code=200)
-        log.info(
-            "slack event received",
-            extra={
-                "slack_app_id": slack_app_id,
-                "event_type": (envelope.get("event") or {}).get("type"),
-                "hmac_ok": True,
-                "ts_skew_seconds": skew,
-                "body_sha256": body_sha[:16],
-            },
-        )
-        # Content actually being ingested is what 'live' claims; lifecycle,
-        # ignored and malformed events don't show that.
-        if _dispatch_event_callback(envelope, slack_app_id)["dispatch"] in INGESTING_DISPATCHES:
-            advance_setup_state(db, app, verified_secret, "signing_verified", "live")
+    if envelope_type != "event_callback":
+        # Slack expects 200 for envelope types we don't act on.
+        record(str(envelope_type), NO_ITEM_TYPE)
+        db.commit()
         return PlainTextResponse(content="", status_code=200)
 
-    # Unknown envelope type — accept (Slack expects 200) but don't dispatch.
+    # A secret rotated outside the wizard gets no new url_verification;
+    # a signed event proves the same thing.
+    advance_setup_state(db, app, verified_secret, "draft", "signing_verified")
+    record_event_arrival(db, app)
+    # An event shows push reaches some channel, not the one that missed,
+    # so the outage ends only once polls stop finding misses.
+    if app.push_missing_since and push_stale(app.push_last_miss_at):
+        app.push_missing_since = None
+        db.commit()
+    event_type = slack_event_type(envelope)
+    # The signature only proves the app's owner sent this; an event counts
+    # only for a workspace the app was authorized into.
+    if not app_has_workspace(db, app.id, envelope.get("team_id")):
+        log.info("slack event for an unconnected workspace dropped", extra={"slack_app_id": slack_app_id})
+        record(event_type, REJECTED)
+        db.commit()
+        return PlainTextResponse(content="", status_code=200)
+
+    label, task, kwargs = plan_event_callback(envelope, slack_app_id)
+    # A channel a push may not reach Memory from leaves only a stub; a delete
+    # carries ids alone and drops whatever copy Memory has.
+    if label.startswith("rejected"):
+        outcome = REJECTED
+    elif label != "mark_deleted" and not channel_collected(db, kwargs["workspace_id"], kwargs["channel_id"]):
+        outcome = NOT_COLLECTED
+    else:
+        outcome = STORED if task else NO_ITEM_TYPE
+    raw_id = record(event_type, outcome, kwargs.get("channel_id"))
+    if raw_id is None:
+        # A retry of an event already taken.
+        db.rollback()
+        return PlainTextResponse(content="", status_code=200)
+    log.info(
+        "slack event received",
+        extra={
+            "slack_app_id": slack_app_id,
+            "event_type": event_type,
+            "hmac_ok": True,
+            "ts_skew_seconds": skew,
+            "body_sha256": body_sha[:16],
+        },
+    )
+    if task and outcome == STORED:
+        try:
+            celery_app.send_task(task, kwargs={**kwargs, "caused_by": raw_id})
+        except Exception:
+            # Slack retries a failed event, which must not be a duplicate.
+            db.rollback()
+            raise
+    db.commit()
+    # A content event shows push works, which is what 'live' claims, even from
+    # a channel not collected; lifecycle, ignored and malformed events don't.
+    if task:
+        advance_setup_state(db, app, verified_secret, "signing_verified", "live")
     return PlainTextResponse(content="", status_code=200)
 
 
