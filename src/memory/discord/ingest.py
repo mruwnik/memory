@@ -23,7 +23,7 @@ from memory.common.celery_app import ADD_DISCORD_MESSAGE
 from memory.common.db.connection import DBSession
 from memory.common.db.models import DiscordBotServer, DiscordChannel, DiscordServer, DiscordUser
 from memory.common.db.upsert import get_or_insert, insert_missing
-from memory.common.discord_events import verify_server
+from memory.common.discord_events import set_thread_parent, verify_server
 
 
 def get_channel_type(channel: abc.Messageable) -> str:
@@ -119,8 +119,7 @@ def ensure_channel(
         channel_model.name = name
     if category_id is not None and channel_model.category_id != category_id:
         channel_model.category_id = category_id
-    if parent_id is not None:
-        channel_model.parent_id = parent_id
+    set_thread_parent(session, channel_model, parent_id)
     return channel_model
 
 

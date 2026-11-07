@@ -7,6 +7,7 @@ so this mirrors ``memory.discord.ingest`` without importing discord.py.
 
 from typing import Any
 
+from memory.common.content_processing import clear_item_chunks
 from memory.common.db.connection import DBSession
 from memory.common.db.models import (
     DiscordBot,
@@ -238,10 +239,26 @@ def ensure_listed_channel(
     parent_id = snowflake(data.get("parent_id"))
     if channel_type == "thread":
         # A thread first stored from a message event has no parent yet.
-        channel.parent_id = parent_id or channel.parent_id
+        set_thread_parent(session, channel, parent_id)
     elif not existed and parent_id is not None:
         channel.category_id = parent_id
     return channel
+
+
+def set_thread_parent(session: DBSession, thread: DiscordChannel, parent_id: int | None) -> None:
+    """Record a thread's parent. Its first messages can be stored before the
+    parent is known; if the parent leaves the thread not collected, they are
+    removed, as if never collected."""
+    if parent_id is None or thread.parent_id == parent_id:
+        return
+    thread.parent_id = parent_id
+    session.flush()
+    session.expire(thread, ["parent"])
+    if thread.should_collect:
+        return
+    for message in session.query(DiscordMessage).filter(DiscordMessage.channel_id == thread.id):
+        clear_item_chunks(message, session)
+        session.delete(message)
 
 
 def ensure_thread(session: DBSession, data: dict, bot_id: int, push_only: bool) -> DiscordChannel:

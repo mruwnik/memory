@@ -14,8 +14,10 @@ from memory.common.db.models import (
     HumanUser,
     Person,
 )
-from memory.common.discord_events import message_task_kwargs
+from memory.common.db.connection import make_session
+from memory.common.discord_events import ensure_listed_channel, message_task_kwargs
 from memory.workers.tasks import discord
+from tests.conftest import item_events
 
 GUILD = "900000000000000001"
 CHANNEL = "900000000000000002"
@@ -279,6 +281,40 @@ def test_a_thread_first_stored_as_a_text_channel_becomes_a_thread(db_session, we
 
     db_session.expire_all()
     assert db_session.get(DiscordChannel, 42).channel_type == "thread"
+
+
+THREAD = "900000000000000042"
+
+
+def thread_create(bot):
+    handle(bot, "THREAD_CREATE", {"id": THREAD, "guild_id": GUILD, "parent_id": CHANNEL, "type": 11})
+
+
+def thread_listed(bot):
+    with make_session() as session:
+        ensure_listed_channel(session, {"id": THREAD, "parent_id": CHANNEL, "type": 11}, int(GUILD), bot.id)
+        session.commit()
+
+
+# A thread's first messages can arrive before anything names its parent.
+@pytest.mark.parametrize("learn_parent", [thread_create, thread_listed])
+@pytest.mark.parametrize("parent_collects, kept, removed", [(False, 0, 1), (True, 1, 0), (None, 1, 0)])
+def test_a_thread_found_under_a_parent_not_collected_drops_what_it_stored(
+    db_session, webhook_bot, qdrant, learn_parent, parent_collects, kept, removed
+):
+    db_session.add(DiscordServer(id=int(GUILD), name="Guild", bot_id=webhook_bot.id, collect_messages=True))
+    db_session.flush()
+    db_session.add(DiscordChannel(id=int(CHANNEL), server_id=int(GUILD), name="parent", channel_type="text",
+                                  collect_messages=parent_collects))
+    db_session.commit()
+    handle(webhook_bot, "MESSAGE_CREATE", message_create(channel_id=THREAD))
+    message_id = stored(db_session).id
+
+    learn_parent(webhook_bot)
+
+    db_session.expire_all()
+    assert db_session.query(DiscordMessage).count() == kept
+    assert [e for e in item_events(db_session) if e[1] == "removed"] == [(message_id, "removed", None)] * removed
 
 
 def test_thread_update_renames(db_session, webhook_bot):
