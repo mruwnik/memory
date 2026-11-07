@@ -1474,6 +1474,10 @@ class GithubItem(SourceItem):
     # PRs: the head commit and each check's conclusion (else status) on it.
     head_sha: Mapped[str | None] = mapped_column(Text, nullable=True)
     checks: Mapped[dict[str, str] | None] = mapped_column(JSONB, nullable=True)
+    # PRs: the base commit, the head branch and the owner/name of the repo it lives in.
+    base_sha: Mapped[str | None] = mapped_column(Text, nullable=True)
+    head_ref: Mapped[str | None] = mapped_column(Text, nullable=True)
+    head_repo: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Relationship to milestone/project
     # foreign_keys needed because SourceItem.project_id also references projects
@@ -1587,7 +1591,7 @@ class GithubPRData(Base):
     changed_files_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # Reviews (structured)
-    # [{user, state, body, submitted_at}]
+    # [{id, user, state, body, submitted_at, commit_oid}]
     reviews: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
 
     # Review comments (line-by-line code comments)

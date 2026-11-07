@@ -106,6 +106,9 @@ class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
         deletions
         changedFiles
         headRefOid
+        baseRefOid
+        headRefName
+        headRepository { nameWithOwner }
         commits(last: 1) {
           nodes {
             commit {
@@ -137,6 +140,7 @@ class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
             state
             body
             submittedAt
+            commit { oid }
           }
         }
         reviewThreads(first: 100) {
@@ -406,6 +410,7 @@ class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
                 state=r.get("state", "COMMENTED").lower(),
                 body=r.get("body"),
                 submitted_at=r.get("submittedAt", ""),
+                commit_oid=self._extract_nested(r, "commit", "oid"),
             )
             for r in raw_reviews
             if r is not None
@@ -497,6 +502,9 @@ class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
             pr_data=pr_data,
             head_sha=pr.get("headRefOid"),
             checks=self._parse_checks(pr),
+            base_sha=pr.get("baseRefOid"),
+            head_ref=pr.get("headRefName"),
+            head_repo=self._extract_nested(pr, "headRepository", "nameWithOwner"),
         )
 
     def _parse_checks(self, pr: dict[str, Any]) -> dict[str, str]:

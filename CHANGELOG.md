@@ -27,10 +27,13 @@ a new, empty `## Unreleased` above it.
 - Discord MCP tools name the server: `discord_list_channels` returns `server_name` by default, and `discord_channel_history` gives the channel's `server_id` and `server_name`.
 - GitHub webhook install no longer overwrites a GitHub App's own webhook. For App and token accounts alike it adds or updates one webhook on each org (finding one already pointing at Memory, such as one added by hand), and one per repo only for personal-account repos. An org whose hook isn't permitted gets "Missing permission" on its repos, never per-repo hooks that would duplicate an org hook; other webhooks are left alone. The dialog says this up front, sums an org webhook up in one row, and names the exact permission an App or token is missing.
 - Sources rows show the push channel at a glance: "Webhook active", "No webhook", "Webhook error", "No recent events" or "Missing events", on GitHub accounts, Slack workspaces, Discord webhook bots and transcript accounts. GitHub accounts are spaced apart as separate cards.
+- GitHub PR reviews record the commit they were left on (`commit_oid`), and PRs record `base_sha`, `head_ref` and `head_repo` (owner/name of the repo the head branch lives in; empty once a fork is deleted). Ingest trigger templates for `github_pr` can name these and `reviews`. Older reviews get their commit at the PR's next sync.
+- New MCP tool `github_pr_diff(id)` fetches a PR's full current diff from GitHub with the repo account's credentials, for callers that can read the PR (the `diff_summary` template field stays clipped).
 
 ### Migrations
 
 - `20261209_github_org_hooks`: clears the retired `app_hook` / `app_settings` repo webhook statuses. Fast.
+- `20261209_github_pr_branches`: adds `base_sha`, `head_ref` and `head_repo` to `github_item`. Fast.
 
 ## v0.4.11 (2026-11-07)
 

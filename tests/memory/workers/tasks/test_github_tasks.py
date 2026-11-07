@@ -662,7 +662,7 @@ def test_sync_github_item_existing_updated(github_repo, db_session, qdrant):
 # =============================================================================
 
 
-@patch("memory.workers.tasks.github.GithubClient")
+@patch("memory.common.project.client.GithubClient")
 def test_sync_github_repo_success(
     mock_client_class, mock_issue_data, github_repo, db_session
 ):
@@ -689,7 +689,7 @@ def test_sync_github_repo_success(
         mock_sync_item.delay.assert_called_once()
 
 
-@patch("memory.workers.tasks.github.GithubClient")
+@patch("memory.common.project.client.GithubClient")
 def test_sync_github_repo_with_prs(
     mock_client_class, mock_issue_data, mock_pr_data, github_repo, db_session
 ):
@@ -743,7 +743,7 @@ def test_sync_github_repo_inactive_account(db_session, inactive_github_account):
     assert "Account not found or inactive" in result["error"]
 
 
-@patch("memory.workers.tasks.github.GithubClient")
+@patch("memory.common.project.client.GithubClient")
 def test_sync_github_repo_force_full(mock_client_class, github_repo, db_session):
     """Test force_full bypasses check interval."""
     from sqlalchemy import text
@@ -768,7 +768,7 @@ def test_sync_github_repo_force_full(mock_client_class, github_repo, db_session)
     assert result["sync_type"] == "full"
 
 
-@patch("memory.workers.tasks.github.GithubClient")
+@patch("memory.common.project.client.GithubClient")
 def test_sync_github_repo_full_sync_for_project_fields(
     mock_client_class, github_repo_with_project_fields, db_session
 ):
@@ -792,7 +792,7 @@ def test_sync_github_repo_full_sync_for_project_fields(
     assert call_args[0][3] == "open"  # state argument
 
 
-@patch("memory.workers.tasks.github.GithubClient")
+@patch("memory.common.project.client.GithubClient")
 def test_sync_github_repo_updates_timestamps(mock_client_class, github_repo, db_session):
     """Test that sync updates last_sync_at timestamp."""
     mock_client = Mock()
@@ -809,7 +809,7 @@ def test_sync_github_repo_updates_timestamps(mock_client_class, github_repo, db_
     assert github_repo.last_sync_at is not None
 
 
-@patch("memory.workers.tasks.github.GithubClient")
+@patch("memory.common.project.client.GithubClient")
 def test_sync_github_repo_records_failure_until_next_success(
     mock_client_class, github_repo, db_session
 ):
@@ -832,7 +832,7 @@ def test_sync_github_repo_records_failure_until_next_success(
     assert (github_repo.sync_error, github_repo.sync_failing_since) == (None, None)
 
 
-@patch("memory.workers.tasks.github.GithubClient")
+@patch("memory.common.project.client.GithubClient")
 def test_sync_github_repo_with_labels_filter(
     mock_client_class, github_account, db_session
 ):
@@ -863,7 +863,7 @@ def test_sync_github_repo_with_labels_filter(
     assert call_args[0][4] == ["bug", "critical"]  # labels argument
 
 
-@patch("memory.workers.tasks.github.GithubClient")
+@patch("memory.common.project.client.GithubClient")
 def test_sync_github_repo_issues_only(mock_client_class, github_account, db_session):
     """Test sync with only issues tracking enabled."""
     mock_client = Mock()
@@ -889,7 +889,7 @@ def test_sync_github_repo_issues_only(mock_client_class, github_account, db_sess
     mock_client.fetch_prs.assert_not_called()
 
 
-@patch("memory.workers.tasks.github.GithubClient")
+@patch("memory.common.project.client.GithubClient")
 def test_sync_github_repo_prs_only(mock_client_class, github_account, db_session):
     """Test sync with only PRs tracking enabled."""
     mock_client = Mock()
@@ -1687,7 +1687,7 @@ def test_sync_github_repo_archived_deactivates_and_closes_children(db_session):
     }
 
     with patch(
-        "memory.workers.tasks.github.GithubClient", return_value=mock_client
+        "memory.common.project.client.GithubClient", return_value=mock_client
     ):
         result = sync_github_repo(repo.id)
 
@@ -1721,7 +1721,7 @@ def test_sync_github_repo_missing_deactivates_and_closes_children(db_session):
     mock_client.get_repo.return_value = None
 
     with patch(
-        "memory.workers.tasks.github.GithubClient", return_value=mock_client
+        "memory.common.project.client.GithubClient", return_value=mock_client
     ):
         result = sync_github_repo(repo.id)
 

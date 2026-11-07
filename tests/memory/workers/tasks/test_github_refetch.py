@@ -37,7 +37,9 @@ def comment(id: int, author: str, at: str) -> GithubComment:
 
 
 def review(id: int, user: str) -> GithubReview:
-    return GithubReview(id=id, user=user, state="commented", body="", submitted_at="2024-01-06T00:00:00Z")
+    return GithubReview(
+        id=id, user=user, state="commented", body="", submitted_at="2024-01-06T00:00:00Z", commit_oid=None
+    )
 
 
 def pr_data(**overrides) -> GithubIssueData:
@@ -282,6 +284,45 @@ def test_refetch_reports_checks_without_reembedding(db_session, repo, qdrant, gi
     assert result["status"] == "updated"
     assert item.checks == {"tests": "success"}
     trigger_matches.assert_called_once_with(item.id, changes=["checks"])
+
+
+def branch_context(base: str, head_repo: str, review_commits=()) -> dict:
+    reviews = [
+        {"databaseId": i, "author": {"login": "bob"}, "state": "COMMENTED", "body": "", "submittedAt": LATER, "commit": {"oid": oid}}
+        for i, oid in enumerate(review_commits, 1)
+    ]
+    return {
+        "baseRefOid": base,
+        "headRefName": "feature",
+        "headRepository": {"nameWithOwner": head_repo},
+        "reviews": {"nodes": reviews},
+    }
+
+
+def test_refetch_stores_branch_context_and_reviewed_commits(db_session, repo, qdrant, github_serves, trigger_matches):
+    github_serves(pr_node("a" * 40) | branch_context("base1", "fork/testrepo"))
+    github.refetch_github_item(repo.id, 7, "pr")
+    first = stored(db_session)
+    assert (first.base_sha, first.head_ref, first.head_repo) == ("base1", "feature", "fork/testrepo")
+
+    github_serves(pr_node("b" * 40, updated=LATER) | branch_context("base2", "testorg/testrepo", ["a" * 40]))
+    github.refetch_github_item(repo.id, 7, "pr")
+
+    item = stored(db_session)
+    assert item.pr_data is not None
+    assert (item.base_sha, item.head_repo) == ("base2", "testorg/testrepo")
+    assert [r["commit_oid"] for r in item.pr_data.reviews or []] == ["a" * 40]
+
+
+def test_refetch_forgets_the_head_repo_of_a_deleted_fork(db_session, repo, qdrant, github_serves, trigger_matches):
+    github_serves(pr_node("a" * 40) | branch_context("base1", "fork/testrepo"))
+    github.refetch_github_item(repo.id, 7, "pr")
+
+    github_serves(pr_node("a" * 40, updated=LATER) | branch_context("base1", "fork/testrepo") | {"headRepository": None})
+    github.refetch_github_item(repo.id, 7, "pr")
+
+    item = stored(db_session)
+    assert (item.base_sha, item.head_ref, item.head_repo) == ("base1", "feature", None)
 
 
 def test_refetch_skips_untracked_kind(db_session, repo, github_serves, trigger_matches):

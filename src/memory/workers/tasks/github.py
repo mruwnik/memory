@@ -36,7 +36,6 @@ from memory.common.people import find_person_by_github, link_github_user_to_pers
 from memory.common.github import (
     GITHUB_API_URL,
     GithubClient,
-    GithubCredentials,
     GithubIssueData,
     GithubMilestoneData,
     GithubProjectData,
@@ -50,6 +49,7 @@ from memory.common.github import (
     webhook_url,
 )
 from memory.common.github.refetch import refetch_started
+from memory.common.project.client import account_client
 from memory.common.content_processing import (
     create_content_hash,
     delete_chunk_vectors,
@@ -67,18 +67,6 @@ CHANGES = ("edited", "commits", "comments", "review", "checks", "state")
 # Items are looked up by kind, and GitHub numbers a repo's issues and PRs from
 # one sequence, so a stored item never changes class.
 CLASSES: dict[str, type[GithubItem]] = {"pr": GithubPR, "issue": GithubIssue}
-
-
-def account_client(account: GithubAccount) -> GithubClient:
-    return GithubClient(
-        GithubCredentials(
-            auth_type=cast(str, account.auth_type),
-            access_token=cast(str | None, account.access_token),
-            app_id=cast(int | None, account.app_id),
-            installation_id=cast(int | None, account.installation_id),
-            private_key=cast(str | None, account.private_key),
-        )
-    )
 
 
 def own_logins(account: GithubAccount, client: GithubClient) -> set[str]:
@@ -323,6 +311,9 @@ def _create_github_item(
         mime_type="text/markdown",
         head_sha=issue_data.get("head_sha"),
         checks=issue_data.get("checks"),
+        base_sha=issue_data.get("base_sha"),
+        head_ref=issue_data.get("head_ref"),
+        head_repo=issue_data.get("head_repo"),
     )
 
     # Create PR data if this is a PR
@@ -372,6 +363,10 @@ def _update_existing_item(
     """Update an existing GithubItem and reindex if content changed."""
     changes = changes or []
     existing.head_sha = issue_data.get("head_sha") or existing.head_sha  # type: ignore
+    existing.base_sha = issue_data.get("base_sha") or existing.base_sha
+    existing.head_ref = issue_data.get("head_ref") or existing.head_ref
+    # Null once the fork is deleted, so it isn't kept like the others.
+    existing.head_repo = issue_data.get("head_repo")
     new_checks = issue_data.get("checks")
     if new_checks is not None:
         existing.checks = new_checks  # type: ignore
@@ -492,6 +487,9 @@ def _deserialize_issue_data(data: dict[str, Any]) -> GithubIssueData:
         pr_data=pr_data,
         head_sha=data.get("head_sha"),
         checks=data.get("checks"),
+        base_sha=data.get("base_sha"),
+        head_ref=data.get("head_ref"),
+        head_repo=data.get("head_repo"),
     )
 
 

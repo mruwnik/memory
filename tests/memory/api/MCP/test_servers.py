@@ -43,6 +43,7 @@ def test_all_servers_in_enum():
         "discord",
         "email",
         "forecast",
+        "github",
         "ingest",
         "journal",
         "meta",

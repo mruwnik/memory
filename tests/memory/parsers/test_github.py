@@ -719,6 +719,51 @@ def test_fetch_pr_reads_head_sha_and_checks(commits, checks):
     assert (pr["number"], pr.get("head_sha"), pr.get("checks")) == (7, "abc123", checks)
 
 
+REVIEW = {
+    "databaseId": 9,
+    "author": {"login": "bob"},
+    "state": "APPROVED",
+    "body": "lgtm",
+    "submittedAt": "2024-01-06T00:00:00Z",
+}
+
+
+@pytest.mark.parametrize(
+    "overrides, context",
+    [
+        (
+            {
+                "baseRefOid": "base1",
+                "headRefName": "feature/x",
+                "headRepository": {"nameWithOwner": "fork/repo"},
+                "reviews": {"nodes": [{**REVIEW, "commit": {"oid": "abc123"}}]},
+            },
+            ("base1", "feature/x", "fork/repo", "abc123"),
+        ),
+        (
+            {"headRepository": None, "reviews": {"nodes": [{**REVIEW, "commit": None}]}},
+            (None, None, None, None),
+        ),
+    ],
+)
+def test_fetch_pr_reads_branch_context(overrides, context):
+    client = GithubClient(GithubCredentials(auth_type="pat", access_token="token"))
+    response = mock_graphql_response({"repository": {"pullRequest": pr_node(**overrides)}})
+
+    with patch.object(requests.Session, "post", return_value=response), patch.object(
+        requests.Session, "get", return_value=mock_rest_response()
+    ):
+        pr = client.fetch_pr("owner", "repo", 7)
+
+    assert pr is not None and pr["pr_data"] is not None
+    assert (
+        pr.get("base_sha"),
+        pr.get("head_ref"),
+        pr.get("head_repo"),
+        pr["pr_data"]["reviews"][0]["commit_oid"],
+    ) == context
+
+
 def test_fetch_issue_by_number():
     client = GithubClient(GithubCredentials(auth_type="pat", access_token="token"))
     issue = {

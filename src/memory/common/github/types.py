@@ -59,6 +59,7 @@ class GithubReview(TypedDict):
     state: str  # "approved", "changes_requested", "commented", "dismissed"
     body: str | None
     submitted_at: str
+    commit_oid: str | None  # the commit the review was left on
 
 
 class GithubFileChange(TypedDict):
@@ -159,6 +160,10 @@ class GithubIssueData(TypedDict):
     # PRs only: the head commit, and check name -> conclusion (else status) on it.
     head_sha: NotRequired[str | None]
     checks: NotRequired[dict[str, str] | None]
+    # PRs only: the base commit, the head branch and the owner/name of the repo it lives in.
+    base_sha: NotRequired[str | None]
+    head_ref: NotRequired[str | None]
+    head_repo: NotRequired[str | None]
 
 
 def parse_github_date(date_str: str | None) -> datetime | None:

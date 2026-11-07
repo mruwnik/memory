@@ -6,13 +6,27 @@ database and return an authenticated `GithubClient`, optionally ensuring a
 """
 
 import logging
-from typing import Any
+from typing import Any, cast
 
 from memory.common.db.models.sources import GithubAccount, GithubRepo
 from memory.common.github import GithubClient, GithubCredentials
 
 
 logger = logging.getLogger(__name__)
+
+
+def account_credentials(account: GithubAccount) -> GithubCredentials:
+    return GithubCredentials(
+        auth_type=cast(str, account.auth_type),
+        access_token=cast(str | None, account.access_token),
+        app_id=cast(int | None, account.app_id),
+        installation_id=cast(int | None, account.installation_id),
+        private_key=cast(str | None, account.private_key),
+    )
+
+
+def account_client(account: GithubAccount) -> GithubClient:
+    return GithubClient(account_credentials(account))
 
 
 def get_github_client(
@@ -66,29 +80,15 @@ def get_github_client(
                 "No GitHub account configured. Please add a GitHub account first."
             )
 
-        credentials = GithubCredentials(
-            auth_type=account.auth_type,
-            access_token=account.access_token,
-            app_id=account.app_id,
-            installation_id=account.installation_id,
-            private_key=account.private_key,
-        )
         # Return None for repo since we're using a generic account
         # The caller will need to handle this case
-        return GithubClient(credentials), None
+        return account_client(account), None
 
     account = repo.account
     if not account or not account.active:
         raise ValueError(f"No active credentials for {repo_path}")
 
-    credentials = GithubCredentials(
-        auth_type=account.auth_type,
-        access_token=account.access_token,
-        app_id=account.app_id,
-        installation_id=account.installation_id,
-        private_key=account.private_key,
-    )
-    return GithubClient(credentials), repo
+    return account_client(account), repo
 
 
 def ensure_github_repo(

@@ -43,8 +43,14 @@ def github_pr():
         content="PR body",
         inserted_at=WHEN,
         head_sha="abc123",
+        base_sha="def456",
+        head_ref="fix-login",
+        head_repo="alice/app",
         checks={"ci": "success"},
-        pr_data=GithubPRData(files=[{"filename": "a.py", "additions": 3, "deletions": 1}]),
+        pr_data=GithubPRData(
+            files=[{"filename": "a.py", "additions": 3, "deletions": 1}],
+            reviews=[{"id": 5, "user": "bob", "state": "approved", "body": "ok", "commit_oid": "abc123"}],
+        ),
     )
 
 
@@ -159,6 +165,20 @@ def test_a_github_pr_fills_item_placeholders():
     )
 
     assert rendered == "acme/app#42 new, commits: https://github.com/acme/app/pull/42"
+
+
+def test_a_github_pr_renders_its_branches_and_reviews():
+    rendered = render_input(
+        "{item.head_repo}:{item.head_ref}@{item.head_sha} onto {item.base_sha}\n{item.reviews}",
+        [github_pr()],
+        max_chars=10_000,
+    )
+
+    assert rendered == (
+        "alice/app:<untrusted_item id=1 field=head_ref>fix-login</untrusted_item>@abc123 onto def456\n"
+        "<untrusted_item id=1 field=reviews>- id: 5; user: bob; state: approved; body: ok; "
+        "commit_oid: abc123</untrusted_item>"
+    )
 
 
 def test_a_meeting_renders_summary_action_items_and_attendees():

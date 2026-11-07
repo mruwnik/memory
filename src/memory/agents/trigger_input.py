@@ -128,6 +128,10 @@ BY_TYPE: dict[type[SourceItem], dict[str, Getter]] = {
     },
     GithubPR: {
         "head_sha": lambda i: i.head_sha,
+        "base_sha": lambda i: i.base_sha,
+        "head_ref": lambda i: i.head_ref,
+        "head_repo": lambda i: i.head_repo,
+        "reviews": lambda i: (i.pr_data.reviews if i.pr_data else None) or [],
         "checks": lambda i: i.checks,
         "diff_summary": lambda i: i.diff_summary,
         "files": pr_files,
@@ -172,8 +176,8 @@ ABSENT: dict[type[SourceItem], frozenset[str]] = {
 }
 
 # Left out of {items_json} and clipped in the default rendering.
-LONG = frozenset({"content", "summary", "notes", "diff_summary", "files"})
-UNTRUSTED = LONG | {"title", "subject", "labels", "action_items"}
+LONG = frozenset({"content", "summary", "notes", "diff_summary", "files", "reviews"})
+UNTRUSTED = LONG | {"title", "subject", "labels", "action_items", "head_ref"}
 # Shown in the default rendering's header line instead.
 HEADER = frozenset({"id", "type", "changes"})
 

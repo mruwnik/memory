@@ -45,6 +45,7 @@ READ_ONLY_TOOLS = {
     *("core_search", "core_search_observations"),
     *("deadlines_fetch", "deadlines_list_upcoming"),
     *("discord_channel_history", "discord_list_channels"),
+    "github_pr_diff",
     "journal_list_all",
     *("meta_get_current_time", "meta_get_metadata_schemas", "meta_get_search_defaults"),
     *("meta_get_tags", "meta_get_user"),

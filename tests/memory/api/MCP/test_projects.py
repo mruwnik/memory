@@ -1609,7 +1609,7 @@ async def test_update_github_project_due_on_syncs_to_milestone(
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.common.project.sync.GithubClient") as mock_client_class,
+        patch("memory.common.project.client.GithubClient") as mock_client_class,
         patch(
             "memory.api.MCP.servers.projects.get_github_client",
             return_value=(mock_github_client, github_milestone_project._test_repo),
@@ -1676,7 +1676,7 @@ async def test_update_github_project_clear_due_on_syncs_to_milestone(
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.common.project.sync.GithubClient") as mock_client_class,
+        patch("memory.common.project.client.GithubClient") as mock_client_class,
         patch(
             "memory.api.MCP.servers.projects.get_github_client",
             return_value=(mock_github_client, github_milestone_project._test_repo),
@@ -1739,7 +1739,7 @@ async def test_update_github_project_due_on_fails_gracefully(
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.common.project.sync.GithubClient") as mock_client_class,
+        patch("memory.common.project.client.GithubClient") as mock_client_class,
         patch(
             "memory.api.MCP.servers.projects.get_github_client",
             return_value=(mock_github_client, github_milestone_project._test_repo),
@@ -1793,7 +1793,7 @@ async def test_update_github_project_owner_does_not_call_github(
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.common.project.sync.GithubClient") as mock_client_class,
+        patch("memory.common.project.client.GithubClient") as mock_client_class,
         patch(
             "memory.api.MCP.servers.projects.get_github_client",
             return_value=(mock_github_client, github_milestone_project._test_repo),
@@ -1852,7 +1852,7 @@ async def test_update_github_project_same_due_on_does_not_call_github(
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
-        patch("memory.common.project.sync.GithubClient") as mock_client_class,
+        patch("memory.common.project.client.GithubClient") as mock_client_class,
         patch(
             "memory.api.MCP.servers.projects.get_github_client",
             return_value=(mock_github_client, github_milestone_project._test_repo),

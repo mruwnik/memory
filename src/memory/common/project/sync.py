@@ -6,7 +6,8 @@ from typing import Any
 
 from memory.common.db.models import Project
 from memory.common.db.models.sources import GithubRepo
-from memory.common.github import GithubClient, GithubCredentials
+from memory.common.github import GithubClient
+from memory.common.project.client import account_client
 from memory.common.project.errors import (
     GithubMilestoneSyncError,
     MilestoneMissingError,
@@ -118,14 +119,7 @@ def sync_milestone_due_date(
         utc_due_on = new_due_on.astimezone(timezone.utc)
         github_due_on = utc_due_on.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    credentials = GithubCredentials(
-        auth_type=account.auth_type,
-        access_token=account.access_token,
-        app_id=account.app_id,
-        installation_id=account.installation_id,
-        private_key=account.private_key,
-    )
-    client = GithubClient(credentials)
+    client = account_client(account)
     try:
         if project.number is None:
             raise GithubMilestoneSyncError("Project has no milestone number")
