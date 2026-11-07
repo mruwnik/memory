@@ -512,3 +512,46 @@ it('bypasses the repository cache when explicitly refreshed', async () => {
   expect(await screen.findByText('octocat/hello')).toBeInTheDocument()
   expect(mock.mock.calls.some(([url]) => String(url).endsWith('/available-repos?refresh=true'))).toBe(true)
 })
+
+describe('GitHubPanel webhook modal', () => {
+  const hooked = (overrides = {}) => account({
+    webhook_url: 'https://memory.example/github/webhook/4',
+    webhook_secret_hint: 'abcd',
+    repos: [
+      { ...repo, webhook_status: 'missing_permission' },
+      { ...repo, id: 51, repo_path: 'octocat/other', webhook_status: 'installed' },
+    ],
+    ...overrides,
+  })
+
+  const openModal = async (accounts: unknown[]) => {
+    const mock = mockFetchRoutes({ '/github/accounts/4/webhooks/install': { json: { status: 'queued' } }, ...routes(accounts) })
+    const { user } = renderWithUser(<GitHubPanel />)
+    await user.click(await screen.findByRole('button', { name: 'Webhook' }))
+    return { mock, user, dialog: screen.getByRole('dialog') }
+  }
+
+  it("lists each repo's webhook status and the permission a failed one needs", async () => {
+    const { dialog } = await openModal([hooked()])
+    expect(within(dialog).getByText('Missing permission')).toBeInTheDocument()
+    expect(within(dialog).getByText('Installed')).toBeInTheDocument()
+    expect(within(dialog).getByText(/admin:repo_hook/)).toBeInTheDocument()
+  })
+
+  it('installs on all repos with a POST', async () => {
+    const { mock, user, dialog } = await openModal([hooked()])
+    await user.click(within(dialog).getByRole('button', { name: 'Install on all repos' }))
+    await waitFor(() => {
+      const install = mock.mock.calls.find(
+        ([url, init]) => String(url).includes('/github/accounts/4/webhooks/install') && (init as RequestInit)?.method === 'POST',
+      )
+      expect(install).toBeTruthy()
+    })
+  })
+
+  it("points App accounts at the App's own settings for events", async () => {
+    const { dialog } = await openModal([hooked({ auth_type: 'app', repos: [{ ...repo, webhook_status: 'app_hook' }] })])
+    expect(within(dialog).getByText('Via the App webhook')).toBeInTheDocument()
+    expect(within(dialog).getByText(/App's settings/)).toBeInTheDocument()
+  })
+})

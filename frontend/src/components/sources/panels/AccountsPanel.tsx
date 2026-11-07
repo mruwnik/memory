@@ -413,7 +413,7 @@ const GitHubAccountForm = ({ account, onSubmit, onCancel }: GitHubAccountFormPro
               <li>Choose an expiration date. For a classic token accessing private repositories, use the repo scope; it grants broader access than a fine-grained token. Complete any organization approval or SSO authorization required.</li>
               <li>Copy the generated token and paste it into the Access token field. GitHub only shows the token once.</li>
             </ol>
-            <p className="mt-2">No callback URL or webhook is needed. After saving, add the repositories you want to sync in Memory. Replace the token here when it expires.</p>
+            <p className="mt-2">No callback URL is needed. For changes within seconds rather than at the next poll, also grant Webhooks → Read and write (classic token: admin:repo_hook); Memory then installs its webhooks from the account's Webhook button. After saving, add the repositories you want to sync in Memory. Replace the token here when it expires.</p>
           </Disclosure>
         ) : (
           <Disclosure key="app" summary="Instructions">
@@ -425,7 +425,7 @@ const GitHubAccountForm = ({ account, onSubmit, onCancel }: GitHubAccountFormPro
               and select your app, or choose “New GitHub App”.
             </p>
             <ol className="list-decimal pl-5 mt-2 space-y-1">
-              <li>Leave the callback URL blank and uncheck “Active” under Webhook. Memory uses installation credentials and polling, so neither an OAuth redirect nor a webhook is needed.</li>
+              <li>Leave the callback URL blank. Under Webhook, keep “Active” checked and subscribe to the events listed in the account's Webhook dialog in Memory, which sets the webhook URL and secret for you; or uncheck it and rely on polling.</li>
               <li>Under Permissions &amp; events → Repository permissions, set Issues → Read-only and Pull requests → Read-only. Metadata read access is automatic. No write permissions are needed for ingestion.</li>
               <li>If syncing organization Projects or their fields, also grant Organization permissions → Projects → Read-only.</li>
               <li>Save the permissions. For an existing installation, approve the updated permissions in its configuration page.</li>

@@ -677,3 +677,85 @@ def test_delete_project_succeeds_for_owner(client, db_session, user):
     assert response.status_code == 200
     db_session.expire_all()
     assert db_session.get(GithubProject, project.id) is None
+
+
+# ====== Webhook installation ======
+
+
+@pytest.fixture
+def queued():
+    with patch("memory.api.github_sources.celery_app") as app:
+        app.send_task.return_value.id = "task-1"
+        yield app.send_task
+
+
+def hooked_account(db_session, user, secret: str | None = "s3cret") -> GithubAccount:
+    account = GithubAccount(user_id=user.id, name="Hooked", auth_type="pat", access_token="t")
+    account.webhook_secret = secret
+    db_session.add(account)
+    db_session.commit()
+    return account
+
+
+def sent(queued) -> list[tuple[str, list]]:
+    return [(c.args[0].rsplit(".", 1)[-1], c.kwargs["args"]) for c in queued.call_args_list]
+
+
+@pytest.mark.parametrize("secret, expected", [("s3cret", ["ensure_github_webhooks"]), (None, [])])
+@patch("memory.api.github_sources.GithubClient")
+def test_adding_a_repo_queues_its_webhook_when_the_account_has_a_secret(
+    mock_client_class, client, db_session, user, queued, secret, expected
+):
+    mock_client_class.return_value.get_repo.return_value = {"id": 1, "owner": {"login": "o"}, "name": "r"}
+    account = hooked_account(db_session, user, secret)
+
+    client.post(f"/github/accounts/{account.id}/repos", json={"owner": "o", "name": "r"})
+
+    assert sent(queued) == [(task, [account.id]) for task in expected]
+
+
+@pytest.mark.parametrize("active, expected", [(True, ["ensure_github_webhooks"]), (False, [])])
+def test_reactivating_a_repo_queues_its_webhook(client, db_session, user, queued, active, expected):
+    account = hooked_account(db_session, user)
+    repo = GithubRepo(account_id=account.id, owner="o", name="r", active=not active)
+    db_session.add(repo)
+    db_session.commit()
+
+    client.patch(f"/github/accounts/{account.id}/repos/{repo.id}", json={"active": active})
+
+    assert sent(queued) == [(task, [account.id]) for task in expected]
+
+
+@pytest.mark.parametrize(
+    "method, task", [("post", "ensure_github_webhooks"), ("delete", "remove_github_webhooks")]
+)
+def test_changing_the_secret_reconciles_the_hooks(client, db_session, user, queued, method, task):
+    account = hooked_account(db_session, user)
+
+    getattr(client, method)(f"/github/accounts/{account.id}/webhook-secret")
+
+    assert sent(queued) == [(task, [account.id])]
+
+
+@pytest.mark.parametrize("secret", ["s3cret", None])
+def test_install_queues_with_a_secret_generating_one_if_needed(client, db_session, user, queued, secret):
+    account = hooked_account(db_session, user, secret)
+
+    response = client.post(f"/github/accounts/{account.id}/webhooks/install")
+
+    assert response.json()["status"] == "queued"
+    assert sent(queued) == [("ensure_github_webhooks", [account.id])]
+    db_session.refresh(account)
+    assert account.webhook_secret
+    assert account.webhook_secret == (secret or account.webhook_secret)
+
+
+def test_repo_responses_carry_the_webhook_status(client, db_session, user):
+    account = hooked_account(db_session, user)
+    repo = GithubRepo(account_id=account.id, owner="o", name="r", webhook_status="missing_permission")
+    db_session.add(repo)
+    db_session.commit()
+
+    (listed,) = client.get(f"/github/accounts/{account.id}").json()["repos"]
+
+    assert listed["webhook_status"] == "missing_permission"

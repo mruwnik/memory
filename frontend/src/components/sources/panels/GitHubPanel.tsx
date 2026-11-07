@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useSources, GithubAccount, GithubProject, AvailableRepo, AvailableProject } from '@/hooks/useSources'
+import { useSources, GithubAccount, GithubProject, GithubWebhookStatus, AvailableRepo, AvailableProject } from '@/hooks/useSources'
 import { TagsInput, PauseButton, ScheduleButton, SyncScheduleFields, StatusBadge, SyncButton, SyncFailingBadge, SyncFailure, formatRelativeTime } from '../shared'
-import { Badge, Button, Checkbox, ConfirmButton, CopyButton, DetailList, EmptyState, ErrorState, Field, FormActions, Input, List, LoadingState, Modal, Notice, Row, Section, SubList, cx, useActionNotice, Fieldset, NewTabLink } from '@/components/shared/ui'
+import { Badge, Button, Checkbox, ConfirmButton, CopyButton, DetailList, Disclosure, EmptyState, ErrorState, Field, FormActions, Input, List, LoadingState, Modal, Notice, Row, Section, SubList, cx, useActionNotice, Fieldset, NewTabLink } from '@/components/shared/ui'
 import { useDebounce } from '@/hooks/useDebounce'
 import { useSourcesContext } from '../context'
 import { llmKeyLabel } from '../LLMKeyField'
@@ -19,7 +19,8 @@ export const GitHubPanel = () => {
   const [error, setError] = useState<string | null>(null)
   const [addingRepoTo, setAddingRepoTo] = useState<number | null>(null)
   const [addingProjectTo, setAddingProjectTo] = useState<number | null>(null)
-  const [webhookFor, setWebhookFor] = useState<GithubAccount | null>(null)
+  const [webhookFor, setWebhookFor] = useState<number | null>(null)
+  const webhookAccount = accounts.find(a => a.id === webhookFor)
   const { run, notice } = useActionNotice()
 
   const loadData = useCallback(async () => {
@@ -117,7 +118,7 @@ export const GitHubPanel = () => {
                   `LLM: ${llmKeyLabel(account.llm_key)}`,
                   account.webhook_secret_hint ? 'webhook set' : 'no webhook',
                 ]}
-                actions={<Button size="sm" onClick={() => setWebhookFor(account)}>Webhook</Button>}
+                actions={<Button size="sm" onClick={() => setWebhookFor(account.id)}>Webhook</Button>}
               >
                 <SubList
                   title={`Repositories (${account.repos.length})`}
@@ -198,8 +199,8 @@ export const GitHubPanel = () => {
         )
       })()}
 
-      {webhookFor && (
-        <WebhookModal account={webhookFor} onClose={() => { setWebhookFor(null); loadData() }} />
+      {webhookAccount && (
+        <WebhookModal account={webhookAccount} onRefresh={loadData} onClose={() => setWebhookFor(null)} />
       )}
 
       {addingProjectTo && (
@@ -216,22 +217,57 @@ export const GitHubPanel = () => {
 
 const WEBHOOK_EVENTS = 'Pull requests, Pull request reviews, Pull request review comments, Issue comments, Issues, Check runs, Check suites, Statuses'
 
-const WebhookModal = ({ account, onClose }: { account: GithubAccount; onClose: () => void }) => {
-  const { generateGithubWebhookSecret, deleteGithubWebhookSecret } = useSources()
-  const [hint, setHint] = useState(account.webhook_secret_hint)
+const HOOK_STATUS: Record<GithubWebhookStatus, [string, 'success' | 'warning' | 'danger']> = {
+  installed: ['Installed', 'success'],
+  missing_permission: ['Missing permission', 'danger'],
+  rejected: ['Rejected by GitHub', 'danger'],
+  error: ['Failed', 'warning'],
+  app_hook: ['Via the App webhook', 'success'],
+  app_settings: ['Set in App settings', 'warning'],
+}
+
+const HookStatusBadge = ({ status }: { status: GithubWebhookStatus | null }) => {
+  const [label, tone] = status ? HOOK_STATUS[status] : ['Not installed', 'neutral' as const]
+  return <Badge tone={tone}>{label}</Badge>
+}
+
+const hookHelp = (account: GithubAccount): string | null => {
+  const statuses = new Set(account.repos.filter(r => r.active).map(r => r.webhook_status))
+  if (account.auth_type === 'app') {
+    return statuses.has('app_settings')
+      ? `Memory couldn't update the App's webhook. In the App's settings, set its webhook URL to the payload URL below and the secret, mark it active, and subscribe to: ${WEBHOOK_EVENTS}.`
+      : `A GitHub App has one webhook, which Memory points here. In the App's settings, keep it active and subscribe to: ${WEBHOOK_EVENTS}.`
+  }
+  if (statuses.has('missing_permission')) {
+    return 'The access token needs permission to manage webhooks: the admin:repo_hook scope for a classic token, or Webhooks: Read and write for a fine-grained one.'
+  }
+  if (statuses.has('rejected')) return 'GitHub rejected the payload URL. It must be reachable from the public internet.'
+  return null
+}
+
+const WebhookModal = ({ account, onRefresh, onClose }: { account: GithubAccount; onRefresh: () => Promise<void>; onClose: () => void }) => {
+  const { generateGithubWebhookSecret, deleteGithubWebhookSecret, installGithubWebhooks } = useSources()
   const [secret, setSecret] = useState<string | null>(null)
   const { run, notice } = useActionNotice()
+  const hint = account.webhook_secret_hint
+  const repos = account.repos.filter(r => r.active).sort((a, b) => a.repo_path.localeCompare(b.repo_path))
+  const help = hookHelp(account)
+
+  const install = () => run(async () => {
+    await installGithubWebhooks(account.id)
+    await onRefresh()
+  }, 'Installing. Refresh in a few seconds to see each repo’s result.')
 
   const generate = () => run(async () => {
     const result = await generateGithubWebhookSecret(account.id)
     setSecret(result.secret)
-    setHint(result.webhook_secret_hint)
+    await onRefresh()
   })
 
   const remove = () => run(async () => {
     await deleteGithubWebhookSecret(account.id)
     setSecret(null)
-    setHint(null)
+    await onRefresh()
   })
 
   return (
@@ -239,27 +275,44 @@ const WebhookModal = ({ account, onClose }: { account: GithubAccount; onClose: (
       <div className="space-y-4">
         {notice}
         <p className="text-sm text-slate-600">
-          Add a webhook to each tracked repo (or its org) with this payload URL, content type
-          {' '}<code>application/json</code> and the secret, sending: {WEBHOOK_EVENTS}.
-          {' '}Changes then arrive within seconds; polling still fills any gaps.
+          With a webhook on each tracked repo, changes arrive within seconds; polling still fills any gaps.
         </p>
-        <DetailList items={[
-          ['Payload URL', <span className="flex items-center gap-2"><code className="break-all">{account.webhook_url}</code><CopyButton text={account.webhook_url} /></span>],
-          ['Secret', hint ? `Set, ending in …${hint}` : 'Not set (deliveries are rejected)'],
-        ]} />
-        {secret && (
-          <Notice tone="success">
-            <p>Copy the secret now. It won't be shown again.</p>
-            <span className="flex items-center gap-2 mt-2">
-              <code className="break-all">{secret}</code><CopyButton text={secret} />
-            </span>
-          </Notice>
+        {repos.length > 0 && (
+          <List>
+            {repos.map(repo => (
+              <Row key={repo.id} compact title={repo.repo_path} badges={<HookStatusBadge status={repo.webhook_status} />}
+                meta={[repo.webhook_checked_at && `checked ${formatRelativeTime(repo.webhook_checked_at)}`]} />
+            ))}
+          </List>
         )}
+        {help && <Notice tone="warning">{help}</Notice>}
+        <Disclosure summary="Set it up by hand">
+          <div className="space-y-3">
+            <p className="text-sm text-slate-600">
+              Add a webhook to each tracked repo (or its org) with this payload URL, content type
+              {' '}<code>application/json</code> and the secret, sending: {WEBHOOK_EVENTS}.
+            </p>
+            <DetailList items={[
+              ['Payload URL', <span className="flex items-center gap-2"><code className="break-all">{account.webhook_url}</code><CopyButton text={account.webhook_url} /></span>],
+              ['Secret', hint ? `Set, ending in …${hint}` : 'Not set (deliveries are rejected)'],
+            ]} />
+            {secret && (
+              <Notice tone="success">
+                <p>Copy the secret now. It won't be shown again.</p>
+                <span className="flex items-center gap-2 mt-2">
+                  <code className="break-all">{secret}</code><CopyButton text={secret} />
+                </span>
+              </Notice>
+            )}
+            {hint
+              ? <ConfirmButton variant="secondary" size="md" confirm="Rotate the secret? Memory re-installs its hooks with it; hooks added by hand reject deliveries until updated." confirmLabel="Rotate" onConfirm={generate}>Rotate secret</ConfirmButton>
+              : <Button onClick={generate}>Generate secret</Button>}
+          </div>
+        </Disclosure>
         <FormActions>
-          {hint && <ConfirmButton size="md" confirm="Remove the secret? Webhook deliveries will be rejected." confirmLabel="Remove" onConfirm={remove}>Remove secret</ConfirmButton>}
-          {hint
-            ? <ConfirmButton variant="secondary" size="md" confirm="Rotate the secret? Deliveries will be rejected until the hook uses the new one." confirmLabel="Rotate" onConfirm={generate}>Rotate secret</ConfirmButton>
-            : <Button variant="primary" onClick={generate}>Generate secret</Button>}
+          {hint && <ConfirmButton size="md" confirm="Remove the secret? Memory deletes its repo hooks, and deliveries will be rejected." confirmLabel="Remove" onConfirm={remove}>Remove secret</ConfirmButton>}
+          <Button onClick={() => run(onRefresh)}>Refresh</Button>
+          <Button variant="primary" onClick={install} disabled={repos.length === 0}>Install on all repos</Button>
           <Button onClick={onClose}>Done</Button>
         </FormActions>
       </div>

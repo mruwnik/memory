@@ -132,6 +132,9 @@ SYNC_GITHUB_REPO = f"{GITHUB_ROOT}.sync_github_repo"
 SYNC_GITHUB_ITEM = f"{GITHUB_ROOT}.sync_github_item"
 SYNC_GITHUB_PROJECTS = f"{GITHUB_ROOT}.sync_github_projects"
 REFETCH_GITHUB_ITEM = f"{GITHUB_ROOT}.refetch_github_item"
+ENSURE_GITHUB_WEBHOOKS = f"{GITHUB_ROOT}.ensure_github_webhooks"
+ENSURE_ALL_GITHUB_WEBHOOKS = f"{GITHUB_ROOT}.ensure_all_github_webhooks"
+REMOVE_GITHUB_WEBHOOKS = f"{GITHUB_ROOT}.remove_github_webhooks"
 
 # People tasks
 SYNC_PERSON_TIDBIT = f"{PEOPLE_ROOT}.sync_person_tidbit"
@@ -472,6 +475,11 @@ def build_beat_schedule() -> dict:
         "sync-beeper-accounts": {
             "task": SYNC_ALL_BEEPER_ACCOUNTS,
             "schedule": crontab(hour="*/6", minute="20"),
+        },
+        # Re-installs hooks someone deleted or edited on GitHub.
+        "ensure-github-webhooks": {
+            "task": ENSURE_ALL_GITHUB_WEBHOOKS,
+            "schedule": crontab(hour="3", minute="15"),
         },
         "verify-orphans": {
             "task": VERIFY_ORPHANS,

@@ -526,6 +526,11 @@ class GithubRepo(PolledSource, SyncStatusMixin, Base):
     last_event_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Outcome of the last attempt to install our webhook (see ensure_github_webhooks).
+    webhook_status: Mapped[str | None] = mapped_column(Text, nullable=True)
+    webhook_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

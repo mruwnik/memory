@@ -186,7 +186,11 @@ export interface GithubRepo extends SyncStatus {
   last_full_sync_at: string | null
   active: boolean
   created_at: string
+  webhook_status: GithubWebhookStatus | null
+  webhook_checked_at: string | null
 }
+
+export type GithubWebhookStatus = 'installed' | 'missing_permission' | 'rejected' | 'error' | 'app_hook' | 'app_settings'
 
 export interface GithubAccount {
   id: number
@@ -731,6 +735,11 @@ export const useSources = () => {
     return response.json()
   }, [apiCall])
 
+  const installGithubWebhooks = useCallback(async (id: number): Promise<void> => {
+    const response = await apiCall(`/github/accounts/${id}/webhooks/install`, { method: 'POST' })
+    if (!response.ok) throw await apiError(response, 'Failed to install webhooks')
+  }, [apiCall])
+
   const listAvailableRepos = useCallback(async (accountId: number, refresh = false): Promise<AvailableRepo[]> => {
     const response = await apiCall(`/github/accounts/${accountId}/available-repos${refresh ? '?refresh=true' : ''}`)
     if (!response.ok) throw await apiError(response, 'Failed to fetch available repos')
@@ -1084,6 +1093,7 @@ export const useSources = () => {
     validateGithubAccount,
     generateGithubWebhookSecret,
     deleteGithubWebhookSecret,
+    installGithubWebhooks,
     listAvailableRepos,
     // GitHub Repos
     addGithubRepo,

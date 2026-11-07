@@ -16,6 +16,7 @@ Example:
 """
 
 from .core import GithubClientCore
+from .hooks import HOOK_EVENTS, HooksMixin, hook_config, webhook_url
 from .issues import IssuesMixin
 from .projects import ProjectsMixin, extract_status_priority
 from .types import (
@@ -37,13 +38,14 @@ from .types import (
 )
 
 
-class GithubClient(IssuesMixin, ProjectsMixin, GithubClientCore):
+class GithubClient(IssuesMixin, ProjectsMixin, HooksMixin, GithubClientCore):
     """Complete GitHub API client combining all functionality.
 
     Inherits from:
     - GithubClientCore: Authentication, GraphQL, rate limiting
     - IssuesMixin: Issue/PR fetching, parsing, mutations
     - ProjectsMixin: GitHub Projects (v2) management
+    - HooksMixin: repo and App webhooks
     """
 
     pass
@@ -68,7 +70,10 @@ __all__ = [
     "compute_content_hash",
     "serialize_issue_data",
     "extract_status_priority",
+    "hook_config",
+    "webhook_url",
     # Constants
     "GITHUB_API_URL",
     "GITHUB_GRAPHQL_URL",
+    "HOOK_EVENTS",
 ]

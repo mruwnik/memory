@@ -17,11 +17,17 @@ from memory.api.llm_keys import LLMKeyInput, LLMKeyView, apply_llm_key, llm_key_
 from memory.api.sync_status import SyncStatusResponse, sync_status_fields
 from memory.common.access_control import has_admin_scope
 from memory.common import settings
-from memory.common.celery_app import app as celery_app, SYNC_GITHUB_REPO, SYNC_GITHUB_PROJECTS
+from memory.common.celery_app import (
+    app as celery_app,
+    ENSURE_GITHUB_WEBHOOKS,
+    REMOVE_GITHUB_WEBHOOKS,
+    SYNC_GITHUB_REPO,
+    SYNC_GITHUB_PROJECTS,
+)
 from memory.common.db.connection import get_session
 from memory.common.db.models import User, GithubProject
 from memory.common.db.models.sources import GithubAccount, GithubRepo
-from memory.common.github import GithubClient, GithubCredentials
+from memory.common.github import GithubClient, GithubCredentials, webhook_url
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +93,8 @@ class GithubRepoResponse(SyncStatusResponse):
     last_full_sync_at: str | None
     active: bool
     created_at: str
+    webhook_status: str | None
+    webhook_checked_at: str | None
 
 
 class GithubAccountResponse(BaseModel):
@@ -171,12 +179,14 @@ def repo_to_response(repo: GithubRepo) -> GithubRepoResponse:
         else None,
         active=cast(bool, repo.active),
         created_at=repo.created_at.isoformat() if repo.created_at else "",
+        webhook_status=repo.webhook_status,
+        webhook_checked_at=repo.webhook_checked_at.isoformat() if repo.webhook_checked_at else None,
         **sync_status_fields(repo),
     )
 
 
-def webhook_url(account_id: int) -> str:
-    return f"{settings.SERVER_URL}/github/webhook/{account_id}"
+def queue_hooks(task: str, account_id: int) -> str:
+    return celery_app.send_task(task, args=[account_id]).id
 
 
 def account_to_response(
@@ -383,6 +393,7 @@ def generate_webhook_secret(
     secret = secrets.token_urlsafe(32)
     account.webhook_secret = secret
     db.commit()
+    queue_hooks(ENSURE_GITHUB_WEBHOOKS, account.id)
     return WebhookSecretResponse(
         secret=secret, webhook_secret_hint=secret[-4:], webhook_url=webhook_url(account.id)
     )
@@ -394,12 +405,29 @@ def delete_webhook_secret(
     user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> GithubAccountResponse:
-    """Remove the webhook secret, which makes every delivery for the account fail."""
+    """Remove the webhook secret, which makes every delivery for the account fail,
+    and delete the repo hooks pointing at it."""
     account = get_user_account(db, GithubAccount, account_id, user)
     account.webhook_secret = None
     db.commit()
+    queue_hooks(REMOVE_GITHUB_WEBHOOKS, account.id)
     db.refresh(account)
     return account_to_response(account, db, user)
+
+
+@router.post("/accounts/{account_id}/webhooks/install")
+def install_webhooks(
+    account_id: int,
+    user: User = Depends(get_interactive_user),
+    db: Session = Depends(get_session),
+) -> dict[str, str]:
+    """Install or refresh the webhook on every active repo, generating a secret if there is none.
+    Each repo's outcome appears as its webhook_status."""
+    account = get_user_account(db, GithubAccount, account_id, user)
+    if not account.webhook_secret:
+        account.webhook_secret = secrets.token_urlsafe(32)
+        db.commit()
+    return {"status": "queued", "task_id": queue_hooks(ENSURE_GITHUB_WEBHOOKS, account.id)}
 
 
 @router.post("/accounts/{account_id}/validate")
@@ -635,6 +663,8 @@ def add_repo(
     db.add(repo)
     db.commit()
     db.refresh(repo)
+    if account.webhook_secret:
+        queue_hooks(ENSURE_GITHUB_WEBHOOKS, account.id)
 
     return repo_to_response(repo)
 
@@ -648,7 +678,7 @@ def update_repo(
     db: Session = Depends(get_session),
 ) -> GithubRepoResponse:
     """Update a repo's tracking configuration."""
-    get_user_account(db, GithubAccount, account_id, user)  # Verify ownership
+    account = get_user_account(db, GithubAccount, account_id, user)
     repo = (
         db.query(GithubRepo)
         .filter(GithubRepo.account_id == account_id, GithubRepo.id == repo_id)
@@ -673,6 +703,8 @@ def update_repo(
 
     db.commit()
     db.refresh(repo)
+    if updates.active and account.webhook_secret:
+        queue_hooks(ENSURE_GITHUB_WEBHOOKS, account.id)
 
     return repo_to_response(repo)
 

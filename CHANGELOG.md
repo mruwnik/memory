@@ -22,6 +22,24 @@ a new, empty `## Unreleased` above it.
 
 ## Unreleased
 
+### Changes
+
+- GitHub webhooks install themselves: **Sources → GitHub → Webhook → Install on all repos** generates a secret if there is none and creates (or PATCHes) one repo hook per active tracked repo, found by its payload URL; other hooks are untouched. The dialog lists each repo's result (installed, missing permission, rejected by GitHub, failed); the manual instructions moved into a collapsed "Set it up by hand".
+- The install re-runs on secret generate/rotate, when a repo is added or resumed under an account with a secret, and daily at 03:15 (`ensure-github-webhooks` beat entry) to repair drift. Removing the secret deletes Memory's repo hooks (best effort).
+- GitHub App accounts: the installation token can't manage repo hooks, so Memory PATCHes the App's own webhook (`/app/hook/config`, URL + secret) with an app JWT from the stored private key. The App's active flag and subscribed events stay in the App's settings.
+- New endpoint `POST /github/accounts/{id}/webhooks/install` (queues; returns `{"status": "queued", "task_id"}`). Repo responses carry `webhook_status` and `webhook_checked_at`.
+
+### Other changes for operators
+
+- To install hooks, a PAT needs `admin:repo_hook` (classic) or **Webhooks: Read and write** (fine-grained). Without it repos show "Missing permission"; polling and hand-added hooks keep working.
+- App accounts: in the App's settings keep the webhook active and subscribe to Pull request, Pull request review, Pull request review comment, Issue comment, Issues, Check run, Check suite and Status (the last three need Checks and Commit statuses read permissions). Several Memory accounts sharing one App overwrite each other's App webhook URL.
+- `SERVER_URL` must be publicly reachable or GitHub rejects the hook (status "Rejected by GitHub").
+- After deploying, existing accounts with a secret get their hooks at the next 03:15 pass, or immediately via **Install on all repos**.
+
+### Migrations
+
+- `20261207_github_webhook_status`: adds nullable `github_repos.webhook_status` and `github_repos.webhook_checked_at` (`ADD COLUMN IF NOT EXISTS`). Fast.
+
 ## v0.4.10 (2026-11-06)
 
 ### Changes

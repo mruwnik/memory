@@ -9,7 +9,10 @@ import requests
 
 from memory.common.celery_app import (
     app,
+    ENSURE_ALL_GITHUB_WEBHOOKS,
+    ENSURE_GITHUB_WEBHOOKS,
     REFETCH_GITHUB_ITEM,
+    REMOVE_GITHUB_WEBHOOKS,
     SYNC_GITHUB_REPO,
     SYNC_GITHUB_ITEM,
     SYNC_GITHUB_PROJECTS,
@@ -31,8 +34,10 @@ from memory.common.github import (
     GithubProjectData,
     GithubPRDataDict,
     extract_status_priority,
+    hook_config,
     parse_github_date,
     serialize_issue_data,
+    webhook_url,
 )
 from memory.common.github.refetch import refetch_started
 from memory.common.content_processing import (
@@ -961,3 +966,116 @@ def sync_github_projects(
             "projects_synced": projects_synced,
             "project_ids": project_ids,
         }
+
+
+def hook_failure(error: requests.RequestException) -> str:
+    """The webhook_status for a failed hook call. GitHub answers 404 to a token
+    that can see the repo but lacks the hooks permission."""
+    code = error.response.status_code if error.response is not None else None
+    if code in (403, 404):
+        return "missing_permission"
+    return "rejected" if code == 422 else "error"
+
+
+def ensure_repo_hook(client: GithubClient, repo: GithubRepo, config: dict[str, str]) -> str:
+    owner, name = cast(str, repo.owner), cast(str, repo.name)
+    try:
+        hooks = client.list_repo_hooks(owner, name)
+        ours = next((h for h in hooks if (h.get("config") or {}).get("url") == config["url"]), None)
+        if ours:
+            client.update_repo_hook(owner, name, ours["id"], config)
+        else:
+            client.create_repo_hook(owner, name, config)
+    except requests.RequestException as e:
+        status = hook_failure(e)
+        logger.warning("github webhook install failed repo=%s status=%s", repo.id, status)
+        return status
+    return "installed"
+
+
+def ensure_app_hook(client: GithubClient, account: GithubAccount, config: dict[str, str]) -> str:
+    """An installation token can't manage repo hooks; the App has one webhook of its own."""
+    try:
+        client.update_app_hook_config(config)
+    except requests.RequestException:
+        logger.warning("github app webhook config failed account=%s", account.id)
+        return "app_settings"
+    return "app_hook"
+
+
+def install_hooks(
+    account: GithubAccount, repos: list[GithubRepo], config: dict[str, str]
+) -> dict[int, str]:
+    try:
+        client = account_client(account)
+    except requests.RequestException:
+        logger.warning("github client unavailable for webhook install account=%s", account.id)
+        return {r.id: "error" for r in repos}
+    if account.auth_type != "app":
+        return {r.id: ensure_repo_hook(client, r, config) for r in repos}
+    status = ensure_app_hook(client, account, config)
+    return {r.id: status for r in repos}
+
+
+@app.task(name=ENSURE_GITHUB_WEBHOOKS)
+@tracked_task
+def ensure_github_webhooks(account_id: int) -> dict[str, Any]:
+    """Make every active repo of the account deliver its events to us, signed with the current secret."""
+    with make_session() as session:
+        account = session.get(GithubAccount, account_id)
+        secret = account.webhook_secret if account and account.active else None
+        if not account or not secret:
+            return {"status": "skipped", "account_id": account_id}
+        repos = [r for r in account.repos if r.active]
+        statuses = install_hooks(account, repos, hook_config(account.id, secret))
+        now = datetime.now(timezone.utc)
+        for repo in repos:
+            repo.webhook_status = statuses[repo.id]
+            repo.webhook_checked_at = now
+        session.commit()
+    return {"status": "completed", "account_id": account_id, "repos": statuses}
+
+
+@app.task(name=ENSURE_ALL_GITHUB_WEBHOOKS)
+def ensure_all_github_webhooks() -> dict[str, Any]:
+    with make_session() as session:
+        ids = [
+            id
+            for (id,) in session.query(GithubAccount.id).filter(
+                GithubAccount.active.is_(True),
+                GithubAccount.webhook_secret_encrypted.isnot(None),
+            )
+        ]
+    for id in ids:
+        app.send_task(ENSURE_GITHUB_WEBHOOKS, args=[id])
+    return {"status": "queued", "accounts": ids}
+
+
+@app.task(name=REMOVE_GITHUB_WEBHOOKS)
+@tracked_task
+def remove_github_webhooks(account_id: int) -> dict[str, Any]:
+    """Delete the repo hooks pointing at the account, best effort. Hooks on other URLs stay."""
+    with make_session() as session:
+        account = session.get(GithubAccount, account_id)
+        # A secret generated since the removal was queued wants the hooks kept.
+        if not account or account.webhook_secret:
+            return {"status": "skipped", "account_id": account_id}
+        url = webhook_url(account.id)
+        removed = []
+        if account.auth_type == "pat":
+            client = account_client(account)
+            for repo in account.repos:
+                owner, name = cast(str, repo.owner), cast(str, repo.name)
+                try:
+                    for hook in client.list_repo_hooks(owner, name):
+                        if (hook.get("config") or {}).get("url") == url:
+                            client.delete_repo_hook(owner, name, hook["id"])
+                            removed.append(repo.id)
+                except requests.RequestException:
+                    logger.warning("github webhook removal failed repo=%s", repo.id)
+        now = datetime.now(timezone.utc)
+        for repo in account.repos:
+            repo.webhook_status = None
+            repo.webhook_checked_at = now
+        session.commit()
+    return {"status": "completed", "account_id": account_id, "removed": removed}
