@@ -4,8 +4,7 @@ import { defaultSpec, useAgents, type AgentRun, type AgentSpec, type Catalog } f
 import { formatRelativeTime } from '@/components/sources/shared'
 import { SpecEditor } from './SpecEditor'
 import { StatusBadge } from './StatusBadge'
-import { Schedules } from './Schedules'
-import { Triggers } from './Triggers'
+import { AgentSubscriptions } from './AgentSubscriptions'
 import { Button, ConfirmButton, Field, FieldRow, FormActions, Input, List, Notice, Page, Row, Section, Textarea, useActionNotice, useSubmit, useUnsavedGuard } from '@/components/shared/ui'
 import { isForbiddenOrMissing } from '@/hooks/useMCP'
 import { formatCost } from '@/utils/format'
@@ -143,8 +142,7 @@ export default function AgentEditor() {
           )}
         </Section>
       )}
-      {definitionId !== undefined && <Schedules definitionId={definitionId} />}
-      {definitionId !== undefined && <Triggers definitionId={definitionId} sourceTypes={catalog.trigger_source_types} />}
+      {definitionId !== undefined && <AgentSubscriptions definitionId={definitionId} />}
     </Page>
   )
 }

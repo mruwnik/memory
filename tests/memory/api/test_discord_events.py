@@ -111,26 +111,26 @@ OFF, ON, NEW, THREAD_UNDER_OFF = "2", "5", "3", "4"
 @pytest.mark.parametrize(
     "event_type, data, outcome, queued, container",
     [
-        ("MESSAGE_CREATE", {"channel_id": OFF, "guild_id": "7"}, "not_collected", 0, OFF),
+        ("MESSAGE_CREATE", {"channel_id": OFF, "guild_id": "7"}, "not_collected", 0, None),
         ("MESSAGE_CREATE", {"channel_id": ON, "guild_id": "7"}, "stored", 1, ON),
         # Channels not stored yet follow their server; a DM has none, so isn't collected.
         ("MESSAGE_CREATE", {"channel_id": NEW, "guild_id": "7"}, "stored", 1, NEW),
-        ("MESSAGE_CREATE", {"channel_id": NEW, "guild_id": "9"}, "not_collected", 0, NEW),
-        ("MESSAGE_CREATE", {"channel_id": NEW}, "not_collected", 0, NEW),
+        ("MESSAGE_CREATE", {"channel_id": NEW, "guild_id": "9"}, "not_collected", 0, None),
+        ("MESSAGE_CREATE", {"channel_id": NEW}, "not_collected", 0, None),
         # A push-only bot stores a server it first hears of as collected.
         ("MESSAGE_CREATE", {"channel_id": NEW, "guild_id": "8"}, "stored", 1, NEW),
         # Threads follow their parent channel before their server.
-        ("MESSAGE_CREATE", {"channel_id": THREAD_UNDER_OFF, "guild_id": "7"}, "not_collected", 0, THREAD_UNDER_OFF),
-        ("THREAD_CREATE", {"id": "50", "parent_id": OFF, "guild_id": "7"}, "not_collected", 0, "50"),
-        ("THREAD_UPDATE", {"id": THREAD_UNDER_OFF, "parent_id": OFF, "guild_id": "7"}, "not_collected", 0,
-         THREAD_UNDER_OFF),
+        ("MESSAGE_CREATE", {"channel_id": THREAD_UNDER_OFF, "guild_id": "7"}, "not_collected", 0, None),
+        ("THREAD_CREATE", {"id": "50", "parent_id": OFF, "guild_id": "7"}, "not_collected", 0, None),
+        ("THREAD_UPDATE", {"id": THREAD_UNDER_OFF, "parent_id": OFF, "guild_id": "7"}, "not_collected", 0, None),
         ("THREAD_CREATE", {"id": "51", "parent_id": ON, "guild_id": "7"}, "stored", 1, "51"),
-        # Deletes carry ids alone, and drop Memory's copy wherever it came from.
-        ("MESSAGE_DELETE", {"channel_id": OFF, "guild_id": "7"}, "stored", 1, OFF),
-        ("MESSAGE_DELETE_BULK", {"ids": ["1"], "channel_id": NEW}, "stored", 1, NEW),
+        # Deletes still drop Memory's copy; an untracked channel's leave a stub like any other.
+        ("MESSAGE_DELETE", {"channel_id": OFF, "guild_id": "7"}, "not_collected", 1, None),
+        ("MESSAGE_DELETE_BULK", {"ids": ["1"], "channel_id": NEW}, "not_collected", 1, None),
+        ("MESSAGE_DELETE", {"channel_id": ON, "guild_id": "7"}, "stored", 1, ON),
         # Events with no item type are gated by their channel too.
-        ("TYPING_START", {"channel_id": OFF, "guild_id": "7"}, "not_collected", 0, OFF),
-        ("TYPING_START", {"channel_id": NEW}, "not_collected", 0, NEW),
+        ("TYPING_START", {"channel_id": OFF, "guild_id": "7"}, "not_collected", 0, None),
+        ("TYPING_START", {"channel_id": NEW}, "not_collected", 0, None),
     ],
 )
 def test_only_events_in_collected_channels_are_queued(

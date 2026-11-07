@@ -11,10 +11,12 @@ from memory.common.db.models import (
     DiscordMessage,
     DiscordServer,
     DiscordUser,
+    Event,
     HumanUser,
     Person,
 )
 from memory.common.db.connection import make_session
+from memory.common.db.models.events import record_raw_event
 from memory.common.discord_events import ensure_listed_channel, message_task_kwargs
 from memory.workers.tasks import discord
 from tests.conftest import item_events
@@ -298,9 +300,16 @@ def thread_listed(bot):
 
 # A thread's first messages can arrive before anything names its parent.
 @pytest.mark.parametrize("learn_parent", [thread_create, thread_listed])
-@pytest.mark.parametrize("parent_collects, kept, removed", [(False, 0, 1), (True, 1, 0), (None, 1, 0)])
+@pytest.mark.parametrize(
+    "parent_collects, kept, removed, raw",
+    [
+        (False, 0, 1, [("not_collected", None), ("stored", THREAD)]),
+        (True, 1, 0, [("stored", THREAD), ("stored", THREAD)]),
+        (None, 1, 0, [("stored", THREAD), ("stored", THREAD)]),
+    ],
+)
 def test_a_thread_found_under_a_parent_not_collected_drops_what_it_stored(
-    db_session, webhook_bot, qdrant, learn_parent, parent_collects, kept, removed
+    db_session, webhook_bot, user_owned_bot, qdrant, learn_parent, parent_collects, kept, removed, raw
 ):
     db_session.add(DiscordServer(id=int(GUILD), name="Guild", bot_id=webhook_bot.id, collect_messages=True))
     db_session.flush()
@@ -309,12 +318,22 @@ def test_a_thread_found_under_a_parent_not_collected_drops_what_it_stored(
     db_session.commit()
     handle(webhook_bot, "MESSAGE_CREATE", message_create(channel_id=THREAD))
     message_id = stored(db_session).id
+    # The thread's deliveries to this bot, and one to another bot that never learns the parent.
+    for bot in (webhook_bot, user_owned_bot):
+        record_raw_event(
+            db_session, source="discord", event_type="MESSAGE_CREATE", account_id=bot.id,
+            owner_id=None, delivery_id="d1", outcome="stored", container=THREAD,
+        )
+    db_session.commit()
 
     learn_parent(webhook_bot)
 
     db_session.expire_all()
     assert db_session.query(DiscordMessage).count() == kept
     assert [e for e in item_events(db_session) if e[1] == "removed"] == [(message_id, "removed", None)] * removed
+    # The deliveries that told this bot about the thread are as untracked as the thread.
+    events = db_session.query(Event).filter_by(kind="raw").order_by(Event.account_id == user_owned_bot.id).all()
+    assert [(e.outcome, e.container) for e in events] == raw
 
 
 def test_thread_update_renames(db_session, webhook_bot):

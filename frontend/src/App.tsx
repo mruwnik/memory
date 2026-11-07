@@ -6,7 +6,8 @@ import { useOAuth } from '@/hooks/useOAuth'
 import { getNeedsAccount } from '@/hooks/useSetup'
 import { ModulesContext, type Module } from '@/hooks/useModule'
 import { Loading, LoginPrompt, AuthError, ForgotPassword, ResetPassword, Dashboard, Search, Sources, Calendar, Tasks, NotesPage, Jobs, CeleryOverview, ReportsPage } from '@/components'
-import { AgentsPage, AgentEditor, AgentRuns, RunView, AdHocRun, ServersPage, ServerDetail, KeysPage } from '@/components/agents'
+import { AgentsPage, AgentEditor, AgentRuns, RunView, AdHocRun, ServersPage, ServerDetail, KeysPage, SubscriptionsPage } from '@/components/agents'
+import WebhookLog from '@/components/sources/WebhookLog'
 import { PollList, PollCreate, PollEdit, PollRespond, PollResults } from '@/components/polls'
 import { UserSettings, UserManagement } from '@/components/users'
 import { SettingsPage } from '@/components/settings'
@@ -108,6 +109,7 @@ const AuthWrapper = () => {
     { path: '/users', element: <UserManagement />, scope: 'admin:users' },
     { path: '/search', element: <Search /> },
     { path: '/sources', element: <Sources /> },
+    { path: '/sources/webhook-log', element: <WebhookLog /> },
     { path: '/ingestion', element: <IngestionOverview standalone /> },
     { path: '/ssh-keys', element: <SSHKeysPage /> },
     { path: '/calendar', element: <Calendar /> },
@@ -122,6 +124,7 @@ const AuthWrapper = () => {
     { path: '/jobs', element: <Jobs /> },
     { path: '/agents', element: <AgentsPage />, scope: 'agents' },
     { path: '/keys', element: <KeysPage /> },
+    { path: '/agents/subscriptions', element: <SubscriptionsPage />, scope: 'agents' },
     { path: '/agents/servers', element: <ServersPage />, scope: 'agents' },
     { path: '/agents/servers/:id', element: <ServerDetail />, scope: 'agents' },
     { path: '/agents/runs', element: <AgentRuns />, scope: 'agents' },

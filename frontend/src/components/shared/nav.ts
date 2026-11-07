@@ -11,6 +11,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { to: '/search', title: 'Search', description: 'Search through your knowledge base' },
       { to: '/ingestion', title: 'Ingestion overview', description: 'Item totals, recent additions, indexing status and content types' },
       { to: '/sources', title: 'Sources', description: 'Connect email, chat, code, feeds, files and other sources' },
+      { to: '/sources/webhook-log', title: 'Webhook log', description: 'Every webhook delivery to your sources, what it stored and what it triggered' },
       { to: '/notes', title: 'Notes', description: 'Browse and view your notes' },
       { to: '/reports', title: 'Reports', description: 'View and create rich HTML and PDF reports' },
       { to: '/people', title: 'People', description: 'Track and manage people you know', scope: 'people' },
@@ -30,6 +31,7 @@ export const NAV_SECTIONS: NavSection[] = [
     title: 'AI',
     items: [
       { to: '/agents', title: 'Agents', description: 'Define and run agents over your memory', scope: 'agents' },
+      { to: '/agents/subscriptions', title: 'Subscriptions', description: 'What hands new items, schedules and timers to your agents, queues and messages', scope: 'agents' },
       { to: '/keys', title: 'LLM keys', description: 'Your Anthropic and OpenAI keys pay for summaries, search steps and agents' },
     ],
   },

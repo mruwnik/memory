@@ -222,7 +222,7 @@ through fixed SSM documents). Output is numbers and states only, except for
 
 | Script | Does |
 |---|---|
-| `status.sh` | Health, containers, disk, memory, last update and backup results, pending reboot |
+| `status.sh` | Health, subscription queues with deliveries waiting (owner and subscription ids, pending count, oldest age), containers, disk, memory, last update and backup results, pending reboot |
 | `logs.sh [LINES]` | The last ERROR records and traceback shapes of api and worker, scrubbed of quoted values, URLs, emails and credentials |
 | `restart.sh [service]` | Restart one service or all |
 | `update-to.sh TAG` | `update.sh` with signature and age checks (`ALLOWED_SIGNERS`, `MIN_AGE_HOURS`), refusing a tag older than the checkout; prints step and result lines only |

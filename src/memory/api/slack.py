@@ -1420,13 +1420,14 @@ async def slack_events(
 
     label, task, kwargs = plan_event_callback(envelope, slack_app_id)
     # A channel a push may not reach Memory from leaves only a stub; a delete
-    # carries ids alone and drops whatever copy Memory has.
+    # still drops whatever copy Memory has.
     if label.startswith("rejected"):
         outcome = REJECTED
-    elif label != "mark_deleted" and not channel_collected(db, kwargs["workspace_id"], kwargs["channel_id"]):
+    elif not channel_collected(db, kwargs["workspace_id"], kwargs["channel_id"]):
         outcome = NOT_COLLECTED
     else:
         outcome = STORED if task else NO_ITEM_TYPE
+    untracked_delete = label == "mark_deleted" and outcome == NOT_COLLECTED
     raw_id = record(event_type, outcome, kwargs.get("channel_id"))
     if raw_id is None:
         # A retry of an event already taken.
@@ -1442,7 +1443,7 @@ async def slack_events(
             "body_sha256": body_sha[:16],
         },
     )
-    if task and outcome == STORED:
+    if task and (outcome == STORED or untracked_delete):
         try:
             celery_app.send_task(task, kwargs={**kwargs, "caused_by": raw_id})
         except Exception:

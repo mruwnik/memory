@@ -14,6 +14,7 @@ from memory.common.db.models import (
     AgentTriggerMatch,
     APIKey,
     BlogPost,
+    Event,
 )
 from tests.conftest import route_item, unique_sha256
 
@@ -126,6 +127,17 @@ def test_a_delivery_routed_but_never_sent_is_sent_by_the_sweep(
     [delivery] = db_session.query(AgentTriggerMatch).all()
     assert early["sent"] == 0
     assert (delivery.status, delivery.run_id) == ("done", run_id)
+
+
+def test_a_delivery_records_the_event_it_was_routed_from(db_session, admin_user, no_celery_dispatch):
+    trigger = setup(db_session, admin_user)
+    item = post(db_session)
+
+    route_item(db_session, item.id)
+
+    [event_id] = db_session.query(Event.id).filter_by(item_id=item.id).all()
+    [delivery] = db_session.query(AgentTriggerMatch).filter_by(trigger_id=trigger.id).all()
+    assert delivery.event_id == event_id[0]
 
 
 def test_a_code_slug_subscriptions_batch_is_sent_and_its_backlog_shed(
@@ -274,8 +286,9 @@ def test_a_fire_that_keeps_failing_ends_the_delivery_failed(
     ],
 )
 def test_over_a_cap_deliveries_are_deferred_then_shed_with_one_notification(
-    db_session, admin_user, fake_providers, admin_keys, no_celery_dispatch, no_grace, spec, earlier_cost, shed
+    db_session, admin_user, fake_providers, admin_keys, no_celery_dispatch, no_grace, spec, earlier_cost, shed, caplog
 ):
+    caplog.set_level("WARNING", logger="memory.agents")
     trigger = setup(db_session, admin_user, spec)
     db_session.add(
         AgentRun(
@@ -314,6 +327,12 @@ def test_over_a_cap_deliveries_are_deferred_then_shed_with_one_notification(
     assert notifications(no_celery_dispatch) == 0
     assert trigger.enabled is True
     assert "throttled" in trigger.state
+    # Ids only: the operator sees these, and the subscription's name is the user's.
+    assert [(r.levelname, r.getMessage()) for r in caplog.records if r.name.startswith("memory.agents")] == [
+        ("WARNING", f"agent trigger {trigger.id} is throttled"),
+        ("WARNING", f"agent trigger {trigger.id} shed 1 deliveries over its caps"),
+        ("WARNING", f"agent trigger {trigger.id} shed 1 deliveries over its caps"),
+    ]
 
 
 @pytest.mark.parametrize("held_back_ago,ended", [(timedelta(hours=2), True), (timedelta(minutes=5), False)])

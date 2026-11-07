@@ -490,7 +490,7 @@ def regex_search(pattern: str, text: str) -> bool:
     try:
         return re.search(pattern, text[:MAX_MATCH_TEXT_CHARS]) is not None
     except RegexTimeout:
-        logger.warning("trigger regex %r timed out", pattern)
+        logger.warning("a trigger regex timed out")
         return False
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
@@ -856,6 +856,7 @@ def claim(
     sent: bool = False,
     order_key: str | None = None,
     coalesce: bool = False,
+    event_id: int | None = None,
 ) -> AgentTriggerMatch | None:
     """Record, uncommitted, that trigger_id matched this version of item_id, as a
     pending delivery (`sent`: about to be sent to FIRE_TRIGGER); None if it may not.
@@ -878,6 +879,7 @@ def claim(
         edited=bool(seen),
         changes=delivered_changes(bool(seen), changes),
         order_key=order_key,
+        event_id=event_id,
         dispatched_at=datetime.now(timezone.utc) if sent else None,
         sends=int(sent),
         # Not the transaction's start, which deliveries routed together share: order_by
@@ -1137,6 +1139,7 @@ def match_item(
             # Batches aren't ordered.
             order_key=None if batched else order_key(item, trigger.order_by),
             coalesce=trigger.coalesce_mode == "latest",
+            event_id=event.id,
         )
         if match is not None:
             claimed.append(Claimed(trigger.id, delivery_ref(item_id, version), sent))

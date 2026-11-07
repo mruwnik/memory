@@ -1,12 +1,14 @@
-"""GET /webhook-events/{source}/{account_id}: the webhook log of one source account."""
+"""The webhook log: GET /webhook-events lists the source accounts it covers, and
+GET /webhook-events/{source}/{account_id} one account's deliveries."""
 
 import pytest
 
-from memory.common.db.models import Event, HumanUser
+from memory.common.db.models import AgentTrigger, AgentTriggerMatch, BlogPost, Event, GithubAccount, HumanUser, SlackApp
 from memory.common.db.models.events import record_raw_event
+from tests.conftest import unique_sha256
 
 
-def raw(db, owner_id, delivery_id, *, source="github", account_id=5, payload=None):
+def raw(db, owner_id, delivery_id, *, source="github", account_id=5, payload=None, outcome="no_item_type"):
     return record_raw_event(
         db,
         source=source,
@@ -14,35 +16,68 @@ def raw(db, owner_id, delivery_id, *, source="github", account_id=5, payload=Non
         account_id=account_id,
         owner_id=owner_id,
         delivery_id=delivery_id,
-        outcome="no_item_type",
+        outcome=outcome,
         container="555",
         payload={"secret": "untrusted"} if payload is None else payload,
     )
 
 
-def test_the_owner_sees_their_accounts_deliveries_newest_first_with_their_items(client, db_session, user):
+def other_user(db):
     other = HumanUser(name="Other", email="other@example.com", password_hash="x")
-    db_session.add(other)
-    db_session.flush()
+    db.add(other)
+    db.flush()
+    return other
+
+
+def subscription(db, user_id, name):
+    trigger = AgentTrigger(
+        user_id=user_id, name=name, handler={"queue": "q"}, kind="ingest", config={"filter": {"tags_any": ["ai"]}}
+    )
+    db.add(trigger)
+    db.flush()
+    return trigger
+
+
+def stored_item(db, raw_id, creator_id=None):
+    item = BlogPost(sha256=unique_sha256("p"), modality="blog", content="x", tags=["ai"], creator_id=creator_id)
+    db.add(item)
+    db.flush()
+    event = Event(kind="item", action="added", item_id=item.id, caused_by=raw_id)
+    db.add(event)
+    db.flush()
+    return item, event
+
+
+def test_the_owner_sees_their_accounts_deliveries_newest_first_with_their_items(member_client, db_session, user):
+    other = other_user(db_session)
     first, second = raw(db_session, user.id, "d1"), raw(db_session, user.id, "d2")
     raw(db_session, user.id, "d3", account_id=6)
     raw(db_session, user.id, "d4", source="slack")
     raw(db_session, other.id, "d5")
-    db_session.add_all(
-        [
-            Event(kind="item", action="added", item_id=10, caused_by=first),
-            Event(kind="item", action="changed", item_id=11, caused_by=first),
-        ]
-    )
+    (a, _), (b, _) = stored_item(db_session, first, user.id), stored_item(db_session, first, user.id)
     db_session.commit()
 
-    response = client.get("/webhook-events/github/5")
+    response = member_client.get("/webhook-events/github/5")
 
     assert response.status_code == 200
     assert [(e["id"], e["type"], e["outcome"], e["container"], e["item_ids"], e["payload"]) for e in response.json()] == [
         (second, "pull_request.opened", "no_item_type", "555", [], None),
-        (first, "pull_request.opened", "no_item_type", "555", [10, 11], None),
+        (first, "pull_request.opened", "no_item_type", "555", [a.id, b.id], None),
     ]
+
+
+def test_items_the_viewer_cannot_read_are_left_out(member_client, db_session, user):
+    raw_id = raw(db_session, user.id, "d1", outcome="stored")
+    mine, _ = stored_item(db_session, raw_id, user.id)
+    # No project and someone else's: only an admin reads it.
+    hidden, hidden_event = stored_item(db_session, raw_id)
+    trigger = subscription(db_session, user.id, "mine")
+    db_session.add(AgentTriggerMatch(trigger_id=trigger.id, item_id=hidden.id, content_hash=b"v", event_id=hidden_event.id))
+    db_session.commit()
+
+    [shown] = member_client.get("/webhook-events/github/5").json()
+
+    assert (shown["item_ids"], shown["triggered"]) == ([mine.id], [])
 
 
 @pytest.mark.parametrize("payload", [{"n": 1}, ["a", "list"], "text"])
@@ -56,14 +91,65 @@ def test_payloads_and_older_pages_are_on_request(client, db_session, user, paylo
     assert [(e["id"], e["payload"]) for e in response.json()] == [(first, payload)]
 
 
-def test_another_users_account_shows_nothing(client, db_session):
-    other = HumanUser(name="Other", email="other@example.com", password_hash="x")
-    db_session.add(other)
-    db_session.flush()
-    raw(db_session, other.id, "d1")
+def test_another_users_account_shows_nothing_but_to_an_admin(client, member_client, db_session, user):
+    raw_id = raw(db_session, other_user(db_session).id, "d1")
     db_session.commit()
 
-    assert client.get("/webhook-events/github/5").json() == []
+    as_member = member_client.get("/webhook-events/github/5").json()
+    user.scopes = ["*"]
+    db_session.flush()
+    as_admin = client.get("/webhook-events/github/5").json()
+
+    assert (as_member, [e["id"] for e in as_admin]) == ([], [raw_id])
+
+
+def test_a_delivery_from_an_untracked_channel_shows_only_when_it_arrived(member_client, db_session, user):
+    raw(db_session, user.id, "d1", outcome="not_collected")
+    db_session.commit()
+
+    [event] = member_client.get("/webhook-events/github/5", params={"payload": True}).json()
+
+    assert (event["outcome"], event["type"], event["container"], event["item_ids"], event["triggered"]) == (
+        "not_collected", None, None, [], [],
+    )
+
+
+def test_a_delivery_shows_what_the_viewers_subscriptions_made_of_it(member_client, db_session, user):
+    raw_id = raw(db_session, user.id, "d1", outcome="stored")
+    item, event = stored_item(db_session, raw_id, user.id)
+    mine, theirs = subscription(db_session, user.id, "mine"), subscription(db_session, other_user(db_session).id, "theirs")
+    db_session.add_all(
+        AgentTriggerMatch(trigger_id=t.id, item_id=item.id, content_hash=b"v", status=status, event_id=event.id)
+        for t, status in [(mine, "pending"), (theirs, "done")]
+    )
+    db_session.commit()
+
+    [shown] = member_client.get("/webhook-events/github/5").json()
+
+    assert (shown["item_ids"], shown["triggered"]) == (
+        [item.id],
+        [{"subscription_id": mine.id, "subscription": "mine", "item_id": item.id, "status": "pending", "run_id": None}],
+    )
+
+
+def test_the_accounts_listed_are_the_viewers_own_with_their_latest_delivery(member_client, db_session, user):
+    other = other_user(db_session)
+    github = GithubAccount(user_id=user.id, name="acct", auth_type="pat", access_token="ghp_x", active=True)
+    slack = SlackApp(client_id="mine.app", name="Mine", created_by_user_id=user.id)
+    db_session.add_all(
+        [github, slack, GithubAccount(user_id=other.id, name="theirs", auth_type="pat", access_token="ghp_y", active=True)]
+    )
+    db_session.flush()
+    raw(db_session, user.id, "d1", account_id=github.id)
+    latest = raw(db_session, user.id, "d2", account_id=github.id)
+    db_session.commit()
+
+    listed = member_client.get("/webhook-events").json()
+
+    assert [(a["source"], a["account_id"], a["name"], a["last_event_id"]) for a in listed] == [
+        ("github", github.id, "acct", latest),
+        ("slack", slack.id, "Mine", None),
+    ]
 
 
 def test_an_unknown_source_is_rejected(client):

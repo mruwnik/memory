@@ -152,6 +152,21 @@ for k in ("status", "version", "db_revision", "expected_revision"):
         | tr -cd 'A-Za-z0-9._=+\n-' | cut -c1-80
 }
 
+# A line per subscription queue with deliveries waiting, by owner and subscription
+# ids: queue names are the owner's own words, so only lines of ids and counts pass.
+queue_backlog() {
+    local py='from memory.agents.queues import queue_health
+from memory.common.db.connection import make_session
+with make_session() as db:
+    for q in queue_health(db):
+        if q["pending"]:
+            ids = ",".join(str(i) for i in q["subscription_ids"][:5])
+            print("queue owner=%d subscriptions=%s of=%d pending=%d oldest_age_sec=%d" % (q["owner_id"], ids, len(q["subscription_ids"]), q["pending"], q["oldest_age_sec"]))'
+    # Five ids and four counts keep a line short; the whitelist drops any other line whole.
+    { $COMPOSE exec -T api python -c "$py" 2>/dev/null || echo "queues=unreachable"; } \
+        | grep -E '^(queue owner=[0-9]+ subscriptions=[0-9,]+ of=[0-9]+ pending=[0-9]+ oldest_age_sec=[0-9]+|queues=unreachable)$' || true
+}
+
 # Waits for a healthy API at the expected DB revision, and at $1 when given.
 wait_healthy() {
     local version=${1:-} deadline=$((SECONDS + HEALTH_TIMEOUT)) s

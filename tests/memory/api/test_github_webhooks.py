@@ -177,7 +177,7 @@ def test_a_delivery_not_collected_is_a_stub_without_payload(client, db_session, 
     deliver(client, repo.account_id, "pull_request", pr_event(repo_id=repo_id))
 
     assert [(e.type, e.container, e.outcome, e.payload) for e in raw_events(db_session)] == [
-        ("pull_request.synchronize", str(repo_id), "not_collected", None)
+        ("pull_request.synchronize", None, "not_collected", None)
     ]
 
 

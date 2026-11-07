@@ -16,7 +16,7 @@ from decimal import Decimal
 from typing import Any, Collection
 
 from pydantic import ValidationError
-from sqlalchemy import exists, func, or_, select, tuple_
+from sqlalchemy import distinct, exists, func, or_, select, tuple_
 from sqlalchemy.orm import aliased
 
 from memory.agents.caps import CapExceeded, check_trigger_rate
@@ -386,26 +386,50 @@ def take_from_queue(
             passed.add(trigger_id)
 
 
-def backlog(db: DBSession, owner_id: int) -> list[dict[str, Any]]:
-    """Each of the owner's queues with its pending deliveries' count and oldest."""
+def queue_backlogs(db: DBSession, owner_id: int | None = None) -> list[dict[str, Any]]:
+    """Each queue, the owner's or everyone's, with its subscriptions and its pending
+    deliveries' count and oldest age."""
     queue = AgentTrigger.handler["queue"].astext
-    rows = db.execute(
-        select(queue, func.count(AgentTriggerMatch.item_id), func.min(AgentTriggerMatch.created_at))
+    query = (
+        select(
+            AgentTrigger.user_id,
+            queue,
+            func.array_agg(distinct(AgentTrigger.id)),
+            func.count(AgentTriggerMatch.item_id),
+            func.min(AgentTriggerMatch.created_at),
+        )
         .select_from(AgentTrigger)
         .outerjoin(
             AgentTriggerMatch,
             (AgentTriggerMatch.trigger_id == AgentTrigger.id) & (AgentTriggerMatch.status == PENDING),
         )
-        .where(AgentTrigger.user_id == owner_id, AgentTrigger.handler.has_key("queue"))
-        .group_by(queue)
-        .order_by(queue)
-    ).all()
+        .where(AgentTrigger.handler.has_key("queue"))
+        .group_by(AgentTrigger.user_id, queue)
+        .order_by(AgentTrigger.user_id, queue)
+    )
+    if owner_id is not None:
+        query = query.where(AgentTrigger.user_id == owner_id)
     now = datetime.now(timezone.utc)
     return [
         {
+            "owner_id": owner,
             "queue": name,
+            "subscription_ids": sorted(ids),
             "pending": count,
             "oldest_age_sec": None if oldest is None else int((now - oldest).total_seconds()),
         }
-        for name, count, oldest in rows
+        for owner, name, ids, count, oldest in db.execute(query).all()
     ]
+
+
+def backlog(db: DBSession, owner_id: int) -> list[dict[str, Any]]:
+    """Each of the owner's queues with its pending deliveries' count and oldest."""
+    return [
+        {k: q[k] for k in ("queue", "pending", "oldest_age_sec")} for q in queue_backlogs(db, owner_id)
+    ]
+
+
+def queue_health(db: DBSession) -> list[dict[str, Any]]:
+    """Every queue's backlog for the operator, named by ids: queue names are the
+    owner's own words."""
+    return [{k: v for k, v in q.items() if k != "queue"} for q in queue_backlogs(db)]

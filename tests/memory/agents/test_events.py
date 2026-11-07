@@ -178,6 +178,17 @@ def test_only_deliveries_that_store_nothing_keep_their_payload(db_session, outco
     assert db_session.query(Event).filter(Event.payload.is_not(None)).count() == with_payload
 
 
+@pytest.mark.parametrize("outcome, container", [("not_collected", None), ("stored", "C1"), ("rejected", "C1")])
+def test_a_delivery_not_collected_never_names_its_channel(db_session, outcome, container):
+    record_raw_event(
+        db_session, source="slack", event_type="message", account_id=1, owner_id=None,
+        delivery_id="d-1", outcome=outcome, container="C1",
+    )
+    db_session.commit()
+
+    assert [e.container for e in raw_events(db_session)] == [container]
+
+
 @pytest.mark.transactional_db
 def test_raw_events_are_routed_without_deliveries(db_session, admin_user, no_celery_dispatch):
     make_trigger(db_session, admin_user)

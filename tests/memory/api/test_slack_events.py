@@ -205,6 +205,7 @@ def test_dispatch_event_callback_routes_correctly(
 ):
     label, task_name, kwargs = plan_event_callback(event, slack_app_id=42)
 
+    assert task_name is not None
     assert task_name.endswith(expected_task_suffix)
     assert expected_kwarg_keys.issubset(kwargs.keys())
     assert kwargs["slack_app_id"] == 42
@@ -686,9 +687,12 @@ def test_events_in_channels_not_collected_leave_only_a_stub(
     assert [(e.outcome, e.payload) for e in raw_events(db_session)] == [("not_collected", None)]
 
 
-@pytest.mark.parametrize("workspace_collects, channel_collects", [(True, False), (False, None)])
-def test_a_delete_passes_whatever_the_channel_collects(
-    client, db_session, events_app, user, workspace_collects, channel_collects
+@pytest.mark.parametrize(
+    "workspace_collects, channel_collects, outcome, container",
+    [(True, False, "not_collected", None), (False, None, "not_collected", None), (True, True, "stored", GOOD_CHANNEL_ID)],
+)
+def test_a_delete_passes_whatever_the_channel_collects_but_an_untracked_ones_leaves_a_bare_stub(
+    client, db_session, events_app, user, workspace_collects, channel_collects, outcome, container
 ):
     connect_workspace(db_session, events_app, user, collect=workspace_collects)
     db_session.add(SlackChannel(id=GOOD_CHANNEL_ID, workspace_id=GOOD_TEAM_ID, name="c", channel_type="channel",
@@ -700,7 +704,7 @@ def test_a_delete_passes_whatever_the_channel_collects(
         post_signed(client, f"/slack/events/{events_app.id}", event_callback(deleted))
 
     assert [c.args[0] for c in send.call_args_list] == [slack_api.MARK_SLACK_MESSAGE_DELETED]
-    assert [e.outcome for e in raw_events(db_session)] == ["stored"]
+    assert [(e.outcome, e.container) for e in raw_events(db_session)] == [(outcome, container)]
 
 
 def test_an_event_that_could_not_be_queued_is_taken_on_retry(client, db_session, events_app, user):

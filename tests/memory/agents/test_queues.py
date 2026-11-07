@@ -650,3 +650,23 @@ async def test_work_queues_shows_each_queues_backlog(db_session, regular_user, w
     assert [(q["queue"], q["pending"]) for q in seen] == [("idle", 0), (QUEUE, 2)]
     assert seen[0]["oldest_age_sec"] is None
     assert 300 <= seen[1]["oldest_age_sec"] < 400
+
+
+def test_queue_health_counts_every_owners_queues_by_id(db_session, regular_user, admin_user):
+    reviews = subscribe(db_session, regular_user)
+    also_reviews = subscribe(db_session, regular_user, name="second")
+    theirs = subscribe(db_session, admin_user, enabled=False)
+    for _ in range(2):
+        route_item(db_session, post(db_session, creator_id=regular_user.id).id)
+    age(db_session, reviews, timedelta(minutes=5))
+
+    health = queues.queue_health(db_session)
+
+    # Queue names are the user's own words; operators get ids.
+    assert [(q["owner_id"], q["subscription_ids"], q["pending"]) for q in health] == [
+        (regular_user.id, [reviews.id, also_reviews.id], 4),
+        (admin_user.id, [theirs.id], 0),
+    ]
+    assert [set(q) for q in health] == [{"owner_id", "subscription_ids", "pending", "oldest_age_sec"}] * 2
+    assert 300 <= health[0]["oldest_age_sec"] < 400
+    assert health[1]["oldest_age_sec"] is None

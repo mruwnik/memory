@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
+from memory.agents.activity import subscription_activity
 from memory.agents.clock import (
     CHANNELS,
     CRON,
@@ -26,7 +27,7 @@ from memory.agents.clock import (
 from memory.agents.prebuilt import code_agent
 from memory.agents.spec import MAX_NAME_CHARS, MAX_TEXT_CHARS, AgentSpec
 from memory.agents.trigger_input import check_template
-from memory.agents.triggers import INGEST, RESUME, THROTTLED, IngestConfig, PerItem, resume_from_trip
+from memory.agents.triggers import INGEST, PENDING, RESUME, THROTTLED, IngestConfig, PerItem, resume_from_trip
 from memory.api.auth import token_api_key
 from memory.api.MCP.access import get_mcp_current_user
 from memory.api.MCP.servers.agent import (
@@ -168,6 +169,8 @@ def notify_handler(db: DBSession, fields: dict[str, Any]) -> dict[str, Any]:
     user = get_mcp_current_user(db)
     if user is None:
         raise ValueError("Not authenticated")
+    # An empty subject clears it.
+    fields = {k: v for k, v in fields.items() if not (k == "subject" and v == "")}
     try:
         notify = Notify.model_validate(fields | {"target": resolve_and_validate_target(db, user, channel, target)})
     except ValidationError as e:
@@ -227,8 +230,8 @@ def check_combination(kind: str, handler: dict[str, Any], shaping: dict[str, Any
     if "agent" in handler and shaping["order_by"] not in (None, "none"):
         raise ValueError("order_by applies to queue handlers: agent deliveries aren't ordered")
     for field in ("max_per_hour", "backlog_max"):
-        if shaping[field] is not None and shaping[field] < 1:
-            raise ValueError(f"{field} must be at least 1")
+        if shaping[field] is not None and shaping[field] < 0:
+            raise ValueError(f"{field} must be at least 0")
 
 
 def checked_config(kind: str, config: dict[str, Any], handler: dict[str, Any], cron_changed: bool) -> dict[str, Any]:
@@ -324,13 +327,15 @@ async def upsert(
     backlog_max: int | None = None,
     coalesce: Literal["none", "latest"] | None = None,
     order_by: Literal["item", "thread", "none"] | None = None,
+    create_only: bool = False,
 ) -> dict:
     """Create or update a subscription: hand what its source produces to its handler.
 
     Subscribing again with the same name updates that subscription in place (it
     never re-enables one that tripped, nor moves when it started matching), so a
     worker can subscribe itself on every start. subscription_id names one to update
-    or rename. On update, omitted arguments keep their values, a `source` given in
+    or rename; create_only=true refuses instead of updating one already named so. On
+    update, omitted arguments keep their values, a `source` given in
     part is merged into the stored one (a filter field by field: give a field its
     empty value, [], false or null, to clear it), and so is a notify handler's. A filter subscription's
     handler stays an agent or a queue; a cron's may move between agent and notify.
@@ -345,7 +350,8 @@ async def upsert(
       with agent_work_claim(queue=...). Needs 'agents:work' (or 'agents') and 'read'.
     - {"notify": {"channel": discord|slack|email, "target", "message", "subject"}}:
       sends that message. The target may be a person's name, identifier or email,
-      a Discord/Slack channel or user id, or an email address. Needs 'schedule:write'.
+      a Discord/Slack channel or user id, or an email address; subject "" clears
+      the subject. Needs 'schedule:write'.
 
     source, exactly one of:
     - {"filter": {...}, "delivery", "template", "on_edit", "on_changes"}: items
@@ -376,8 +382,8 @@ async def upsert(
       MAX_TIMERS_PER_USER. Returns the timer (kind "timer").
 
     Filter sources also take: max_per_hour (deliveries an hour; default
-    AGENT_MAX_RUNS_PER_HOUR), backlog_max (waiting deliveries beyond which the
-    oldest are shed), coalesce ("latest": a new event for an item, or its order_by
+    AGENT_MAX_RUNS_PER_HOUR, which 0 restores), backlog_max (waiting deliveries
+    beyond which the oldest are shed; 0 for no limit), coalesce ("latest": a new event for an item, or its order_by
     key, replaces its waiting delivery), and for queue handlers order_by ("item",
     the default, "thread" or "none": a later delivery with the same key waits for
     the earlier one to end). Over a cap, deliveries wait an hour and are then shed;
@@ -398,7 +404,11 @@ async def upsert(
     shaping = dict(max_per_hour=max_per_hour, backlog_max=backlog_max, coalesce=coalesce, order_by=order_by)
     with make_session() as db:
         key = token_api_key(token, db)
+        if create_only and subscription_id is not None:
+            raise ValueError("create_only creates: leave out subscription_id")
         existing = find(db, user_id, subscription_id, name)
+        if create_only and existing is not None:
+            raise ValueError(f"you already have a subscription named '{existing.name}'")
         renaming = existing is not None and subscription_id is not None and name is not None
         if resume and enabled is not True:
             raise ValueError("resume only applies when enabling a tripped subscription: pass enabled=true")
@@ -455,10 +465,11 @@ async def upsert(
             trigger.name = checked_name(db, user_id, name or f"subscription-{trigger.id}", trigger.id)
         trigger.handler, trigger.config = stored, config
         trigger.definition_id = definition.id if definition else None
+        # 0 clears a cap.
         if max_per_hour is not None:
-            trigger.max_per_hour = max_per_hour
+            trigger.max_per_hour = max_per_hour or None
         if backlog_max is not None:
-            trigger.backlog_max = backlog_max
+            trigger.backlog_max = backlog_max or None
         if coalesce is not None:
             trigger.coalesce_mode = coalesce
         if order_by is not None:
@@ -483,7 +494,10 @@ async def list_all(
     definition_id: int | None = None, queue: str | None = None, include_fired: bool = False
 ) -> dict:
     """Your subscriptions and the timers still waiting to fire; with definition_id or
-    queue, only those handed to that definition or queue. include_fired adds `fired`:
+    queue, only those handed to that definition or queue. Each subscription has
+    `api_key_name` (the key it was set up through, if any) and `activity`: `pending`
+    deliveries, `oldest_pending_at`, and `last`, its latest delivery or tick ({status,
+    at, run_id, run_status}). include_fired adds `fired`:
     the latest FIRED_TIMERS_LISTED timers that ended, newest first, each with its
     `result` (sent, done with the run_id, failed with the error, or skipped:<reason>;
     `late_sec` when it went out late). A tripped subscription's state says why.
@@ -511,14 +525,16 @@ async def list_all(
         if definition_id is not None:
             timers = [t for t in timers if (t.handler or {}).get("agent") == definition_id]
             fired = [t for t in fired if (t.handler or {}).get("agent") == definition_id]
+        subscriptions = list(db.scalars(query.order_by(AgentTrigger.id)))
+        activity = subscription_activity(db, subscriptions, token_api_key(caller_token()[0], db))
         listed = {
-            "subscriptions": [t.serialize() for t in db.scalars(query.order_by(AgentTrigger.id))],
+            "subscriptions": [t.serialize() | activity[t.id] for t in subscriptions],
             "timers": [timer_payload(t) for t in timers],
         }
         return listed | ({"fired": [timer_payload(t) for t in fired]} if include_fired else {})
 
 
-def delivery(match: AgentTriggerMatch) -> dict[str, Any]:
+def delivery(match: AgentTriggerMatch, run_status: str | None) -> dict[str, Any]:
     return {
         "item_id": match.item_id,
         "status": match.status,
@@ -528,6 +544,7 @@ def delivery(match: AgentTriggerMatch) -> dict[str, Any]:
         "not_before": iso(match.not_before),
         "error": match.error,
         "run_id": match.run_id,
+        "run_status": run_status,
     }
 
 
@@ -553,11 +570,14 @@ def run_summary(run: AgentRun) -> dict[str, Any]:
 
 @subscription_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(*READERS))
-async def fetch(subscription_id: int, item_id: int | None = None, limit: int = 20) -> dict:
+async def fetch(
+    subscription_id: int, item_id: int | None = None, limit: int = 20, pending: bool | None = None
+) -> dict:
     """One of your subscriptions with its history, newest first; with item_id, only
     that item's. `deliveries`: a filter source's, each with its status (pending,
-    done, failed, expired or skipped:<reason>), changes and run_id (none while
-    pending), or a cron source's ticks with `missed` and their `result` (sent, done
+    done, failed, expired or skipped:<reason>), changes, run_id and run_status (none
+    while pending; pending=true lists only those, oldest first, pending=false only
+    the ended ones), or a cron source's ticks with `missed` and their `result` (sent, done
     with the run_id, failed with the error, or skipped:<reason>; none until
     delivered). `runs`: the runs it started or its workers claimed, with their status.
     """
@@ -569,11 +589,20 @@ async def fetch(subscription_id: int, item_id: int | None = None, limit: int = 2
             ticks = select(Event).where(Event.kind == TICK, Event.trigger_id == trigger.id)
             deliveries = [tick(e) for e in db.scalars(ticks.order_by(Event.fire_at.desc()).limit(limit))]
         else:
-            matches = select(AgentTriggerMatch).where(AgentTriggerMatch.trigger_id == trigger.id)
+            matches = (
+                select(AgentTriggerMatch, AgentRun.status)
+                .outerjoin(AgentRun, AgentRun.id == AgentTriggerMatch.run_id)
+                .where(AgentTriggerMatch.trigger_id == trigger.id)
+            )
             if item_id is not None:
                 matches = matches.where(AgentTriggerMatch.item_id == item_id)
-            ordered = matches.order_by(AgentTriggerMatch.created_at.desc(), AgentTriggerMatch.item_id.desc())
-            deliveries = [delivery(m) for m in db.scalars(ordered.limit(limit))]
+            if pending is not None:
+                waiting = AgentTriggerMatch.status == PENDING
+                matches = matches.where(waiting if pending else ~waiting)
+            newest = (AgentTriggerMatch.created_at.desc(), AgentTriggerMatch.item_id.desc())
+            oldest = (AgentTriggerMatch.created_at, AgentTriggerMatch.item_id)
+            ordered = matches.order_by(*(oldest if pending else newest)).limit(limit)
+            deliveries = [delivery(m, status) for m, status in db.execute(ordered).tuples()]
         runs = select(AgentRun).where(AgentRun.trigger_id == trigger.id, AgentRun.user_id == user_id)
         if item_id is not None:
             runs = runs.where(AgentRun.trigger_ref["item_ids"].contains([item_id]))

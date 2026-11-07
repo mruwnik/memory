@@ -8,6 +8,8 @@ parse_args "$@"
 
 echo "[health]"
 health_summary
+echo "[queues]"
+queue_backlog
 echo "[containers]"
 container_states
 echo "[resources]"

@@ -267,8 +267,8 @@ async def test_an_agent_runs_on_a_cron_with_its_input(
         ({"handler": NOTIFY, "source": CRON, "max_per_hour": 3}, "apply to filter sources"),
         ({"handler": NOTIFY, "source": CRON, "order_by": "item"}, "apply to filter sources"),
         ({"handler": {"agent": "echo"}, "source": FILTER, "order_by": "item"}, "order_by applies to queue handlers"),
-        ({"handler": {"queue": "q"}, "source": FILTER, "max_per_hour": 0}, "max_per_hour must be at least 1"),
-        ({"handler": {"queue": "q"}, "source": FILTER, "backlog_max": 0}, "backlog_max must be at least 1"),
+        ({"handler": {"queue": "q"}, "source": FILTER, "max_per_hour": -1}, "max_per_hour must be at least 0"),
+        ({"handler": {"queue": "q"}, "source": FILTER, "backlog_max": -1}, "backlog_max must be at least 0"),
         ({"handler": {"queue": "q"}, "source": FILTER, "name": " "}, "name must not be empty"),
         ({"handler": {"queue": "q"}, "source": FILTER, "name": "trigger-12"}, "reserved for default names"),
         ({"handler": {"queue": "q"}, "source": {"filter": {}}}, "set at least one of"),
@@ -887,3 +887,128 @@ async def test_deleting_a_definition_takes_its_subscriptions_and_cancels_its_tim
     assert db_session.query(AgentTrigger).count() == 0
     assert db_session.get_one(Event, timer["id"]).result == {"status": "skipped:cancelled"}
     assert db_session.get_one(Event, slugged["id"]).result is None
+
+
+@pytest.mark.asyncio
+async def test_create_only_refuses_a_name_already_taken(db_session, regular_user, user_session):
+    with mcp_auth_context(user_session.token):
+        first = await upsert(name="reviews", handler={"queue": "prs"}, source=FILTER)
+        with pytest.raises(ValueError, match="already have a subscription named 'reviews'"):
+            await upsert(name="reviews", handler={"queue": "other"}, source=FILTER, create_only=True)
+        fresh = await upsert(name="fresh", handler={"queue": "other"}, source=FILTER, create_only=True)
+
+    assert db_session.get_one(AgentTrigger, first["id"]).handler == {"queue": "prs"}
+    assert fresh["name"] == "fresh"
+
+
+@pytest.mark.asyncio
+async def test_caps_and_a_subject_are_cleared_with_their_empty_values(db_session, regular_user, user_session):
+    with mcp_auth_context(user_session.token):
+        queued = await upsert(handler={"queue": "q"}, source=FILTER, max_per_hour=5, backlog_max=10)
+        cron = await upsert(name="ping", handler=NOTIFY, source=CRON)
+        cleared = await upsert(subscription_id=queued["id"], max_per_hour=0, backlog_max=0)
+        unsubjected = await upsert(subscription_id=cron["id"], handler={"notify": {"subject": ""}})
+
+    assert (cleared["max_per_hour"], cleared["backlog_max"]) == (None, None)
+    assert unsubjected["handler"] == {"notify": {k: v for k, v in NOTIFY["notify"].items() if k != "subject"}}
+
+
+def queued_run(db, user, trigger_id, item_id, status="done"):
+    run = AgentRun(
+        user_id=user.id, queue="reviews", spec={}, input="", trigger_kind="ingest",
+        trigger_ref={"trigger_id": trigger_id, "item_ids": [item_id]}, trigger_id=trigger_id,
+        executor="workers", status=status, max_cost_usd=0,
+    )
+    db.add(run)
+    db.flush()
+    return run
+
+
+@pytest.mark.asyncio
+async def test_a_listing_shows_each_subscriptions_backlog_last_delivery_and_origin(
+    db_session, regular_user, user_session
+):
+    key = api_key(db_session, regular_user, ALL_SCOPES)
+    with mcp_auth_context(user_session.token):
+        busy = await upsert(name="busy", handler={"queue": "reviews"}, source=FILTER)
+        await upsert(name="idle", handler={"queue": "idle"}, source=FILTER)
+    with mcp_auth_context(key.key, scopes=ALL_SCOPES):
+        cron = await upsert(name="cron", handler=NOTIFY, source=CRON)
+    a, b, c = (post(db_session, regular_user) for _ in range(3))
+    run = queued_run(db_session, regular_user, busy["id"], a.id, status="failed")
+    now = datetime.now(timezone.utc)
+    db_session.add_all([
+        AgentTriggerMatch(
+            trigger_id=busy["id"], item_id=a.id, content_hash=b"a", status="done", run_id=run.id,
+            created_at=now - timedelta(minutes=1),
+        ),
+        AgentTriggerMatch(trigger_id=busy["id"], item_id=b.id, content_hash=b"b", created_at=now - timedelta(hours=2)),
+        AgentTriggerMatch(trigger_id=busy["id"], item_id=c.id, content_hash=b"c", created_at=now - timedelta(hours=1)),
+        Event(kind="tick", trigger_id=cron["id"], owner_id=regular_user.id, fire_at=now, result={"status": "sent"}),
+    ])
+    db_session.commit()
+
+    with mcp_auth_context(user_session.token):
+        listed = {s["name"]: s for s in (await list_all())["subscriptions"]}
+
+    assert listed["busy"]["activity"] == {
+        "pending": 2,
+        "oldest_pending_at": (now - timedelta(hours=2)).isoformat(),
+        "last": {"status": "done", "at": (now - timedelta(minutes=1)).isoformat(), "run_id": run.id, "run_status": "failed"},
+    }
+    assert listed["idle"]["activity"] == {"pending": 0, "oldest_pending_at": None, "last": None}
+    assert listed["cron"]["activity"] == {
+        "pending": 0,
+        "oldest_pending_at": None,
+        "last": {"status": "sent", "at": now.isoformat(), "run_id": None, "run_status": None},
+    }
+    assert (listed["busy"]["api_key_name"], listed["cron"]["api_key_name"]) == (None, key.name)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("by_creator, shown", [(True, "creator"), (False, None)])
+async def test_a_key_sees_only_its_own_name_on_what_it_set_up(db_session, regular_user, by_creator, shown):
+    creator = APIKey.create(user_id=regular_user.id, name="creator", scopes=ALL_SCOPES)
+    other = APIKey.create(user_id=regular_user.id, name="other", scopes=ALL_SCOPES)
+    db_session.add_all([creator, other])
+    db_session.commit()
+    with mcp_auth_context(creator.key, scopes=ALL_SCOPES):
+        await upsert(name="cron", handler=NOTIFY, source=CRON)
+
+    with mcp_auth_context((creator if by_creator else other).key, scopes=ALL_SCOPES):
+        [listed] = (await list_all())["subscriptions"]
+
+    assert listed["api_key_name"] == shown
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "pending, expected",
+    [
+        (True, [("b", None), ("c", None)]),
+        (False, [("a", "done")]),
+        (None, [("a", "done"), ("c", None), ("b", None)]),
+    ],
+)
+async def test_a_history_lists_pending_deliveries_apart_with_their_runs_status(
+    db_session, regular_user, user_session, pending, expected
+):
+    with mcp_auth_context(user_session.token):
+        queued = await upsert(handler={"queue": "reviews"}, source=FILTER)
+    items = {name: post(db_session, regular_user) for name in "abc"}
+    run = queued_run(db_session, regular_user, queued["id"], items["a"].id)
+    now = datetime.now(timezone.utc)
+    db_session.add_all([
+        AgentTriggerMatch(
+            trigger_id=queued["id"], item_id=items["a"].id, content_hash=b"a", status="done", run_id=run.id, created_at=now
+        ),
+        AgentTriggerMatch(trigger_id=queued["id"], item_id=items["b"].id, content_hash=b"b", created_at=now - timedelta(hours=2)),
+        AgentTriggerMatch(trigger_id=queued["id"], item_id=items["c"].id, content_hash=b"c", created_at=now - timedelta(hours=1)),
+    ])
+    db_session.commit()
+    names = {i.id: name for name, i in items.items()}
+
+    with mcp_auth_context(user_session.token):
+        fetched = await fetch(subscription_id=queued["id"], pending=pending)
+
+    assert [(names[d["item_id"]], d["run_status"]) for d in fetched["deliveries"]] == expected

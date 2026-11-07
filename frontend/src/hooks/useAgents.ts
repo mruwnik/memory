@@ -116,6 +116,7 @@ export interface Catalog {
     default_user_key_run_cost_usd: string
   }
   default_model: string
+  agents: { slug: string; title: string; description: string }[]
   trigger_source_types: string[]
   mcp_servers: ExternalServer[]
   provider_keys: ProviderKey[]
@@ -227,53 +228,134 @@ export interface IngestFilter {
   source_types: string[]
   tags_any: string[]
   channel_ids: string[]
-  // Absent from triggers saved before the field existed.
-  exclude_channel_ids?: string[]
+  exclude_channel_ids: string[]
   text_contains: string[]
   regex: string | null
+  authors_any: string[]
   exclude_authors: string[]
+  known_people_only: boolean
+  changed_by_any: string[]
+  exclude_changed_by: string[]
+  // null: on, except for queue handlers
+  exclude_own: boolean | null
+  repos: string[]
+  mentions_me: boolean
+  threads_im_in: boolean
+  dms_to_me: boolean
 }
 
 export type Delivery = { mode: 'per_item' } | { mode: 'batch'; window_sec: number; max_items: number }
+
+export const CHANGE_TAGS = [
+  'edited', 'commits', 'comments', 'review', 'checks', 'checks_complete', 'state',
+  'labels', 'assignees', 'draft', 'title', 'due', 'priority',
+] as const
 
 export interface TriggerConfig {
   filter: IngestFilter
   delivery: Delivery
   template: string
-  on_edit?: boolean
+  on_edit: boolean
+  on_changes: string[]
 }
 
-export interface AgentTrigger {
+export interface CronConfig { cron: string; input: string }
+
+export const NOTIFY_CHANNELS = ['email', 'discord', 'slack'] as const
+export type NotifyChannel = typeof NOTIFY_CHANNELS[number]
+export interface NotifyHandler { channel: NotifyChannel; target: string; message: string; subject?: string | null }
+
+export type Handler = { agent: number | string } | { queue: string } | { notify: NotifyHandler }
+
+export interface LastDelivery { status: string | null; at: string | null; run_id: string | null; run_status: RunStatus | null }
+
+interface SubscriptionBase {
   id: number
-  definition_id: number
-  kind: 'ingest'
-  config: TriggerConfig
+  name: string
+  definition_id: number | null
+  handler: Handler
   enabled: boolean
-  state: { tripped?: { reason: string; at: string } }
+  state: {
+    tripped?: { reason: string; at: string }
+    throttled?: { reason: string; since: string; last: string }
+  }
   api_key_id: number | null
   via_api_key: boolean
+  api_key_name: string | null
+  max_per_hour: number | null
+  backlog_max: number | null
+  coalesce_mode: 'none' | 'latest'
+  order_by: 'none' | 'item' | 'thread'
+  active_since: string | null
+  next_at: string | null
   created_at: string | null
   updated_at: string | null
+  activity: { pending: number; oldest_pending_at: string | null; last: LastDelivery | null }
+}
+
+export type Subscription =
+  | (SubscriptionBase & { kind: 'ingest'; config: TriggerConfig })
+  | (SubscriptionBase & { kind: 'cron'; config: CronConfig })
+
+export interface Timer {
+  id: number
+  kind: 'timer'
+  fire_at: string | null
+  handler: Handler
+  input: string | null
+  result: { status: string; [key: string]: unknown } | null
+  created_at: string | null
+}
+
+export interface ItemDelivery {
+  item_id: number
+  status: string
+  changes: string[]
+  coalesced: number[]
+  created_at: string | null
+  not_before: string | null
+  error: string | null
+  run_id: string | null
+  run_status: RunStatus | null
+}
+
+export interface TickDelivery {
+  event_id: number
+  time: string | null
+  missed: number
+  result: { status: string; run_id?: string; error?: string } | null
+}
+
+export interface SubscriptionUpsert {
+  subscription_id?: number
+  name?: string
+  handler?: Handler
+  source?: Partial<TriggerConfig> | Partial<CronConfig> | { at: string; input?: string }
+  enabled?: boolean
+  resume?: boolean
+  max_per_hour?: number
+  backlog_max?: number
+  coalesce?: 'none' | 'latest'
+  order_by?: 'none' | 'item' | 'thread'
+  // Refuse rather than update a subscription already so named.
+  create_only?: boolean
 }
 
 export const DEFAULT_TRIGGER_TEMPLATE = 'New items matched this trigger:\n\n{items}'
 
+export const emptyFilter = (): IngestFilter => ({
+  source_types: [], tags_any: [], channel_ids: [], exclude_channel_ids: [], text_contains: [], regex: null,
+  authors_any: [], exclude_authors: [], known_people_only: false, changed_by_any: [], exclude_changed_by: [],
+  exclude_own: null, repos: [], mentions_me: false, threads_im_in: false, dms_to_me: false,
+})
+
 export const emptyTriggerConfig = (): TriggerConfig => ({
-  filter: { source_types: [], tags_any: [], channel_ids: [], exclude_channel_ids: [], text_contains: [], regex: null, exclude_authors: [] },
+  filter: emptyFilter(),
   delivery: { mode: 'per_item' },
   template: DEFAULT_TRIGGER_TEMPLATE,
   on_edit: false,
+  on_changes: [],
 })
-
-export interface AgentSchedule {
-  id: number
-  kind: 'cron'
-  name: string
-  config: { cron: string; input: string }
-  next_at: string | null
-  enabled: boolean
-  state: { tripped?: { reason: string; at: string } }
-}
 
 export const defaultSpec = (model: string): AgentSpec => ({
   system_prompt: '',
@@ -354,56 +436,32 @@ export const useAgents = () => {
   )
   const catalog = useCallback(() => call<Catalog>('agent_catalog'), [call])
 
-  // A definition's cron subscriptions and filter subscriptions, which the editor shows apart.
   const listSubscriptions = useCallback(
-    async (definitionId: number) =>
-      (await call<{ subscriptions: (AgentSchedule | AgentTrigger)[] }>('subscription_list_all', { definition_id: definitionId }))
-        .subscriptions,
+    (filters: { definitionId?: number; includeFired?: boolean } = {}) =>
+      call<{ subscriptions: Subscription[]; timers: Timer[]; fired?: Timer[] }>('subscription_list_all', {
+        ...(filters.definitionId !== undefined ? { definition_id: filters.definitionId } : {}),
+        ...(filters.includeFired ? { include_fired: true } : {}),
+      }),
     [call],
   )
-  // An update names only the subscription, so pausing never re-checks the definition.
-  const saveSubscription = useCallback(
-    <T,>(definitionId: number, subscriptionId: number | undefined, source: object | undefined, enabled: boolean | undefined) =>
-      call<T>('subscription_upsert', {
-        ...(subscriptionId !== undefined ? { subscription_id: subscriptionId } : { handler: { agent: definitionId } }),
-        ...(source !== undefined ? { source } : {}),
-        ...(enabled !== undefined ? { enabled } : {}),
+  const fetchSubscription = useCallback(
+    (subscriptionId: number, options: { pending?: boolean; limit?: number } = {}) =>
+      call<{ subscription: Subscription; deliveries: (ItemDelivery | TickDelivery)[]; runs: AgentRun[] }>('subscription_fetch', {
+        subscription_id: subscriptionId,
+        ...(options.pending !== undefined ? { pending: options.pending } : {}),
+        ...(options.limit !== undefined ? { limit: options.limit } : {}),
       }),
+    [call],
+  )
+  const upsertSubscription = useCallback(
+    (args: SubscriptionUpsert) => call<(Subscription | Timer) & { warnings?: string[] }>('subscription_upsert', { ...args }),
     [call],
   )
   const deleteSubscription = useCallback(
     (subscriptionId: number) => call('subscription_delete', { subscription_id: subscriptionId }),
     [call],
   )
-
-  const listSchedules = useCallback(
-    async (definitionId: number) =>
-      (await listSubscriptions(definitionId)).filter((s): s is AgentSchedule => s.kind === 'cron'),
-    [listSubscriptions],
-  )
-  const saveSchedule = useCallback(
-    (body: { definitionId: number; input?: string; cron?: string; enabled?: boolean; scheduleId?: number }) => {
-      const source = {
-        ...(body.cron !== undefined ? { cron: body.cron } : {}),
-        ...(body.input !== undefined ? { input: body.input } : {}),
-      }
-      return saveSubscription<AgentSchedule>(
-        body.definitionId, body.scheduleId, Object.keys(source).length ? source : undefined, body.enabled,
-      )
-    },
-    [saveSubscription],
-  )
-
-  const listTriggers = useCallback(
-    async (definitionId: number) =>
-      (await listSubscriptions(definitionId)).filter((s): s is AgentTrigger => s.kind === 'ingest'),
-    [listSubscriptions],
-  )
-  const saveTrigger = useCallback(
-    (body: { definitionId: number; config?: TriggerConfig; enabled?: boolean; triggerId?: number }) =>
-      saveSubscription<AgentTrigger & { warnings?: string[] }>(body.definitionId, body.triggerId, body.config, body.enabled),
-    [saveSubscription],
-  )
+  const cancelTimer = useCallback((timerId: number) => call('subscription_delete', { timer_id: timerId }), [call])
 
   const listServers = useCallback(
     async () => (await call<{ servers: ExternalServer[] }>('agent_server_list')).servers,
@@ -455,7 +513,7 @@ export const useAgents = () => {
 
   return {
     listDefinitions, listSystemAgents, getDefinition, saveDefinition, deleteDefinition, startRun, waitRun, listRuns, cancelRun, starRun, catalog,
-    listSchedules, saveSchedule, listTriggers, saveTrigger, deleteSubscription,
+    listSubscriptions, fetchSubscription, upsertSubscription, deleteSubscription, cancelTimer,
     listServers, upsertServer, authorizeServer, refreshServerTools, disconnectServer, deleteServer,
     listKeys, upsertKey, deleteKey,
   }

@@ -204,7 +204,8 @@ def record_raw_event(
 ) -> int | None:
     """Add, uncommitted, the raw event for one delivery; None when the account
     already recorded `delivery_id`. Until the caller commits, a concurrent repeat
-    of the delivery waits on this one."""
+    of the delivery waits on this one. A delivery not collected keeps no
+    container: an untracked channel stays unseen."""
     values = dict(
         kind=RAW,
         source=source,
@@ -213,7 +214,7 @@ def record_raw_event(
         owner_id=owner_id,
         delivery_id=delivery_id,
         outcome=outcome,
-        container=container,
+        container=None if outcome == NOT_COLLECTED else container,
         payload=kept_payload(outcome, payload),
     )
     statement = (

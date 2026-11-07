@@ -31,6 +31,10 @@ case "$*" in
         printf 'status=healthy\\nversion=v1\\ndb_revision=r1\\nexpected_revision=r1\\n'
         printf 'item_text=%s\\n' "$(grep -h '^JWT_SECRET=' .env | cut -d= -f2)"
         ;;
+    *"python -c"*"queue_health"*)
+        fails queues && exit 1
+        printf 'queue owner=3 subscriptions=12,15 of=2 pending=4 oldest_age_sec=120\\n'
+        printf 'queue owner=3 subscriptions=pr-reviews of=1 pending=1 oldest_age_sec=5\\n'        ;;
     *pg_dump*) echo DUMPDATA ;;
     "logs "*) cat "$FAKE_LOGS/${@: -1}" 2>/dev/null ;;
     "ps -a -q") echo container1 ;;
@@ -284,6 +288,21 @@ def test_status_reports_update_failure_and_backup_markers(box):
     assert "last_update_check=failed" in output
     assert "something sensitive" not in output
     assert "row text" not in output
+
+
+def test_status_reports_each_waiting_queue_by_ids_only(box):
+    code, output = ops(box, "status")
+
+    assert code == 0, output
+    assert "queue owner=3 subscriptions=12,15 of=2 pending=4 oldest_age_sec=120" in output
+    assert "pr-reviews" not in output
+
+
+def test_status_says_when_the_queues_cannot_be_read(box):
+    code, output = ops(box, "status", FAKE_FAIL="queues")
+
+    assert code == 0, output
+    assert "queues=unreachable" in output
 
 
 def test_status_reports_a_degraded_api_instead_of_unreachable(box):

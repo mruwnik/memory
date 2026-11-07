@@ -452,6 +452,9 @@ class AgentTriggerMatch(Base):
     run_id: Mapped[str | None] = mapped_column(
         String, ForeignKey("agent_runs.id", ondelete="SET NULL")
     )
+    # The event it was routed from (the latest, once coalesced). No foreign key:
+    # events are purged on their own schedule.
+    event_id: Mapped[int | None] = mapped_column(BigInteger)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -467,6 +470,13 @@ class AgentTriggerMatch(Base):
             name="agent_trigger_matches_status_check",
         ),
         Index("agent_trigger_matches_item_idx", "item_id"),
+        Index(
+            "agent_trigger_matches_event_idx",
+            "event_id",
+            postgresql_where=text("event_id IS NOT NULL"),
+        ),
+        # A subscription's latest delivery (memory.agents.activity).
+        Index("agent_trigger_matches_trigger_created_idx", "trigger_id", text("created_at DESC")),
         Index("agent_trigger_matches_created_idx", "created_at"),
         Index(
             "agent_trigger_matches_pending_idx",

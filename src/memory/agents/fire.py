@@ -187,14 +187,18 @@ def hold_back(db: DBSession, trigger_id: int, refs: list[str], cap: CapExceeded)
         return
     shed_as = SHED_RATE if isinstance(cap, RateExceeded) else SHED_BUDGET
     retry_at = datetime.now(timezone.utc) + THROTTLE_WINDOW
+    shed = 0
     for d in due_deliveries(db, trigger_id, refs):
         if d.not_before is None:
             d.not_before, d.dispatched_at, d.sends = retry_at, None, 0
         else:
             d.status = shed_as
+            shed += 1
     reason = str(cap)
     episode = throttled(trigger, reason)
     db.commit()
+    if shed:
+        logger.warning("agent trigger %s shed %d deliveries over its caps", trigger_id, shed)
     if episode:
         tell_throttled(db, trigger, reason)
 

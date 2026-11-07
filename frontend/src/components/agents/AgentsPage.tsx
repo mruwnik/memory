@@ -31,6 +31,7 @@ export default function AgentsPage() {
       actions={<>
         <ButtonLink to="/agents/new" variant="primary">New agent</ButtonLink>
         <ButtonLink to="/agents/runs">Runs</ButtonLink>
+        <ButtonLink to="/agents/subscriptions">Subscriptions</ButtonLink>
         <ButtonLink to="/agents/servers">MCP servers</ButtonLink>
         <ButtonLink to="/keys">LLM keys</ButtonLink>
       </>}

@@ -15,6 +15,7 @@ const catalog: Catalog = {
   }],
   ceilings: { max_timeout_sec: 1800, max_runs_per_hour: 60, default_user_key_run_cost_usd: '2.00' },
   default_model: 'anthropic/claude-sonnet-5-5',
+  agents: [],
   trigger_source_types: [],
   mcp_servers: [],
   provider_keys: [],
@@ -28,8 +29,7 @@ const agents = {
   deleteDefinition: vi.fn(),
   startRun: vi.fn(),
   listRuns: vi.fn(),
-  listSchedules: vi.fn().mockResolvedValue([]),
-  listTriggers: vi.fn().mockResolvedValue([]),
+  listSubscriptions: vi.fn().mockResolvedValue({ subscriptions: [], timers: [] }),
 }
 
 vi.mock('@/hooks/useAgents', async (orig) => ({

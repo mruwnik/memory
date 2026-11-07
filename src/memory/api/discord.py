@@ -642,8 +642,7 @@ def channel_collected(db: Session, event_type: str, data: dict) -> bool | None:
 def discord_outcome(db: Session, event_type: str, data: object) -> str:
     if not isinstance(data, dict):
         return NO_ITEM_TYPE
-    # A delete carries ids alone and drops whatever copy Memory has.
-    if event_type not in DELETE_EVENT_TYPES and channel_collected(db, event_type, data) is False:
+    if channel_collected(db, event_type, data) is False:
         return NOT_COLLECTED
     return STORED if event_type in CARRIED_EVENT_TYPES else NO_ITEM_TYPE
 
@@ -687,6 +686,8 @@ async def discord_events(bot_id: int, request: Request, db: Session = Depends(ge
     event_type = str(event.get("type") or ("PING" if envelope.get("type") == DISCORD_PING else "unknown"))
     data = event.get("data")
     outcome = discord_outcome(db, event_type, data)
+    # A delete still drops whatever copy Memory has.
+    untracked_delete = event_type in DELETE_EVENT_TYPES and outcome == NOT_COLLECTED
     channel_id = event_channel_id(event_type, data) if isinstance(data, dict) else None
     # Discord sends no delivery id, and a retry or replay repeats the body.
     raw_id = record_raw_event(
@@ -703,7 +704,7 @@ async def discord_events(bot_id: int, request: Request, db: Session = Depends(ge
     if raw_id is None:
         db.rollback()
         return Response(status_code=204)
-    if outcome == STORED:
+    if outcome == STORED or untracked_delete:
         try:
             celery_app.send_task(
                 HANDLE_DISCORD_EVENT,

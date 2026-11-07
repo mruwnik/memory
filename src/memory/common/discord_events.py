@@ -7,6 +7,8 @@ so this mirrors ``memory.discord.ingest`` without importing discord.py.
 
 from typing import Any
 
+from sqlalchemy import select, update
+
 from memory.common.content_processing import clear_item_chunks
 from memory.common.db.connection import DBSession
 from memory.common.db.models import (
@@ -16,7 +18,9 @@ from memory.common.db.models import (
     DiscordMessage,
     DiscordServer,
     DiscordUser,
+    Event,
 )
+from memory.common.db.models.events import NOT_COLLECTED, RAW
 from memory.common.db.upsert import get_or_insert, insert_missing
 
 # Gateway message types that are ordinary messages: DEFAULT and REPLY.
@@ -248,7 +252,8 @@ def ensure_listed_channel(
 def set_thread_parent(session: DBSession, thread: DiscordChannel, parent_id: int | None) -> None:
     """Record a thread's parent. Its first messages can be stored before the
     parent is known; if the parent leaves the thread not collected, they are
-    removed, as if never collected."""
+    removed, as if never collected, and the webhook deliveries about it become
+    bare not_collected stubs."""
     if parent_id is None or thread.parent_id == parent_id:
         return
     thread.parent_id = parent_id
@@ -259,6 +264,21 @@ def set_thread_parent(session: DBSession, thread: DiscordChannel, parent_id: int
     for message in session.query(DiscordMessage).filter(DiscordMessage.channel_id == thread.id):
         clear_item_chunks(message, session)
         session.delete(message)
+    # Only the server's bots can have delivered events about the thread; naming
+    # them lets the update use events_account_idx.
+    server_bots = select(DiscordBotServer.bot_id).where(DiscordBotServer.server_id == thread.server_id)
+    owner_bot = select(DiscordServer.bot_id).where(DiscordServer.id == thread.server_id)
+    bots = {thread.bot_id, *session.scalars(server_bots), *session.scalars(owner_bot)} - {None}
+    session.execute(
+        update(Event)
+        .where(
+            Event.kind == RAW,
+            Event.source == "discord",
+            Event.account_id.in_(bots),
+            Event.container == str(thread.id),
+        )
+        .values(outcome=NOT_COLLECTED, container=None, payload=None)
+    )
 
 
 def ensure_thread(session: DBSession, data: dict, bot_id: int, push_only: bool) -> DiscordChannel:
