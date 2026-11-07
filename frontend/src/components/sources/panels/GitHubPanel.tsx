@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSources, GithubAccount, GithubProject, GithubWebhookStatus, AvailableRepo, AvailableProject } from '@/hooks/useSources'
-import { TagsInput, PauseButton, ScheduleButton, SyncScheduleFields, StatusBadge, SyncButton, SyncFailingBadge, SyncFailure, formatRelativeTime } from '../shared'
-import { Badge, Button, Checkbox, ConfirmButton, CopyButton, DetailList, Disclosure, EmptyState, ErrorState, Field, FormActions, Input, List, LoadingState, Modal, Notice, Row, Section, SubList, cx, useActionNotice, Fieldset, NewTabLink } from '@/components/shared/ui'
+import { TagsInput, PauseButton, PUSH_CAUSES, PushMissedBadge, ScheduleButton, SyncScheduleFields, StatusBadge, SyncButton, SyncFailingBadge, SyncFailure, formatRelativeTime } from '../shared'
+import { Badge, Button, Checkbox, ConfirmButton, CopyButton, DetailList, Disclosure, EmptyState, ErrorState, Field, FormActions, Input, List, LoadingState, Modal, Notice, Row, RowError, Section, SubList, cx, useActionNotice, Fieldset, NewTabLink } from '@/components/shared/ui'
 import { useDebounce } from '@/hooks/useDebounce'
 import { useSourcesContext } from '../context'
 import { llmKeyLabel } from '../LLMKeyField'
@@ -10,7 +10,7 @@ export const GitHubPanel = () => {
   const {
     listGithubAccounts,
     addGithubRepo, updateGithubRepo, deleteGithubRepo, syncGithubRepo,
-    listAccountProjects, addGithubProject, deleteGithubProject
+    listAccountProjects, addGithubProject, deleteGithubProject, installGithubWebhooks
   } = useSources()
   const { userId, refreshCounts } = useSourcesContext()
   const [accounts, setAccounts] = useState<GithubAccount[]>([])
@@ -83,6 +83,11 @@ export const GitHubPanel = () => {
     loadData()
   }, 'Sync queued')
 
+  const handleReinstallHooks = (accountId: number) => run(async () => {
+    await installGithubWebhooks(accountId)
+    loadData()
+  }, 'Reinstalling. Push is marked healthy again once an event arrives.')
+
   const handleAddProject = async (accountId: number, data: { owner: string; project_number: number; is_org: boolean }) => {
     await addGithubProject(accountId, data)
     setAddingProjectTo(null)
@@ -106,20 +111,36 @@ export const GitHubPanel = () => {
         <List>
           {accounts.map(account => {
             const projects = accountProjects[account.id] || []
+            const missing = account.repos.filter(r => r.push_missing_since)
+            // The account's outage spans its repos': from the first repo's miss to the latest.
+            const accountPush = {
+              push_missing_since: missing.map(r => r.push_missing_since!).sort()[0] ?? null,
+              push_last_miss_at: missing.map(r => r.push_last_miss_at ?? '').sort().at(-1) || null,
+              push_stale: false,
+            }
             return (
               <Row
                 key={account.id}
                 title={account.name}
                 muted={!account.active}
-                badges={<StatusBadge active={account.active} />}
+                badges={<><StatusBadge active={account.active} /><PushMissedBadge status={accountPush} causes={PUSH_CAUSES.github} /></>}
                 meta={[
                   account.auth_type === 'pat' ? 'Personal access token' : 'GitHub App',
                   account.verified_login ? `verified as ${account.verified_login}` : 'unverified',
                   `LLM: ${llmKeyLabel(account.llm_key)}`,
                   account.webhook_secret_hint ? 'webhook set' : 'no webhook',
                 ]}
-                actions={<Button size="sm" onClick={() => setWebhookFor(account.id)}>Webhook</Button>}
+                actions={<>
+                  {missing.length > 0 && <Button size="sm" onClick={() => handleReinstallHooks(account.id)}>Reinstall webhooks</Button>}
+                  <Button size="sm" onClick={() => setWebhookFor(account.id)}>Webhook</Button>
+                </>}
               >
+                {missing.length > 0 && (
+                  <RowError>
+                    Polling found changes to {missing.map(r => r.repo_path).join(', ')} that {missing.length === 1 ? 'its webhook' : 'their webhooks'} never
+                    delivered, so they arrived late.
+                  </RowError>
+                )}
                 <SubList
                   title={`Repositories (${account.repos.length})`}
                   actions={<Button size="sm" onClick={() => setAddingRepoTo(account.id)} disabled={!account.active}>Add repo</Button>}
@@ -136,8 +157,9 @@ export const GitHubPanel = () => {
                         {repo.track_prs && <Badge tone="primary">PRs</Badge>}
                         {repo.track_comments && <Badge tone="success">Comments</Badge>}
                         <SyncFailingBadge status={repo} />
+                        <PushMissedBadge status={repo} causes={PUSH_CAUSES.github} />
                       </>}
-                      meta={[`Last sync: ${formatRelativeTime(repo.last_sync_at)}`]}
+                      meta={[`Last sync: ${formatRelativeTime(repo.last_sync_at)}`, repo.push_stale && 'No recent push events']}
                       actions={<>
                         <SyncButton onSync={() => handleSyncRepo(account.id, repo.id)} disabled={!repo.active || !account.active} label="Sync" />
                         <ScheduleButton

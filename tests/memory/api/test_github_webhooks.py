@@ -5,6 +5,7 @@ import hmac
 import json
 import logging
 import uuid
+from datetime import datetime, timezone
 
 import pytest
 
@@ -209,12 +210,16 @@ def test_events_queue_a_refetch_of_their_item(client, repo, no_celery_dispatch, 
     ],
 )
 def test_other_events_queue_nothing_but_count_as_events(client, db_session, repo, no_celery_dispatch, event, payload):
+    repo.push_missing_since = repo.push_last_miss_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    db_session.commit()
+
     response = deliver(client, repo.account_id, event, {**payload, "repository": {"id": REPO_GITHUB_ID}})
 
     assert response.status_code == 202
     assert refetches(no_celery_dispatch) == []
     db_session.refresh(repo)
     assert repo.last_event_at is not None
+    assert repo.push_missing_since is None  # push delivers again: the outage is over
 
 
 def test_untracked_kind_queues_nothing(client, db_session, repo, no_celery_dispatch):

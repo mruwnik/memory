@@ -3,7 +3,7 @@ import { useSlack, SlackWorkspace, SlackWorkspaceApp, SlackChannel, SlackChannel
 import { useSlackWizard, SlackAppResponse } from '@/hooks/useSlackWizard'
 import { useModule } from '@/hooks/useModule'
 import { useProjects, Project } from '@/hooks/useProjects'
-import { AccessSelects, CollectSelect, PauseButton, SyncButton, SyncFailure, formatRelativeTime, lazySubList, useBusy } from '../shared'
+import { AccessSelects, CollectSelect, PauseButton, PUSH_CAUSES, PushMissedBadge, SyncButton, SyncFailure, formatRelativeTime, lazySubList, useBusy } from '../shared'
 import { LLMKeyField } from '../LLMKeyField'
 import { Field, Select, Hint, Badge, Button, ConfirmButton, EmptyState, ErrorState, ExpandToggle, List, LoadingState, Row, RowError, Section, SubList, Tone, cx, useActionNotice, useSubmit } from '@/components/shared/ui'
 import { useSourcesContext } from '../context'
@@ -288,6 +288,7 @@ const WorkspaceRow = ({
             Polling only
           </Badge>
         ))}
+        {workspace.apps.map(app => <PushMissedBadge key={app.id} status={app} causes={PUSH_CAUSES.slack} />)}
       </>}
       meta={[
         workspace.domain && `${workspace.domain}.slack.com`,
@@ -295,6 +296,7 @@ const WorkspaceRow = ({
         `${workspace.connected_users} connected users`,
         workspace.last_sync_at && `Last sync: ${formatRelativeTime(workspace.last_sync_at)}`,
         lastEventAt && `Last event: ${formatRelativeTime(lastEventAt)}`,
+        ...workspace.apps.filter(app => app.push_stale && !app.push_missing_since).map(app => `No recent push events for ${app.name}`),
       ]}
       actions={<>
         <AccessSelects projectId={workspace.project_id} sensitivity={workspace.sensitivity} projects={projects} disabled={update.busy}
@@ -313,6 +315,9 @@ const WorkspaceRow = ({
       {update.error && <RowError live>{update.error}</RowError>}
       {workspace.collect_messages && workspace.poll_blocker && <RowError>Not collecting: {workspace.poll_blocker}</RowError>}
       <SyncFailure status={workspace} />
+      {workspace.apps.filter(app => app.push_missing_since).map(app => (
+        <RowError key={app.id}>Polling stored messages {app.name}'s events never delivered, so they arrived late.</RowError>
+      ))}
       <Field label="Background sweep frequency">
         <Select value={workspace.event_reconcile_interval_seconds ?? 86400} disabled={update.busy}
           onChange={e => update.submit(() => onUpdateWorkspace({ event_reconcile_interval_seconds: Number(e.target.value) }))}>

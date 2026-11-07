@@ -32,6 +32,8 @@ FAILING = {
     "sync_failing_since": datetime(2026, 10, 20, tzinfo=timezone.utc),
 }
 
+PUSH_MISSING = datetime(2026, 10, 21, tzinfo=timezone.utc)
+
 TABS = [
     "accounts",
     "email",
@@ -50,10 +52,13 @@ TABS = [
 ]
 
 
-def tabs(**overrides: tuple[int, int]) -> dict:
-    """The expected response: every tab empty unless given as (count, failing)."""
-    counts = {tab: (0, 0) for tab in TABS} | overrides
-    return {tab: {"count": count, "failing": failing} for tab, (count, failing) in counts.items()}
+def tabs(**overrides: tuple[int, ...]) -> dict:
+    """The expected response: every tab empty unless given as (count, failing[, push_missing])."""
+    counts = {tab: (0, 0, 0) for tab in TABS} | {tab: (*c, 0)[:3] for tab, c in overrides.items()}
+    return {
+        tab: {"count": count, "failing": failing, "push_missing": push}
+        for tab, (count, failing, push) in counts.items()
+    }
 
 
 @pytest.fixture
@@ -81,7 +86,7 @@ def seed_sources(db_session, user_id):
     """Three email accounts (two failing), and a mix of failing and healthy sources on the other tabs."""
     github = GithubAccount(user_id=user_id, name="gh", auth_type="pat", access_token="t")
     github.repos.append(GithubRepo(owner=f"o{user_id}", name="r", **FAILING))
-    github.repos.append(GithubRepo(owner=f"o{user_id}", name="ok"))
+    github.repos.append(GithubRepo(owner=f"o{user_id}", name="ok", push_missing_since=PUSH_MISSING))
     google = GoogleAccount(user_id=user_id, name="g", email=f"g{user_id}@example.com", **FAILING)
     google.folders.append(GoogleFolder(folder_id="f", folder_name="F", **FAILING))
     google.folders.append(GoogleFolder(folder_id="ok", folder_name="OK"))
@@ -99,6 +104,7 @@ def seed_sources(db_session, user_id):
             TranscriptAccount(user_id=user_id, name="t", provider="fireflies", **FAILING),
             bot,
             BeeperAccount(created_by_user_id=user_id, server_url=f"http://beeper-{user_id}:23373"),
+            SlackApp(client_id=f"app{user_id}", name="app", created_by_user_id=user_id, push_missing_since=PUSH_MISSING),
         ]
     )
     db_session.commit()
@@ -108,11 +114,12 @@ SEEDED = tabs(
     accounts=(2, 1),
     email=(3, 2),
     feeds=(1, 1),
-    github=(2, 1),
+    github=(2, 1, 1),
     drive=(2, 2),  # the failing Google account is shown, and flagged, on the Drive tab too
     calendar=(1, 1),
     transcripts=(1, 1),
     discord=(1, 0),
+    slack=(0, 0, 1),  # an app missing events, though no workspace is connected
     beeper=(1, 0),
 )
 
@@ -142,7 +149,7 @@ def test_admin_sees_everyone_without_a_user_filter(client, user, other, db_sessi
     seed_sources(db_session, other.id)
 
     assert client.get("/source-tabs").json() == {
-        tab: {"count": 2 * c["count"], "failing": 2 * c["failing"]} for tab, c in SEEDED.items()
+        tab: {key: 2 * n for key, n in c.items()} for tab, c in SEEDED.items()
     }
 
 
@@ -172,7 +179,7 @@ def test_books_count_only_those_with_a_readable_section(client, user, other, db_
     user.scopes = scopes
     db_session.commit()
 
-    assert client.get("/source-tabs").json()["books"] == {"count": books, "failing": 0}
+    assert client.get("/source-tabs").json()["books"] == {"count": books, "failing": 0, "push_missing": 0}
 
 
 def photo(n: int, **access) -> Photo:
@@ -190,7 +197,7 @@ def test_photos_count_only_those_the_viewer_can_see(member_client, user, other, 
     )
     db_session.commit()
 
-    assert member_client.get("/source-tabs").json()["photos"] == {"count": 2, "failing": 0}
+    assert member_client.get("/source-tabs").json()["photos"] == {"count": 2, "failing": 0, "push_missing": 0}
 
 
 def test_admin_counts_every_photo_but_hidden(client, user, other, db_session):
@@ -203,7 +210,7 @@ def test_admin_counts_every_photo_but_hidden(client, user, other, db_session):
     )
     db_session.commit()
 
-    assert client.get("/source-tabs").json()["photos"] == {"count": 2, "failing": 0}
+    assert client.get("/source-tabs").json()["photos"] == {"count": 2, "failing": 0, "push_missing": 0}
 
 
 def test_photos_visible_through_a_project_role(member_client, user, other, db_session):
@@ -222,7 +229,7 @@ def test_photos_visible_through_a_project_role(member_client, user, other, db_se
     )
     db_session.commit()
 
-    assert member_client.get("/source-tabs").json()["photos"] == {"count": 1, "failing": 0}
+    assert member_client.get("/source-tabs").json()["photos"] == {"count": 1, "failing": 0, "push_missing": 0}
 
 
 @pytest.mark.parametrize("query, discord, slack", [("", 2, (2, 1)), ("?user_id=1", 1, (1, 0))])
@@ -243,8 +250,8 @@ def test_admin_sees_every_bot_and_workspace_without_a_user_filter(
 
     tabs_seen = client.get(f"/source-tabs{query}").json()
 
-    assert tabs_seen["discord"] == {"count": discord, "failing": 0}
-    assert tabs_seen["slack"] == {"count": slack[0], "failing": slack[1]}
+    assert tabs_seen["discord"] == {"count": discord, "failing": 0, "push_missing": 0}
+    assert tabs_seen["slack"] == {"count": slack[0], "failing": slack[1], "push_missing": 0}
 
 
 def note(n: int, **access) -> Note:
@@ -260,20 +267,20 @@ def test_notes_count_only_those_the_viewer_can_see(member_client, user, other, d
     db_session.add_all([note(1, creator_id=user.id), note(2, creator_id=other.id)])
     db_session.commit()
 
-    assert member_client.get("/source-tabs").json()["notes"] == {"count": 1, "failing": 0}
+    assert member_client.get("/source-tabs").json()["notes"] == {"count": 1, "failing": 0, "push_missing": 0}
 
 
 @pytest.mark.parametrize("ok, failing", [(True, 0), (False, 1)])
 def test_a_failed_notes_sync_flags_the_tab_for_admins(client, ok, failing):
     record_sync(ok)
 
-    assert client.get("/source-tabs").json()["notes"] == {"count": 0, "failing": failing}
+    assert client.get("/source-tabs").json()["notes"] == {"count": 0, "failing": failing, "push_missing": 0}
 
 
 def test_members_cant_fix_the_vault_so_its_failure_isnt_flagged_for_them(member_client):
     record_sync(False)
 
-    assert member_client.get("/source-tabs").json()["notes"] == {"count": 0, "failing": 0}
+    assert member_client.get("/source-tabs").json()["notes"] == {"count": 0, "failing": 0, "push_missing": 0}
 
 
 def test_forums_count_only_posts_the_viewer_can_see(member_client, db_session):
@@ -285,7 +292,7 @@ def test_forums_count_only_posts_the_viewer_can_see(member_client, db_session):
     )
     db_session.commit()
 
-    assert member_client.get("/source-tabs").json()["forums"] == {"count": 1, "failing": 0}
+    assert member_client.get("/source-tabs").json()["forums"] == {"count": 1, "failing": 0, "push_missing": 0}
 
 
 @pytest.mark.parametrize("scopes, failing", [(["*"], 1), (["read", "write"], 0)])
@@ -294,4 +301,4 @@ def test_a_failing_forum_sync_flags_the_tab_for_admins(client, user, db_session,
     ForumSyncConfig.load(db_session, "lesswrong").sync_error = "LW down"
     db_session.commit()
 
-    assert client.get("/source-tabs").json()["forums"] == {"count": 0, "failing": failing}
+    assert client.get("/source-tabs").json()["forums"] == {"count": 0, "failing": failing, "push_missing": 0}

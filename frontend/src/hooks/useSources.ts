@@ -8,6 +8,14 @@ export interface SyncStatus {
   sync_failing_since: string | null
 }
 
+/** A push channel (webhook, events API) that polling caught missing events; cleared when push next delivers. */
+export interface PushHealth {
+  push_missing_since: string | null
+  push_last_miss_at: string | null
+  // Push is set up but nothing arrived within PUSH_STALE_HOURS: a quiet source, or broken delivery.
+  push_stale: boolean
+}
+
 export type LLMKeyChoice = number | 'default' | 'none'
 /** Which provider key pays for LLM work (summaries, extraction) on a source's items.
  * Another user's key is never named: choice 'key' with a null key_id. */
@@ -167,7 +175,7 @@ export interface ArticleFeedUpdate {
 }
 
 // Types for GitHub
-export interface GithubRepo extends SyncStatus {
+export interface GithubRepo extends SyncStatus, PushHealth {
   id: number
   account_id: number
   owner: string
@@ -188,6 +196,7 @@ export interface GithubRepo extends SyncStatus {
   created_at: string
   webhook_status: GithubWebhookStatus | null
   webhook_checked_at: string | null
+  last_event_at: string | null
 }
 
 export type GithubWebhookStatus = 'installed' | 'missing_permission' | 'rejected' | 'error' | 'app_hook' | 'app_settings'
@@ -555,8 +564,8 @@ export interface ForumSummary {
   settings: ForumSettings
 }
 
-/** What each Sources tab lists, and how many of those are failing to sync, keyed by tab value. */
-export type SourceTabCounts = Partial<Record<string, { count: number; failing: number }>>
+/** What each Sources tab lists, how many of those are failing to sync or missing push events, keyed by tab value. */
+export type SourceTabCounts = Partial<Record<string, { count: number; failing: number; push_missing: number }>>
 
 export const useSources = () => {
   const { apiCall } = useAuth()

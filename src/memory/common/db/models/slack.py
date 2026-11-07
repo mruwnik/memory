@@ -35,7 +35,7 @@ from sqlalchemy.orm import Mapped, mapped_column, object_session, relationship
 from memory.common.db.models.base import Base
 from memory.common.db.models.provider_keys import LLMKeyChoice
 from memory.common.encryption import decrypt_value, encrypt_value
-from memory.common.db.models.sync_status import SyncStatusMixin
+from memory.common.db.models.sync_status import PushHealthMixin, SyncStatusMixin
 
 if TYPE_CHECKING:
     from memory.common.db.models.users import User
@@ -46,7 +46,7 @@ DEFAULT_SLACK_TOKEN_URL = "https://slack.com/api/oauth.v2.access"
 DEFAULT_SLACK_API_BASE_URL = "https://slack.com/api"
 
 
-class SlackApp(Base):
+class SlackApp(PushHealthMixin, Base):
     """A Slack app registered at api.slack.com.
 
     One row per (Slack app, user): each user who uses an app registers it,
@@ -356,6 +356,10 @@ class SlackChannel(Base):
     )
     sensitivity: Mapped[str] = mapped_column(String(20), nullable=False, server_default="basic")
     config_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+
+    # When push first delivered a message here: the Events API only covers
+    # channels the app's bot is in, so only these can show push missing one.
+    push_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Sync cursor for incremental message fetching
     last_message_ts: Mapped[str | None] = mapped_column(Text, nullable=True)

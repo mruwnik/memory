@@ -324,6 +324,28 @@ describe('SlackPanel - event setup', () => {
     expect(screen.queryByRole('button', { name: 'Finish event setup' })).not.toBeInTheDocument()
   })
 
+  it('flags an app whose events missed messages, naming it and the likely causes', async () => {
+    const liveApp = { ...draftApp, setup_state: 'live', last_event_at: '2026-11-05T12:00:00Z' }
+    listWorkspaces.mockResolvedValue([workspace({
+      apps: [{ ...liveApp, push_missing_since: '2026-11-04T12:00:00Z', push_last_miss_at: '2026-11-05T09:00:00Z' }],
+    })])
+    renderWithUser(<SlackPanel />)
+    const marker = await screen.findByText('Missing events')
+    expect(marker.closest('[title]')).toHaveAttribute('title', expect.stringMatching(/^Push missed events since .+; last miss .+event subscriptions/))
+    expect(screen.getByText(/Polling stored messages Acme app's events never delivered/)).toBeInTheDocument()
+  })
+
+  it.each([
+    ['healthy push', { push_missing_since: null, push_stale: false }, 0],
+    ['quiet push', { push_missing_since: null, push_stale: true }, 1],
+  ])('shows no marker for %s', async (_name, health, hints) => {
+    listWorkspaces.mockResolvedValue([workspace({ apps: [{ ...draftApp, setup_state: 'live', ...health }] })])
+    renderWithUser(<SlackPanel />)
+    await screen.findByText('Acme')
+    expect(screen.queryByText('Missing events')).not.toBeInTheDocument()
+    expect(screen.queryAllByText(/No recent push events for Acme app/)).toHaveLength(hints)
+  })
+
   it('shows when the newest event arrived', async () => {
     const recent = new Date(Date.now() - 3 * 60_000).toISOString()
     const older = new Date(Date.now() - 3 * 3600_000).toISOString()

@@ -16,7 +16,7 @@ from memory.common.db.connection import get_session
 from memory.common.db.counts import count_rows
 from memory.common.db.models import BeeperAccount, BookSection, User
 from memory.common.db.models.discord import DiscordBot
-from memory.common.db.models.slack import SlackUserCredentials, SlackWorkspace
+from memory.common.db.models.slack import SlackApp, SlackUserCredentials, SlackWorkspace
 from memory.common.db.models.source_items import ForumPost, Photo
 from memory.common.db.models.sources import (
     ArticleFeed,
@@ -38,6 +38,8 @@ router = APIRouter(prefix="/source-tabs", tags=["sources"])
 class TabCounts(BaseModel):
     count: int
     failing: int = 0
+    # Sources whose push channel (webhook, events API) is missing events.
+    push_missing: int = 0
 
 
 class SourceTabs(BaseModel):
@@ -98,7 +100,8 @@ def source_tabs(
     user: User = Depends(require_rest_access),
     db: Session = Depends(get_session),
 ) -> SourceTabs:
-    """Per-tab counts of what the Sources tabs list, and how many of those are failing to sync.
+    """Per-tab counts of what the Sources tabs list, how many of those are failing to sync,
+    and how many are missing push events.
 
     Each count is scoped like its tab's own list.
     """
@@ -127,6 +130,14 @@ def source_tabs(
         slack_filter = [SlackWorkspace.id.in_(connected)]
         discord_bots = count_rows(db, DiscordBot, DiscordBot.created_by_user_id == uid)
 
+    github = with_failures(db, GithubRepo, *of_accounts(GithubRepo, GithubAccount))
+    github.push_missing = count_rows(
+        db, GithubRepo, GithubRepo.push_missing_since.isnot(None), *of_accounts(GithubRepo, GithubAccount)
+    )
+    slack = with_failures(db, SlackWorkspace, *slack_filter)
+    slack.push_missing = count_rows(
+        db, SlackApp, SlackApp.push_missing_since.isnot(None), *owned(SlackApp.created_by_user_id)
+    )
     google = with_failures(db, GoogleAccount, *owned(GoogleAccount.user_id))
     folders = with_failures(db, GoogleFolder, *of_accounts(GoogleFolder, GoogleAccount))
 
@@ -137,7 +148,7 @@ def source_tabs(
         ),
         email=with_failures(db, EmailAccount, *owned(EmailAccount.user_id)),
         feeds=with_failures(db, ArticleFeed, *feed_owner),
-        github=with_failures(db, GithubRepo, *of_accounts(GithubRepo, GithubAccount)),
+        github=github,
         # Deliberately sums both: the Drive tab shows each folder under its Google account,
         # and a failing account (e.g. a lapsed token) stops all of its folders syncing.
         drive=TabCounts(count=folders.count, failing=folders.failing + google.failing),
@@ -150,6 +161,6 @@ def source_tabs(
         ),
         notes=TabCounts(count=visible_notes(db, access), failing=int(sync_failing(user))),
         discord=TabCounts(count=discord_bots),
-        slack=with_failures(db, SlackWorkspace, *slack_filter),
+        slack=slack,
         beeper=TabCounts(count=count_rows(db, BeeperAccount, *owned(BeeperAccount.created_by_user_id))),
     )

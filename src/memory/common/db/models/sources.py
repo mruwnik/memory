@@ -32,7 +32,7 @@ from sqlalchemy.orm import Mapped, Session, backref, mapped_column, relationship
 from memory.common.db.models.base import Base
 from memory.common.db.models.provider_keys import LLMKeyChoice
 from memory.common.encryption import decrypt_value, encrypt_value
-from memory.common.db.models.sync_status import PolledSource, SyncStatusMixin
+from memory.common.db.models.sync_status import PolledSource, PushHealthMixin, SyncStatusMixin
 from memory.common.scopes import SCOPE_ADMIN, STORABLE_SENSITIVITY_CHECK_SQL
 
 if TYPE_CHECKING:
@@ -471,7 +471,7 @@ class GithubAccount(LLMKeyChoice, Base):
     )
 
 
-class GithubRepo(PolledSource, SyncStatusMixin, Base):
+class GithubRepo(PolledSource, SyncStatusMixin, PushHealthMixin, Base):
     """Tracked GitHub repository configuration."""
 
     __tablename__ = "github_repos"

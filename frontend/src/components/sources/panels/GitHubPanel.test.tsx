@@ -555,3 +555,35 @@ describe('GitHubPanel webhook modal', () => {
     expect(within(dialog).getByText(/App's settings/)).toBeInTheDocument()
   })
 })
+
+describe('GitHubPanel push health', () => {
+  const missed = { ...repo, webhook_status: 'installed', push_missing_since: '2026-11-04T12:00:00Z', push_last_miss_at: '2026-11-05T09:00:00Z' }
+  const healthy = { ...repo, id: 51, repo_path: 'octocat/other', webhook_status: 'installed', push_missing_since: null, push_stale: false }
+
+  it('flags a repo whose webhook missed events, and its account, with a reinstall action', async () => {
+    const mock = mockFetchRoutes({ '/github/accounts/4/webhooks/install': { json: { status: 'queued' } }, ...routes([account({ repos: [missed, healthy] })]) })
+    const { user } = renderWithUser(<GitHubPanel />)
+    await screen.findByText('octocat/hello')
+    expect(screen.getAllByText('Missing events')).toHaveLength(2)  // the account and the one repo
+    const repoMarker = within(screen.getByText('octocat/hello').closest('li')!).getByText('Missing events')
+    expect(repoMarker.closest('[title]')).toHaveAttribute('title', expect.stringMatching(/^Push missed events since .+; last miss .+secret was rotated outside Memory/))
+    expect(screen.getByText(/Polling found changes to octocat\/hello that its webhook never delivered/)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Reinstall webhooks' }))
+    await waitFor(() => {
+      const install = mock.mock.calls.find(
+        ([url, init]) => String(url).includes('/github/accounts/4/webhooks/install') && (init as RequestInit)?.method === 'POST',
+      )
+      expect(install).toBeTruthy()
+    })
+  })
+
+  it('shows no marker while push delivers, and a muted hint when it has gone quiet', async () => {
+    mockFetchRoutes(routes([account({ repos: [healthy, { ...healthy, id: 52, repo_path: 'octocat/quiet', push_stale: true }] })]))
+    renderWithUser(<GitHubPanel />)
+    await screen.findByText('octocat/quiet')
+    expect(screen.queryByText('Missing events')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Reinstall webhooks' })).not.toBeInTheDocument()
+    expect(screen.getAllByText('No recent push events')).toHaveLength(1)
+  })
+})

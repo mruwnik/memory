@@ -69,6 +69,7 @@ from memory.common.content_processing import (
     process_content_item,
 )
 from memory.common.jobs import tracked_task
+from memory.common.push_health import push_overdue, record_push_miss
 from memory.common.people import find_person_by_slack_id, sync_slack_users_to_people
 from memory.common.reactions import ReactionAction, Reactions, apply_reaction, slack_reactions
 
@@ -753,7 +754,7 @@ def store_history_message(
     subtype = msg.get("subtype")
     if subtype in SKIPPED_SUBTYPES:
         return {"status": "skipped", "reason": subtype}
-    return store_slack_message(
+    result = store_slack_message(
         workspace_id=workspace_id,
         channel_id=channel_id,
         message_ts=msg["ts"],
@@ -768,6 +769,30 @@ def store_history_message(
         files=msg.get("files"),
         polled=True,
     )
+    if "slackmessage_id" in result and result["status"] not in ("already_exists", "updated"):
+        check_push_missed(channel_id, slack_app_id, msg["ts"])
+    return result
+
+
+def check_push_missed(channel_id: str, slack_app_id: int, message_ts: str) -> None:
+    """A poll just stored this message: record a miss if the app's events should have brought it."""
+    with make_session() as session:
+        channel = session.get(SlackChannel, channel_id)
+        app = session.get(SlackApp, slack_app_id)
+        if not channel or not app or not app.last_event_at:
+            return
+        sent_at = datetime.fromtimestamp(float(message_ts), timezone.utc)
+        if not push_overdue(sent_at, channel.push_since):
+            return
+        owner_id, name = app.created_by_user_id, app.name
+    record_push_miss(SlackApp, slack_app_id, owner_id, f"Slack app {name}")
+
+
+def mark_channel_pushed(channel_id: str) -> None:
+    with make_session() as session:
+        session.query(SlackChannel).filter(
+            SlackChannel.id == channel_id, SlackChannel.push_since.is_(None)
+        ).update({SlackChannel.push_since: datetime.now(timezone.utc)}, synchronize_session=False)
 
 
 def ensure_slack_channel(workspace_id: str, channel_id: str) -> bool:
@@ -1124,6 +1149,8 @@ def store_slack_message(
     if not ensure_slack_channel(workspace_id, channel_id):
         logger.info(f"Slack channel {channel_id} belongs to another workspace; message ignored")
         return {"status": "skipped", "reason": "channel_in_another_workspace"}
+    if not polled:
+        mark_channel_pushed(channel_id)
 
     msg_kwargs: dict[str, Any] = {
         "workspace_id": workspace_id,

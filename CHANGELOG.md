@@ -30,6 +30,10 @@ a new, empty `## Unreleased` above it.
 - New endpoint `POST /github/accounts/{id}/webhooks/install` (queues; returns `{"status": "queued", "task_id"}`). Repo responses carry `webhook_status` and `webhook_checked_at`.
 - GitHub pull requests and issues are separate source types, `github_pr` and `github_issue` (comments and project cards stay `github_item`). Ingest trigger `source_types` can name either; trigger template fields `head_sha`, `checks`, `diff_summary` and `files` are offered for `github_pr` only.
 - Every `pull_request` webhook action refetches the PR, so labels, assignees and milestone changes (labeled/unlabeled, assigned/unassigned, milestoned/demilestoned, review_requested, converted_to_draft, ...) are stored within the refetch debounce instead of at the next gap-fill poll.
+- Push channels that stop delivering are flagged. When a gap-fill poll stores something push should have delivered (a GitHub change made after the repo's hook was last confirmed installed and more than 10 minutes old; a Slack message, in a channel push has delivered to before, more than 10 minutes old), the GitHub repo or Slack app gets `push_missing_since` (first miss) and `push_last_miss_at` (latest). The next webhook event for that repo, or Slack event for that app, clears `push_missing_since`. Check results don't count, since they don't change an item's `updated_at`.
+- The owner is notified once per outage, on their usual notification channel. The message names the repo or app only.
+- Sources UI: a "⚠ Missing events" badge on each affected GitHub repo row, its account row and each affected Slack app (on its workspace row). Its tooltip shows since/last miss and likely causes. GitHub accounts also get a **Reinstall webhooks** action. The GitHub/Slack tab shows the red "!" with "N missing push events". A muted "No recent push events" hint shows when push is set up but nothing has arrived within `PUSH_STALE_HOURS`.
+- API: GitHub repo responses add `last_event_at`, `push_missing_since`, `push_last_miss_at`, `push_stale`; Slack app and workspace-app responses add `push_missing_since`, `push_last_miss_at` (workspace apps also `push_stale`); `/source-tabs` counts add `push_missing`.
 
 ### Other changes for operators
 
@@ -44,6 +48,7 @@ a new, empty `## Unreleased` above it.
 
 - `20261207_github_webhook_status`: adds nullable `github_repos.webhook_status` and `github_repos.webhook_checked_at` (`ADD COLUMN IF NOT EXISTS`). Fast.
 - `20261207_github_pr_issue_types`: sets `source_item.type` to `github_pr` / `github_issue` from `github_item.kind` (one UPDATE over the GitHub rows; no schema change), and adds both types to every ingest trigger whose `filter.source_types` names `github_item`. Fast.
+- `20261208_push_missed`: adds nullable `push_missing_since`/`push_last_miss_at` to `github_repos` and `slack_apps`, and `push_since` to `slack_channels`. Fast (nullable columns, no rewrite).
 
 ## v0.4.10 (2026-11-06)
 

@@ -120,6 +120,18 @@ describe('Sources container', () => {
     expect(screen.getByRole('tab', { name: 'Email' })).toBeInTheDocument()
   })
 
+  it('flags a tab whose sources are missing push events', async () => {
+    mockFetchRoutes({
+      '/auth/me': meWith(['teams']),
+      '/source-tabs': { json: { github: { count: 3, failing: 1, push_missing: 2 }, slack: { count: 1, failing: 0, push_missing: 0 } } },
+      __default: { json: {} },
+    })
+    renderWithRouter(<Sources />)
+    const github = await screen.findByRole('tab', { name: 'GitHub (3), has problems' })
+    expect(github).toHaveAttribute('title', '1 failing to sync; 2 missing push events')
+    expect(screen.getByRole('tab', { name: 'Slack (1)' })).toBeInTheDocument()
+  })
+
   it('updates the badges when the open panel reloads after a change', async () => {
     let failing = 1
     mockFetch(async input => {

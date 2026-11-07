@@ -1,11 +1,11 @@
 import { useCallback } from 'react'
 import { useAuth } from './useAuth'
 import type { SlackAppSetupState } from './useSlackWizard'
-import type { LLMKeyChoice, LLMKeyView, SyncStatus } from './useSources'
+import type { LLMKeyChoice, LLMKeyView, PushHealth, SyncStatus } from './useSources'
 import { apiError } from './apiError'
 
 // Types for Slack Workspaces
-export interface SlackWorkspaceApp {
+export interface SlackWorkspaceApp extends PushHealth {
   id: number
   name: string
   setup_state: SlackAppSetupState

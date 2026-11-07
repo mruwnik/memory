@@ -10,6 +10,7 @@ import hashlib
 import hmac
 import json
 import time
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pytest
@@ -646,6 +647,9 @@ def test_an_oversized_body_is_rejected(client, events_app):
 
 
 def test_event_records_when_it_arrived(client, db_session, events_app):
+    events_app.push_missing_since = events_app.push_last_miss_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    db_session.commit()
+
     with _capture_send_task():
         post_signed(
             client,
@@ -660,3 +664,4 @@ def test_event_records_when_it_arrived(client, db_session, events_app):
 
     db_session.refresh(events_app)
     assert events_app.last_event_at is not None
+    assert events_app.push_missing_since is None  # push delivers again: the outage is over

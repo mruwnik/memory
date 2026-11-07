@@ -36,7 +36,7 @@ from memory.api.https_url import HttpsUrl, require_chat_url
 from memory.api.request_body import read_request_body_with_cap
 from memory.api.webhook_events import record_event_arrival, register_body_seen
 from memory.api.llm_keys import LLMKeyInput, LLMKeyView, apply_llm_key, llm_key_view
-from memory.api.sync_status import SyncStatusResponse, sync_status_fields
+from memory.api.sync_status import PushHealthResponse, SyncStatusResponse, push_health_fields, sync_status_fields
 from memory.common import settings
 from memory.common.access_control import has_admin_scope
 from memory.common.celery_app import (
@@ -71,6 +71,7 @@ from memory.common.oauth_client import (
     store_state,
     validate_and_consume_state,
 )
+from memory.common.push_health import push_stale
 from memory.common.safe_http import public_http_client
 from memory.common.slack import user_has_workspace_membership, workspace_poll_plan, workspace_sync_interval
 
@@ -96,7 +97,7 @@ SLACK_STALE_SYNC_INTERVALS = 3
 # --- Response Models ---
 
 
-class SlackWorkspaceApp(BaseModel):
+class SlackWorkspaceApp(PushHealthResponse):
     """A SlackApp the current user is connected to this workspace through."""
 
     id: int
@@ -104,6 +105,7 @@ class SlackWorkspaceApp(BaseModel):
     setup_state: str
     is_owner: bool
     last_event_at: str | None
+    push_stale: bool
 
 
 class SlackWorkspaceResponse(SyncStatusResponse):
@@ -201,7 +203,7 @@ SLACK_APP_URL_DEFAULTS = {
 DUPLICATE_CLIENT_ID = "You already have a Slack app with this client ID. Reconnect or delete it on the Slack tab."
 
 
-class SlackAppResponse(BaseModel):
+class SlackAppResponse(PushHealthResponse):
     """Public-facing SlackApp serialization.
 
     NEVER includes the encrypted secret blobs or the decrypted secrets —
@@ -305,6 +307,8 @@ def workspace_apps(db: Session, ws: SlackWorkspace, user: User) -> list[SlackWor
             setup_state=app.setup_state,
             is_owner=app.is_owner(user),
             last_event_at=app.last_event_at.isoformat() if app.last_event_at else None,
+            push_stale=app.setup_state in ("live", "degraded") and push_stale(app.last_event_at),
+            **push_health_fields(app),
         )
         for app in apps
     ]
@@ -908,6 +912,7 @@ def slack_app_to_response(app: SlackApp, current_user: User) -> SlackAppResponse
         token_url=app.token_url,
         api_base_url=app.api_base_url,
         last_event_at=app.last_event_at.isoformat() if app.last_event_at else None,
+        **push_health_fields(app),
     )
 
 
@@ -1381,6 +1386,9 @@ async def slack_events(
         # a signed event proves the same thing.
         advance_setup_state(db, app, verified_secret, "draft", "signing_verified")
         record_event_arrival(db, app)
+        if app.push_missing_since:
+            app.push_missing_since = None
+            db.commit()
         # The signature only proves the app's owner sent this; an event counts
         # only for a workspace the app was authorized into.
         if not app_has_workspace(db, app.id, envelope.get("team_id")):

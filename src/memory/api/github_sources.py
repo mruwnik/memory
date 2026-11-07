@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from memory.api.auth import get_interactive_user, get_user_account, resolve_user_filter
 from memory.api.llm_keys import LLMKeyInput, LLMKeyView, apply_llm_key, llm_key_view
-from memory.api.sync_status import SyncStatusResponse, sync_status_fields
+from memory.api.sync_status import PushHealthResponse, SyncStatusResponse, push_health_fields, sync_status_fields
 from memory.common.access_control import has_admin_scope
 from memory.common import settings
 from memory.common.celery_app import (
@@ -28,6 +28,7 @@ from memory.common.db.connection import get_session
 from memory.common.db.models import User, GithubProject
 from memory.common.db.models.sources import GithubAccount, GithubRepo
 from memory.common.github import GithubClient, GithubCredentials, webhook_url
+from memory.common.push_health import GITHUB_PUSH_STATUSES, push_stale
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,7 @@ class GithubAccountUpdate(BaseModel):
     llm_key: LLMKeyInput | None = None
 
 
-class GithubRepoResponse(SyncStatusResponse):
+class GithubRepoResponse(SyncStatusResponse, PushHealthResponse):
     id: int
     account_id: int
     github_id: int | None  # GitHub's numeric repo ID
@@ -95,6 +96,8 @@ class GithubRepoResponse(SyncStatusResponse):
     created_at: str
     webhook_status: str | None
     webhook_checked_at: str | None
+    last_event_at: str | None
+    push_stale: bool
 
 
 class GithubAccountResponse(BaseModel):
@@ -181,7 +184,10 @@ def repo_to_response(repo: GithubRepo) -> GithubRepoResponse:
         created_at=repo.created_at.isoformat() if repo.created_at else "",
         webhook_status=repo.webhook_status,
         webhook_checked_at=repo.webhook_checked_at.isoformat() if repo.webhook_checked_at else None,
+        last_event_at=repo.last_event_at.isoformat() if repo.last_event_at else None,
+        push_stale=repo.webhook_status in GITHUB_PUSH_STATUSES and push_stale(repo.last_event_at),
         **sync_status_fields(repo),
+        **push_health_fields(repo),
     )
 
 

@@ -1,15 +1,22 @@
 """Single-item GitHub refetches and the trigger changes a sync reports."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock, patch
 
 import pytest
 import requests
 
+from memory.common.celery_app import SEND_NOTIFICATION
 from memory.common.db import connection as db_connection
 from memory.common.db.models import GithubItem, User
 from memory.common.db.models.sources import GithubAccount, GithubRepo
-from memory.common.github import GithubComment, GithubIssueData, GithubPRDataDict, GithubReview
+from memory.common.github import (
+    GithubComment,
+    GithubIssueData,
+    GithubPRDataDict,
+    GithubReview,
+    serialize_issue_data,
+)
 from memory.common.github.refetch import queue_refetch
 from memory.workers.tasks import github
 
@@ -287,3 +294,98 @@ def test_refetch_skips_untracked_kind(db_session, repo, github_serves, trigger_m
     assert result["status"] == "skipped"
     assert post.call_count == 0
     trigger_matches.assert_not_called()
+
+
+# --- Polls that find what the webhook should have delivered ---
+
+NOW = datetime.now(timezone.utc)
+
+
+def ago(minutes: int) -> datetime:
+    return NOW - timedelta(minutes=minutes)
+
+
+@pytest.fixture
+def hooked_repo(db_session, repo):
+    repo.webhook_status = "installed"
+    repo.webhook_checked_at = ago(120)
+    db_session.commit()
+    return repo
+
+
+def poll(repo, **changed):
+    return github.sync_github_item(repo.id, serialize_issue_data(pr_data(**changed)), [OWN])
+
+
+def notifications(no_celery_dispatch) -> list:
+    return [c for c in no_celery_dispatch.call_args_list if c.args and c.args[0] == SEND_NOTIFICATION]
+
+
+def test_poll_finding_an_unpushed_change_marks_the_repo_and_notifies_once(
+    db_session, hooked_repo, qdrant, trigger_matches, no_celery_dispatch
+):
+    github.sync_item(hooked_repo.id, pr_data(github_updated_at=ago(90)), {OWN})  # pushed
+
+    poll(hooked_repo, title="Renamed", github_updated_at=ago(30))
+    db_session.refresh(hooked_repo)
+    first_miss = hooked_repo.push_last_miss_at
+    assert hooked_repo.push_missing_since == first_miss is not None
+    [sent] = notifications(no_celery_dispatch)
+    assert "testorg/testrepo" in sent.kwargs["args"][2]
+    assert "Renamed" not in sent.kwargs["args"][2]
+
+    poll(hooked_repo, state="closed", github_updated_at=ago(20))
+    db_session.refresh(hooked_repo)
+    assert hooked_repo.push_missing_since == first_miss
+    assert hooked_repo.push_last_miss_at > first_miss
+    assert len(notifications(no_celery_dispatch)) == 1
+
+
+def test_poll_finding_an_unpushed_new_item_marks_the_repo(db_session, hooked_repo, qdrant, trigger_matches):
+    poll(hooked_repo, github_updated_at=ago(30))
+
+    db_session.refresh(hooked_repo)
+    assert hooked_repo.push_missing_since is not None
+
+
+@pytest.mark.parametrize(
+    "repo_fields, updated_minutes_ago",
+    [
+        ({}, 5),  # its event may still be on its way
+        ({}, 150),  # before the hook was installed
+        ({"webhook_status": None}, 30),  # no push configured
+        ({"webhook_status": "missing_permission"}, 30),
+    ],
+)
+def test_poll_changes_push_cannot_have_missed_leave_the_repo_unmarked(
+    db_session, hooked_repo, qdrant, trigger_matches, no_celery_dispatch, repo_fields, updated_minutes_ago
+):
+    for field, value in repo_fields.items():
+        setattr(hooked_repo, field, value)
+    db_session.commit()
+
+    poll(hooked_repo, github_updated_at=ago(updated_minutes_ago))
+
+    db_session.refresh(hooked_repo)
+    assert hooked_repo.push_missing_since is None
+    assert notifications(no_celery_dispatch) == []
+
+
+@pytest.mark.parametrize(
+    "polled, changed",
+    [
+        (False, {"title": "Renamed"}),  # a webhook refetch is push delivering
+        (True, {"checks": {"tests": "success"}}),  # checks don't date themselves
+        (True, {}),  # nothing new
+    ],
+)
+def test_syncs_that_show_no_missed_push_leave_the_repo_unmarked(
+    db_session, hooked_repo, qdrant, trigger_matches, polled, changed
+):
+    github.sync_item(hooked_repo.id, pr_data(github_updated_at=ago(90)), {OWN})
+
+    data = pr_data(github_updated_at=ago(30), **changed)
+    github.sync_item(hooked_repo.id, data, {OWN}, polled=polled)
+
+    db_session.refresh(hooked_repo)
+    assert hooked_repo.push_missing_since is None

@@ -55,6 +55,7 @@ from memory.common.content_processing import (
     queue_trigger_match,
 )
 from memory.common.jobs import tracked_task
+from memory.common.push_health import GITHUB_PUSH_STATUSES, push_overdue, record_push_miss
 
 logger = logging.getLogger(__name__)
 
@@ -623,8 +624,10 @@ def sync_github_item(
     issue_data_serialized: dict[str, Any],
     own_logins: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Sync a single GitHub issue or PR."""
-    return sync_item(repo_id, _deserialize_issue_data(issue_data_serialized), own_logins or [])
+    """Sync a single GitHub issue or PR found by polling."""
+    return sync_item(
+        repo_id, _deserialize_issue_data(issue_data_serialized), own_logins or [], polled=True
+    )
 
 
 def matches_repo_filters(repo: GithubRepo, data: GithubIssueData) -> bool:
@@ -665,8 +668,19 @@ def refetch_github_item(repo_id: int, number: int, kind: str) -> dict[str, Any]:
     return sync_item(repo_id, data, logins)
 
 
+def push_missed(repo: GithubRepo, data: GithubIssueData, changes: list[str]) -> bool:
+    """Whether a poll found a change the repo's webhook should have delivered:
+    one made since the hook was last confirmed installed. Check results don't
+    move an item's updated_at, so their age can't be told and they don't count."""
+    if repo.webhook_status not in GITHUB_PUSH_STATUSES:
+        return False
+    if not set(changes) - {"checks"}:
+        return False
+    return push_overdue(data["github_updated_at"], repo.webhook_checked_at)
+
+
 def sync_item(
-    repo_id: int, issue_data: GithubIssueData, logins: Collection[str]
+    repo_id: int, issue_data: GithubIssueData, logins: Collection[str], polled: bool = False
 ) -> dict[str, Any]:
     logger.debug(
         f"Syncing {issue_data['kind']} from repo {repo_id}: #{issue_data['number']}"
@@ -704,6 +718,8 @@ def sync_item(
         )
 
         changes = item_changes(existing, issue_data, logins)
+        if polled and push_missed(repo, issue_data, changes):
+            record_push_miss(GithubRepo, repo.id, repo.account.user_id, f"GitHub repo {repo.repo_path}")
         if existing:
             _apply_author_person(session, existing, issue_data)
             return _update_existing_item(

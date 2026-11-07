@@ -11,7 +11,7 @@ import pytest
 import redis
 from sqlalchemy.exc import InterfaceError, OperationalError
 
-from memory.common.celery_app import SYNC_SLACK_CHANNEL, SYNC_SLACK_WORKSPACE
+from memory.common.celery_app import SEND_NOTIFICATION, SYNC_SLACK_CHANNEL, SYNC_SLACK_WORKSPACE
 from memory.common.db.models import User
 from memory.common.db.models.slack import (
     SlackApp,
@@ -1965,3 +1965,109 @@ def test_a_dry_run_rewinds_nothing(db_session, stored_history, slack_credentials
         }
     ]
     assert (channel_cursor(db_session, stored_history), send.call_count) == (slack.slack_ts("2026-11-05"), 0)
+
+
+# --- Polls that store what the Events API should have delivered ---
+
+
+def minutes_ago(minutes: int) -> datetime:
+    return datetime.now(timezone.utc) - timedelta(minutes=minutes)
+
+
+def sent(minutes: int) -> str:
+    return f"{minutes_ago(minutes).timestamp():.6f}"
+
+
+@pytest.fixture
+def pushing_app(db_session, slack_app, slack_channel, slack_user):
+    slack_app.created_by_user_id = slack_user.id
+    slack_app.last_event_at = minutes_ago(1)
+    slack_channel.push_since = minutes_ago(120)
+    db_session.commit()
+    return slack_app
+
+
+def poll(app, channel, ts: str) -> dict:
+    message = history_message(ts, text="A message long enough to store and embed.")
+    return slack.store_history_message(message, channel.workspace_id, channel.id, app.id)
+
+
+def push(app, channel, ts: str) -> dict:
+    return slack.store_slack_message(channel.workspace_id, channel.id, ts, "U1", "Pushed, long enough to store.", app.id)
+
+
+def notifications(no_celery_dispatch) -> list:
+    return [c for c in no_celery_dispatch.call_args_list if c.args and c.args[0] == SEND_NOTIFICATION]
+
+
+def test_poll_storing_an_unpushed_message_marks_the_app_and_notifies_once(
+    db_session, pushing_app, slack_channel, qdrant, no_celery_dispatch
+):
+    poll(pushing_app, slack_channel, sent(30))
+    db_session.refresh(pushing_app)
+    first_miss = pushing_app.push_last_miss_at
+    assert pushing_app.push_missing_since == first_miss is not None
+    [notification] = notifications(no_celery_dispatch)
+    assert "Test Slack App" in notification.kwargs["args"][2]
+    assert "long enough" not in notification.kwargs["args"][2]
+
+    poll(pushing_app, slack_channel, sent(20))
+    db_session.refresh(pushing_app)
+    assert pushing_app.push_missing_since == first_miss
+    assert pushing_app.push_last_miss_at > first_miss
+    assert len(notifications(no_celery_dispatch)) == 1
+
+
+def no_push_to_channel(app, channel):
+    channel.push_since = None
+
+
+def no_events_for_app(app, channel):
+    app.last_event_at = None
+
+
+def push_as_set_up(app, channel):
+    pass
+
+
+@pytest.mark.parametrize(
+    "minutes, setup",
+    [
+        (5, push_as_set_up),  # its event may still be on its way
+        (150, push_as_set_up),  # sent before push reached the channel
+        (30, no_push_to_channel),  # the app's bot isn't in it, so push never covered it
+        (30, no_events_for_app),
+    ],
+)
+def test_polled_messages_push_cannot_have_missed_leave_the_app_unmarked(
+    db_session, pushing_app, slack_channel, qdrant, no_celery_dispatch, minutes, setup
+):
+    setup(pushing_app, slack_channel)
+    db_session.commit()
+
+    poll(pushing_app, slack_channel, sent(minutes))
+
+    db_session.refresh(pushing_app)
+    assert pushing_app.push_missing_since is None
+    assert notifications(no_celery_dispatch) == []
+
+
+def test_poll_of_a_pushed_message_leaves_the_app_unmarked(db_session, pushing_app, slack_channel, qdrant):
+    ts = sent(30)
+    push(pushing_app, slack_channel, ts)
+
+    poll(pushing_app, slack_channel, ts)
+
+    db_session.refresh(pushing_app)
+    assert pushing_app.push_missing_since is None
+
+
+def test_the_first_pushed_message_dates_push_in_its_channel(db_session, slack_app, slack_channel, qdrant):
+    push(slack_app, slack_channel, sent(3))
+    db_session.refresh(slack_channel)
+    first = slack_channel.push_since
+    push(slack_app, slack_channel, sent(1))
+
+    db_session.refresh(slack_channel)
+    assert first is not None
+    assert slack_channel.push_since == first

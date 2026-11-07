@@ -136,6 +136,7 @@ def handle_delivery(db: Session, account_id: int, body: bytes, request: Request)
         return accepted("untracked")
 
     repo.last_event_at = datetime.now(timezone.utc)
+    repo.push_missing_since = None
     db.commit()
 
     targets = [(n, kind) for n, kind in event_targets(db, repo, event, payload) if tracks(repo, kind)]

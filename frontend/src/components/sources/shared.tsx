@@ -1,5 +1,5 @@
 import { useState, type ComponentProps, type RefObject } from 'react'
-import type { EmailAccountTestResult, SyncStatus } from '../../hooks/useSources'
+import type { EmailAccountTestResult, PushHealth, SyncStatus } from '../../hooks/useSources'
 import { useModule } from '@/hooks/useModule'
 import { formatUserDate, formatUserDateTime } from '@/utils/timezones'
 import { Badge, Button, ConfirmButton, Field, FieldRow, FormActions, Input, Modal, Notice, Row, RowError, Select, Fieldset, NewTabLink } from '@/components/shared/ui'
@@ -42,6 +42,20 @@ const failingSince = (since: string | null) => {
 /** Flags a source whose latest sync failed, for a Row's badges. */
 export const SyncFailingBadge = ({ status }: { status: SyncStatus }) =>
   status.sync_error ? <Badge tone="danger">Sync failing</Badge> : null
+
+/** Why a source's push channel stops delivering, for a PushMissedBadge. */
+export const PUSH_CAUSES = {
+  github: 'the webhook was deleted or disabled on GitHub, its secret was rotated outside Memory, or a proxy blocks /github/webhook/',
+  slack: "the app's event subscriptions were turned off, its bot left the channels, or a proxy blocks /slack/events/",
+}
+
+/** Flags a source whose push channel polling caught missing events, for a Row's badges. */
+export const PushMissedBadge = ({ status, causes }: { status: PushHealth; causes: string }) => {
+  if (!status.push_missing_since) return null
+  const since = formatUserDateTime(new Date(status.push_missing_since))
+  const tip = `Push missed events since ${since}; last miss ${formatRelativeTime(status.push_last_miss_at)}. Likely causes: ${causes}.`
+  return <Badge tone="warning" title={tip}><span aria-hidden="true">⚠ </span>Missing events</Badge>
+}
 
 /** The latest sync error and when the failing streak began, for a Row's body. */
 export const SyncFailure = ({ status }: { status: SyncStatus }) => {

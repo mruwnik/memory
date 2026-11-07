@@ -64,8 +64,9 @@ const Sources = () => {
   useEffect(refreshCounts, [refreshCounts])
 
   const tabOptions = TABS.map(({ value, label }) => {
-    const failing = counts[value]?.failing
-    return { value, label, count: counts[value]?.count, problem: failing ? `${failing} failing to sync` : undefined }
+    const { count, failing, push_missing } = counts[value] ?? {}
+    const problems = [failing && `${failing} failing to sync`, push_missing && `${push_missing} missing push events`]
+    return { value, label, count, problem: problems.filter(Boolean).join('; ') || undefined }
   })
 
   // Check if user is admin

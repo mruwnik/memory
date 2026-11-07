@@ -493,6 +493,8 @@ def test_workspace_lists_the_callers_apps_and_their_event_setup(
     slack_app.setup_state = "draft"
     slack_app.created_by_user_id = user.id
     slack_app.last_event_at = datetime(2026, 11, 5, 12, tzinfo=timezone.utc)
+    slack_app.push_missing_since = datetime(2026, 11, 4, 12, tzinfo=timezone.utc)
+    slack_app.push_last_miss_at = datetime(2026, 11, 5, 9, tzinfo=timezone.utc)
     db_session.commit()
 
     data = client.get(f"/slack/workspaces/{slack_workspace.id}").json()
@@ -505,6 +507,9 @@ def test_workspace_lists_the_callers_apps_and_their_event_setup(
             "setup_state": "draft",
             "is_owner": True,
             "last_event_at": "2026-11-05T12:00:00+00:00",
+            "push_stale": False,  # a draft app isn't expected to receive events
+            "push_missing_since": "2026-11-04T12:00:00+00:00",
+            "push_last_miss_at": "2026-11-05T09:00:00+00:00",
         }
     ]
 
@@ -1102,6 +1107,8 @@ def test_slack_app_response_contract():
         "token_url",
         "api_base_url",
         "last_event_at",
+        "push_missing_since",
+        "push_last_miss_at",
     }
     assert set(SlackAppResponse.model_fields.keys()) == expected
 
@@ -1525,7 +1532,7 @@ def test_source_tabs_count_connected_workspaces_and_failures(
     slack_workspace.record_sync("boom")
     db_session.commit()
 
-    assert client.get("/source-tabs").json()["slack"] == {"count": 1, "failing": 1}
+    assert client.get("/source-tabs").json()["slack"] == {"count": 1, "failing": 1, "push_missing": 0}
 
 
 @pytest.mark.parametrize(

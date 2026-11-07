@@ -62,6 +62,20 @@ class SyncStatusMixin:
         self.sync_failing_since = self.sync_failing_since or datetime.now(timezone.utc)
 
 
+class PushHealthMixin:
+    """A push channel (webhook, events API) that polling caught missing something.
+
+    `push_missing_since` is the first miss since push last delivered, which
+    clears it; `push_last_miss_at` is the latest miss.
+    """
+
+    push_missing_since: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    push_last_miss_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
 
 class PolledSource:
     """A source fetched on a schedule.

@@ -1,6 +1,6 @@
 """Tests for GitHub Sources API endpoints."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock, patch
 
 import pytest
@@ -750,12 +750,38 @@ def test_install_queues_with_a_secret_generating_one_if_needed(client, db_sessio
     assert account.webhook_secret == (secret or account.webhook_secret)
 
 
-def test_repo_responses_carry_the_webhook_status(client, db_session, user):
+def test_repo_responses_carry_the_webhook_health(client, db_session, user):
     account = hooked_account(db_session, user)
-    repo = GithubRepo(account_id=account.id, owner="o", name="r", webhook_status="missing_permission")
+    at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    repo = GithubRepo(
+        account_id=account.id, owner="o", name="r", webhook_status="installed",
+        last_event_at=at, push_missing_since=at, push_last_miss_at=at,
+    )
     db_session.add(repo)
     db_session.commit()
 
     (listed,) = client.get(f"/github/accounts/{account.id}").json()["repos"]
 
-    assert listed["webhook_status"] == "missing_permission"
+    fields = ("webhook_status", "last_event_at", "push_missing_since", "push_last_miss_at", "push_stale")
+    assert {k: listed[k] for k in fields} == {
+        "webhook_status": "installed",
+        "last_event_at": at.isoformat(),
+        "push_missing_since": at.isoformat(),
+        "push_last_miss_at": at.isoformat(),
+        "push_stale": True,
+    }
+
+
+@pytest.mark.parametrize(
+    "status, hours_since_event, stale",
+    [("installed", 1, False), ("app_hook", None, True), (None, None, False), ("missing_permission", 48, False)],
+)
+def test_a_hooked_repo_without_recent_events_is_flagged_stale(client, db_session, user, status, hours_since_event, stale):
+    account = hooked_account(db_session, user)
+    last_event = hours_since_event and datetime.now(timezone.utc) - timedelta(hours=hours_since_event)
+    db_session.add(GithubRepo(account_id=account.id, owner="o", name="r", webhook_status=status, last_event_at=last_event))
+    db_session.commit()
+
+    (listed,) = client.get(f"/github/accounts/{account.id}").json()["repos"]
+
+    assert listed["push_stale"] is stale
