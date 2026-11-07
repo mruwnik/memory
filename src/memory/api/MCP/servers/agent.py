@@ -1061,7 +1061,8 @@ async def trigger_upsert(
     lists the definition's tools that write or reach outside memory, which a
     trigger exposes to whatever content arrives.
 
-    Runs act with the credentials used here (an API key's scopes, if you used one).
+    Runs act with the credentials that created the trigger (an API key's scopes, if
+    one was used); edits keep them, and an API key can only edit triggers it created.
     At most AGENT_MAX_TRIGGERS_PER_USER of your triggers can be enabled at once.
     To pause, pass only trigger_id and enabled=false; that always works. Any other
     change (config is required to create; omitted on update, it's kept) re-checks
@@ -1088,6 +1089,8 @@ async def trigger_upsert(
         spec = parse_spec(definition.spec)
         await check_spec(spec)
         key = token_api_key(token, db)
+        if existing is not None and key is not None and existing.api_key_id != key.id:
+            raise ValueError("this trigger is bound to another credential")
         was_enabled = existing is not None and existing.enabled
         will_be_enabled = was_enabled if enabled is None and existing else enabled is not False
         if will_be_enabled and not was_enabled:
@@ -1099,7 +1102,8 @@ async def trigger_upsert(
         db.add(trigger)
         trigger.definition_id = definition.id
         trigger.config = parsed.model_dump(mode="json")
-        trigger.api_key_id, trigger.via_api_key = (key.id, True) if key else (None, False)
+        if existing is None:
+            trigger.api_key_id, trigger.via_api_key = (key.id, True) if key else (None, False)
         trigger.enabled = will_be_enabled
         if will_be_enabled and not was_enabled:
             # The database clock, which also stamps items' inserted_at.

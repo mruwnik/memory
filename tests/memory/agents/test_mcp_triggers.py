@@ -113,8 +113,8 @@ async def test_a_key_cannot_trigger_tools_it_could_not_run(
 
 
 @pytest.mark.asyncio
-async def test_a_trigger_remembers_the_key_that_made_it(
-    db_session, regular_user, fake_providers
+async def test_a_trigger_keeps_the_key_that_made_it(
+    db_session, regular_user, user_session, fake_providers
 ):
     d = definition(db_session, regular_user)
     key = APIKey.create(user_id=regular_user.id, name="k", scopes=["agents"])
@@ -123,8 +123,37 @@ async def test_a_trigger_remembers_the_key_that_made_it(
 
     with mcp_auth_context(key.key, scopes=["agents"]):
         created = await agent.trigger_upsert.fn(definition_id=d.id, config=CONFIG)
+    with mcp_auth_context(user_session.token):
+        edited = await agent.trigger_upsert.fn(
+            definition_id=d.id, trigger_id=created["id"], config=CONFIG
+        )
 
     assert (created["api_key_id"], created["via_api_key"]) == (key.id, True)
+    assert (edited["api_key_id"], edited["via_api_key"]) == (key.id, True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bound_to", ["session", "other key"])
+async def test_a_key_cannot_edit_a_trigger_bound_to_another_credential(
+    db_session, regular_user, fake_providers, bound_to
+):
+    d = definition(db_session, regular_user)
+    key, other = (
+        APIKey.create(user_id=regular_user.id, name=n, scopes=["agents"]) for n in "ko"
+    )
+    db_session.add_all([key, other])
+    db_session.commit()
+    api_key_id, via_api_key = {"session": (None, False), "other key": (other.id, True)}[bound_to]
+    trigger = AgentTrigger(
+        definition_id=d.id, kind="ingest", config=CONFIG, enabled=False,
+        api_key_id=api_key_id, via_api_key=via_api_key,
+    )
+    db_session.add(trigger)
+    db_session.commit()
+
+    with mcp_auth_context(key.key, scopes=["agents"]):
+        with pytest.raises(ValueError, match="bound to another credential"):
+            await agent.trigger_upsert.fn(definition_id=d.id, trigger_id=trigger.id, config=CONFIG)
 
 
 @pytest.mark.asyncio

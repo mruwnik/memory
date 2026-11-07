@@ -221,9 +221,16 @@ def test_a_valid_key_bounds_the_triggered_run(db_session, admin_user, fake_provi
     assert (run.api_key_id, sorted(run.scopes)) == (key.id, scopes)
 
 
-@pytest.mark.parametrize("key_scopes,runs", [(["*"], 1), (["agents", "read"], 0)])
+@pytest.mark.parametrize(
+    "key_scopes,reads",
+    [
+        (["*"], [True, True]),
+        (["agents", "read"], [False, True]),
+        (["agents"], [False, False]),
+    ],
+)
 def test_a_trigger_reads_items_with_its_keys_scopes(
-    db_session, admin_user, fake_providers, admin_keys, no_celery_dispatch, key_scopes, runs
+    db_session, admin_user, fake_providers, admin_keys, no_celery_dispatch, key_scopes, reads
 ):
     key = APIKey.create(user_id=admin_user.id, name="k", scopes=key_scopes)
     db_session.add(key)
@@ -231,13 +238,15 @@ def test_a_trigger_reads_items_with_its_keys_scopes(
     trigger = setup(db_session, admin_user)
     trigger.api_key_id, trigger.via_api_key = key.id, True
     db_session.commit()
-    admin_only = post(db_session)
+    items = [post(db_session), post(db_session, creator_id=admin_user.id)]
 
-    fire_trigger(trigger.id, claimed(admin_only))
-    matched = triggers.match_ingest_triggers(admin_only.id, fakeredis.FakeRedis())
+    fired = [fire_trigger(trigger.id, claimed(i)) is not None for i in items]
+    matched = [
+        triggers.match_ingest_triggers(i.id, fakeredis.FakeRedis()) == [trigger.id]
+        for i in items
+    ]
 
-    assert db_session.query(AgentRun).count() == runs
-    assert matched == [trigger.id] * runs
+    assert fired == matched == reads
 
 
 def test_a_deleted_pinned_provider_key_trips_the_breaker(

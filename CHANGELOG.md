@@ -34,6 +34,9 @@ a new, empty `## Unreleased` above it.
 - The owner is notified once per outage, on their usual notification channel. The message names the repo or app only.
 - Sources UI: a "⚠ Missing events" badge on each affected GitHub repo row, its account row and each affected Slack app (on its workspace row). Its tooltip shows since/last miss and likely causes. GitHub accounts also get a **Reinstall webhooks** action. The GitHub/Slack tab shows the red "!" with "N missing push events". A muted "No recent push events" hint shows when push is set up but nothing has arrived within `PUSH_STALE_HOURS`.
 - API: GitHub repo responses add `last_event_at`, `push_missing_since`, `push_last_miss_at`, `push_stale`; Slack app and workspace-app responses add `push_missing_since`, `push_last_miss_at` (workspace apps also `push_stale`); `/source-tabs` counts add `push_missing`.
+- Editing an ingest trigger keeps the credential it was created with: a login-session edit no longer widens a key-bound trigger to full access, and an API key can only edit triggers it created.
+- A trigger bound to an API key without the `read` scope matches and renders no items.
+- A GitHub webhook delivery whose refetch couldn't be queued is processed again when GitHub retries it, instead of being answered "duplicate".
 
 ### Other changes for operators
 
@@ -43,6 +46,7 @@ a new, empty `## Unreleased` above it.
 - After deploying, existing accounts with a secret get their hooks at the next 03:15 pass, or immediately via **Install on all repos**.
 - Orphan verification batches GitHub PRs and issues separately per repo (`source_type` `github_pr` / `github_issue` in `verify_orphans` results); `verify_orphans(source_types=["github_item"])` now selects nothing.
 - `reingest_item` / `update_metadata_for_source_items` take `github_pr` / `github_issue` (or `GithubPR` / `GithubIssue`).
+- Ingest triggers bound to an API key that lacks `read` (or `*`) stop matching. Re-create them with a key that has `read`, or from a login session.
 
 ### Migrations
 

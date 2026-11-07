@@ -119,6 +119,17 @@ def test_redelivered_delivery_is_a_no_op(client, repo, no_celery_dispatch):
     assert refetches(no_celery_dispatch) == [[repo.id, 7, "pr"]]
 
 
+def test_a_delivery_that_could_not_be_queued_is_taken_on_redelivery(client, repo, no_celery_dispatch):
+    no_celery_dispatch.side_effect = [ConnectionError("broker down"), None]
+
+    failed = deliver(client, repo.account_id, "pull_request", pr_event(), delivery="d-1")
+    retried = deliver(client, repo.account_id, "pull_request", pr_event(), delivery="d-1")
+
+    assert (failed.status_code, retried.status_code) == (500, 202)
+    assert retried.json()["status"] == "queued"
+    assert refetches(no_celery_dispatch) == [[repo.id, 7, "pr"]] * 2
+
+
 def test_ping_answers_without_work(client, repo, no_celery_dispatch):
     response = deliver(client, repo.account_id, "ping", {"zen": "Keep it simple.", "hook_id": 1})
 

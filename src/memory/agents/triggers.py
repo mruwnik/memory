@@ -38,7 +38,7 @@ from memory.common.access_control import (
 )
 from memory.common.celery_app import FIRE_TRIGGER, MATCH_INGEST_TRIGGERS, app
 from memory.common.collections import SESSION_COLLECTIONS
-from memory.common.scopes import SCOPE_AGENTS
+from memory.common.scopes import SCOPE_ADMIN, SCOPE_AGENTS, SCOPE_READ
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import (
     AgentTrigger,
@@ -416,7 +416,10 @@ def accessible_ids(
     db: DBSession, owner: User, key: APIKey | None, item_ids: list[int]
 ) -> list[int]:
     """The subset of item_ids `owner` may read through `key`, by the same filter search uses."""
-    reader = UserProxy.from_user(owner, scopes=credential_scopes(owner, key))
+    scopes = credential_scopes(owner, key)
+    if not {SCOPE_READ, SCOPE_ADMIN} & set(scopes):
+        return []
+    reader = UserProxy.from_user(owner, scopes=scopes)
     access_filter = (
         None
         if has_admin_scope(reader)

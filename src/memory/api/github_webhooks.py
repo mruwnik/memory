@@ -42,8 +42,12 @@ def signature_matches(secret: str, body: bytes, signature: str) -> bool:
     return hmac.compare_digest(expected.encode(), signature.encode())
 
 
+def delivery_key(delivery_id: str) -> str:
+    return f"memory:github:delivery:{delivery_id}"
+
+
 def first_delivery(delivery_id: str) -> bool:
-    key = f"memory:github:delivery:{delivery_id}"
+    key = delivery_key(delivery_id)
     return bool(redis.from_url(settings.REDIS_URL).set(key, 1, nx=True, ex=DELIVERY_TTL_SECONDS))
 
 
@@ -140,7 +144,12 @@ def handle_delivery(db: Session, account_id: int, body: bytes, request: Request)
     db.commit()
 
     targets = [(n, kind) for n, kind in event_targets(db, repo, event, payload) if tracks(repo, kind)]
-    queued = [n for n, kind in targets if queue_refetch(repo.id, n, kind)]
+    try:
+        queued = [n for n, kind in targets if queue_refetch(repo.id, n, kind)]
+    except Exception:
+        # GitHub retries a failed delivery under the same id, which must not be a duplicate.
+        redis.from_url(settings.REDIS_URL).delete(delivery_key(delivery))
+        raise
     logger.info(
         "github webhook account=%s repo=%s event=%s delivery=%s queued=%s",
         account_id, repo.id, event, delivery, queued,
