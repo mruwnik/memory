@@ -25,6 +25,7 @@ a new, empty `## Unreleased` above it.
 ### Changes
 
 - Discord MCP tools name the server: `discord_list_channels` returns `server_name` by default, and `discord_channel_history` gives the channel's `server_id` and `server_name`.
+- GitHub webhook dialog: for App accounts, a plain note on where in the App's settings to tick the events (only the App's owner can); an unset secret no longer reads as an error, since Install creates one.
 
 ## v0.4.11 (2026-11-07)
 
