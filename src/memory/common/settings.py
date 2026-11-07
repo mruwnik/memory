@@ -417,6 +417,9 @@ EVENT_RETENTION_DAYS = int(os.getenv("EVENT_RETENTION_DAYS", 30))
 EVENT_MAX_ATTEMPTS = int(os.getenv("EVENT_MAX_ATTEMPTS", 5))
 # Raw webhook payloads are untrusted and bulky: kept this long, then dropped from their events.
 EVENT_RAW_PAYLOAD_DAYS = int(os.getenv("EVENT_RAW_PAYLOAD_DAYS", 7))
+# A Slack message, email or new GitHub item this many days older than its store
+# is an initial import, so subscriptions don't react to it.
+EVENT_BACKFILL_AGE_DAYS = float(os.getenv("EVENT_BACKFILL_AGE_DAYS", 2))
 # Days of telemetry_events and llm_spend rows kept for the usage page.
 USAGE_RETENTION_DAYS = int(os.getenv("USAGE_RETENTION_DAYS", 365))
 AUDIT_RETENTION_DAYS = int(os.getenv("AUDIT_RETENTION_DAYS", 730))

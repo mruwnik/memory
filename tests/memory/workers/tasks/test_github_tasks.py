@@ -536,9 +536,9 @@ def test_sync_github_item_new_issue(mock_issue_data, github_repo, db_session, qd
     assert item.state == "open"
     assert item.author == "testuser"
     # Author was resolved to a Person end-to-end (ingest wiring).
-    assert item.author_person_id is not None
+    assert item.author_person is not None
     assert item.author_person.contact_info["github"] == "testuser"
-    assert "bug" in item.labels
+    assert "bug" in (item.labels or [])
     assert "github" in item.tags  # From repo tags
     assert "bug" in item.tags  # From issue labels
 
@@ -1127,6 +1127,7 @@ def mock_pr_data_with_extended() -> GithubIssueData:
                 "state": "approved",
                 "body": "LGTM!",
                 "submitted_at": "2024-01-02T10:00:00Z",
+                "commit_oid": None,
             }
         ],
         "review_comments": [
@@ -1498,7 +1499,7 @@ def test_sync_github_item_updates_existing_pr_data(github_repo, db_session, qdra
             "deletions": 10,
             "changed_files_count": 2,
             "reviews": [
-                {"id": 1, "user": "reviewer", "state": "approved", "body": "Approved!", "submitted_at": ""}
+                {"id": 1, "user": "reviewer", "state": "approved", "body": "Approved!", "submitted_at": "", "commit_oid": None}
             ],
             "review_comments": [
                 {"id": 1, "user": "reviewer", "body": "Nice!", "path": "new.py", "line": 10, "side": "RIGHT", "diff_hunk": "", "created_at": ""}

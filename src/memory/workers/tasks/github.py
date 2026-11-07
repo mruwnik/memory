@@ -25,6 +25,7 @@ from memory.common.db.models import (
     GithubPRData,
     GithubProject,
     Project,
+    is_backfill,
     item_event,
 )
 from memory.common.db.models.sources import (
@@ -786,7 +787,8 @@ def sync_item(
         # Create new item
         github_item = _create_github_item(repo, issue_data, milestone_id, project_id)
         _apply_author_person(session, github_item, issue_data)
-        return process_content_item(github_item, session, changes=changes)
+        backfill = is_backfill(issue_data["github_updated_at"])
+        return process_content_item(github_item, session, changes=changes, backfill=backfill)
 
 
 @app.task(name=SYNC_GITHUB_REPO)

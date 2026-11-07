@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from memory.common import settings
 from memory.common.celery_app import PROCESS_EMAIL, SYNC_ACCOUNT, app
 from memory.common.db.connection import DBSession, make_session
-from memory.common.db.models import EmailAccount, MailMessage, item_event
+from memory.common.db.models import EmailAccount, MailMessage, is_backfill, item_event
 from memory.common.db.models.source_item import clean_filename
 from memory.common.email_sender import PASSWORD_RESET_HEADER, PASSWORD_RESET_SUBJECT
 from memory.common.redis_lock import Lock, distributed_lock
@@ -137,8 +137,10 @@ def store_email_message(
     message_id: str,
     folder: str,
     raw_email: str,
+    received_at: datetime | None = None,
 ) -> dict:
-    """Parse a raw email and persist it (with attachments and embeddings)."""
+    """Parse a raw email and persist it (with attachments and embeddings).
+    It is backfill when it was received, or else sent, long before now."""
     try:
         with make_session() as db:
             account = db.get(EmailAccount, account_id)
@@ -165,7 +167,9 @@ def store_email_message(
             db.flush()
             for item in [mail_message, *mail_message.attachments]:
                 item.apply_inherited_access_control()
-            db.add(item_event(db, mail_message, None))
+            # The receiving server's time, as a sender can forge Date.
+            backfill = is_backfill(received_at or mail_message.sent_at)
+            db.add(item_event(db, mail_message, None, backfill))
             vectorize_email(mail_message)
 
             db.commit()
@@ -192,6 +196,7 @@ def process_message(
     message_id: str,
     folder: str,
     spool_name: str,
+    received_at: str | None = None,
 ) -> dict:
     """
     Process a single email message and store it in the database.
@@ -202,6 +207,7 @@ def process_message(
         folder: Folder name where the message is stored
         spool_name: Filename of the spooled raw email under EMAIL_SPOOL_DIR
             (written by ``queue_message``); read here and deleted once handled.
+        received_at: ISO time the mail server received the message, if known
 
     Returns:
         dict with processing result
@@ -223,7 +229,8 @@ def process_message(
         spool_path(spool_name).unlink(missing_ok=True)
         return {"status": "skipped", "reason": "empty_content"}
 
-    result = store_email_message(account_id, message_id, folder, raw_email)
+    received = datetime.fromisoformat(received_at) if received_at else None
+    result = store_email_message(account_id, message_id, folder, raw_email, received)
     # Delete only on a handled outcome. On an uncaught error this line is
     # skipped so the spool file survives and recovery can re-read it two ways:
     # the next account re-sync re-spools to the same deterministic filename (and
@@ -256,6 +263,7 @@ def queue_message(
     message_id: str,
     folder: str,
     raw_email: str,
+    received_at: datetime | None = None,
 ) -> bool:
     """Parse, dedup, spool, and queue a single message for async processing.
 
@@ -292,6 +300,7 @@ def queue_message(
             message_id=message_id,
             folder=folder,
             spool_name=spooled,
+            received_at=received_at and received_at.isoformat(),
         )
         return True
     except Exception:
@@ -319,7 +328,7 @@ LOCK_EXTEND_INTERVAL = 100
 def process_email_batch(
     account: EmailAccount,
     db: DBSession,
-    messages: Generator[tuple[str, str], None, None],
+    messages: Generator[tuple[str, str, datetime | None], None, None],
     folder: str = "INBOX",
     lock: Lock | None = None,
 ) -> dict:
@@ -329,7 +338,7 @@ def process_email_batch(
     Args:
         account: EmailAccount being synced
         db: Database session
-        messages: Generator yielding (message_id, raw_email) tuples
+        messages: Generator yielding (message_id, raw_email, received_at) tuples
         folder: Folder name for the messages
         lock: Optional lock to extend during long-running operations
 
@@ -340,7 +349,7 @@ def process_email_batch(
     new_messages = 0
     errors = 0
 
-    for message_id, raw_email in messages:
+    for message_id, raw_email, received_at in messages:
         messages_found += 1
 
         # Extend lock periodically to prevent expiry during long syncs
@@ -364,7 +373,7 @@ def process_email_batch(
 
         try:
             if queue_message(
-                db, cast(int, account.id), message_id, folder, raw_email
+                db, cast(int, account.id), message_id, folder, raw_email, received_at
             ):
                 new_messages += 1
         except Exception as e:
@@ -411,9 +420,9 @@ def sync_imap_messages(
     deleted_messages = 0
 
     def message_processor(
-        account_id: int, message_id: str, folder: str, raw_email: str
+        account_id: int, message_id: str, folder: str, raw_email: str, received_at: datetime | None
     ) -> bool:
-        return queue_message(db, account_id, message_id, folder, raw_email)
+        return queue_message(db, account_id, message_id, folder, raw_email, received_at)
 
     with imap_connection(account) as conn:
         for folder in folders_to_process:

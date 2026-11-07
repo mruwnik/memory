@@ -33,7 +33,8 @@ class EmailMessage(TypedDict):
     raw_email: str
 
 
-RawEmailResponse = tuple[str | None, bytes]
+# (uid, raw email, when the mail server received it)
+RawEmailResponse = tuple[str | None, bytes, datetime | None]
 
 
 def extract_recipients(msg: email.message.Message) -> list[str]:  # type: ignore

@@ -6,7 +6,7 @@ import logging
 import re
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Callable, Generator, Iterable, Sequence, cast
 
 from googleapiclient.discovery import build
@@ -154,11 +154,12 @@ def create_mail_message(
 
 
 UID_PATTERN = re.compile(r"UID (\d+)")
+INTERNALDATE_PATTERN = re.compile(r'INTERNALDATE "([^"]+)"')
 
 
 def extract_email_uid(
     msg_data: Sequence[bytes | tuple[bytes, bytes]],
-) -> tuple[str | None, bytes]:
+) -> RawEmailResponse:
     """
     Extract the UID and raw email data from a FETCH response.
 
@@ -169,17 +170,28 @@ def extract_email_uid(
     the string/tuple-header parts; scan them all rather than only the first.
     """
     uid: str | None = None
+    received_at: datetime | None = None
     raw_email = b""
     for part in msg_data:
         header, payload = part if isinstance(part, tuple) else (part, None)
-        if uid is None and (match := UID_PATTERN.search(_as_text(header))):
+        text = _as_text(header)
+        if uid is None and (match := UID_PATTERN.search(text)):
             uid = match.group(1)
+        if received_at is None and (match := INTERNALDATE_PATTERN.search(text)):
+            received_at = parse_internaldate(match.group(1))
         if payload is not None and not raw_email:
             raw_email = payload
 
     if uid is None:
         logger.warning(f"Could not extract UID from FETCH response: {msg_data!r}")
-    return uid, raw_email
+    return uid, raw_email, received_at
+
+
+def parse_internaldate(value: str) -> datetime | None:
+    try:
+        return datetime.strptime(value.strip(), "%d-%b-%Y %H:%M:%S %z")
+    except ValueError:
+        return None
 
 
 def _as_text(value: bytes | str | None) -> str:
@@ -192,7 +204,7 @@ def _as_text(value: bytes | str | None) -> str:
 
 def fetch_email(conn: imaplib.IMAP4, uid: str) -> RawEmailResponse | None:
     try:
-        status, msg_data = conn.uid("FETCH", uid, "(UID BODY.PEEK[])")
+        status, msg_data = conn.uid("FETCH", uid, "(UID INTERNALDATE BODY.PEEK[])")
         if status != "OK" or not msg_data or not msg_data[0]:
             logger.error(f"Error fetching message {uid!r}")
             return None
@@ -217,7 +229,7 @@ def fetch_email_since(
         since_date: Fetch emails since this date and time
 
     Returns:
-        List of tuples with (uid, raw_email)
+        List of (uid, raw_email, received_at) tuples
     """
     try:
         status, counts = conn.select(folder)
@@ -250,7 +262,7 @@ def process_folder(
     folder: str,
     account: EmailAccount,
     since_date: datetime,
-    processor: Callable[[int, str, str, str], bool],
+    processor: Callable[[int, str, str, str, datetime | None], bool],
 ) -> dict:
     """
     Process a single folder from an email account.
@@ -271,13 +283,14 @@ def process_folder(
     try:
         emails = fetch_email_since(conn, folder, since_date)
 
-        for uid, raw_email in emails:
+        for uid, raw_email, received_at in emails:
             try:
                 task = processor(
                     account_id=account.id,  # type: ignore
                     message_id=uid,
                     folder=folder,
                     raw_email=raw_email.decode("utf-8", errors="replace"),
+                    received_at=received_at,
                 )
                 if task:
                     new_messages += 1
@@ -736,57 +749,30 @@ def get_gmail_label_ids(service, folder_names: list[str]) -> list[str]:
     return list(label_ids) + [api_labels[folder] for folder in custom_folders]
 
 
-def fetch_gmail_message(
-    service, message_id: str, format: str = "raw"
-) -> str | dict | None:
-    """
-    Fetch a single Gmail message.
-
-    Args:
-        service: Gmail API service
-        message_id: Gmail message ID
-        format: Message format - "raw" for RFC 2822, "full" for structured data
-
-    Returns:
-        For format="raw": Raw email content as string, or None on error
-        For format="full": Message dict with payload, or None on error
-    """
+def fetch_gmail_message(service, message_id: str) -> tuple[str, datetime | None] | None:
+    """A Gmail message's raw RFC 2822 text and when Gmail received it, or None on error."""
     try:
         message = (
             service.users()
             .messages()
-            .get(userId="me", id=message_id, format=format)
+            .get(userId="me", id=message_id, format="raw")
             .execute()
         )
-        if format == "raw":
-            raw_data = message.get("raw", "")
-            # Gmail returns base64url encoded data
-            decoded = base64.urlsafe_b64decode(raw_data)
-            return decoded.decode("utf-8", errors="replace")
-        return message
+        raw_email = base64.urlsafe_b64decode(message.get("raw", "")).decode("utf-8", errors="replace")
+        internal_date = message.get("internalDate")
+        received_at = internal_date and datetime.fromtimestamp(int(internal_date) / 1000, timezone.utc)
     except Exception as e:
         logger.error(f"Error fetching Gmail message {message_id}: {e}")
         return None
+    return raw_email, received_at or None
 
 
 def iterate_gmail_messages(
     service,
     label_ids: list[str] | None = None,
     query: str | None = None,
-    fetch_content: bool = False,
-) -> Generator[tuple[str, str | None], None, None]:
-    """
-    Iterate over Gmail messages matching the given criteria.
-
-    Args:
-        service: Gmail API service
-        label_ids: Optional list of label IDs to filter by
-        query: Optional Gmail search query (e.g., "after:2024/01/01")
-        fetch_content: If True, fetch raw email content; if False, yield (id, None)
-
-    Yields:
-        Tuples of (message_id, raw_email_content or None)
-    """
+) -> Generator[str, None, None]:
+    """Ids of the Gmail messages carrying `label_ids` and matching `query`."""
     request = (
         service.users()
         .messages()
@@ -801,41 +787,20 @@ def iterate_gmail_messages(
 
     while request:
         response = request.execute()
-
         for msg_info in response.get("messages", []):
-            msg_id = msg_info["id"]
-            if fetch_content:
-                try:
-                    raw_email = fetch_gmail_message(service, msg_id, format="raw")
-                    if raw_email and isinstance(raw_email, str):
-                        yield (msg_id, raw_email)
-                except Exception as e:
-                    logger.error(f"Error fetching Gmail message {msg_id}: {e}")
-            else:
-                yield (msg_id, None)
-
-        # Handle pagination
+            yield msg_info["id"]
         request = service.users().messages().list_next(request, response)
 
 
 def fetch_gmail_messages_by_ids(
     service,
     message_ids: set[str],
-) -> Generator[tuple[str, str], None, None]:
-    """
-    Fetch email content for specific Gmail message IDs.
-
-    Args:
-        service: Gmail API service
-        message_ids: Set of message IDs to fetch content for
-
-    Yields:
-        Tuples of (gmail_message_id, raw_email_content)
-    """
+) -> Generator[tuple[str, str, datetime | None], None, None]:
+    """(gmail message id, raw email, received at) of each message that could be fetched."""
     for msg_id in message_ids:
-        raw_email = fetch_gmail_message(service, msg_id, format="raw")
-        if raw_email:
-            yield (msg_id, cast(str, raw_email))
+        fetched = fetch_gmail_message(service, msg_id)
+        if fetched and fetched[0]:
+            yield (msg_id, *fetched)
 
 
 GMAIL_MAILBOX_QUERY = "-in:drafts -in:chats"
@@ -848,13 +813,13 @@ def list_gmail_message_ids(service, label_ids: list[str] | None = None) -> set[s
         # An unfiltered listing also returns unsent drafts and Hangouts chats.
         return {
             msg_id
-            for msg_id, _ in iterate_gmail_messages(service, query=GMAIL_MAILBOX_QUERY)
+            for msg_id in iterate_gmail_messages(service, query=GMAIL_MAILBOX_QUERY)
         }
     # labelIds on one listing means "carries all of these", so union per label
     return {
         msg_id
         for label_id in label_ids
-        for msg_id, _ in iterate_gmail_messages(service, label_ids=[label_id])
+        for msg_id in iterate_gmail_messages(service, label_ids=[label_id])
     }
 
 

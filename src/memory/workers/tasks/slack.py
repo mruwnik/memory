@@ -44,7 +44,7 @@ from memory.common.celery_app import (
     app,
 )
 from memory.common.db.connection import make_session
-from memory.common.db.models import SlackMessage
+from memory.common.db.models import SlackMessage, is_backfill
 from memory.common.db.models.slack import (
     SlackApp,
     SlackChannel,
@@ -771,6 +771,10 @@ def store_history_message(
     return result
 
 
+def slack_time(ts: str) -> datetime:
+    return datetime.fromtimestamp(float(ts), timezone.utc)
+
+
 def check_push_missed(channel_id: str, slack_app_id: int, message_ts: str) -> None:
     """A poll just stored this message: record a miss if the app's events should have brought it."""
     with make_session() as session:
@@ -778,8 +782,7 @@ def check_push_missed(channel_id: str, slack_app_id: int, message_ts: str) -> No
         app = session.get(SlackApp, slack_app_id)
         if not channel or not app or not app.last_event_at:
             return
-        sent_at = datetime.fromtimestamp(float(message_ts), timezone.utc)
-        if not push_overdue(sent_at, channel.push_since):
+        if not push_overdue(slack_time(message_ts), channel.push_since):
             return
         # Push isn't reaching this channel (bot removed, event unsubscribed), so
         # it stops counting as covered and can't re-flag the app every poll.
@@ -929,10 +932,16 @@ def _get_existing_slack_message(session, msg_kwargs: dict) -> SlackMessage | Non
     )
 
 
-def _reembed_existing_message(session, message: SlackMessage) -> dict[str, Any]:
+def polled_backfill(message: SlackMessage, polled: bool) -> bool:
+    """Pushes are live however long they waited; a poll found history if the
+    message's last edit, else its sending, is old."""
+    return polled and is_backfill(slack_time(message.edited_ts or message.message_ts))
+
+
+def _reembed_existing_message(session, message: SlackMessage, polled: bool) -> dict[str, Any]:
     """Re-embed an existing SlackMessage whose content was just updated."""
     clear_item_chunks(message, session)
-    result = process_content_item(message, session)
+    result = process_content_item(message, session, backfill=polled_backfill(message, polled))
     result["status"] = "updated"
     return result
 
@@ -962,7 +971,7 @@ def _apply_merge(session, existing: SlackMessage, msg_kwargs: dict) -> dict[str,
     _link_author_person(session, existing, msg_kwargs["workspace_id"])
 
     if content_changed:
-        return _reembed_existing_message(session, existing)
+        return _reembed_existing_message(session, existing, msg_kwargs["polled"])
 
     return {
         "status": "already_exists",
@@ -1069,7 +1078,7 @@ def _insert_new_slack_message(session, msg_kwargs: dict) -> dict[str, Any]:
 
     message = _build_slack_message(msg_kwargs, author_name, resolved_content, saved_images)
     _link_author_person(session, message, workspace_id)
-    return process_content_item(message, session)
+    return process_content_item(message, session, backfill=polled_backfill(message, msg_kwargs["polled"]))
 
 
 def _try_add_slack_message(msg_kwargs: dict) -> dict[str, Any] | None:

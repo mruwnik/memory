@@ -290,6 +290,26 @@ def stored(db_session) -> GithubItem:
     return db_session.query(GithubItem).filter_by(repo_path="testorg/testrepo", number=7).one()
 
 
+@pytest.mark.parametrize(
+    "first_updated, later_updated, backfills",
+    [
+        (timedelta(days=1.9), timedelta(0), [False, False]),
+        (timedelta(days=2.1), timedelta(0), [True, False]),
+        # a change only seen days later is still a change, not an import
+        (timedelta(days=30), timedelta(days=5), [True, False]),
+    ],
+)
+def test_items_last_updated_long_before_they_are_first_stored_are_backfill(
+    db_session, repo, qdrant, first_updated, later_updated, backfills
+):
+    now = datetime.now(timezone.utc)
+    github.sync_item(repo.id, pr_data(github_updated_at=now - first_updated), {OWN})
+    github.sync_item(repo.id, pr_data(title="Renamed", github_updated_at=now - later_updated), {OWN})
+
+    db_session.expire_all()
+    assert [e.backfill for e in db_session.query(Event).filter(Event.kind == "item").order_by(Event.id)] == backfills
+
+
 def test_refetch_after_synchronize_reports_commits(db_session, repo, qdrant, github_serves):
     github_serves(pr_node("a" * 40))
     github.refetch_github_item(repo.id, 7, "pr")

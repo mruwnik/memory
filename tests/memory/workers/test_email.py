@@ -2,7 +2,7 @@ import base64
 import hashlib
 import imaplib
 import pathlib
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import cast
 from unittest.mock import MagicMock, patch
 
@@ -277,19 +277,21 @@ def test_process_attachments_mixed():
 
 
 def test_extract_email_uid_valid():
-    msg_data = [(b"1 (UID 12345 RFC822 {1234}", b"raw email content")]
-    uid, raw_email = extract_email_uid(msg_data)
+    msg_data = [(b'1 (UID 12345 INTERNALDATE " 7-Nov-2026 09:05:00 +0100" RFC822 {1234}', b"raw email content")]
+    uid, raw_email, received_at = extract_email_uid(msg_data)
 
     assert uid == "12345"
     assert raw_email == b"raw email content"
+    assert received_at == datetime(2026, 11, 7, 8, 5, tzinfo=timezone.utc)
 
 
 def test_extract_email_uid_no_match():
     msg_data = [(b"1 (RFC822 {1234}", b"raw email content")]
-    uid, raw_email = extract_email_uid(msg_data)
+    uid, raw_email, received_at = extract_email_uid(msg_data)
 
     assert uid is None
     assert raw_email == b"raw email content"
+    assert received_at is None
 
 
 def test_extract_email_uid_in_later_part():
@@ -298,7 +300,7 @@ def test_extract_email_uid_in_later_part():
         (b"1 (BODY[] {1234}", b"raw email content"),
         b"UID 4242)",
     ]
-    uid, raw_email = extract_email_uid(msg_data)
+    uid, raw_email, _ = extract_email_uid(msg_data)
 
     assert uid == "4242"
     assert raw_email == b"raw email content"
@@ -386,9 +388,10 @@ def test_fetch_email(email_provider):
 
     # Verify result contains the expected UID and content
     assert result is not None
-    uid, content = result
+    uid, content, received_at = result
     assert uid == "101"
     assert b"This is test email 1" in content
+    assert received_at is not None
 
     # Test fetching a non-existent email
     result = fetch_email(email_provider, "999")
@@ -403,7 +406,7 @@ def test_fetch_email_since(email_provider):
     assert len(result) == 2
 
     # Verify content of fetched emails
-    uids = sorted([uid or "" for uid, _ in result])
+    uids = sorted([uid or "" for uid, _, _ in result])
     assert uids == ["101", "102"]
 
     # Test with a folder that doesn't exist
@@ -1082,11 +1085,14 @@ def test_fetch_gmail_message(mock_gmail_service):
     raw_email = "From: test@example.com\nSubject: Test\n\nBody"
     encoded = base64.urlsafe_b64encode(raw_email.encode()).decode()
 
-    mock_gmail_service.users().messages().get().execute.return_value = {"raw": encoded}
+    mock_gmail_service.users().messages().get().execute.return_value = {
+        "raw": encoded,
+        "internalDate": "1704067200000",
+    }
 
-    result = fetch_gmail_message(mock_gmail_service, "msg123", format="raw")
+    result = fetch_gmail_message(mock_gmail_service, "msg123")
 
-    assert result == raw_email
+    assert result == (raw_email, datetime(2024, 1, 1, tzinfo=timezone.utc))
 
 
 def test_fetch_gmail_message_error(mock_gmail_service):
@@ -1095,7 +1101,7 @@ def test_fetch_gmail_message_error(mock_gmail_service):
         "API Error"
     )
 
-    result = fetch_gmail_message(mock_gmail_service, "msg123", format="raw")
+    result = fetch_gmail_message(mock_gmail_service, "msg123")
 
     assert result is None
 
@@ -1235,7 +1241,7 @@ def test_fetch_gmail_messages_by_ids(mock_gmail_service):
     messages = list(fetch_gmail_messages_by_ids(mock_gmail_service, {"msg1", "msg2"}))
 
     assert len(messages) == 2
-    assert all(content == raw_email for _, content in messages)
+    assert all((content, received_at) == (raw_email, None) for _, content, received_at in messages)
 
 
 def test_get_gmail_service_requires_google_account(db_session, test_user):

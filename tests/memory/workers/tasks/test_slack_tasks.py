@@ -12,7 +12,7 @@ import redis
 from sqlalchemy.exc import InterfaceError, OperationalError
 
 from memory.common.celery_app import SEND_NOTIFICATION, SYNC_SLACK_CHANNEL, SYNC_SLACK_WORKSPACE
-from memory.common.db.models import User
+from memory.common.db.models import Event, User
 from memory.common.db.models.slack import (
     SlackApp,
     SlackChannel,
@@ -288,6 +288,68 @@ def test_add_slack_message_update_on_edit(
     )
     assert message.content == "Edited content with enough text to be meaningful."
     assert message.edited_ts == "1704067300.000000"
+
+
+def ts_days_ago(days: float) -> str:
+    return f"{(datetime.now(timezone.utc) - timedelta(days=days)).timestamp():.6f}"
+
+
+def item_event_backfills(db_session) -> list[bool]:
+    return [e.backfill for e in db_session.query(Event).filter(Event.kind == "item").order_by(Event.id)]
+
+
+@pytest.mark.parametrize(
+    "polled, days_ago, edited_days_ago, backfill",
+    [
+        (True, 0, None, False),
+        (True, 1.9, None, False),
+        (True, 2.1, None, True),
+        (True, 400, None, True),
+        (True, 400, 0, False),  # an old message edited lately is judged by its edit
+        (True, 400, 5, True),
+        (False, 400, None, False),  # a push is live however long it waited
+    ],
+)
+@patch("memory.workers.tasks.slack.get_workspace_credentials")
+@patch("memory.workers.tasks.slack.build_user_cache")
+def test_polled_messages_last_changed_long_before_they_are_stored_are_backfill(
+    mock_build_cache, mock_get_creds, db_session, sample_message_data, slack_credentials, qdrant,
+    polled, days_ago, edited_days_ago, backfill,
+):
+    mock_get_creds.return_value = slack_credentials
+    mock_build_cache.return_value = {}
+    edited_ts = None if edited_days_ago is None else ts_days_ago(edited_days_ago)
+
+    slack.add_slack_message(
+        **sample_message_data | {"message_ts": ts_days_ago(days_ago), "edited_ts": edited_ts, "polled": polled}
+    )
+
+    assert item_event_backfills(db_session) == [backfill]
+
+
+@pytest.mark.parametrize(
+    "polled, edited_days_ago, backfill",
+    [(True, 0, False), (True, 5, True), (False, 5, False)],
+)
+@patch("memory.workers.tasks.slack.get_workspace_credentials")
+@patch("memory.workers.tasks.slack.build_user_cache")
+def test_an_edit_is_backfill_only_when_a_poll_finds_it_old(
+    mock_build_cache, mock_get_creds, db_session, sample_message_data, slack_credentials, qdrant,
+    polled, edited_days_ago, backfill,
+):
+    mock_get_creds.return_value = slack_credentials
+    mock_build_cache.return_value = {}
+    old = sample_message_data | {"message_ts": ts_days_ago(10), "polled": True}
+    slack.add_slack_message(**old)
+
+    edit = {
+        "content": "Edited content with enough text to be meaningful.",
+        "edited_ts": ts_days_ago(edited_days_ago),
+        "polled": polled,
+    }
+    slack.add_slack_message(**old | edit)
+
+    assert item_event_backfills(db_session) == [True, backfill]
 
 
 def test_add_slack_message_no_author_skipped(db_session, sample_message_data, qdrant):
@@ -1466,10 +1528,10 @@ def failing_store_of(ts: str, error=lost_connection):
     """process_content_item that raises ``error()`` while storing message ``ts``."""
     store = slack.process_content_item
 
-    def process(item, session):
+    def process(item, session, **kwargs):
         if item.message_ts == ts:
             raise error()
-        return store(item, session)
+        return store(item, session, **kwargs)
 
     return process
 

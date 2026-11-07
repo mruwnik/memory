@@ -3,7 +3,7 @@ import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
 from sqlalchemy import (
@@ -23,6 +23,7 @@ from sqlalchemy.dialects.postgresql import ARRAY, JSONB, insert
 from sqlalchemy.orm import Mapped, Session, mapped_column
 from sqlalchemy.sql import func
 
+from memory.common import settings
 from memory.common.db.models.base import Base
 from memory.common.db.models.source_item import SourceItem
 
@@ -264,6 +265,15 @@ def item_event(
         caused_by=CAUSING_EVENT.get(),
         actors=actors or None,
     )
+
+
+def is_backfill(at: datetime | None) -> bool:
+    """Whether something that happened `at` is history only being stored now.
+    Naive times are UTC; an unknown time is live."""
+    if at is None:
+        return False
+    at = at if at.tzinfo else at.replace(tzinfo=timezone.utc)
+    return at < datetime.now(timezone.utc) - timedelta(days=settings.EVENT_BACKFILL_AGE_DAYS)
 
 
 @event.listens_for(Session, "before_flush")

@@ -116,7 +116,7 @@ from memory.common.db.models.agents import (
     RunStatus,
     TERMINAL_STATUSES,
 )
-from memory.common.db.models.events import Event, item_event
+from memory.common.db.models.events import Event, is_backfill, item_event
 from memory.common.db.models.users import (
     User,
     HumanUser,
@@ -205,6 +205,7 @@ __all__ = [
     "Delivery",
     "Event",
     "item_event",
+    "is_backfill",
     "RunStatus",
     "TERMINAL_STATUSES",
     "Base",

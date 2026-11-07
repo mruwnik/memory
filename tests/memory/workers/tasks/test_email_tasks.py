@@ -1,7 +1,8 @@
 import base64
 import io
 import pathlib
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
 
 import pytest
 from typing import cast
@@ -18,6 +19,7 @@ from memory.common.db.models import (
     Project,
     SourceItem,
     EmailAttachment,
+    Event,
 )
 from memory.common import embedding, settings
 from memory.common.jobs import LOST_JOB_ERROR, MAX_TASK_STARTS, WORKER_LOST_ERROR
@@ -72,7 +74,7 @@ VGhpcyBpcyBhIHRlc3QgYXR0YWNobWVudA==
 --boundary123--"""
 
 
-def run_process_message(account_id, message_id, folder, raw_email):
+def run_process_message(account_id, message_id, folder, raw_email, received_at=None):
     """Spool a raw email (as queue_message does) and run the worker task.
 
     process_message now receives a spool-file path rather than the raw body,
@@ -85,6 +87,7 @@ def run_process_message(account_id, message_id, folder, raw_email):
         message_id=message_id,
         folder=folder,
         spool_name=spool_name,
+        received_at=received_at,
     )
 
 
@@ -344,6 +347,44 @@ def test_stored_mail_is_offered_to_subscriptions(db_session, test_email_account,
     assert item_events(db_session) == [(res["mail_message_id"], "added", None)]
 
 
+def mail_sent(date_header: str) -> str:
+    return SIMPLE_EMAIL_RAW.replace("Date: Tue, 14 May 2024 10:00:00 +0000", date_header)
+
+
+def days_ago(days: float) -> datetime:
+    return datetime.now(timezone.utc) - timedelta(days=days)
+
+
+@pytest.mark.parametrize(
+    "date_header, received_days_ago, backfill",
+    [
+        (f"Date: {format_datetime(days_ago(0))}", None, False),
+        (f"Date: {format_datetime(days_ago(1.9))}", None, False),
+        (f"Date: {format_datetime(days_ago(2.1))}", None, True),
+        ("Date: Tue, 14 May 2024 10:00:00 +0000", None, True),
+        # -0000 parses to a naive datetime
+        (f"Date: {format_datetime(days_ago(5).replace(tzinfo=None))}", None, True),
+        ("X-No-Date: none", None, False),
+        # the receiving server's time beats a sender's Date, which can be forged
+        ("Date: Tue, 14 May 2024 10:00:00 +0000", 0, False),
+        (f"Date: {format_datetime(days_ago(0))}", 5, True),
+    ],
+)
+def test_mail_received_long_before_it_is_stored_is_backfill(
+    db_session, test_email_account, qdrant, date_header, received_days_ago, backfill
+):
+    received_at = None if received_days_ago is None else days_ago(received_days_ago).isoformat()
+    run_process_message(
+        account_id=test_email_account.id,
+        message_id="778",
+        folder="INBOX",
+        raw_email=mail_sent(date_header),
+        received_at=received_at,
+    )
+
+    assert [e.backfill for e in db_session.query(Event).filter(Event.kind == "item")] == [backfill]
+
+
 def test_spool_file_removed_after_processing(db_session, test_email_account, qdrant):
     """The spool file is deleted once the message is handled."""
     parsed = parse_email_message(SIMPLE_EMAIL_RAW, "555")
@@ -380,7 +421,8 @@ def test_queue_message_spools_body_and_passes_only_filename(
     passing only the bare spool filename."""
     with patch("memory.workers.tasks.email.process_message") as mock_proc:
         queued = queue_message(
-            db_session, test_email_account.id, "777", "INBOX", SIMPLE_EMAIL_RAW
+            db_session, test_email_account.id, "777", "INBOX", SIMPLE_EMAIL_RAW,
+            datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc),
         )
 
     assert queued is True
@@ -391,6 +433,7 @@ def test_queue_message_spools_body_and_passes_only_filename(
     assert call.kwargs["account_id"] == test_email_account.id
     assert call.kwargs["message_id"] == "777"
     assert call.kwargs["folder"] == "INBOX"
+    assert call.kwargs["received_at"] == "2026-01-02T03:04:00+00:00"
     name = call.kwargs["spool_name"]
     # The broker carries a bare filename, never the body or an absolute path.
     assert name.endswith(".eml")
@@ -802,7 +845,7 @@ def test_process_email_batch_recovers_after_db_error(
     account = MagicMock()
     account.id = 1
     messages = (
-        (uid, SIMPLE_EMAIL_RAW) for uid in ("1", "2", "3")
+        (uid, SIMPLE_EMAIL_RAW, None) for uid in ("1", "2", "3")
     )
 
     # PoisonableSession is a structural stand-in for a real session (it only
