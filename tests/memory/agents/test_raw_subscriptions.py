@@ -35,6 +35,9 @@ from tests.memory.agents.test_deliveries import post
 from tests.memory.agents.test_queues import QUEUE, claim, subscribe
 
 upsert = subscription_tools.upsert.fn
+# Rows are aged past a limit by this margin: the database's clock_timestamp() and
+# the host's clock differ by milliseconds.
+PAST = timedelta(minutes=1)
 
 
 @pytest.fixture(autouse=True)
@@ -474,8 +477,8 @@ async def test_a_stored_delivery_whose_items_never_link_goes_after_a_grace_perio
     account = transcripts(db_session, regular_user)
     subscription = raw_subscription(db_session, regular_user, source="transcripts")
     delivered(db_session, account, outcome="stored", event_type="transcript", container=None, links_items=True)
-    db_session.query(Event).update({"created_at": Event.created_at - subscriptions.CAUSED_GRACE})
-    subscription.active_since -= subscriptions.CAUSED_GRACE
+    db_session.query(Event).update({"created_at": Event.created_at - subscriptions.CAUSED_GRACE - PAST})
+    subscription.active_since -= subscriptions.CAUSED_GRACE + PAST
     db_session.commit()
     subscriptions.route_events()
 
@@ -504,7 +507,7 @@ def test_never_claimed_raw_deliveries_expire(db_session, regular_user):
     gh = account(db_session, regular_user)
     raw_subscription(db_session, regular_user)
     delivered(db_session, gh)
-    db_session.query(AgentRun).update({"created_at": AgentRun.created_at - subscriptions.DELIVERY_MAX_AGE})
+    db_session.query(AgentRun).update({"created_at": AgentRun.created_at - subscriptions.DELIVERY_MAX_AGE - PAST})
     db_session.commit()
 
     subscriptions.sweep_deliveries()
