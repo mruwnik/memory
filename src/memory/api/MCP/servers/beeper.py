@@ -10,6 +10,7 @@ from fastmcp import FastMCP
 from sqlalchemy import func
 from sqlalchemy.orm import contains_eager
 
+from memory.agents.subscription_input import new_tag, preamble, untrusted
 from memory.api.MCP.access import fetch_user_by_token, get_mcp_current_user
 from memory.api.MCP.visibility import READ_ONLY, require_scopes, visible_when
 from memory.common.db.connection import DBSession, make_session
@@ -88,7 +89,20 @@ def fetch_chats(
             )
         chats = [chat_fields(chat) for chat in query.limit(limit)]
     wanted = fields or DEFAULT_FIELDS
-    return {"chats": [{k: chat[k] for k in wanted if k in chat} for chat in chats], "count": len(chats)}
+    tag = new_tag()
+
+    def shown(chat: dict[str, Any]) -> dict[str, Any]:
+        picked = {k: chat[k] for k in wanted if k in chat}
+        # Group chat titles are set by any member.
+        if picked.get("title"):
+            picked["title"] = untrusted(tag, chat["id"], "title", chat["title"])
+        return picked
+
+    return {
+        "untrusted": preamble(tag),
+        "chats": [shown(chat) for chat in chats],
+        "count": len(chats),
+    }
 
 
 @beeper_mcp.tool(annotations=READ_ONLY)
@@ -128,6 +142,7 @@ async def list_chats(
         limit: Maximum chats to return (default 100)
 
     Returns:
-        Dict with the chats and their count
+        Dict with untrusted (names the tag its title blocks carry), the chats
+        and their count
     """
     return await asyncio.to_thread(fetch_chats, network, name, collected_only, fields, max(1, min(limit, 500)))

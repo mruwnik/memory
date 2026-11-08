@@ -4,11 +4,8 @@ Shared data fetching functions for Discord.
 Used by both REST API and MCP endpoints to avoid duplication.
 """
 
-from collections.abc import Callable
-from typing import Any
-
 from sqlalchemy import and_, or_
-from sqlalchemy.orm import Query, joinedload
+from sqlalchemy.orm import Query
 
 from memory.common.access_control import UserLike, has_admin_scope
 from memory.common.db.connection import DBSession
@@ -20,7 +17,6 @@ from memory.common.db.models import (
     DiscordServer,
     User,
 )
-from memory.common.db.models.discord import DM_CHANNEL_TYPES
 
 
 def discord_channel_for_target(
@@ -127,60 +123,6 @@ def get_bot_for_user(session: DBSession, bot_id: int, user: User) -> DiscordBot 
     if not bot or not bot.is_authorized(user):
         return None
     return bot
-
-
-CHANNEL_FIELDS: dict[str, Callable[[DiscordChannel], Any]] = {
-    # Snowflakes as strings to avoid JS precision loss
-    "id": lambda ch: str(ch.id),
-    "name": lambda ch: ch.name,
-    "type": lambda ch: ch.channel_type,
-    "server_id": lambda ch: str(ch.server_id) if ch.server_id else None,
-    "server_name": lambda ch: ch.server.name if ch.server else None,
-    "category_id": lambda ch: str(ch.category_id) if ch.category_id else None,
-    "collect_messages": lambda ch: ch.collect_messages,
-    "effective_collect": lambda ch: ch.should_collect,
-    "project_id": lambda ch: ch.project_id,
-    "sensitivity": lambda ch: ch.sensitivity,
-}
-
-DEFAULT_CHANNEL_FIELDS = ["id", "name", "type", "server_id", "server_name"]
-
-
-def fetch_channels(
-    session: DBSession,
-    caller: UserLike,
-    server: str | None,
-    include_dms: bool,
-    name: str | None = None,
-    fields: list[str] | None = None,
-) -> dict[str, Any]:
-    """List the Discord channels visible to ``caller`` (see ``visible_channels``).
-
-    ``server`` is a numeric id or name, resolved only among visible servers so
-    another user's server reads as not found. ``name`` is a case-insensitive
-    substring match.
-    """
-    fields = fields or DEFAULT_CHANNEL_FIELDS
-    invalid = set(fields) - CHANNEL_FIELDS.keys()
-    if invalid:
-        raise ValueError(f"Invalid fields: {sorted(invalid)}. Available: {sorted(CHANNEL_FIELDS)}")
-
-    query = visible_channels(session, caller).options(joinedload(DiscordChannel.server))
-
-    if server is not None:
-        servers = fetch_servers(session, user_id=None if has_admin_scope(caller) else caller.id)
-        match = next((s for s in servers if server in (str(s.id), s.name)), None)
-        if match is None:
-            return {"channels": [], "count": 0, "error": f"Server '{server}' not found"}
-        query = query.filter(DiscordChannel.server_id == match.id)
-
-    if not include_dms:
-        query = query.filter(DiscordChannel.channel_type.notin_(DM_CHANNEL_TYPES))
-    if name:
-        query = query.filter(DiscordChannel.name.ilike(f"%{name}%"))
-
-    formatted = [{f: CHANNEL_FIELDS[f](ch) for f in fields} for ch in query.order_by(DiscordChannel.name)]
-    return {"channels": formatted, "count": len(formatted)}
 
 
 def fetch_servers(

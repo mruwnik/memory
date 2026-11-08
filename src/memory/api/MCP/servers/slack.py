@@ -174,11 +174,12 @@ CHANNEL_FIELDS = {
 DEFAULT_CHANNEL_FIELDS = ["id", "name", "type", "is_private"]
 
 
-def _channel_to_dict(channel: SlackChannel, fields: list[str]) -> dict[str, Any]:
+def _channel_to_dict(tag: str, channel: SlackChannel, fields: list[str]) -> dict[str, Any]:
     """Convert a channel to a dict with only the requested fields."""
     field_map = {
         "id": lambda ch: ch.id,
-        "name": lambda ch: ch.name,
+        # Any workspace member can create or rename a channel.
+        "name": lambda ch: ch.name and untrusted(tag, ch.id, "name", ch.name),
         "type": lambda ch: ch.channel_type,
         "is_private": lambda ch: ch.is_private,
         "is_archived": lambda ch: ch.is_archived,
@@ -227,11 +228,12 @@ def _get_channels_data(
             )
 
         channels = query.order_by(SlackChannel.name).all()
-
+        tag = new_tag()
         return {
+            "untrusted": preamble(tag),
             "workspace_id": credentials.workspace_id,
-            "workspace_name": workspace.name,
-            "channels": [_channel_to_dict(ch, fields) for ch in channels],
+            "workspace_name": workspace.name and untrusted(tag, workspace.id, "workspace_name", workspace.name),
+            "channels": [_channel_to_dict(tag, ch, fields) for ch in channels],
             "count": len(channels),
         }
 
@@ -474,7 +476,8 @@ async def list_channels(
                 - sensitivity: Sensitivity level (public, basic, internal, confidential)
 
     Returns:
-        Dict with workspace info and channels list
+        Dict with untrusted (names the tag its name and workspace_name blocks
+        carry), workspace_id, workspace_name, channels and count
     """
     # Get access token from FastMCP context
     access_token = get_access_token()

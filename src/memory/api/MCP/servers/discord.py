@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
@@ -19,7 +20,7 @@ from memory.api.MCP.access import (
 from memory.api.MCP.visibility import READ_ONLY, require_scopes, visible_when
 from memory.common import discord as discord_client
 from memory.common import settings
-from memory.common.access_control import UserProxy, apply_access_filter_to_query
+from memory.common.access_control import UserProxy, apply_access_filter_to_query, has_admin_scope
 from memory.common.dates import parse_iso_datetime
 from memory.common.scopes import (
     SCOPE_DISCORD,
@@ -28,19 +29,81 @@ from memory.common.scopes import (
     has_scope,
 )
 from memory.common.db.connection import DBSession, make_session
-from memory.common.db.models import DiscordBot, DiscordMessage, DiscordServer, DiscordUser
+from memory.common.db.models import DiscordBot, DiscordChannel, DiscordMessage, DiscordServer, DiscordUser
+from memory.common.db.models.discord import DM_CHANNEL_TYPES
 from memory.common.people import find_person, primary_contact
 from memory.common.reactions import reaction_counts
 from memory.common.discord_data import (
-    CHANNEL_FIELDS,
     caller_can_see_discord_user,
-    fetch_channels,
+    fetch_servers,
     find_visible_channel,
+    visible_channels,
 )
 
 logger = logging.getLogger(__name__)
 
 discord_mcp = FastMCP("memory-discord")
+
+CHANNEL_FIELDS: dict[str, Callable[[DiscordChannel], Any]] = {
+    # Snowflakes as strings to avoid JS precision loss
+    "id": lambda ch: str(ch.id),
+    "name": lambda ch: ch.name,
+    "type": lambda ch: ch.channel_type,
+    "server_id": lambda ch: str(ch.server_id) if ch.server_id else None,
+    "server_name": lambda ch: ch.server.name if ch.server else None,
+    "category_id": lambda ch: str(ch.category_id) if ch.category_id else None,
+    "collect_messages": lambda ch: ch.collect_messages,
+    "effective_collect": lambda ch: ch.should_collect,
+    "project_id": lambda ch: ch.project_id,
+    "sensitivity": lambda ch: ch.sensitivity,
+}
+DEFAULT_CHANNEL_FIELDS = ["id", "name", "type", "server_id"]
+# Server admins set these, and any member can name a thread.
+NAME_FIELDS = frozenset({"name", "server_name"})
+
+
+def channel_fields(tag: str, channel: DiscordChannel, fields: list[str]) -> dict[str, Any]:
+    values = {f: CHANNEL_FIELDS[f](channel) for f in fields}
+    return {
+        f: (v and untrusted(tag, channel.id, f, v)) if f in NAME_FIELDS else v
+        for f, v in values.items()
+    }
+
+
+def fetch_channels(
+    session: DBSession,
+    caller: UserProxy,
+    server: str | None,
+    include_dms: bool,
+    name: str | None = None,
+    fields: list[str] | None = None,
+) -> dict[str, Any]:
+    """The Discord channels visible to ``caller`` (see ``visible_channels``).
+
+    ``server`` is a numeric id or name, resolved only among visible servers so
+    another user's server reads as not found. ``name`` is a case-insensitive
+    substring match.
+    """
+    fields = fields or DEFAULT_CHANNEL_FIELDS
+    invalid = set(fields) - CHANNEL_FIELDS.keys()
+    if invalid:
+        raise ValueError(f"Invalid fields: {sorted(invalid)}. Available: {sorted(CHANNEL_FIELDS)}")
+
+    tag = new_tag()
+    query = visible_channels(session, caller).options(joinedload(DiscordChannel.server))
+    if server is not None:
+        servers = fetch_servers(session, user_id=None if has_admin_scope(caller) else caller.id)
+        match = next((s for s in servers if server in (str(s.id), s.name)), None)
+        if match is None:
+            return {"untrusted": preamble(tag), "channels": [], "count": 0, "error": f"Server '{server}' not found"}
+        query = query.filter(DiscordChannel.server_id == match.id)
+    if not include_dms:
+        query = query.filter(DiscordChannel.channel_type.notin_(DM_CHANNEL_TYPES))
+    if name:
+        query = query.filter(DiscordChannel.name.ilike(f"%{name}%"))
+
+    channels = [channel_fields(tag, ch, fields) for ch in query.order_by(DiscordChannel.name)]
+    return {"untrusted": preamble(tag), "channels": channels, "count": len(channels)}
 
 
 async def has_discord_bots(user_info: dict, session: DBSession | None) -> bool:
@@ -157,11 +220,12 @@ async def send_dm(
     caller = require_caller(session)
     target = resolve_discord_user(session, caller, user_id, username)
     if target is None:
-        suggestions = suggest_people(session, caller, username or "")
+        tag = new_tag()
+        suggestions = suggest_people(session, caller, username or "", tag)
         error = f"Discord user '{user_id or username}' not found"
         if suggestions:
             error += ", but found matching people"
-        return {"success": False, "error": error, "suggestions": suggestions}
+        return {"untrusted": preamble(tag), "success": False, "error": error, "suggestions": suggestions}
 
     success = await asyncio.to_thread(discord_client.send_dm, bot_id, target, message)
     preview = message[:100] + "..." if len(message) > 100 else message
@@ -188,7 +252,7 @@ def resolve_discord_user(
     )
 
 
-def suggest_people(session: DBSession, caller: UserProxy, query: str) -> list[dict[str, str]]:
+def suggest_people(session: DBSession, caller: UserProxy, query: str, tag: str) -> list[dict[str, str]]:
     """Find Person records that might match a failed username lookup.
 
     Returns at most one suggestion (find_person returns a single match), and
@@ -216,9 +280,10 @@ def suggest_people(session: DBSession, caller: UserProxy, query: str) -> list[di
 
     return [{
         "person": person.identifier,
-        "display_name": person.display_name,
+        # Ingest takes both from the Discord account, which its owner names.
+        "display_name": untrusted(tag, person.id, "display_name", person.display_name),
         "discord_id": str(discord_id),
-        "discord_username": discord_username or "",
+        "discord_username": untrusted(tag, person.id, "discord_username", discord_username or ""),
     }]
 
 
@@ -278,7 +343,9 @@ async def channel_history(
     after: str | None = None,
 ) -> dict[str, Any]:
     """
-    Get message history from a Discord channel.
+    Get message history from a Discord channel. Only messages you can read are
+    returned, as in search: in a server or channel with no project they are
+    admin-only, so the list can be empty.
 
     Args:
         channel_id: Discord channel ID (snowflake)
@@ -288,8 +355,8 @@ async def channel_history(
         after: ISO datetime - only get messages after this time
 
     Returns:
-        Dict with untrusted (names the tag its author and text blocks carry),
-        channel (id, name, server_id, server_name), messages oldest first, count
+        Dict with untrusted (names the tag its name, author and text blocks
+        carry), channel (id, name, server_id, server_name), messages oldest first, count
         and limit; each message has id, message_id, author, author_id, sent_at,
         edited_at, text, is_pinned, reactions and reply_to (a message_id)
     """
@@ -356,10 +423,12 @@ def fetch_channel_history(
     limit: int,
 ) -> dict[str, Any]:
     channel = find_visible_channel(session, caller, channel_id, channel_name)
-    query = (
+    # A visible channel can hold messages whose project or sensitivity the caller can't read.
+    query = apply_access_filter_to_query(
         session.query(DiscordMessage)
         .options(joinedload(DiscordMessage.author))
-        .filter(DiscordMessage.channel_id == channel.id)
+        .filter(DiscordMessage.channel_id == channel.id),
+        build_mcp_user_access_filter(session, caller),
     )
     if before_dt:
         query = query.filter(DiscordMessage.sent_at < before_dt)
@@ -369,9 +438,7 @@ def fetch_channel_history(
     tag = new_tag()
     return {
         "untrusted": preamble(tag),
-        "channel": {
-            field: CHANNEL_FIELDS[field](channel) for field in ("id", "name", "server_id", "server_name")
-        },
+        "channel": channel_fields(tag, channel, ["id", "name", "server_id", "server_name"]),
         "messages": [history_message(tag, m) for m in reversed(messages)],
         "count": len(messages),
         "limit": limit,
@@ -448,7 +515,7 @@ async def list_channels(
         name: Case-insensitive substring of the channel name
         include_dms: Include DMs and group DMs your bots delivered (default False)
         fields: Fields to include for each channel.
-                Default: ["id", "name", "type", "server_id", "server_name"]
+                Default: ["id", "name", "type", "server_id"]
                 Available fields:
                 - id: Channel ID (snowflake, as string)
                 - name: Channel name
@@ -462,7 +529,8 @@ async def list_channels(
                 - sensitivity: Sensitivity level (public, basic, internal, confidential)
 
     Returns:
-        Dict with channels list and count
+        Dict with untrusted (names the tag its name and server_name blocks
+        carry), channels and count
     """
     with make_session() as session:
         return await asyncio.to_thread(
