@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, Mock, patch
 
 from memory.common.db.models import GithubIssue, GithubItem, GithubPR
-from memory.common.db.models.sources import GithubAccount, GithubRepo
+from memory.common.db.models.sources import CONTENT_FULL, CONTENT_METADATA, GithubAccount, GithubRepo
 from memory.workers.tasks import github
 from memory.workers.tasks.github import (
     _build_content,
@@ -766,6 +766,22 @@ def test_sync_github_repo_force_full(mock_client_class, github_repo, db_session)
 
     assert result["status"] == "completed"
     assert result["sync_type"] == "full"
+
+
+@pytest.mark.parametrize("mode, with_diff", [(CONTENT_FULL, True), (CONTENT_METADATA, False)])
+@patch("memory.common.project.client.GithubClient")
+def test_sync_github_repo_fetches_diffs_only_for_repos_that_store_content(
+    mock_client_class, mock_github_client, github_repo, db_session, mode, with_diff
+):
+    mock_github_client.get_repo.return_value = {"archived": False}
+    mock_client_class.return_value = mock_github_client
+    github_repo.content_mode = mode
+    db_session.commit()
+
+    result = github.sync_github_repo(github_repo.id)
+
+    assert result["status"] == "completed"
+    assert mock_github_client.fetch_prs.call_args.kwargs == {"with_diff": with_diff}
 
 
 @patch("memory.common.project.client.GithubClient")

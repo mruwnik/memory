@@ -26,9 +26,19 @@ from memory.common.celery_app import (
 )
 from memory.common.db.connection import get_session
 from memory.common.db.models import User, GithubProject
-from memory.common.db.models.sources import GithubAccount, GithubRepo
+from memory.common.db.models.sources import CONTENT_FULL, GithubAccount, GithubRepo
 from memory.common.github import GithubClient, GithubCredentials, webhook_url
 from memory.common.push_health import GITHUB_PUSH_STATUSES, push_stale
+
+# The modes of GithubRepo.content_mode (memory.common.db.models.sources).
+ContentMode = Literal["full", "metadata"]
+CONTENT_MODE_DESCRIPTION = (
+    "full: store and index bodies, comments and diffs. metadata: store titles, state "
+    "and activity (authors, branch names, labels, assignees, milestone, project fields, "
+    "SHAs, timestamps, review and comment ids) but not issue or PR text, comments, "
+    "review text or code; subscriptions still fire but nothing is indexed. A change "
+    "applies to what later syncs store."
+)
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +95,7 @@ class GithubRepoResponse(SyncStatusResponse, PushHealthResponse):
     track_prs: bool
     track_comments: bool
     track_project_fields: bool
+    content_mode: ContentMode
     labels_filter: list[str]
     state_filter: str | None
     tags: list[str]
@@ -137,6 +148,7 @@ class GithubRepoCreate(BaseModel):
     track_prs: bool = True
     track_comments: bool = True
     track_project_fields: bool = True
+    content_mode: ContentMode = Field(CONTENT_FULL, description=CONTENT_MODE_DESCRIPTION)
     labels_filter: list[str] = []
     state_filter: str | None = None
     tags: list[str] = []
@@ -149,6 +161,7 @@ class GithubRepoUpdate(BaseModel):
     track_prs: bool | None = None
     track_comments: bool | None = None
     track_project_fields: bool | None = None
+    content_mode: ContentMode | None = Field(None, description=CONTENT_MODE_DESCRIPTION)
     labels_filter: list[str] | None = None
     state_filter: str | None = None
     tags: list[str] | None = None
@@ -173,6 +186,7 @@ def repo_to_response(repo: GithubRepo) -> GithubRepoResponse:
         track_prs=cast(bool, repo.track_prs),
         track_comments=cast(bool, repo.track_comments),
         track_project_fields=cast(bool, repo.track_project_fields),
+        content_mode=cast(ContentMode, repo.content_mode),
         labels_filter=list(repo.labels_filter or []),
         state_filter=cast(str | None, repo.state_filter),
         tags=list(repo.tags or []),
@@ -663,6 +677,7 @@ def add_repo(
         track_prs=data.track_prs,
         track_comments=data.track_comments,
         track_project_fields=data.track_project_fields,
+        content_mode=data.content_mode,
         labels_filter=data.labels_filter,
         state_filter=data.state_filter,
         tags=data.tags,

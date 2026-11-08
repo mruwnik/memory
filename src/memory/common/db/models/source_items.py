@@ -1467,6 +1467,8 @@ class GithubItem(SourceItem):
     # New fields for change detection and tracking
     github_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # GitHub's updated_at
     content_hash: Mapped[str | None] = mapped_column(Text)  # Hash of body + comments for change detection
+    # SHA-256 of the body, which detects edits in repos that don't store it.
+    body_hash: Mapped[str | None] = mapped_column(Text)
     repo_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("github_repos.id", ondelete="SET NULL"), nullable=True
     )
@@ -1563,6 +1565,11 @@ class GithubItem(SourceItem):
             closed_at=self.closed_at,
             merged_at=self.merged_at,
         )
+
+    @property
+    def should_embed(self) -> bool:
+        """Items from repos that store only metadata have no content to index."""
+        return bool(self.content)
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
         """Override to use 'github' modality instead of default 'text'."""

@@ -773,6 +773,35 @@ def test_fetch_pr_reads_branch_context(overrides, context):
     ) == context
 
 
+def pr_fetchers():
+    """fetch_pr and fetch_prs, each taking the with_diff flag and returning one PR."""
+    single = mock_graphql_response({"repository": {"pullRequest": pr_node()}})
+    page = mock_graphql_response(
+        {"repository": {"pullRequests": {"nodes": [pr_node()], "pageInfo": {"hasNextPage": False}}}}
+    )
+    return [
+        (single, lambda client, with_diff: client.fetch_pr("owner", "repo", 7, with_diff=with_diff)),
+        (page, lambda client, with_diff: next(client.fetch_prs("owner", "repo", with_diff=with_diff))),
+    ]
+
+
+@pytest.mark.parametrize("response, fetch", pr_fetchers())
+@pytest.mark.parametrize("with_diff, diff_requests, diff", [(True, 1, "+added"), (False, 0, None)])
+def test_fetching_prs_requests_the_diff_only_with_diff(response, fetch, with_diff, diff_requests, diff):
+    client = GithubClient(GithubCredentials(auth_type="pat", access_token="token"))
+    diff_response = mock_rest_response()
+    diff_response.text = "+added"
+
+    with patch.object(requests.Session, "post", return_value=response), patch.object(
+        requests.Session, "get", return_value=diff_response
+    ) as get:
+        pr = fetch(client, with_diff)
+
+    assert pr["pr_data"] is not None
+    assert get.call_count == diff_requests
+    assert (pr["pr_data"]["diff"], pr["diff_summary"]) == (diff, diff)
+
+
 def test_fetch_issue_by_number():
     client = GithubClient(GithubCredentials(auth_type="pat", access_token="token"))
     issue = {

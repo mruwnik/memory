@@ -400,6 +400,8 @@ def item_text(item: SourceItem) -> str:
 
 def github_version_part(item: GithubItem) -> str:
     reviews = item.pr_data.reviews if item.pr_data else None
+    review_comments = item.pr_data.review_comments if item.pr_data else None
+    updated = item.github_updated_at
     return json.dumps(
         {
             "head_sha": item.head_sha,
@@ -410,6 +412,9 @@ def github_version_part(item: GithubItem) -> str:
             "labels": sorted(item.labels or []),
             "assignees": sorted(item.assignees or []),
             "draft": item.draft,
+            "body_hash": item.body_hash,
+            "github_updated_at": updated.isoformat() if updated else None,
+            "review_comments": sorted(c["id"] for c in review_comments or []),
         },
         sort_keys=True,
     )
@@ -424,10 +429,19 @@ def content_version(item: SourceItem) -> bytes:
     """What an edit changes, read off the item: not every ingester updates sha256 on an edit.
 
     Raw content counts as well as the body, as Slack edits leave resolved_content
-    as it was. The migration that added claim versions backfills this in SQL.
+    as it was. The migration that added claim versions backfills, in SQL, the
+    version of title, content and body only, so a GitHub item's backfilled
+    version differs from the one computed here.
     GitHub items also count what their sync reports as changes beyond the
-    content (comments are in it): head commit, state, checks, reviews, labels,
-    assignees and draft.
+    content: head commit, state, checks, reviews, labels, assignees and draft,
+    plus the body hash, GitHub's updated-at time and the review comment ids.
+    These stand in for the body and comments of items whose repo stores no
+    text. GitHub bumps updated-at on every new or edited comment, so even a
+    comment deleted and another posted between two syncs moves it. They count
+    for every GitHub item, so the version depends on the item alone, never on
+    its repo's content mode. A sync that moves only updated-at reports no
+    change, writes no event and so delivers nothing; a later reprocess of
+    that item redelivers it once to on_edit subscriptions that saw it.
     """
     parts = (item_title(item) or "", item.content or "", item_body(item))
     if isinstance(item, GithubItem):

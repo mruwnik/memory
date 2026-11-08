@@ -169,6 +169,8 @@ class GithubIssueData(TypedDict):
     checks_state: NotRequired[str | None]
     # PRs only: the login of the head commit's author, when GitHub knows the user.
     head_author: NotRequired[str | None]
+    # SHA-256 of the body, set where the body is dropped (metadata-only repos).
+    body_hash: NotRequired[str | None]
 
 
 def parse_github_date(date_str: str | None) -> datetime | None:
