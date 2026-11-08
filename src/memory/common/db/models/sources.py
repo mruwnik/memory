@@ -471,6 +471,15 @@ class GithubAccount(LLMKeyChoice, Base):
     )
 
 
+# GithubRepo.content_mode: "full" stores and indexes bodies, comments and diffs;
+# "metadata" stores titles, state and activity (authors, branch names, labels,
+# assignees, milestone, project fields, SHAs, timestamps, review and comment ids)
+# but not issue or PR text, comments, review text or code, so subscriptions still
+# see every change but nothing is indexed.
+CONTENT_FULL, CONTENT_METADATA = "full", "metadata"
+CONTENT_MODES = (CONTENT_FULL, CONTENT_METADATA)
+
+
 class GithubRepo(PolledSource, SyncStatusMixin, PushHealthMixin, Base):
     """Tracked GitHub repository configuration."""
 
@@ -500,6 +509,11 @@ class GithubRepo(PolledSource, SyncStatusMixin, PushHealthMixin, Base):
     )
     track_project_fields: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="true"
+    )
+    # How much of each item is stored (CONTENT_FULL or CONTENT_METADATA); a
+    # change applies to what syncs store from then on.
+    content_mode: Mapped[str] = mapped_column(
+        Text, nullable=False, default=CONTENT_FULL, server_default=CONTENT_FULL
     )
 
     # Filtering
@@ -551,11 +565,19 @@ class GithubRepo(PolledSource, SyncStatusMixin, PushHealthMixin, Base):
         #   ON github_repos (LOWER(owner), LOWER(name))
         Index("github_repos_active_idx", "active", "last_sync_at"),
         Index("github_repos_owner_name_idx", "owner", "name"),
+        CheckConstraint(
+            "content_mode IN ({})".format(", ".join(f"'{m}'" for m in CONTENT_MODES)),
+            name="github_repos_content_mode_check",
+        ),
     )
 
     @property
     def repo_path(self) -> str:
         return f"{self.owner}/{self.name}"
+
+    @property
+    def stores_content(self) -> bool:
+        return self.content_mode == CONTENT_FULL
 
     @property
     def content_owner_id(self) -> int | None:

@@ -4,7 +4,7 @@ import logging
 import pathlib
 import time
 import uuid
-from typing import Any, Literal, Mapping, overload
+from typing import Any, Iterator, Literal, Mapping, overload
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 import requests
@@ -228,7 +228,17 @@ class DownloadResponse(requests.Response):
         self.url = str(response.url)
         self.encoding = response.encoding
 
-    def iter_content(self, chunk_size=1, decode_unicode=False):
+    @overload
+    def iter_content(
+        self, chunk_size: int | None = 1, decode_unicode: Literal[False] = False
+    ) -> Iterator[bytes]: ...
+    @overload
+    def iter_content(
+        self, chunk_size: int | None = 1, *, decode_unicode: Literal[True]
+    ) -> Iterator[str | bytes]: ...
+    def iter_content(
+        self, chunk_size: int | None = 1, decode_unicode: bool = False
+    ) -> Iterator[str | bytes]:
         # The stream can be read once, so later reads replay .content like requests does.
         content = self._content
         if isinstance(content, bytes):
