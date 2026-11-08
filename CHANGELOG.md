@@ -22,6 +22,8 @@ a new, empty `## Unreleased` above it.
 
 ## Unreleased
 
+## v0.5.1 (2026-11-08)
+
 ### Changes
 - **Breaking for MCP clients:** `core_search`, `core_fetch`, `core_list_items` and `github_pr_diff` return third-party text in untrusted blocks (one per top-level field; lists and dicts as one JSON block, field `<name>.json`) under a per-call random tag named in a top-level `untrusted` preamble. Shapes: search → `{untrusted, results}`, fetch → `{untrusted, ...item}`, fetch of several ids → `{untrusted, items}`, list → `{untrusted, items, total, has_more}`, pr_diff → `{untrusted, diff}`. The web UI and the HTML-report client (`mcp-client.js`) unwrap them.
 - HTML reports' `MCP.call`/`MCP.batch` post to `/mcp` again (they posted to `/mcp/<tool>`, which 404s).
@@ -48,8 +50,21 @@ a new, empty `## Unreleased` above it.
 - Only the owner holding a Discord server may push into it: a push from a bot that is in the server (a token lists it) but whose owner doesn't hold it is refused (`held_by_other`, recorded `rejected`) for every event (creates, edits, partial edits, deletes, bulk deletes, reactions, threads) with no REST call, so a co-member can't forge authors, text or edit times, take ownership of a real message, or hold back a real edit. The holder's pushes and the gateway are unchanged. Messages disowned when a token takes over a server, moves a channel into its server or claims a DM are checked with that bot's token, 100 per task (new task `verify_discord_messages`, discord queue): deleted if Discord says the message doesn't exist (code 10008), rewritten field by field as Discord reads it (text, author, times, reply, thread, type, pin, images, embeds, attachments; reactions cleared) if it differs, left alone if unreachable (including an unknown channel); rate limits, server errors and dropped connections retry with backoff, and a bot without API access logs that the check was skipped. Thread discovery keeps threads whose object names no guild (they are in their parent's server).
 - A Discord message's images are downloaded only when the message is stored or its edit applies, and every streamed download (Discord, Slack, web pages) is written to a temporary file moved into place when complete, so a failed download never removes a file already there: a push naming another owner's message id with a junk image URL could delete that message's image. A pushed Discord message naming no server, in a stored server channel, is judged by that channel's server without asking the token; only unknown channel ids cost a REST call. A stored Discord message is only ever changed by an edit naming its own channel, checked again on the locked row after its images download, so a push racing the gateway with a slow image can no longer overwrite another owner's message; streamed downloads also stop after `max_seconds` in all (default 300), not only per read. The disowned-message check asks once per channel its token can't reach, skips (and logs) on a rejected token rather than retrying, keeps what it read before a rate limit or server error and retries the rest, and alerts only on its last attempt.
 
+### Required env vars
+None
+
+### Manual steps
+None
+
+### Other changes for operators
+- Streamed downloads (Discord, Slack, web pages) have a total time cap scaled to their size limit (at least 300s, enough for the limit at 1 Mbit/s), on top of the per-read timeout.
+- New Celery task `verify_discord_messages` on the existing discord queue.
+
 ### Migrations
 - `20261218_disown_dm_messages`: DM messages delivered by a bot not of the DM's owner lose that bot (`bot_id` NULL). Data only, one UPDATE over DM messages.
+
+### Post-deploy commands
+None
 
 ## v0.5.0 (2026-11-08)
 
