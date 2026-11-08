@@ -312,11 +312,16 @@ def test_threads_inherit_collection_from_their_parent(
     assert (11 in [cid for cid, _ in collectible_channels()]) is expected
 
 
-def test_collectible_channels_excludes_serverless_by_default(db_session):
-    db_session.add(DiscordChannel(id=20, server_id=None, name="dm",
-                                  channel_type="dm", collect_messages=None))
+@pytest.mark.parametrize(
+    "channel_type, collect, expected",
+    [("dm", None, True), ("group_dm", None, True), ("dm", False, False), ("text", None, False)],
+)
+def test_serverless_channels_are_collectible_only_as_dms(db_session, channel_type, collect, expected):
+    db_session.add(DiscordChannel(id=20, server_id=None, name="dm", channel_type=channel_type, collect_messages=collect))
     db_session.commit()
-    assert 20 not in [cid for cid, _ in collectible_channels()]
+
+    assert db_session.get(DiscordChannel, 20).should_collect is expected
+    assert (20 in [cid for cid, _ in collectible_channels()]) is expected
 
 
 def test_schedule_dispatches_backfill_per_channel_and_threads_for_parents(db_session):

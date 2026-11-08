@@ -1,5 +1,7 @@
 """Tests for Discord database models."""
 
+import pytest
+
 from memory.common.db.models import (
     DiscordBot,
     DiscordChannel,
@@ -112,34 +114,41 @@ def test_discord_channel_should_collect_explicit_override(db_session):
     assert channel.should_collect is False
 
 
-def test_discord_channel_dm_defaults_to_not_collect(db_session):
-    """Test that DM channels (no server) default to not collecting."""
-    channel = DiscordChannel(
-        id=111222333,
-        name="dm-channel",
-        channel_type="dm",
-        server_id=None,
-        collect_messages=None,
-    )
+@pytest.mark.parametrize(
+    "channel_type, collect, expected",
+    [
+        ("dm", None, True),
+        ("group_dm", None, True),
+        ("dm", False, False),
+        ("dm", True, True),
+        # A server channel whose server row is gone is not a DM.
+        ("text", None, False),
+    ],
+)
+def test_serverless_channels_collect_only_dms_by_default(db_session, channel_type, collect, expected):
+    channel = DiscordChannel(id=111222333, name="c", channel_type=channel_type, server_id=None, collect_messages=collect)
     db_session.add(channel)
     db_session.commit()
 
-    assert channel.should_collect is False
+    assert channel.should_collect is expected
 
 
-def test_discord_channel_dm_can_be_explicitly_enabled(db_session):
-    """Test that DM channels can be explicitly enabled for collection."""
-    channel = DiscordChannel(
-        id=111222333,
-        name="dm-channel",
-        channel_type="dm",
-        server_id=None,
-        collect_messages=True,
-    )
+@pytest.mark.parametrize(
+    "channel_type, server_id, owned",
+    [("dm", None, True), ("group_dm", None, True), ("text", 987654321, False)],
+)
+def test_a_dm_belongs_to_the_owner_of_the_bot_that_delivered_it(db_session, channel_type, server_id, owned):
+    owner = HumanUser(email="owner@example.com", name="Owner", password_hash="x")
+    db_session.add_all([owner, DiscordServer(id=987654321, name="Server")])
+    db_session.flush()
+    bot = DiscordBot(application_id=1, name="bot", created_by_user_id=owner.id)
+    db_session.add(bot)
+    db_session.flush()
+    channel = DiscordChannel(id=1, name="c", channel_type=channel_type, server_id=server_id, bot_id=bot.id)
     db_session.add(channel)
     db_session.commit()
 
-    assert channel.should_collect is True
+    assert (channel.content_owner_id == owner.id) is owned
 
 
 def test_create_discord_user(db_session):

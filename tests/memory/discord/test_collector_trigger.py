@@ -7,12 +7,12 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-from discord import MessageType
+from discord import DMChannel, MessageType
 from fastapi import HTTPException
 from sqlalchemy import text
 
 from memory.common.celery_app import ADD_DISCORD_MESSAGE, BACKFILL_DISCORD_CHANNEL, HANDLE_DISCORD_EVENT
-from memory.common.db.models import DiscordBot, DiscordBotServer, DiscordChannel, DiscordServer, DiscordUser, Project
+from memory.common.db.models import DiscordBot, DiscordBotServer, DiscordChannel, DiscordServer, DiscordUser, HumanUser, Project
 from memory.common.db.models.discord import DEFAULT_DISCORD_API_BASE_URL
 from memory.discord import api as collector_api
 from memory.discord import collector as collector_module
@@ -105,7 +105,7 @@ async def test_edits_deletes_and_reactions_go_through_the_owner_scoped_event_tas
     await getattr(collector_with(celery_app), event)(payload)
 
     event_type, data = expected
-    assert handled_events(celery_app) == [{"bot_id": 42, "event_type": event_type, "data": data}]
+    assert handled_events(celery_app) == [{"bot_id": 42, "event_type": event_type, "data": data, "pushed": False}]
 
 
 def fake_guild(guild_id=1, name="Guild") -> Any:
@@ -317,3 +317,131 @@ async def test_a_paused_server_stops_collection_for_channels_that_inherit(db_ses
 
     sent = [c.args[0] for c in celery_app.send_task.call_args_list]
     assert (ADD_DISCORD_MESSAGE in sent) is queued
+
+
+def fake_dm(mutual_guilds=("a guild",)):
+    message = fake_message()
+    message.guild = None
+    message.channel = MagicMock(spec=DMChannel, id=555)
+    message.channel.recipient = SimpleNamespace(id=444, name="alice", mutual_guilds=list(mutual_guilds))
+    return message
+
+
+@pytest.mark.parametrize("stored_collect, queued", [(None, True), (False, False)])
+@pytest.mark.asyncio
+async def test_a_dm_to_a_gateway_bot_is_collected_unless_switched_off(db_session, stored_collect, queued):
+    db_session.add(DiscordBot(id=42, application_id=42, name="bot"))
+    db_session.flush()
+    db_session.add(DiscordChannel(id=555, name="DM with alice", channel_type="dm", bot_id=42, collect_messages=stored_collect))
+    db_session.commit()
+    celery_app = MagicMock()
+
+    await collector_with(celery_app).on_message(fake_dm())
+
+    sent = [c.args[0] for c in celery_app.send_task.call_args_list]
+    assert (ADD_DISCORD_MESSAGE in sent) is queued
+
+
+@pytest.mark.asyncio
+async def test_a_first_dm_from_someone_sharing_a_server_with_the_bot_stores_its_channel(db_session):
+    db_session.add(DiscordBot(id=42, application_id=42, name="bot"))
+    db_session.commit()
+    celery_app = MagicMock()
+
+    await collector_with(celery_app).on_message(fake_dm())
+
+    db_session.expire_all()
+    channel = db_session.get(DiscordChannel, 555)
+    assert (channel.name, channel.channel_type, channel.bot_id, channel.should_collect) == ("DM with alice", "dm", 42, True)
+    assert ADD_DISCORD_MESSAGE in [c.args[0] for c in celery_app.send_task.call_args_list]
+
+
+@pytest.mark.asyncio
+async def test_a_dm_from_a_stranger_is_untracked(db_session):
+    db_session.add(DiscordBot(id=42, application_id=42, name="bot"))
+    db_session.commit()
+    celery_app = MagicMock()
+
+    await collector_with(celery_app).on_message(fake_dm(mutual_guilds=()))
+
+    db_session.expire_all()
+    assert db_session.get(DiscordChannel, 555) is None
+    assert ADD_DISCORD_MESSAGE not in [c.args[0] for c in celery_app.send_task.call_args_list]
+
+
+@pytest.mark.asyncio
+async def test_a_strangers_dm_switched_on_is_collected(db_session):
+    db_session.add(DiscordBot(id=42, application_id=42, name="bot"))
+    db_session.flush()
+    db_session.add(DiscordChannel(id=555, name="DM", channel_type="dm", bot_id=42, collect_messages=True))
+    db_session.commit()
+    celery_app = MagicMock()
+
+    await collector_with(celery_app).on_message(fake_dm(mutual_guilds=()))
+
+    assert ADD_DISCORD_MESSAGE in [c.args[0] for c in celery_app.send_task.call_args_list]
+
+
+def a_dm_held_by_another_owner(db_session, **stored) -> None:
+    other = HumanUser(email="o@example.com", name="O", password_hash="x")
+    db_session.add(other)
+    db_session.flush()
+    project = Project(title="Theirs", state="open")
+    db_session.add_all([
+        DiscordBot(id=42, application_id=42, name="bot"),
+        DiscordBot(id=43, application_id=43, name="theirs", created_by_user_id=other.id),
+        DiscordServer(id=222, name="Test Server", verified=False),
+        project,
+    ])
+    db_session.flush()
+    db_session.add(DiscordChannel(**{
+        "id": 555, "name": "taken", "channel_type": "dm", "collect_messages": True, "project_id": project.id,
+        "bot_id": 43, **stored,
+    }))
+    db_session.commit()
+
+
+@pytest.mark.asyncio
+async def test_the_gateway_takes_back_its_dm_stored_as_a_servers_channel_with_default_access(db_session):
+    a_dm_held_by_another_owner(db_session, server_id=222, channel_type="text")
+    celery_app = MagicMock()
+
+    await collector_with(celery_app).on_message(fake_dm())
+
+    db_session.expire_all()
+    channel = db_session.get(DiscordChannel, 555)
+    assert (channel.server_id, channel.channel_type, channel.bot_id, channel.project_id, channel.collect_messages) == (
+        None, "dm", 42, None, None,
+    )
+    assert [c.kwargs["kwargs"]["bot_id"] for c in celery_app.send_task.call_args_list if c.args[0] == ADD_DISCORD_MESSAGE] == [42]
+
+
+@pytest.mark.asyncio
+async def test_the_gateway_leaves_a_dm_another_owner_holds_alone(db_session):
+    """Two owners can register the same application: the DM stays with the first."""
+    a_dm_held_by_another_owner(db_session)
+    celery_app = MagicMock()
+
+    await collector_with(celery_app).on_message(fake_dm())
+
+    db_session.expire_all()
+    channel = db_session.get(DiscordChannel, 555)
+    assert (channel.bot_id, channel.collect_messages, channel.project_id is None) == (43, True, False)
+    assert ADD_DISCORD_MESSAGE not in [c.args[0] for c in celery_app.send_task.call_args_list]
+
+
+@pytest.mark.asyncio
+async def test_a_gateway_message_in_a_server_corrects_a_channel_stored_as_a_dm(db_session):
+    db_session.add_all([DiscordBot(id=42, application_id=42, name="bot"), DiscordBot(id=43, application_id=43, name="squatter")])
+    db_session.add(DiscordServer(id=222, name="Test Server", bot_id=42, collect_messages=True, verified=True))
+    db_session.flush()
+    db_session.add(DiscordChannel(id=555, name="squat", channel_type="dm", bot_id=43))
+    db_session.commit()
+    message = fake_message()
+    message.channel = SimpleNamespace(id=555, name="general", category_id=None, type=SimpleNamespace(name="text"))
+
+    await collector_with(MagicMock()).on_message(message)
+
+    db_session.expire_all()
+    channel = db_session.get(DiscordChannel, 555)
+    assert (channel.server_id, channel.channel_type, channel.name, channel.content_owner_id) == (222, "text", "general", None)

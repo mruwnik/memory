@@ -70,7 +70,7 @@ def queue_messages(
     with make_session() as session:
         for message in messages:
             discord_events.ensure_message_entities(
-                session, message | {"guild_id": server_id}, access.bot_id, access.push_only
+                session, message | {"guild_id": server_id}, access.bot_id, access.push_only, trusted=True
             )
         session.commit()
     for message in messages:
@@ -143,6 +143,10 @@ async def backfill_channel_messages(
     runs carry the history cursor in ``before_id``: messages are stored
     asynchronously, so re-reading MIN(stored) would refetch the same window.
 
+    A DM's history is crawled only once its owner switches it on: one
+    collected by default may predate its bot's arrival in Memory, so it gets
+    just the ``catch_up_days`` window.
+
     Returns ``{"processed", "done", "oldest_message_id"}``; ``done`` means the
     crawl reached the start of the channel.
     """
@@ -152,6 +156,7 @@ async def backfill_channel_messages(
         channel = session.get(DiscordChannel, channel_id)
         server_id = channel.server_id if channel else None
         is_forum = channel is not None and channel.channel_type == "forum"
+        recent_only = channel is not None and channel.is_direct and channel.collect_messages is not True
     if is_forum:
         # A forum's posts are threads, which discover_channel_threads crawls.
         return {"processed": 0, "done": True, "oldest_message_id": None}
@@ -159,9 +164,10 @@ async def backfill_channel_messages(
         async with DiscordRest(access) as rest:
             if before_id is None:
                 low, high = stored_message_id_bounds(channel_id)
-                if high is not None:
+                if high is not None or recent_only:
                     started = datetime.now(timezone.utc)
-                    stop_at = min(high, snowflake_at(started - timedelta(days=catch_up_days)))
+                    window = snowflake_at(started - timedelta(days=catch_up_days))
+                    stop_at = window if recent_only or high is None else min(high, window)
                     listed: set[int] = set()
                     processed, _, read_all = await crawl(
                         rest, access, channel_id, server_id, celery_app,
@@ -173,6 +179,8 @@ async def backfill_channel_messages(
                             access, channel_id, celery_app, listed, stop_at, snowflake_at(started - CLOCK_MARGIN)
                         )
                 before_id = low
+            if recent_only:
+                return {"processed": processed, "done": True, "oldest_message_id": None}
             count, oldest_seen, reached_start = await crawl(
                 rest, access, channel_id, server_id, celery_app,
                 max_messages, before=before_id, backfill=True,
@@ -224,7 +232,7 @@ async def discover_channel_threads(access: BotAccess, channel_id: int, celery_ap
         return []
     with make_session() as session:
         for thread in threads.values():
-            discord_events.ensure_listed_channel(session, thread, server_id, access.bot_id)
+            discord_events.ensure_listed_channel(session, thread, server_id, access.bot_id, trusted=True)
         session.commit()
     # Stagger dispatches: a forum can have hundreds of archived threads.
     for thread_id in threads:
@@ -254,7 +262,7 @@ async def discover_bot_servers(access: BotAccess) -> int:
             )
             for channel in channels:
                 if channel.get("type") in COLLECTED_CHANNEL_TYPES:
-                    discord_events.ensure_listed_channel(session, channel, server_id, access.bot_id)
+                    discord_events.ensure_listed_channel(session, channel, server_id, access.bot_id, trusted=True)
         if bot := session.get(DiscordBot, access.bot_id):
             bot.last_sync_at = datetime.now(timezone.utc)
         session.commit()

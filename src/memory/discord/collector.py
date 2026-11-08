@@ -54,6 +54,7 @@ from memory.discord.ingest import (
     ensure_user,
     queue_message,
     should_collect,
+    untracked_dm,
 )
 from memory.common.chat_urls import chat_url_allowed
 from memory.discord.proxied_http import ProxiedHTTPClient
@@ -241,7 +242,8 @@ class MessageCollector(commands.Bot):
         """Hand a gateway event to the task webhook deliveries use, which handles
         partial and stale edits and only touches messages this bot's owner may change."""
         self.celery_app.send_task(
-            HANDLE_DISCORD_EVENT, kwargs={"bot_id": self.bot_info.id, "event_type": event_type, "data": data}
+            HANDLE_DISCORD_EVENT,
+            kwargs={"bot_id": self.bot_info.id, "event_type": event_type, "data": data, "pushed": False},
         )
 
     async def on_guild_channel_create(self, channel: abc.GuildChannel) -> None:
@@ -321,9 +323,13 @@ class MessageCollector(commands.Bot):
     async def _process_message(self, message: Message) -> None:
         """Process a message - check collection settings and queue for storage."""
         with make_session() as session:
+            if untracked_dm(session, message.channel, self.bot_info.id):
+                return
             channel_model = ensure_message_entities(
                 session, message, self.bot_info.id
             )
+            if channel_model.is_direct and channel_model.bot_id != self.bot_info.id:
+                return
             if not should_collect(channel_model):
                 return
             session.commit()

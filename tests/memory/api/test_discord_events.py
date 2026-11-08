@@ -2,6 +2,7 @@
 
 import json
 import time
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pytest
@@ -9,7 +10,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from memory.common.celery_app import HANDLE_DISCORD_EVENT
-from memory.common.db.models import DiscordBot, DiscordChannel, DiscordServer
+from memory.common.db.models import DiscordBot, DiscordBotServer, DiscordChannel, DiscordMessage, DiscordServer, DiscordUser
 from tests.conftest import raw_events
 
 SIGNING_KEY = Ed25519PrivateKey.generate()
@@ -101,11 +102,12 @@ def test_carried_events_are_queued(client, db_session, webhook_bot, collected_ch
     assert raw.payload is None
     send.assert_called_once_with(
         HANDLE_DISCORD_EVENT,
-        kwargs={"bot_id": webhook_bot.id, "event_type": event_type, "data": data, "caused_by": raw.id},
+        kwargs={"bot_id": webhook_bot.id, "event_type": event_type, "data": data, "caused_by": raw.id, "pushed": True},
     )
 
 
-OFF, ON, NEW, THREAD_UNDER_OFF = "2", "5", "3", "4"
+OFF, ON, NEW, THREAD_UNDER_OFF, DM_OFF = "2", "5", "3", "4", "6"
+KNOWN, STRANGER = "70", "71"
 
 
 @pytest.mark.parametrize(
@@ -113,10 +115,13 @@ OFF, ON, NEW, THREAD_UNDER_OFF = "2", "5", "3", "4"
     [
         ("MESSAGE_CREATE", {"channel_id": OFF, "guild_id": "7"}, "not_collected", 0, None),
         ("MESSAGE_CREATE", {"channel_id": ON, "guild_id": "7"}, "stored", 1, ON),
-        # Channels not stored yet follow their server; a DM has none, so isn't collected.
+        # Channels not stored yet follow their server; a DM is collected from someone sharing a server with the bot.
         ("MESSAGE_CREATE", {"channel_id": NEW, "guild_id": "7"}, "stored", 1, NEW),
         ("MESSAGE_CREATE", {"channel_id": NEW, "guild_id": "9"}, "not_collected", 0, None),
+        ("MESSAGE_CREATE", {"channel_id": NEW, "author": {"id": KNOWN}}, "stored", 1, NEW),
+        ("MESSAGE_CREATE", {"channel_id": NEW, "author": {"id": STRANGER}}, "not_collected", 0, None),
         ("MESSAGE_CREATE", {"channel_id": NEW}, "not_collected", 0, None),
+        ("MESSAGE_CREATE", {"channel_id": DM_OFF, "author": {"id": KNOWN}}, "not_collected", 0, None),
         # A push-only bot stores a server it first hears of as collected.
         ("MESSAGE_CREATE", {"channel_id": NEW, "guild_id": "8"}, "stored", 1, NEW),
         # Threads follow their parent channel before their server.
@@ -126,11 +131,11 @@ OFF, ON, NEW, THREAD_UNDER_OFF = "2", "5", "3", "4"
         ("THREAD_CREATE", {"id": "51", "parent_id": ON, "guild_id": "7"}, "stored", 1, "51"),
         # Deletes still drop Memory's copy; an untracked channel's leave a stub like any other.
         ("MESSAGE_DELETE", {"channel_id": OFF, "guild_id": "7"}, "not_collected", 1, None),
-        ("MESSAGE_DELETE_BULK", {"ids": ["1"], "channel_id": NEW}, "not_collected", 1, None),
+        ("MESSAGE_DELETE_BULK", {"ids": ["1"], "channel_id": DM_OFF}, "not_collected", 1, None),
         ("MESSAGE_DELETE", {"channel_id": ON, "guild_id": "7"}, "stored", 1, ON),
         # Events with no item type are gated by their channel too.
         ("TYPING_START", {"channel_id": OFF, "guild_id": "7"}, "not_collected", 0, None),
-        ("TYPING_START", {"channel_id": NEW}, "not_collected", 0, None),
+        ("TYPING_START", {"channel_id": DM_OFF}, "not_collected", 0, None),
     ],
 )
 def test_only_events_in_collected_channels_are_queued(
@@ -142,7 +147,15 @@ def test_only_events_in_collected_channels_are_queued(
         DiscordChannel(id=int(OFF), name="off", channel_type="text", server_id=7, collect_messages=False),
         DiscordChannel(id=int(ON), name="on", channel_type="text", server_id=7),
         DiscordChannel(id=int(THREAD_UNDER_OFF), name="t", channel_type="thread", server_id=7, parent_id=int(OFF)),
+        DiscordChannel(id=int(DM_OFF), name="dm", channel_type="dm", collect_messages=False),
+        DiscordBotServer(bot_id=webhook_bot.id, server_id=7),
+        DiscordUser(id=int(KNOWN), username="known"),
     ])
+    db_session.flush()
+    db_session.add(DiscordMessage(
+        modality="message", sha256=b"\x03" * 32, content="hi", message_id=80, channel_id=int(ON),
+        server_id=7, author_id=int(KNOWN), sent_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    ))
     db_session.commit()
 
     with patch("memory.api.discord.celery_app.send_task") as send:

@@ -197,6 +197,29 @@ async def test_catch_up_fills_recent_gaps_then_crawls_older_history(db_session, 
     assert [k["backfill"] for k in queued] == [False, False, False, True]
 
 
+@pytest.mark.parametrize(
+    "collect, recent_only",
+    [(None, True), (True, False)],
+    ids=["collected by default: the catch-up window only", "switched on: full history"],
+)
+@pytest.mark.asyncio
+async def test_a_dms_history_is_crawled_only_once_it_is_switched_on(db_session, fake_api, collect, recent_only):
+    db_session.add_all([
+        DiscordBot(id=42, application_id=42, name="bot", is_active=True),
+        DiscordChannel(id=10, name="DM with alice", channel_type="dm", bot_id=42, collect_messages=collect),
+        DiscordUser(id=100, username="alice"),
+    ])
+    db_session.commit()
+    now = datetime.now(timezone.utc)
+    recent, old = snowflake_at(now - timedelta(hours=5)), snowflake_at(now - timedelta(days=30))
+    celery_app = MagicMock()
+
+    with fake_api(FakeDiscord([recent, old])):
+        result = await backfill.backfill_channel_messages(ACCESS, 10, celery_app, max_messages=100, catch_up_days=2)
+
+    assert (queued_ids(celery_app) == [recent], result["done"]) == (recent_only, True)
+
+
 def sent(celery_app, task: str) -> list:
     return [c for c in celery_app.send_task.call_args_list if c.args[0] == task]
 
@@ -485,3 +508,18 @@ async def test_discovery_records_membership_of_servers_others_own(db_session, fa
 
     members = db_session.query(DiscordBotServer.bot_id).filter_by(server_id=7).all()
     assert [m[0] for m in members] == [42]
+
+
+@pytest.mark.parametrize(
+    "first_replies",
+    [[httpx.Response(500)], [httpx.Response(429, json={"retry_after": 1})], [httpx.ConnectTimeout("slow")]],
+    ids=["server error", "rate limited", "timeout"],
+)
+@pytest.mark.asyncio
+async def test_confirming_a_dm_is_one_short_try(fake_api, first_replies):
+    fake = FakeDiscord(first_replies=first_replies)
+
+    with fake_api(fake):
+        confirmed = await rest.confirmed_dm(ACCESS, 10)
+
+    assert (confirmed, len(fake.requests), fake.requests[0].extensions["timeout"]["read"]) == (None, 1, 5.0)

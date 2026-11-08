@@ -9,12 +9,13 @@ import random
 from typing import Any
 
 
-from sqlalchemy import func
+from sqlalchemy import and_, func
 from sqlalchemy.orm import aliased
 
 from memory.common import settings
 from memory.common.celery_app import (
     BACKFILL_DISCORD_CHANNEL,
+    DISCOVER_DISCORD_SERVERS,
     DISCOVER_DISCORD_THREADS,
     SCHEDULE_DISCORD_BACKFILLS,
     app,
@@ -26,6 +27,7 @@ from memory.common.db.models import (
     DiscordChannel,
     DiscordServer,
 )
+from memory.common.db.models.discord import DM_CHANNEL_TYPES
 from memory.common.jobs import tracked_task
 from memory.common.redis_lock import distributed_lock
 from memory.discord.backfill import (
@@ -155,10 +157,10 @@ def collectible_channels() -> list[tuple[int, str]]:
 
     Mirrors ``DiscordChannel.should_collect`` in SQL: explicit channel override,
     else a thread's parent channel's override, else server inheritance, else
-    excluded (serverless channels need an explicit True). A thread shares its
-    parent's server.
+    only DMs. A thread shares its parent's server.
     """
     parent = aliased(DiscordChannel)
+    is_dm = and_(DiscordChannel.server_id.is_(None), DiscordChannel.channel_type.in_(DM_CHANNEL_TYPES))
     with make_session() as session:
         rows = (
             session.query(DiscordChannel.id, DiscordChannel.channel_type)
@@ -166,7 +168,7 @@ def collectible_channels() -> list[tuple[int, str]]:
             .outerjoin(DiscordServer, DiscordChannel.server_id == DiscordServer.id)
             .filter(
                 func.coalesce(
-                    DiscordChannel.collect_messages, parent.collect_messages, DiscordServer.collect_messages
+                    DiscordChannel.collect_messages, parent.collect_messages, DiscordServer.collect_messages, is_dm
                 ).is_(True)
             )
             .all()
@@ -211,6 +213,17 @@ def discover_servers() -> None:
         except Exception:
             # A malformed listing from one bot's API must not stop everyone's sweep.
             logger.exception("Discord server discovery failed for bot %s", access.bot_id)
+
+
+@app.task(name=DISCOVER_DISCORD_SERVERS)
+@tracked_task
+def discover_bot(bot_id: int) -> dict[str, Any]:
+    """List one bot's servers and channels, as the daily sweep does for all."""
+    with make_session() as session:
+        access = bot_access(session.get(DiscordBot, bot_id))
+    if access is None:
+        return {"status": "skipped", "bot_id": bot_id, "reason": "no_token"}
+    return {"status": "ok", "bot_id": bot_id, "servers": asyncio.run(discover_bot_servers(access))}
 
 
 @app.task(name=DISCOVER_DISCORD_THREADS)

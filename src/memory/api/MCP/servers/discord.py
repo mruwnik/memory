@@ -391,7 +391,7 @@ async def list_channels(
     Args:
         server: Filter by server - numeric ID or server name
         name: Case-insensitive substring of the channel name
-        include_dms: Include DM channels (default False; DMs are admin-only)
+        include_dms: Include DMs and group DMs your bots delivered (default False)
         fields: Fields to include for each channel.
                 Default: ["id", "name", "type", "server_id", "server_name"]
                 Available fields:

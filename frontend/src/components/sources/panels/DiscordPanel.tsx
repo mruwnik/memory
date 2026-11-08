@@ -19,6 +19,7 @@ export const DiscordPanel = () => {
     listServers,
     updateServer,
     listChannels,
+    listBotDms,
     updateChannel,
   } = useDiscord()
   const { listProjects } = useProjects()
@@ -27,6 +28,8 @@ export const DiscordPanel = () => {
   const [bots, setBots] = useState<DiscordBot[]>([])
   const [servers, setServers] = useState<DiscordServer[]>([])
   const [channelsByServer, setChannelsByServer] = useState<Record<string, DiscordChannel[] | Error>>({})
+  const [dmsByBot, setDmsByBot] = useState<Record<string, DiscordChannel[] | Error>>({})
+  const [expandedDms, setExpandedDms] = useState<string | null>(null)
   const [projects, setProjects] = useState<Project[]>([])
   const [expandedBot, setExpandedBot] = useState<string | null>(null)
   const [expandedServer, setExpandedServer] = useState<string | null>(null)
@@ -72,6 +75,16 @@ export const DiscordPanel = () => {
       setChannelsByServer(prev => ({ ...prev, [serverId]: channels }))
     } catch (e) {
       setChannelsByServer(prev => ({ ...prev, [serverId]: e instanceof Error ? e : new Error(String(e)) }))
+    }
+  }
+
+  const loadDms = async (botId: string) => {
+    setDmsByBot(prev => Object.fromEntries(Object.entries(prev).filter(([id]) => id !== botId)))
+    try {
+      const dms = await listBotDms(botId)
+      setDmsByBot(prev => ({ ...prev, [botId]: dms }))
+    } catch (e) {
+      setDmsByBot(prev => ({ ...prev, [botId]: e instanceof Error ? e : new Error(String(e)) }))
     }
   }
 
@@ -131,14 +144,13 @@ export const DiscordPanel = () => {
   const handleUpdateChannel = (channel: DiscordChannel, updates: DiscordChannelUpdate) => run(async () => {
     const updatedChannel = await updateChannel(channel.id, updates)
 
-    // Refresh channels for this server, or update single channel for DMs
+    // A server's channels are refetched, as inheritance may have changed; a DM inherits nothing.
     if (channel.server_id) {
       const channels = await listChannels(channel.server_id)
       setChannelsByServer(prev => ({ ...prev, [channel.server_id!]: channels }))
     } else {
-      // For DM channels (no server_id), update the channel in place
-      setChannelsByServer(prev => Object.fromEntries(Object.entries(prev).map(([serverId, channels]) =>
-        [serverId, Array.isArray(channels) ? channels.map(ch => ch.id === channel.id ? updatedChannel : ch) : channels])))
+      setDmsByBot(prev => Object.fromEntries(Object.entries(prev).map(([botId, dms]) =>
+        [botId, Array.isArray(dms) ? dms.map(ch => ch.id === channel.id ? updatedChannel : ch) : dms])))
     }
   })
 
@@ -168,6 +180,13 @@ export const DiscordPanel = () => {
               expandedServer={expandedServer}
               onToggleExpand={() => setExpandedBot(expandedBot === bot.id ? null : bot.id)}
               onRetryChannels={loadChannels}
+              dms={dmsByBot[bot.id]}
+              dmsExpanded={expandedDms === bot.id}
+              onToggleDms={() => {
+                setExpandedDms(expandedDms === bot.id ? null : bot.id)
+                if (expandedDms !== bot.id) loadDms(bot.id)
+              }}
+              onRetryDms={() => loadDms(bot.id)}
               onExpandServer={(serverId) => {
                 setExpandedServer(expandedServer === serverId ? null : serverId)
                 if (expandedServer !== serverId) {
@@ -215,6 +234,10 @@ interface BotCardProps {
   onToggleExpand: () => void
   onExpandServer: (serverId: string) => void
   onRetryChannels: (serverId: string) => void
+  dms: DiscordChannel[] | Error | undefined
+  dmsExpanded: boolean
+  onToggleDms: () => void
+  onRetryDms: () => void
   onEdit: () => void
   onToggleActive: () => void
   onRefresh: () => Promise<unknown>
@@ -235,6 +258,10 @@ const BotRow = ({
   onToggleExpand,
   onExpandServer,
   onRetryChannels,
+  dms,
+  dmsExpanded,
+  onToggleDms,
+  onRetryDms,
   onEdit,
   onToggleActive,
   onRefresh,
@@ -294,6 +321,15 @@ const BotRow = ({
               onUpdateChannel={onUpdateChannel}
             />
           ))}
+      </SubList>
+      <SubList
+        indent
+        title={<ExpandToggle expanded={dmsExpanded} onClick={onToggleDms}>Direct messages</ExpandToggle>}
+        {...(dmsExpanded ? lazySubList(dms, 'DMs', onRetryDms) : {})}
+      >
+        {dmsExpanded && Array.isArray(dms) && dms.map(dm => (
+          <ChannelRow key={dm.id} channel={dm} projects={projects} serverCollecting onUpdate={updates => onUpdateChannel(dm, updates)} />
+        ))}
       </SubList>
     </Row>
   )

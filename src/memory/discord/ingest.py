@@ -21,9 +21,9 @@ from discord import (
 
 from memory.common.celery_app import ADD_DISCORD_MESSAGE
 from memory.common.db.connection import DBSession
-from memory.common.db.models import DiscordBotServer, DiscordChannel, DiscordServer, DiscordUser
+from memory.common.db.models import DiscordBot, DiscordBotServer, DiscordChannel, DiscordServer, DiscordUser
 from memory.common.db.upsert import get_or_insert, insert_missing
-from memory.common.discord_events import set_thread_parent, verify_server
+from memory.common.discord_events import claim_dm, knows_user, move_to_server, set_thread_parent, verify_server
 
 
 def get_channel_type(channel: abc.Messageable) -> str:
@@ -85,6 +85,26 @@ def ensure_server(session: DBSession, guild: Guild, bot_id: int | None = None) -
     return server
 
 
+def channel_name(channel: abc.Messageable) -> str | None:
+    """A DM has no name of its own, so it is named after the other end."""
+    if isinstance(channel, DMChannel):
+        return f"DM with {channel.recipient.name}" if channel.recipient else None
+    return getattr(channel, "name", None)
+
+
+def untracked_dm(session: DBSession, channel: abc.Messageable, bot_id: int) -> bool:
+    """A DM not stored yet whose other end shares no server with the bot, as
+    the gateway's member cache or the authors stored in its servers show:
+    strangers' DMs stay unseen."""
+    if not isinstance(channel, (DMChannel, GroupChannel)) or session.get(DiscordChannel, channel.id) is not None:
+        return False
+    people = [channel.recipient] if isinstance(channel, DMChannel) else list(channel.recipients)
+    people = [person for person in people if person is not None]
+    if any(getattr(person, "mutual_guilds", None) for person in people):
+        return False
+    return not knows_user(session, bot_id, [person.id for person in people])
+
+
 def ensure_channel(
     session: DBSession,
     channel: abc.Messageable,
@@ -95,6 +115,10 @@ def ensure_channel(
     channel_id = getattr(channel, "id", None)
     if channel_id is None:
         raise ValueError("Channel is missing an identifier.")
+    bot = session.get(DiscordBot, bot_id) if bot_id is not None else None
+    if isinstance(channel, (DMChannel, GroupChannel)) and bot is not None:
+        # The caller checks the result is this bot's: another owner's DM stays theirs.
+        return claim_dm(session, channel_id, bot, name=channel_name(channel), channel_type=get_channel_type(channel))[0]
 
     # Get category_id if available (TextChannel, VoiceChannel have it)
     category_id = getattr(channel, "category_id", None)
@@ -109,12 +133,15 @@ def ensure_channel(
         bot_id=bot_id,
         category_id=category_id,
         parent_id=parent_id,
-        name=getattr(channel, "name", f"Channel {channel_id}"),
+        name=channel_name(channel) or f"Channel {channel_id}",
         channel_type=get_channel_type(channel),
     )
     if created:
         return channel_model
-    name = getattr(channel, "name", None)
+    if guild_id is not None and channel_model.server_id is None:
+        # The gateway's word beats a push that stored this id as a DM.
+        move_to_server(session, channel_model, guild_id, bot_id, get_channel_type(channel))
+    name = channel_name(channel)
     if name and channel_model.name != name:
         channel_model.name = name
     if category_id is not None and channel_model.category_id != category_id:

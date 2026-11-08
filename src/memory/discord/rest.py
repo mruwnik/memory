@@ -74,14 +74,16 @@ class DiscordAPIError(Exception):
 
 
 class DiscordRest:
-    def __init__(self, access: BotAccess):
+    def __init__(self, access: BotAccess, *, retries: int = MAX_RETRIES, timeout: float = 30.0):
         self.base_url = access.api_base_url.rstrip("/")
         self.token = access.token
+        self.retries = retries
+        self.timeout = timeout
         self._client: httpx.AsyncClient | None = None
 
     async def __aenter__(self) -> "DiscordRest":
         self._client = public_http_client(
-            headers={"Authorization": f"Bot {self.token}"}, timeout=30.0
+            headers={"Authorization": f"Bot {self.token}"}, timeout=self.timeout
         )
         return self
 
@@ -95,23 +97,23 @@ class DiscordRest:
         if self._client is None:
             raise RuntimeError("DiscordRest must be used as an async context manager")
         query = {k: v for k, v in params.items() if v is not None}
-        for attempt in range(MAX_RETRIES + 1):
+        for attempt in range(self.retries + 1):
             try:
                 response = await self._client.request(
                     method, f"{self.base_url}{path}", params=query, json=json
                 )
             except httpx.TransportError:
-                if attempt == MAX_RETRIES:
+                if attempt == self.retries:
                     raise DiscordAPIError(TRANSPORT_FAILED, None)
                 await asyncio.sleep(2**attempt)
                 continue
             if response.status_code == RATE_LIMITED:
                 wait = retry_after(response)
-                if wait > MAX_RETRY_AFTER_SECONDS or attempt == MAX_RETRIES:
+                if wait > MAX_RETRY_AFTER_SECONDS or attempt == self.retries:
                     raise DiscordAPIError(RATE_LIMITED, None)
                 await asyncio.sleep(wait)
                 continue
-            if response.status_code >= 500 and attempt < MAX_RETRIES:
+            if response.status_code >= 500 and attempt < self.retries:
                 await asyncio.sleep(2**attempt)
                 continue
             if response.status_code >= 400:
@@ -143,6 +145,9 @@ class DiscordRest:
         """One page, newest first."""
         return await self.get(f"/channels/{channel_id}/messages", before=before, limit=PAGE_SIZE)
 
+    async def channel(self, channel_id: int) -> dict:
+        return await self.get(f"/channels/{channel_id}")
+
     async def my_guilds(self) -> list[dict]:
         return await self.get("/users/@me/guilds")
 
@@ -165,6 +170,21 @@ class DiscordRest:
             if not page.get("has_more") or not batch:
                 return threads
             before = batch[-1].get("thread_metadata", {}).get("archive_timestamp")
+
+
+# Discord's channel types for a DM and a group DM.
+DM_TYPES = frozenset({1, 3})
+
+
+async def confirmed_dm(access: BotAccess, channel_id: int) -> dict | None:
+    """The channel, if this bot's token can read it as a DM or group DM. One
+    short try: anyone can push DMs, and a flood of them mustn't hold workers."""
+    try:
+        async with DiscordRest(access, retries=0, timeout=5.0) as rest:
+            channel = await rest.channel(channel_id)
+    except DiscordAPIError:
+        return None
+    return channel if channel.get("type") in DM_TYPES else None
 
 
 def retry_after(response: httpx.Response) -> float:

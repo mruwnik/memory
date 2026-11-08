@@ -39,6 +39,7 @@ import memory.common.extract as extract
 import memory.common.summarizer as summarizer
 import memory.common.formatters.observation as observation
 from memory.common.db.models.base import Base
+from memory.common.db.models.discord import DM_CHANNEL_TYPES
 from memory.common.db.models.source_item import (
     SourceItem,
     SourceItemPayload,
@@ -391,7 +392,8 @@ class ChatMessage(SourceItem):
     __table_args__ = (Index("chat_channel_idx", "platform", "channel_id"),)
 
 
-DIRECT_CHANNEL_TYPES = {"dm", "group_dm", "mpim"}
+# Slack names a group DM "mpim".
+DIRECT_CHANNEL_TYPES = {*DM_CHANNEL_TYPES, "mpim"}
 
 
 def said_in(author: str, channel: DiscordChannel | SlackChannel | None) -> str:
@@ -544,6 +546,17 @@ class DiscordMessage(SourceItem):
     def llm_registrant_id(self) -> int | None:
         """DMs have no server to name a registrant, but the bot that collected them does."""
         return self.bot.created_by_user_id if self.bot else None
+
+    def resolve_creator_id(self) -> int | None:
+        """A DM message is its channel owner's, and only when that owner's bot
+        delivered it: a channel row can be a DM some push claimed for an id that
+        is really a server channel."""
+        if self.creator_id is not None:
+            return self.creator_id
+        if self.server_id is not None or self.channel is None or self.bot is None:
+            return None
+        owner = self.channel.content_owner_id
+        return owner if owner == self.bot.created_by_user_id else None
 
 
 class SlackMessage(SourceItem):

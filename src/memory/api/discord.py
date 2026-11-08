@@ -26,7 +26,7 @@ from memory.api.llm_keys import LLMKeyInput, LLMKeyView, apply_llm_key, llm_key_
 from memory.common import discord as discord_client
 from memory.common import settings
 from memory.common.access_control import has_admin_scope
-from memory.common.celery_app import HANDLE_DISCORD_EVENT
+from memory.common.celery_app import DISCOVER_DISCORD_SERVERS, HANDLE_DISCORD_EVENT
 from memory.common.celery_app import app as celery_app
 from memory.common.data_source_access import (
     enqueue_access_control_propagation,
@@ -36,11 +36,12 @@ from memory.common.db.connection import get_session
 from memory.common.db.models import User
 from memory.common.db.models.events import NO_ITEM_TYPE, NOT_COLLECTED, STORED, record_raw_event
 from memory.common.db.models.discord import (
+    DM_CHANNEL_TYPES,
     DiscordBot,
     DiscordChannel,
     DiscordServer,
 )
-from memory.common.discord_events import hand_off_server
+from memory.common.discord_events import hand_off_server, knows_user, reclaim_dms
 from memory.common.push_health import push_stale
 from memory.common.discord_data import (
     fetch_servers,
@@ -315,8 +316,15 @@ def create_bot(
         bot.api_base_url = data.api_base_url
 
     db.add(bot)
+    db.flush()
+    reclaim_dms(db, bot)
     db.commit()
     db.refresh(bot)
+    # Until it lists its servers, pushes from a new bot can't reach them.
+    try:
+        celery_app.send_task(DISCOVER_DISCORD_SERVERS, args=[bot.id])
+    except Exception:
+        logger.warning("Could not queue server discovery for Discord bot %s", bot.id)
 
     return bot_to_response(bot)
 
@@ -423,6 +431,26 @@ def get_bot_invite_url(
     permissions = 2048 + 65536 + 1024  # send messages, read history, view channels
     invite_url = f"https://discord.com/oauth2/authorize?client_id={bot.application_id}&scope=bot&permissions={permissions}"
     return {"invite_url": invite_url}
+
+
+@router.get("/bots/{bot_id}/dms")
+def list_bot_dms(
+    bot_id: int,
+    user: User = Depends(get_interactive_user),
+    db: Session = Depends(get_session),
+) -> list[DiscordChannelResponse]:
+    """The DMs this bot delivered first, which its owner manages."""
+    bot = get_user_bot(db, bot_id, user)
+    channels = (
+        db.query(DiscordChannel)
+        .filter(
+            DiscordChannel.bot_id == bot.id,
+            DiscordChannel.server_id.is_(None),
+            DiscordChannel.channel_type.in_(DM_CHANNEL_TYPES),
+        )
+        .order_by(DiscordChannel.name)
+    )
+    return [channel_to_response(channel) for channel in channels]
 
 
 # --- Server Endpoints ---
@@ -619,11 +647,13 @@ def event_channel_id(event_type: str, data: dict) -> int | None:
     return snowflake(data.get("id" if event_type in THREAD_EVENT_TYPES else "channel_id"))
 
 
-def channel_collected(db: Session, event_type: str, data: dict) -> bool | None:
+def channel_collected(db: Session, bot_id: int, event_type: str, data: dict) -> bool | None:
     """Whether the event's channel is collected, as DiscordChannel.should_collect
     decides; None for an event about no channel. A thread event names the thread
     and its parent. A channel not stored yet follows its server, and one of a
-    server not stored yet is collected, as a push-only bot stores that server so."""
+    server not stored yet is collected, as a push-only bot stores that server so;
+    one with no server is a DM to the bot, collected when its author shares a
+    server with the bot (the worker checks it against the bot's token)."""
     channel_id = event_channel_id(event_type, data)
     if channel_id is None:
         return None
@@ -634,7 +664,8 @@ def channel_collected(db: Session, event_type: str, data: dict) -> bool | None:
         return parent.should_collect
     server_id = snowflake(data.get("guild_id"))
     if server_id is None:
-        return False
+        author = snowflake((data.get("author") or {}).get("id"))
+        return author is not None and knows_user(db, bot_id, [author])
     server = db.get(DiscordServer, server_id)
     return server is None or server.collect_messages
 
@@ -647,10 +678,10 @@ def writes_items(event_type: str, data: object) -> bool:
     return event_type in {"MESSAGE_CREATE", *DELETE_EVENT_TYPES}
 
 
-def discord_outcome(db: Session, event_type: str, data: object) -> str:
+def discord_outcome(db: Session, bot_id: int, event_type: str, data: object) -> str:
     if not isinstance(data, dict):
         return NO_ITEM_TYPE
-    if channel_collected(db, event_type, data) is False:
+    if channel_collected(db, bot_id, event_type, data) is False:
         return NOT_COLLECTED
     return STORED if event_type in CARRIED_EVENT_TYPES else NO_ITEM_TYPE
 
@@ -693,7 +724,7 @@ async def discord_events(bot_id: int, request: Request, db: Session = Depends(ge
     event = event if isinstance(event, dict) else {}
     event_type = str(event.get("type") or ("PING" if envelope.get("type") == DISCORD_PING else "unknown"))
     data = event.get("data")
-    outcome = discord_outcome(db, event_type, data)
+    outcome = discord_outcome(db, bot.id, event_type, data)
     # A delete still drops whatever copy Memory has.
     untracked_delete = event_type in DELETE_EVENT_TYPES and outcome == NOT_COLLECTED
     channel_id = event_channel_id(event_type, data) if isinstance(data, dict) else None
@@ -717,7 +748,7 @@ async def discord_events(bot_id: int, request: Request, db: Session = Depends(ge
         try:
             celery_app.send_task(
                 HANDLE_DISCORD_EVENT,
-                kwargs={"bot_id": bot.id, "event_type": event_type, "data": data, "caused_by": raw_id},
+                kwargs={"bot_id": bot.id, "event_type": event_type, "data": data, "caused_by": raw_id, "pushed": True},
             )
         except Exception:
             # Discord retries a failed delivery, which must not be a duplicate.

@@ -217,6 +217,12 @@ export const useDiscord = () => {
     }))
   }, [mcpCall])
 
+  const listBotDms = useCallback(async (botId: string): Promise<DiscordChannel[]> => {
+    const response = await apiCall(`/discord/bots/${botId}/dms`)
+    if (!response.ok) throw await apiError(response, 'Failed to fetch Discord DMs')
+    return response.json()
+  }, [apiCall])
+
   const updateChannel = useCallback(async (channelId: string, data: DiscordChannelUpdate): Promise<DiscordChannel> => {
     const response = await apiCall(`/discord/channels/${channelId}`, {
       method: 'PATCH',
@@ -241,6 +247,7 @@ export const useDiscord = () => {
     updateServer,
     // Channels
     listChannels,
+    listBotDms,
     updateChannel,
   }
 }

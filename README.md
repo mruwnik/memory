@@ -266,19 +266,46 @@ token; a message they can all see is stored once.
   webhook mode) with 401. Events carry gateway payloads (`MESSAGE_CREATE`,
   `MESSAGE_UPDATE`, `MESSAGE_DELETE`, `MESSAGE_DELETE_BULK`, the four
   `MESSAGE_REACTION_*` events, `THREAD_CREATE`, `THREAD_UPDATE`); others are
-  acknowledged and ignored. Servers and DMs first seen through a webhook bot
-  collect everything it receives; turn collection off per server or channel as
-  usual.
+  acknowledged and ignored. Servers first seen through a webhook bot collect
+  everything it receives; turn collection off per server or channel as usual.
 
-A signing key only proves which Memory user sent an event, so pushes are
-limited to that user's own rows: edits, deletes and reactions only touch
-messages their bots delivered or that sit in servers (or DMs) their bots own,
-and a push never renames or claims an existing server or channel, changes a
-stored Discord user's name, or links an author to a person by username. A
-server first seen in a pushed event isn't listed or manageable until the
-token confirms it (the gateway, or the daily REST listing), which takes it
-over with default access settings. A DM is managed by the owner of the bot
-that first delivered it.
+A DM to one of your bots, gateway or webhook, is collected by default when
+the person sending it shares a server with the bot: they're in the gateway's
+member list for one of its servers, or have posted in one. Other DMs stay
+unseen, like any untracked channel. Collected DMs are listed under the bot's
+**Direct messages**, where each can be skipped or set to collect, and their
+messages are visible only to the bot's owner (and admins) unless you give the
+DM a project. The daily catch-up reads a DM's last `DISCORD_CATCH_UP_DAYS`;
+its older history is read only once you set it to **Collect**. Removing a bot
+and adding the same one again gives it back its DMs. A new bot lists its
+servers straight away.
+
+A signing key only proves which Memory user sent an event, so a push is
+untrusted and held to that user's own rows. "Their server" below is one that
+one of their bots holds or that a token lists one of their bots in; a server
+is always the one stored for the channel, never the one a payload names, and
+a push naming another server is refused.
+
+- It adds or changes messages only in one of their DMs or in a channel of
+  their server. Edits, deletes and reactions only touch messages their bots
+  delivered or that sit in servers (or DMs) their bots own.
+- It creates a channel or thread only under their server; one with no server
+  is refused. A DM is stored only from the gateway or once the bot's token
+  reads its channel as that bot's DM (one 5-second try), and a pushed thread
+  event never makes one.
+- It never changes a stored channel's server, parent, type, bot or access
+  settings, except that the channel or thread of their server it names can
+  get a new parent in that server. It never renames or claims an existing
+  server or channel, changes a stored Discord user's name, or links an author
+  to a person by username.
+
+A server first seen in a pushed event is closed to other users' pushes, and
+isn't listed or manageable, until a token confirms it (the gateway, or the
+REST listing), which takes it over with default access settings. A DM is
+managed by the owner of its bot, and stays with them even if someone else
+registers the same application. When the gateway or a token-read listing
+shows a stored channel to be a server's channel, or a DM stored as a server's
+channel to be a DM, it becomes that, with default access settings.
 
 Under **Advanced**, **API base URL** points the bot at any server speaking
 Discord's API (default `https://discord.com/api/v10`). REST calls go there with

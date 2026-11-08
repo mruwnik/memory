@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     from memory.common.db.models.sources import Person
     from memory.common.db.models.users import User
 
+DM_CHANNEL_TYPES = ("dm", "group_dm")
 
 DEFAULT_DISCORD_API_BASE_URL = "https://discord.com/api/v10"
 
@@ -260,8 +261,8 @@ class DiscordChannel(Base):
         """Determine if messages should be collected for this channel.
 
         Returns the explicit setting if set; otherwise a thread inherits from its
-        parent channel and a channel from its server. For DMs/group DMs (no
-        server), defaults to False unless explicitly enabled.
+        parent channel and a channel from its server. A DM or group DM reached
+        one of our bots, so it is collected; any other serverless channel is not.
         """
         if self.collect_messages is not None:
             return self.collect_messages
@@ -269,7 +270,18 @@ class DiscordChannel(Base):
             return self.parent.should_collect
         if self.server:
             return self.server.collect_messages
-        return False
+        return self.is_direct
+
+    @property
+    def is_direct(self) -> bool:
+        return self.server_id is None and self.channel_type in DM_CHANNEL_TYPES
+
+    @property
+    def content_owner_id(self) -> int | None:
+        """A DM's items belong to the owner of the bot that first delivered it."""
+        if not self.is_direct or self.bot is None:
+            return None
+        return self.bot.created_by_user_id
 
     @property
     def llm_key_holder(self) -> DiscordServer | None:

@@ -5,6 +5,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from memory.common import discord as discord_client
+from memory.common.celery_app import DISCOVER_DISCORD_SERVERS
 
 from memory.common.db.models import (
     DiscordBot,
@@ -268,6 +269,50 @@ def test_a_dm_is_managed_by_the_owner_of_the_bot_that_delivered_it(
     response = member_client.patch("/discord/channels/999", json={"collect_messages": False})
 
     assert response.status_code == status
+
+
+def test_a_bot_lists_the_dms_it_delivered_to_its_owner(member_client, db_session, user):
+    mine, theirs = two_owners_bots(db_session, user)
+    db_session.add(DiscordServer(id=1, name="Guild", bot_id=mine.id, verified=True))
+    db_session.flush()
+    db_session.add_all([
+        DiscordChannel(id=998, server_id=None, bot_id=mine.id, name="dm", channel_type="dm"),
+        DiscordChannel(id=997, server_id=None, bot_id=theirs.id, name="their dm", channel_type="dm"),
+        DiscordChannel(id=996, server_id=1, bot_id=mine.id, name="general", channel_type="text"),
+    ])
+    db_session.commit()
+
+    own = member_client.get(f"/discord/bots/{mine.id}/dms")
+    other = member_client.get(f"/discord/bots/{theirs.id}/dms")
+
+    assert [(c["id"], c["effective_collect"]) for c in own.json()] == [("998", True)]
+    assert other.status_code == 404
+
+
+def test_a_new_bot_lists_its_servers_straight_away(member_client):
+    with patch("memory.api.discord.celery_app.send_task") as send:
+        bot_id = member_client.post("/discord/bots", json={"name": "New", "token": gateway_token(66669)}).json()["id"]
+
+    send.assert_called_once_with(DISCOVER_DISCORD_SERVERS, args=[int(bot_id)])
+
+
+def test_re_adding_a_deleted_bot_reclaims_its_owners_orphaned_dms(member_client, db_session, user):
+    other = HumanUser(email="other@example.com", name="Other", password_hash="x")
+    db_session.add_all([other, DiscordUser(id=100, username="alice")])
+    db_session.flush()
+    for channel_id, creator in ((998, user), (997, other)):
+        db_session.add(DiscordChannel(id=channel_id, server_id=None, bot_id=None, name="dm", channel_type="dm"))
+        db_session.flush()
+        db_session.add(DiscordMessage(
+            modality="message", sha256=channel_id.to_bytes(32, "big"), content="hi", message_id=channel_id,
+            channel_id=channel_id, author_id=100, sent_at=datetime.now(timezone.utc), creator_id=creator.id,
+        ))
+    db_session.commit()
+
+    bot_id = member_client.post("/discord/bots", json={"name": "Again", "token": gateway_token(66668)}).json()["id"]
+
+    db_session.expire_all()
+    assert [db_session.get(DiscordChannel, c).bot_id for c in (998, 997)] == [int(bot_id), None]
 
 
 def two_owners_bots(db_session, user):

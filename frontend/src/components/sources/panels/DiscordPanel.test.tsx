@@ -606,6 +606,43 @@ describe('DiscordPanel channels', () => {
   })
 })
 
+describe('DiscordPanel direct messages', () => {
+  const dm = {
+    id: 'dm-1', server_id: null, server_name: null, name: 'DM with alice', channel_type: 'dm',
+    collect_messages: null, effective_collect: true, project_id: null, sensitivity: 'basic',
+  }
+
+  it("lists a bot's DMs, collected by default, and skips one with a PATCH", async () => {
+    const mock = mockFetchRoutes({
+      '/discord/bots/bot-1/dms': { json: [dm] },
+      '/discord/channels/dm-1': { json: { ...dm, collect_messages: false, effective_collect: false } },
+      ...routes({ bots: [bot] }),
+    })
+    const { user } = renderWithUser(<DiscordPanel />)
+    await user.click(await screen.findByRole('button', { name: 'Direct messages' }))
+    expect(await screen.findByText('DM with alice')).toBeInTheDocument()
+    const collect = screen.getByRole('combobox', { name: 'Collect messages' })
+    expect(collect).toHaveDisplayValue('Inherit (collect)')
+
+    await user.selectOptions(collect, 'skip')
+
+    await waitFor(() => {
+      const patch = mock.mock.calls.find(
+        ([url, init]) => String(url).includes('/discord/channels/dm-1') && (init as RequestInit)?.method === 'PATCH',
+      )
+      expect(JSON.parse((patch![1] as RequestInit).body as string)).toEqual({ collect_messages: false })
+    })
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Collect messages' })).toHaveDisplayValue('Skip'))
+  })
+
+  it('says so when a bot has no DMs', async () => {
+    mockFetchRoutes({ '/discord/bots/bot-1/dms': { json: [] }, ...routes({ bots: [bot] }) })
+    const { user } = renderWithUser(<DiscordPanel />)
+    await user.click(await screen.findByRole('button', { name: 'Direct messages' }))
+    expect(await screen.findByText('No DMs')).toBeInTheDocument()
+  })
+})
+
 it('does not offer bot user sharing', async () => {
   mockFetchRoutes(routes({ bots: [bot] }))
   renderWithUser(<DiscordPanel />)

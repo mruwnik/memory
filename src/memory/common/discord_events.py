@@ -20,6 +20,7 @@ from memory.common.db.models import (
     DiscordUser,
     Event,
 )
+from memory.common.db.models.discord import DM_CHANNEL_TYPES
 from memory.common.db.models.events import NOT_COLLECTED, RAW
 from memory.common.db.upsert import get_or_insert, insert_missing
 
@@ -163,10 +164,15 @@ def ensure_channel(
     name: str | None = None,
     channel_type: str | None = None,
     collect: bool | None = None,
+    trusted: bool = False,
 ) -> DiscordChannel:
     """A channel row, named by its id until a name is known. ``collect`` is
     only set on creation, so later choices made in the UI stand; only the
-    bot owning the channel (or its server) renames it."""
+    bot owning the channel (or its server) renames it.
+
+    A DM row can sit on an id that is really a server's channel. Seen in a
+    server by ``trusted`` data (the gateway or a token-read listing), the row
+    becomes that server's channel, with the settings a new one has."""
     channel, created = get_or_insert(
         session, DiscordChannel, channel_id,
         id=channel_id,
@@ -176,9 +182,103 @@ def ensure_channel(
         channel_type=channel_type or ("text" if server_id else "dm"),
         collect_messages=collect,
     )
-    if not created and name and owns_channel(channel, {bot_id}):
+    if created:
+        return channel
+    if trusted and server_id is not None and channel.server_id is None:
+        move_to_server(session, channel, server_id, bot_id, channel_type or "text")
+    if name and owns_channel(channel, {bot_id}):
         channel.name = name
     return channel
+
+
+def reset_access(channel: DiscordChannel) -> None:
+    channel.collect_messages, channel.project_id, channel.sensitivity = None, None, "basic"
+
+
+def move_to_server(
+    session: DBSession, channel: DiscordChannel, server_id: int, bot_id: int | None, channel_type: str
+) -> None:
+    channel.server_id, channel.bot_id, channel.channel_type = server_id, bot_id, channel_type
+    reset_access(channel)
+    session.flush()
+    session.expire(channel, ["server"])
+
+
+def claim_dm(
+    session: DBSession, channel_id: int, bot: DiscordBot, *, name: str | None = None, channel_type: str = "dm"
+) -> tuple[DiscordChannel, bool]:
+    """A DM as trusted data (the gateway, or the bot's token) shows it, and
+    whether it is this bot's. A row held as a server's channel becomes this
+    bot's DM, with the settings a new one has; one another bot of the same
+    owner holds passes to this one. A DM another owner holds stays theirs:
+    owners who registered the same application share its DMs' ids."""
+    channel, created = get_or_insert(
+        session, DiscordChannel, channel_id,
+        id=channel_id, server_id=None, bot_id=bot.id, name=name or f"Channel {channel_id}", channel_type=channel_type,
+    )
+    if not created and channel.server_id is not None:
+        channel.server_id, channel.bot_id, channel.channel_type, channel.parent_id = None, bot.id, channel_type, None
+        reset_access(channel)
+        session.flush()
+        session.expire(channel, ["server", "parent", "bot"])
+    elif not created and channel.bot_id != bot.id:
+        holder = channel.bot.created_by_user_id if channel.bot else None
+        if holder is None or holder != bot.created_by_user_id:
+            return channel, False
+        channel.bot_id = bot.id
+        session.flush()
+        session.expire(channel, ["bot"])
+    if name:
+        channel.name = name
+    return channel, True
+
+
+def may_push_into(session: DBSession, server_id: int, bot_ids: set[int]) -> bool:
+    """Whether pushes from the owner of these bots may add to a server: a new
+    one, one their bot holds, or one a token lists one of their bots in."""
+    server = session.get(DiscordServer, server_id)
+    if server is None or server.bot_id in bot_ids:
+        return True
+    member = session.query(DiscordBotServer).filter(
+        DiscordBotServer.server_id == server_id, DiscordBotServer.bot_id.in_(bot_ids)
+    )
+    return member.first() is not None
+
+
+def push_refusal(
+    session: DBSession, channel_id: int, server_id: int | None, bot_ids: set[int], parent_id: int | None = None
+) -> str | None:
+    """Why a push about this channel (from the owner of ``bot_ids``) is
+    refused, or None. A push is untrusted: it may only touch a stored row in a
+    server it may push into, or a DM of its owner's, and only as that row
+    stands (its stored server, never a pushed one); it may only create a row
+    under a server it may push into, as a DM needs the bot's token to show it.
+    A thread's parent must be a channel of the same server."""
+    channel = session.get(DiscordChannel, channel_id)
+    if channel is not None and channel.server_id != server_id:
+        return "guild_mismatch"
+    if server_id is None and (channel is None or not channel.is_direct):
+        return "no_server"
+    if server_id is None and channel is not None and channel.bot_id not in bot_ids:
+        return "not_owner"
+    if server_id is not None and not may_push_into(session, server_id, bot_ids):
+        return "not_member"
+    parent = session.get(DiscordChannel, parent_id) if parent_id is not None else None
+    if parent is not None and parent.server_id != server_id:
+        return "guild_mismatch"
+    return None
+
+
+def knows_user(session: DBSession, bot_id: int, user_ids: list[int]) -> bool:
+    """Whether any of these users has posted in a server the bot is in, by the
+    stored channels' servers: only they may start a DM Memory collects."""
+    servers = select(DiscordBotServer.server_id).where(DiscordBotServer.bot_id == bot_id)
+    posted = (
+        session.query(DiscordMessage.id)
+        .join(DiscordChannel, DiscordChannel.id == DiscordMessage.channel_id)
+        .filter(DiscordMessage.author_id.in_(user_ids), DiscordChannel.server_id.in_(servers))
+    )
+    return posted.first() is not None
 
 
 def owns_channel(channel: DiscordChannel, bot_ids: set[int]) -> bool:
@@ -216,7 +316,7 @@ def ensure_user(session: DBSession, author: dict) -> DiscordUser:
 
 
 def ensure_message_entities(
-    session: DBSession, data: dict, bot_id: int, push_only: bool
+    session: DBSession, data: dict, bot_id: int, push_only: bool, *, trusted: bool = False
 ) -> DiscordChannel:
     """Server, channel and author rows for a message. Servers first seen
     through a push-only bot collect everything: that bot receives only what
@@ -224,19 +324,19 @@ def ensure_message_entities(
     server_id = snowflake(data.get("guild_id"))
     if server_id is not None:
         ensure_server(session, server_id, bot_id, collect=push_only)
-    channel = ensure_channel(session, int(data["channel_id"]), server_id, bot_id)
+    channel = ensure_channel(session, int(data["channel_id"]), server_id, bot_id, trusted=trusted)
     ensure_user(session, data["author"])
     return channel
 
 
 def ensure_listed_channel(
-    session: DBSession, data: dict, server_id: int | None, bot_id: int
+    session: DBSession, data: dict, server_id: int | None, bot_id: int, *, trusted: bool = False
 ) -> DiscordChannel:
     """A channel or thread object from the API, with its name and type."""
     channel_type = CHANNEL_TYPE_NAMES.get(data.get("type", 0), "text")
     existed = session.get(DiscordChannel, int(data["id"])) is not None
     channel = ensure_channel(
-        session, int(data["id"]), server_id, bot_id, name=data.get("name"), channel_type=channel_type
+        session, int(data["id"]), server_id, bot_id, name=data.get("name"), channel_type=channel_type, trusted=trusted
     )
     # A thread first stored from a message event was taken for a text channel.
     channel.channel_type = channel_type
@@ -281,8 +381,28 @@ def set_thread_parent(session: DBSession, thread: DiscordChannel, parent_id: int
     )
 
 
-def ensure_thread(session: DBSession, data: dict, bot_id: int, push_only: bool) -> DiscordChannel:
+def ensure_thread(
+    session: DBSession, data: dict, bot_id: int, push_only: bool, *, trusted: bool = False
+) -> DiscordChannel:
     server_id = snowflake(data.get("guild_id"))
     if server_id is not None:
         ensure_server(session, server_id, bot_id, collect=push_only)
-    return ensure_listed_channel(session, data | {"type": data.get("type", 11)}, server_id, bot_id)
+    return ensure_listed_channel(session, data | {"type": data.get("type", 11)}, server_id, bot_id, trusted=trusted)
+
+
+def reclaim_dms(session: DBSession, bot: DiscordBot) -> None:
+    """Give this bot its owner's DMs whose bot was deleted: those holding
+    messages that are the owner's."""
+    if bot.created_by_user_id is None:
+        return
+    owned = select(DiscordMessage.channel_id).where(DiscordMessage.creator_id == bot.created_by_user_id)
+    session.execute(
+        update(DiscordChannel)
+        .where(
+            DiscordChannel.bot_id.is_(None),
+            DiscordChannel.server_id.is_(None),
+            DiscordChannel.channel_type.in_(DM_CHANNEL_TYPES),
+            DiscordChannel.id.in_(owned),
+        )
+        .values(bot_id=bot.id)
+    )

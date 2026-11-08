@@ -23,6 +23,7 @@ from memory.common.db.models import (
     DiscordUser,
     User,
 )
+from memory.common.db.models.discord import DM_CHANNEL_TYPES
 
 
 def discord_channel_for_target(
@@ -265,7 +266,7 @@ def fetch_channels(
         query = query.filter(DiscordChannel.server_id == match.id)
 
     if not include_dms:
-        query = query.filter(DiscordChannel.channel_type != "dm")
+        query = query.filter(DiscordChannel.channel_type.notin_(DM_CHANNEL_TYPES))
     if name:
         query = query.filter(DiscordChannel.name.ilike(f"%{name}%"))
 
