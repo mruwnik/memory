@@ -1,4 +1,4 @@
-fastapi>=0.115.12
+fastapi>=0.140.0
 # Pin >=0.31 for CIDR support in --forwarded-allow-ips (ProxyHeadersMiddleware
 # switched from plain set-membership to ip_network matching there). Earlier
 # versions silently ignore CIDR strings, which makes deploying behind a
@@ -18,6 +18,9 @@ fastmcp==2.14.6
 # fastmcp 2.14 starts a Docket in every server lifespan; pin it so a new
 # pydocket release can't change server startup underneath us.
 pydocket==0.27.0
+# sse-starlette (via mcp) <3 binds one process-wide exit event to the first event
+# loop, so the tests' per-loop MCP servers hang on it.
+sse-starlette>=3
 slowapi==0.1.10
 cachetools>=5.3.0  # TTL-based caching for prediction market tools
 jinja2>=3.1.0  # Required by starlette Jinja2Templates (MCP OAuth login page)

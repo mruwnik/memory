@@ -19,18 +19,16 @@ def test_app_version_prefers_baked_in_env(monkeypatch):
     assert version.app_version() == "v1.2.3"
 
 
-def test_app_version_falls_back_to_git_describe(monkeypatch):
+def test_app_version_falls_back_to_git_describe(monkeypatch, tmp_path):
     monkeypatch.delenv("APP_VERSION", raising=False)
-    # On a tagged commit this is the bare tag, elsewhere it names the commit.
-    described = subprocess.run(
-        ["git", "describe", "--tags", "--always"],
-        cwd=version.REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
-    assert version.app_version() != "dev"
-    assert version.app_version().startswith(described)
+    git = ["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@t"]
+    git += ["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"]
+    subprocess.run([*git, "init", "-q"], check=True)
+    subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "c"], check=True)
+    subprocess.run([*git, "tag", "v9.9.9"], check=True)
+    monkeypatch.setattr(version, "REPO_ROOT", tmp_path)
+
+    assert version.app_version() == "v9.9.9"
 
 
 def test_app_version_is_dev_outside_a_git_checkout(monkeypatch, tmp_path):

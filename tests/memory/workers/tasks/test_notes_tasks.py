@@ -1025,7 +1025,7 @@ def test_git_tracking_unstages_its_paths_when_commit_fails(tmp_path):
     assert last_status()["failed_step"] == "commit"
 
 
-def test_git_tracking_skips_pulled_files_it_cannot_reindex(tmp_path, reindexed):
+def test_git_tracking_skips_pulled_files_it_cannot_reindex(tmp_path, reindexed, mock_make_session):
     vault, remote = make_vault(tmp_path, "master")
     other = tmp_path / "other"
     git(tmp_path, "clone", "-q", str(remote), str(other))

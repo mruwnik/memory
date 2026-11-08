@@ -2,6 +2,7 @@ import re
 from pathlib import Path
 
 import pytest
+from fastapi.routing import iter_route_contexts
 from fastapi.testclient import TestClient
 from starlette.routing import BaseRoute, Mount
 
@@ -30,11 +31,11 @@ def web(tmp_path, monkeypatch):
 def route_paths(routes: list[BaseRoute], prefix: str = "") -> list[str]:
     return [
         path
-        for route in routes
+        for context in iter_route_contexts(routes)
         for path in (
-            route_paths(route.routes, prefix + route.path)
-            if isinstance(route, Mount)
-            else [prefix + getattr(route, "path", "")]
+            route_paths(context.original_route.routes, prefix + (context.path or ""))
+            if isinstance(context.original_route, Mount)
+            else [prefix + (context.path or "")]
         )
     ]
 
