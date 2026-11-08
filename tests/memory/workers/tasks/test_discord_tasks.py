@@ -506,9 +506,19 @@ def test_a_discord_name_never_attaches_the_author_to_someones_person(
     assert author.person_id != alices_person.id
 
 
-@pytest.mark.parametrize("named_by", ["123456789", "testuser", ["old", "testuser"]])
-def test_the_author_attaches_to_the_person_whose_contact_info_names_them(
-    db_session, sample_message_data, discord_user, qdrant, named_by
+@pytest.mark.parametrize(
+    "named_by, attached",
+    [
+        ("123456789", True),
+        (["old", "123456789"], True),
+        (123456789, True),
+        ([1, 123456789], True),
+        ("testuser", False),
+        (["old", "testuser"], False),
+    ],
+)
+def test_the_author_attaches_only_to_the_person_whose_contact_info_has_their_id(
+    db_session, sample_message_data, discord_user, qdrant, named_by, attached
 ):
     person = Person(identifier="tess", display_name="Tess", contact_info={"discord": named_by})
     db_session.add(person)
@@ -517,7 +527,7 @@ def test_the_author_attaches_to_the_person_whose_contact_info_names_them(
     discord.add_discord_message(**sample_message_data)
 
     db_session.expire_all()
-    assert db_session.get(DiscordUser, discord_user.id).person_id == person.id
+    assert (db_session.get(DiscordUser, discord_user.id).person_id == person.id) == attached
 
 
 def test_discord_person_identifier_collision_does_not_claim_existing_person(db_session):

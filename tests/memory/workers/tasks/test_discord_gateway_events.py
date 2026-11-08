@@ -16,7 +16,6 @@ from memory.common.db.models import (
     DiscordUser,
     Event,
     HumanUser,
-    Person,
     Project,
 )
 from memory.api.discord import user_can_manage_channel
@@ -475,17 +474,6 @@ def test_a_push_never_renames_or_claims_existing_rows(db_session, webhook_bot, a
     assert db_session.get(DiscordChannel, int(CHANNEL)).name == "general"
 
 
-def test_a_push_never_links_the_author_to_a_person_by_username(db_session, webhook_bot, qdrant):
-    named = Person(identifier="alice", display_name="Alice", contact_info={"discord": "alice"})
-    db_session.add(named)
-    db_session.commit()
-
-    handle(webhook_bot, "MESSAGE_CREATE", message_create())
-
-    db_session.expire_all()
-    author = db_session.get(DiscordUser, int(AUTHOR))
-    assert author.person_id is not None
-    assert author.person_id != named.id
 
 
 DM_WITH_ALICE = {"id": CHANNEL, "type": 1, "recipients": [{"id": AUTHOR, "username": "alice"}]}

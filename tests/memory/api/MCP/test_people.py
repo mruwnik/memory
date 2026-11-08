@@ -1896,8 +1896,11 @@ async def test_upsert_create_attaches_discord_users_for_admins_only(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("named_as, attached", [("ceo", True), ("The CEO", False)])
-async def test_upsert_attaches_discord_users_by_username_not_display_name(
+@pytest.mark.parametrize(
+    "named_as, attached",
+    [("123456789", True), (123456789, True), ("ceo", False), ("The CEO", False), ("²", False), ("9" * 30, False)],
+)
+async def test_upsert_attaches_discord_users_by_id_only(
     db_session, admin_session, named_as, attached
 ):
     db_session.add(DiscordUser(id=123456789, username="ceo", display_name="The CEO"))

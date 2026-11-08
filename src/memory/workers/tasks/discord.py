@@ -15,8 +15,10 @@ from datetime import datetime
 from typing import Any, cast
 from uuid import uuid4
 
+from sqlalchemy import BigInteger, or_
+from sqlalchemy import cast as sql_cast
 from sqlalchemy import exc as sqlalchemy_exc
-from sqlalchemy import or_
+from sqlalchemy import func as sql_func
 
 from memory.common import paths, settings
 from memory.common.downloads import stream_download_to_path
@@ -96,18 +98,17 @@ def download_and_save_images(image_urls: list[str], message_id: int) -> list[str
     return saved_paths
 
 
-def person_for_discord_user(
-    session: DBSession, discord_user: DiscordUser, by_username: bool = True
-) -> Person:
-    """The Person whose contact_info names this account by id (or username,
-    when the username came from Discord itself), else a new Person. Never
-    matched by name: the account's owner picks those."""
-    names = [json_string(str(discord_user.id))]
-    if by_username:
-        names.append(json_string(discord_user.username))
+def person_for_discord_user(session: DBSession, discord_user: DiscordUser) -> Person:
+    """The Person whose contact_info names this account by id, else a new
+    Person. Never matched by username or name: a username can be taken by
+    another account after a rename."""
+    stored = Person.contact_info["discord"]
     named = (
         session.query(Person)
-        .filter(or_(*(Person.contact_info["discord"].contains(n) for n in names)))
+        .filter(or_(
+            stored.contains(json_string(str(discord_user.id))),
+            stored.contains(sql_func.to_jsonb(sql_cast(discord_user.id, BigInteger))),
+        ))
         .order_by(Person.id)
         .first()
     )
@@ -149,17 +150,14 @@ def add_discord_message(
     attachments: list[dict] | None = None,
     reactions: Reactions | None = None,
     is_edit: bool = False,
-    link_by_username: bool = True,
     backfill: bool = False,
 ) -> dict[str, Any]:
     """
     Add a Discord message to the database and queue for embedding.
 
-    ``link_by_username`` is off for pushed messages, whose author names are
-    only as trustworthy as the pushing bot's owner. ``backfill`` marks history
-    read below what was stored, which subscriptions don't react to. A new
-    message is filed under its channel's server as stored now: the channel
-    may have moved since the message was queued.
+    ``backfill`` marks history read below what was stored, which subscriptions
+    don't react to. A new message is filed under its channel's server as stored
+    now: the channel may have moved since the message was queued.
     """
     logger.debug(f"Adding Discord message {message_id}")
 
@@ -240,9 +238,7 @@ def add_discord_message(
 
         if discord_user := session.get(DiscordUser, author_id):
             if not discord_user.person:
-                discord_user.person = person_for_discord_user(
-                    session, discord_user, by_username=link_by_username
-                )
+                discord_user.person = person_for_discord_user(session, discord_user)
                 session.flush()
             if discord_user.person not in discord_message.people:
                 discord_message.people.append(discord_user.person)
@@ -450,7 +446,7 @@ def store_message(bot: DiscordBot, bot_ids: set[int], data: dict, is_edit: bool,
         session.commit()
     if not collect:
         return {"status": "skipped", "reason": "not_collected"}
-    return add_discord_message(**discord_events.message_task_kwargs(data, bot.id, is_edit), link_by_username=False)
+    return add_discord_message(**discord_events.message_task_kwargs(data, bot.id, is_edit))
 
 
 def update_message(bot: DiscordBot, bot_ids: set[int], data: dict, pushed: bool) -> dict[str, Any]:

@@ -33,43 +33,17 @@ def make_discord_user(discord_id: int, person_id: int | None = None,
 
 
 class FakeSession:
-    """Minimal session that returns canned objects for query/get."""
+    """Minimal session that returns canned objects for get."""
 
-    def __init__(self, *, discord_by_id=None, discord_by_name=None, person_by_id=None):
+    def __init__(self, *, discord_by_id=None, person_by_id=None):
         self._discord_by_id = discord_by_id or {}
-        self._discord_by_name = discord_by_name or {}
         self._person_by_id = person_by_id or {}
-
-    def query(self, model):
-        return _FakeQuery(self, model)
 
     def get(self, model, key):
         if model.__name__ == "DiscordUser":
             return self._discord_by_id.get(key)
         if model.__name__ == "Person":
             return self._person_by_id.get(key)
-        return None
-
-
-class _FakeQuery:
-    def __init__(self, session, model):
-        self._session = session
-        self._model = model
-        self._intent = None
-        self._args = None
-
-    def filter(self, *_conds):
-        # Don't try to introspect SQLAlchemy expressions; we just
-        # remember that filter was called and return self. The first()
-        # call below decides what to return based on model type.
-        return self
-
-    def first(self):
-        if self._model.__name__ == "DiscordUser":
-            # Pick whichever is set
-            if self._session._discord_by_name:
-                return next(iter(self._session._discord_by_name.values()), None)
-            return None
         return None
 
 

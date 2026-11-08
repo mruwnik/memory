@@ -210,8 +210,8 @@ def set_user_link(session: DBSession, person: Person, user_id: int) -> int:
 def link_discord_from_contact_info(
     session: DBSession, person: Person, contact_info: dict | None
 ) -> list[int]:
-    """Attach the Discord users named in contact_info to ``person``. Admin only:
-    a Discord account's messages follow its Person.
+    """Attach the Discord users whose ids are in contact_info to ``person``.
+    Admin only: a Discord account's messages follow its Person.
 
     Returns list of Discord user IDs that were linked.
     """
@@ -223,7 +223,7 @@ def link_discord_from_contact_info(
         return []
 
     # Normalize to list
-    if isinstance(discord_info, str):
+    if isinstance(discord_info, (str, int)):
         discord_identifiers = [discord_info]
     elif isinstance(discord_info, list):
         discord_identifiers = discord_info
@@ -238,19 +238,9 @@ def link_discord_from_contact_info(
         if not identifier:
             continue
 
-        # Try to find existing Discord user
-        discord_user = None
-
-        # Check if it's a numeric ID
-        if identifier.isdigit():
-            discord_user = session.get(DiscordUser, int(identifier))
-
-        # Usernames are unique on Discord; display names are not, and anyone picks theirs.
-        if not discord_user:
-            discord_user = (
-                session.query(DiscordUser).filter(DiscordUser.username == identifier).first()
-            )
-
+        # Only the id: a username can pass to another account after a rename.
+        is_snowflake = identifier.isdecimal() and int(identifier) < 2**63
+        discord_user = session.get(DiscordUser, int(identifier)) if is_snowflake else None
         if not discord_user:
             logger.debug(f"Discord user not found for identifier: {identifier}")
             continue
@@ -332,7 +322,7 @@ async def upsert(
 
     Only admins can set email, slack, github or discord contact info, including
     on creation. Only admins can change existing display names and aliases,
-    since those decide which content is linked to a person. Only admins' contact_info.discord attaches Discord users.
+    since those decide which content is linked to a person. Only admins' contact_info.discord attaches Discord users, by numeric user id only.
     A person is linked to a user only through user_id.
 
     Returns:
