@@ -33,9 +33,9 @@ def route_paths(routes: list[BaseRoute], prefix: str = "") -> list[str]:
         path
         for context in iter_route_contexts(routes)
         for path in (
-            route_paths(context.original_route.routes, prefix + context.path)
+            route_paths(context.original_route.routes, prefix + (context.path or ""))
             if isinstance(context.original_route, Mount)
-            else [prefix + context.path]
+            else [prefix + (context.path or "")]
         )
     ]
 

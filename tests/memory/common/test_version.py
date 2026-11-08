@@ -22,7 +22,7 @@ def test_app_version_prefers_baked_in_env(monkeypatch):
 def test_app_version_falls_back_to_git_describe(monkeypatch, tmp_path):
     monkeypatch.delenv("APP_VERSION", raising=False)
     git = ["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@t"]
-    git += ["-c", "commit.gpgsign=false"]
+    git += ["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"]
     subprocess.run([*git, "init", "-q"], check=True)
     subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "c"], check=True)
     subprocess.run([*git, "tag", "v9.9.9"], check=True)
