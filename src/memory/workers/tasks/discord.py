@@ -12,7 +12,7 @@ import hashlib
 import logging
 import pathlib
 from datetime import datetime
-from typing import Any, cast
+from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import BigInteger, or_
@@ -39,7 +39,6 @@ from memory.common.db.models.events import CAUSING_EVENT, reject_raw_event
 from memory.common.people import DBSession, json_string
 from memory.common.reactions import ReactionAction, Reactions, apply_reaction
 from memory.common.content_processing import (
-    check_content_exists,
     clear_item_chunks,
     create_task_result,
     process_content_item,
@@ -139,11 +138,14 @@ def is_stale_edit(message: DiscordMessage, edited_at: datetime | None) -> bool:
     return bool(message.edited_at and edited_at and edited_at < message.edited_at)
 
 
-def changes(message: DiscordMessage, is_edit: bool, content: str, edited_at: datetime | None) -> bool:
+def changes(
+    message: DiscordMessage, channel_id: int, is_edit: bool, content: str, edited_at: datetime | None
+) -> bool:
     """Whether storing this over the stored message changes it: only an edit
-    does, and not one that is unchanged or older than the stored edit."""
+    in its channel does (a message never moves; one naming another channel is
+    someone's forgery), and not one that is unchanged or older than the stored edit."""
     unchanged = message.content == content and edited_at in (None, message.edited_at)
-    return is_edit and not unchanged and not is_stale_edit(message, edited_at)
+    return is_edit and message.channel_id == channel_id and not unchanged and not is_stale_edit(message, edited_at)
 
 
 @app.task(name=ADD_DISCORD_MESSAGE)
@@ -184,14 +186,15 @@ def add_discord_message(
     # Images are fetched only for a message this call stores or edits: they
     # live under the message id, which a push may name for someone else's message.
     with make_session() as session:
-        existing = cast(DiscordMessage | None, check_content_exists(session, DiscordMessage, message_id=message_id))
-        if existing and not changes(existing, is_edit, content, edited_at_dt):
+        existing = find_message(session, message_id, None)
+        if existing and not changes(existing, channel_id, is_edit, content, edited_at_dt):
             return create_task_result(existing, "already_exists", message_id=message_id)
     saved_image_paths = download_and_save_images(images, message_id) if images else []
 
+    # Checked again, on the locked row: the message may have been stored while the images downloaded.
     with make_session() as session:
-        existing = cast(DiscordMessage | None, check_content_exists(session, DiscordMessage, message_id=message_id))
-        if existing and not changes(existing, is_edit, content, edited_at_dt):
+        existing = find_message(session, message_id, None, lock=True)
+        if existing and not changes(existing, channel_id, is_edit, content, edited_at_dt):
             return create_task_result(existing, "already_exists", message_id=message_id)
 
         if existing:

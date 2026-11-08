@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import pathlib
 from typing import cast
 from unittest.mock import patch
@@ -139,6 +140,18 @@ def test_stream_download_to_path_creates_parent_directory(tmp_path: pathlib.Path
         ok = stream_download_to_path("http://example.com/f", dest, max_bytes=1024)
     assert ok is True
     assert dest.exists()
+
+
+def test_a_download_outlasting_its_time_cap_fails(tmp_path: pathlib.Path):
+    """A server trickling bytes inside every read timeout still can't hold the download open."""
+    dest = tmp_path / "slow.bin"
+    clock = itertools.count(step=100)
+    with (
+        patch("memory.common.downloads.checked_get", return_value=_FakeChunkResponse([b"x"] * 4)),
+        patch("memory.common.downloads.time.monotonic", side_effect=lambda: next(clock)),
+    ):
+        ok = stream_download_to_path("http://example.com/f", dest, max_bytes=1024, max_seconds=250)
+    assert (ok, dest.exists()) == (False, False)
 
 
 @pytest.mark.parametrize(

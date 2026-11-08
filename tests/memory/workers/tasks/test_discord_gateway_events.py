@@ -1,11 +1,15 @@
 """Gateway event payloads (as carried by Discord Webhook Events) stored like collected messages."""
 
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import patch
+from typing import cast
+from unittest.mock import ANY, patch
 
 import httpx
 import pytest
+from celery import Task
+from celery.exceptions import Retry
 
 from memory.common.db.models import (
     DiscordBot,
@@ -877,6 +881,31 @@ def test_a_push_reusing_a_stored_message_id_never_touches_its_images(db_session,
     download.assert_not_called()
 
 
+@pytest.mark.parametrize("event_type", ["MESSAGE_CREATE", "MESSAGE_UPDATE"])
+def test_a_message_stored_elsewhere_while_a_push_downloads_its_images_is_never_overwritten(
+    db_session, user_owned_bot, attacker_bot, qdrant, event_type
+):
+    """A slow image keeps the push between its checks while the gateway stores the real message in another channel."""
+    victims_server(db_session, user_owned_bot)
+    server_of(db_session, ATTACKERS_GUILD, attacker_bot)
+    db_session.add(DiscordChannel(id=55, server_id=ATTACKERS_GUILD, name="mine", channel_type="text"))
+    db_session.commit()
+
+    def gateway_stores_the_real_one(urls, message_id):
+        handle(user_owned_bot, "MESSAGE_CREATE", message_create(), pushed=False)
+        return ["discord/forged.png"]
+
+    with patch.object(discord, "download_and_save_images", side_effect=gateway_stores_the_real_one):
+        handle(attacker_bot, event_type, message_create(
+            channel_id="55", guild_id=str(ATTACKERS_GUILD), content=FORGED_TEXT, attachments=[image_attachment(CDN)],
+        ))
+
+    message = stored(db_session)
+    assert (message.content, message.channel_id, message.images, message.bot_id) == (
+        LONG_TEXT, int(CHANNEL), None, user_owned_bot.id,
+    )
+
+
 @pytest.mark.parametrize("guild", [{"guild_id": GUILD}, {}], ids=["naming the server", "naming none"])
 def test_a_co_members_forged_edit_never_holds_back_a_real_one(db_session, user_owned_bot, attacker_bot, qdrant, guild):
     co_member(db_session, user_owned_bot, attacker_bot)
@@ -1328,16 +1357,31 @@ def two_disowned_forgeries(db_session, holder) -> list[int]:
     return [m.id for m in db_session.query(DiscordMessage).order_by(DiscordMessage.id)]
 
 
-def test_a_check_discord_cannot_answer_now_keeps_what_it_read_and_is_retried(
-    db_session, user_owned_bot, discord_api, qdrant
+@contextmanager
+def task_request(task, **fields):
+    """Run a task's body as a worker would, with this request (its retry count)."""
+    task.push_request(**fields)
+    try:
+        yield
+    finally:
+        task.pop_request()
+
+
+@pytest.mark.parametrize("retries, countdown", [(0, 60), (3, 480), (10, 3600)])
+def test_a_check_discord_cannot_answer_now_keeps_what_it_read_and_retries_the_rest(
+    db_session, user_owned_bot, discord_api, qdrant, retries, countdown
 ):
     ids = two_disowned_forgeries(db_session, user_owned_bot)
     discord_api.channels[(SECOND_TOKEN, f"{CHANNEL}/messages/{MESSAGE}")] = message_create()
     discord_api.channels[(SECOND_TOKEN, f"{CHANNEL}/messages/62")] = httpx.Response(429, json={"retry_after": 600})
+    task = cast(Task, discord.verify_discord_messages)
 
-    with pytest.raises(rest.DiscordAPIError):
-        discord.verify_discord_messages(user_owned_bot.id, ids)
+    with task_request(task, retries=retries), patch.object(task, "retry", side_effect=Retry()) as retry:
+        with pytest.raises(Retry):
+            task.run(user_owned_bot.id, ids)
 
+    retry.assert_called_once_with(exc=ANY, args=[user_owned_bot.id, ids[1:]], countdown=countdown)
+    assert retry.call_args.kwargs["exc"].status == 429
     db_session.expire_all()
     assert [m.content for m in db_session.query(DiscordMessage).order_by(DiscordMessage.id)] == [LONG_TEXT, FORGED_TEXT]
 

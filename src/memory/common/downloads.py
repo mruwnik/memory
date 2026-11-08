@@ -2,6 +2,7 @@
 
 import logging
 import pathlib
+import time
 import uuid
 from typing import Any, Literal, Mapping, overload
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
@@ -402,6 +403,10 @@ def stream_download_to_bytes(
         return (None, None) if return_content_type else None
 
 
+# Bytes per second (1 Mbit/s): the slowest link a full-size download must still finish on.
+MIN_DOWNLOAD_RATE = 125_000
+
+
 def stream_download_to_path(
     url: str,
     destination: pathlib.Path,
@@ -409,10 +414,15 @@ def stream_download_to_path(
     *,
     headers: Mapping[str, str] | None = None,
     timeout: float = 30.0,
+    max_seconds: float | None = None,
     follow_redirects: bool = True,
     validate_url: bool = True,
 ) -> bool:
     """Stream ``url`` to ``destination``. Returns True on success.
+
+    ``timeout`` bounds each read; ``max_seconds`` the whole download (by
+    default long enough for ``max_bytes`` at ``MIN_DOWNLOAD_RATE``), so a
+    server trickling bytes can't hold a worker (or the caller's state) open.
 
     The body goes to a temporary file beside it, moved into place only once
     complete, so a failure leaves no partial file and never removes one a
@@ -422,6 +432,7 @@ def stream_download_to_path(
     """
     destination.parent.mkdir(parents=True, exist_ok=True)
     partial = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.part")
+    deadline = time.monotonic() + (max_seconds or max(300.0, max_bytes / MIN_DOWNLOAD_RATE))
     try:
         with safe_get(
             url,
@@ -436,7 +447,7 @@ def stream_download_to_path(
             if _content_length_exceeds_cap(response.headers, max_bytes, url):
                 return False
 
-            if not _write_streaming(partial, response.iter_content(chunk_size=_CHUNK_SIZE), max_bytes, url):
+            if not _write_streaming(partial, response.iter_content(chunk_size=_CHUNK_SIZE), max_bytes, url, deadline):
                 return False
         partial.replace(destination)
         return True
@@ -455,10 +466,12 @@ def _write_streaming(
     chunks,
     max_bytes: int,
     url: str,
+    deadline: float,
 ) -> bool:
-    """Write a chunk iterator to ``destination`` with a hard cap.
+    """Write a chunk iterator to ``destination`` with a hard size cap, until
+    the ``time.monotonic`` deadline.
 
-    Cleans up the partial file if the cap is exceeded so callers always
+    Cleans up the partial file if a cap is exceeded so callers always
     see either a complete file (returns True) or no file at all (returns
     False). Internal helper — not part of the public API.
     """
@@ -474,6 +487,11 @@ def _write_streaming(
                     url,
                     max_bytes,
                 )
+                f.close()
+                destination.unlink(missing_ok=True)
+                return False
+            if time.monotonic() > deadline:
+                logger.warning("Download from %s aborted: took longer than its time cap", url)
                 f.close()
                 destination.unlink(missing_ok=True)
                 return False

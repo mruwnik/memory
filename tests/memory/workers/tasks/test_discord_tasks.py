@@ -571,7 +571,7 @@ def test_a_concurrent_duplicate_insert_is_reported_as_existing(db_session, sampl
     discord.add_discord_message(**sample_message_data)
     racing = sample_message_data | {"content": "the racing delivery's own text for this message"}
 
-    with patch.object(discord, "check_content_exists", return_value=None), caplog.at_level("INFO"):
+    with patch.object(discord, "find_message", return_value=None), caplog.at_level("INFO"):
         result = discord.add_discord_message(**racing)
 
     assert result["status"] == "already_exists"
