@@ -22,6 +22,10 @@ a new, empty `## Unreleased` above it.
 
 ## Unreleased
 
+## v0.5.0 (2026-11-08)
+
+The event pipeline: everything that reacts to new data is now a subscription (events → subscriptions → handlers). Bullets are in the order the work landed, so later ones supersede earlier ones: the `agent_trigger_*` and `scheduler_*` tools that earlier bullets name are replaced by `subscription_*`, and `agent_triggers` / `agent_trigger_matches` / `trigger_id` are renamed `subscriptions` / `deliveries` / `subscription_id` by `20261217_subscriptions_contract`.
+
 ### Changes
 
 - A DM (or group DM) to one of your Discord bots is collected by default when its sender shares a server with the bot (in the gateway's member list for one of its servers, or having posted in one), over the gateway and webhook delivery alike; other DMs stay untracked (a `not_collected` stub, no channel row). Each bot card lists its DMs under **Direct messages** (new endpoint `GET /discord/bots/{bot_id}/dms`), named after the other person, where any can be set to Skip or Collect. The daily catch-up reads a DM's last `DISCORD_CATCH_UP_DAYS`; its older history is crawled only once it is set to Collect. A DM's messages belong to the owner of its bot, and only when that owner's bot delivered them: they're visible to that owner and admins, plus anyone a project given to the DM grants. DM rows already stored without a setting start collecting; DM messages stored before this release get their owner at the next daily access-control sweep. Adding a removed bot again gives it back its owner's DMs, and a new bot lists its servers straight away (new task `discover_bot` on the backfill queue). `discord_list_channels(include_dms=false)` now leaves out group DMs too.
@@ -68,6 +72,14 @@ a new, empty `## Unreleased` above it.
 - Subscriptions and deliveries are named so throughout: a run's `subscription_id` (in `agent_fetch`, `agent_list_runs` and `subscription_fetch`) replaces `trigger_id`, and so does its ref's key (`ref.subscription_id` in claimed queue deliveries, ticks and raw deliveries; refs of runs made before this keep `trigger_id`). `agent_list_all` gives each definition's `subscriptions` summary (was `triggers`), `agent_catalog` gives `subscription_source_types` (was `trigger_source_types`), and the default filter template says "New items matched this subscription". Default names left by earlier conversions (`trigger-<id>`, `schedule-<task id>`) become `subscription-<id>`. A run's `trigger_kind` and `trigger_ref` keep their names: they say what started any run (manual, mcp, agent, cron, timer, ingest, raw). The runs pages label timer and webhook-event runs.
 - Initial imports no longer fire subscriptions: a polled Slack message last edited (else sent), an email received (by IMAP INTERNALDATE or Gmail `internalDate`, else its `Date`), or a new GitHub issue or PR last updated more than `EVENT_BACKFILL_AGE_DAYS` (2) before it's stored counts as backfill. Slack pushes are always live, and an edit today to an old message is live. After a poll outage longer than `EVENT_BACKFILL_AGE_DAYS`, the items the poll catches up don't fire subscriptions.
 
+### Required env vars
+
+None.
+
+### Manual steps
+
+- If the instance sets `AGENT_MAX_TRIGGERS_PER_USER`, rename it `AGENT_MAX_SUBSCRIPTIONS_PER_USER` before updating; otherwise it falls back to the default (20).
+
 ### Other changes for operators
 
 - New optional `EVENT_BACKFILL_AGE_DAYS` (default 2): how much older than its store a Slack message, email or new GitHub item must be to count as backfill.
@@ -93,6 +105,10 @@ a new, empty `## Unreleased` above it.
 - `20261215_delivery_events`: adds nullable `event_id` to `agent_trigger_matches`, and builds two indexes on it concurrently (on `event_id`, and on `trigger_id, created_at DESC`), so routing isn't blocked. If interrupted, drop any INVALID `agent_trigger_matches_*_idx` it left and run it again.
 - `20261216_raw_subscriptions`: allows `agent_triggers.kind = 'raw'`, drops the foreign key from `agent_trigger_matches.item_id` to `source_item`, so a deleted item's deliveries are kept until the nightly purge, and builds `agent_runs_raw_event_idx` concurrently (on the raw event a raw subscription's run delivers). Re-runnable. If interrupted, drop the index if INVALID and run it again.
 - `20261217_subscriptions_contract`: renames `agent_triggers` to `subscriptions`, `agent_trigger_matches` to `deliveries` and `trigger_id` to `subscription_id` on `agent_runs`, `deliveries` and `events`, with their indexes, constraints and id sequence (found by lookup; a name off the usual pattern is kept), and renames default names to `subscription-<id>`. The renames are metadata only but need a brief exclusive lock on each table; the migration gives up after 30s waiting for any one of them, holding the locks it already has meanwhile, so at worst it waits about 2 minutes, which is harmless under `tools/update.sh` (stop the workers and retry if it gives up). It then limits `deliveries.status` to the statuses the pipeline records: added NOT VALID, then validated after the renames commit, which scans `deliveries` without blocking writes. If validation fails, a delivery holds a status nothing writes. Don't roll back to the previous release, since the renames are already committed: find the rows with `SELECT status, count(*) FROM deliveries GROUP BY 1`, fix them, and run the migration again (it is re-runnable).
+
+### Post-deploy commands
+
+None.
 
 ## v0.4.11 (2026-11-07)
 
