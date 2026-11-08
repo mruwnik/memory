@@ -369,6 +369,8 @@ def days_ago(days: float) -> datetime:
         ("Date: Tue, 14 May 2024 10:00:00 +0000", 0, False),
         (f"Date: {format_datetime(days_ago(0))}", 5, True),
     ],
+    # The headers hold the time of collection, which xdist workers must agree on.
+    ids=["sent-now", "sent-1.9d", "sent-2.1d", "sent-2024", "sent-5d-naive", "no-date", "received-now", "received-5d"],
 )
 def test_mail_received_long_before_it_is_stored_is_backfill(
     db_session, test_email_account, qdrant, date_header, received_days_ago, backfill
