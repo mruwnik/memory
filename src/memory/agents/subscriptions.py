@@ -1635,12 +1635,12 @@ def tell_throttled(db: DBSession, subscription: Subscription, reason: str) -> No
     owner = db.get(User, subscription.user_id)
     if owner is None:
         return
-    # Raw deliveries are shed at once: a webhook delivery is news only while it's fresh.
-    held = (
-        "Its deliveries over it are shed, each recorded as a failed run."
-        if subscription.kind == RAW
-        else "Its deliveries wait up to an hour, and any still over it then are dropped."
-    )
+    # Raw deliveries and ticks are shed at once: a webhook delivery is news only
+    # while it's fresh, and a deferred tick would run into the next one.
+    held = {
+        INGEST: "Its deliveries wait up to an hour, and any still over it then are dropped.",
+        RAW: "Its deliveries over it are shed, each recorded as a failed run.",
+    }.get(subscription.kind, "Its ticks over it are skipped.")
     tell_owner(
         db,
         owner,

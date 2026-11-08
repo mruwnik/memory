@@ -205,7 +205,8 @@ def test_an_unparseable_cron_trips_its_subscription(db_session, regular_user):
     clock.write_ticks(db_session, NOW, notices)
     db_session.commit()
 
-    assert (subscription.enabled, "tripped" in subscription.state, len(notices.tripped)) == (False, True, 1)
+    assert (subscription.enabled, subscription.next_at, "tripped" in subscription.state) == (False, None, True)
+    assert len(notices.tripped) == 1
     assert ticks(db_session, subscription) == []
 
 
@@ -434,6 +435,41 @@ def test_a_handoff_is_resent_after_its_grace(db_session, regular_user, no_celery
 
     db_session.refresh(event)
     assert (event.attempts, handoffs(no_celery_dispatch, SEND_TIME_NOTIFY)) == (2, [[event.id]])
+
+
+def test_a_handoff_never_delivered_fails_and_tells_its_owner_before_it_is_late(db_session, regular_user):
+    event = timer(db_session, regular_user, NOW, handler={"agent": "echo"})
+    notices = clock.Notices()
+
+    for step in range(clock.MAX_DISPATCHES + 1):
+        at = NOW + step * clock.MAX_RESEND_WAIT
+        for due in clock.due_events(db_session, at):
+            clock.deliver(db_session, due, at, notices)
+        db_session.commit()
+
+    db_session.refresh(event)
+    assert clock.MAX_DISPATCHES * clock.MAX_RESEND_WAIT < clock.MAX_LATENESS
+    assert (event.result, notices.failed_timers) == (
+        {"status": "failed", "error": "it was handed off but never delivered"},
+        [(regular_user.id, event.id, "it was handed off but never delivered")],
+    )
+
+
+def test_a_lost_tick_handoff_fails_the_tick_without_tripping(db_session, regular_user, no_celery_dispatch, told):
+    subscription = cron_subscription(
+        db_session, regular_user, next_at=datetime.now(UTC) + timedelta(hours=1), state={"failures": 2}
+    )
+    event = tick(db_session, subscription, datetime.now(UTC) - timedelta(hours=2))
+    event.attempts, event.dispatched_at = clock.MAX_DISPATCHES, datetime.now(UTC) - timedelta(hours=1)
+    db_session.commit()
+
+    clock.run_clock()
+
+    db_session.refresh(event)
+    db_session.refresh(subscription)
+    assert (event.result["status"], subscription.enabled, subscription.state, told) == (
+        "failed", True, {"failures": 2}, [],
+    )
 
 
 def test_a_second_clock_waits_for_the_first(db_session, db_engine, regular_user, no_celery_dispatch):

@@ -64,7 +64,10 @@ LATE_AFTER = timedelta(minutes=5)
 MAX_LATENESS = timedelta(hours=6)
 # A handoff still undelivered this long after it was sent is sent again, each
 # resend waiting twice as long, so a backlogged queue doesn't fill with copies.
+# The cap keeps all MAX_DISPATCHES resends well inside MAX_LATENESS, so a lost
+# handoff fails, and its owner hears of it, before lateness would skip it.
 DISPATCH_GRACE_MINUTES = 2
+MAX_RESEND_WAIT = timedelta(minutes=30)
 MAX_DISPATCHES = 8
 CLOCK_BATCH = 50
 CLOCK_LOCK_KEY = 0x636C6F636B  # "clock"
@@ -274,7 +277,7 @@ def trip(db: DBSession, subscription_id: int, reason: str) -> Subscription | Non
     subscription = lock_subscription(db, subscription_id)
     if subscription is None or not subscription.enabled:
         return None
-    subscription.enabled = False
+    subscription.enabled, subscription.next_at = False, None
     subscription.state = (subscription.state or {}) | {"tripped": {"reason": reason, "at": utcnow().isoformat()}}
     logger.warning("cron subscription %s tripped", subscription.id)
     return subscription
@@ -335,6 +338,7 @@ def deliver(db: DBSession, event: Event, now: datetime, notices: Notices) -> str
         fail(db, event, target, "only notify and agent handlers take ticks and timers", notices)
         return None
     if event.attempts >= MAX_DISPATCHES:
+        # An infrastructure fault the owner can't fix, so it never trips.
         fail(db, event, target, "it was handed off but never delivered", notices, trip_it=False)
         return None
     event.dispatched_at, event.attempts = now, event.attempts + 1
@@ -490,7 +494,10 @@ def due_events(db: DBSession, now: datetime) -> list[Event]:
         0,
         0,
         0,
-        cast(DISPATCH_GRACE_MINUTES * func.power(2, func.greatest(Event.attempts - 1, 0)), Integer),
+        func.least(
+            cast(DISPATCH_GRACE_MINUTES * func.power(2, func.greatest(Event.attempts - 1, 0)), Integer),
+            int(MAX_RESEND_WAIT.total_seconds() // 60),
+        ),
     )
     return list(
         db.scalars(

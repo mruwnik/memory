@@ -23,7 +23,17 @@ from memory.agents.enqueue import TriggerInfo, enqueue_run
 from memory.agents.prebuilt import code_agent
 from memory.agents.principal import standing_key
 from memory.agents.spec import AgentSpec
-from memory.agents.subscriptions import DONE, SHED_BUDGET, SHED_RATE, SKIPPED_DISABLED
+from memory.agents.subscriptions import (
+    DONE,
+    SHED_BUDGET,
+    SHED_RATE,
+    SKIPPED_DISABLED,
+    THROTTLED,
+    episode_over,
+    lock_subscription,
+    tell_throttled,
+    throttled,
+)
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import AgentDefinition, AgentRun, Event
 from memory.common.db.models.agents import iso
@@ -65,6 +75,9 @@ def start(db: DBSession, event: Event, target: Target) -> AgentRun:
     key = standing_key(db, target.owner, target.api_key_id, SCOPE_AGENTS)
     # Ended in the run's own transaction, which enqueue_run commits.
     finish(event, DONE)
+    subscription = lock_subscription(db, event.subscription_id) if event.subscription_id else None
+    if subscription is not None and THROTTLED in subscription.state and episode_over(subscription.state, utcnow()):
+        subscription.state = {k: v for k, v in subscription.state.items() if k != THROTTLED}
     run = enqueue_run(
         db,
         user_id=target.owner.id,
@@ -91,8 +104,8 @@ def start_time_run(event_id: int) -> str | None:
     the run's dedupe key makes a resend after a crash reuse the run.
 
     A tick or timer that waited past MAX_LATENESS is skipped; a cap that stops
-    the run sheds it; a definition, key or scope that's gone fails it, and trips
-    a subscription.
+    the run sheds it, telling a timer's owner, and a tick's once per throttling
+    episode; a definition, key or scope that's gone fails it, and trips a subscription.
     """
     with make_session() as db:
         event = db.get(Event, event_id, with_for_update=True)
@@ -112,8 +125,15 @@ def start_time_run(event_id: int) -> str | None:
         except CapExceeded as e:
             db.rollback()
             event = db.get_one(Event, event_id, with_for_update=True)
-            finish(event, SHED_RATE if isinstance(e, RateExceeded) else SHED_BUDGET, error=str(e))
+            reason = str(e)
+            finish(event, SHED_RATE if isinstance(e, RateExceeded) else SHED_BUDGET, error=reason)
+            subscription = lock_subscription(db, event.subscription_id) if event.subscription_id else None
+            episode = subscription if subscription is not None and throttled(subscription, reason) else None
+            shed_timers = [(target.owner.id, event.id, reason)] if event.kind == TIMER else []
             db.commit()
+            Notices(failed_timers=shed_timers).tell(db)
+            if episode:
+                tell_throttled(db, episode, reason)
         # An invalid spec and revoked credentials are ValueErrors.
         except ValueError as e:
             db.rollback()

@@ -765,6 +765,8 @@ async def delete(subscription_id: int | None = None, timer_id: int | None = None
         timer = db.scalar(owned_timer.with_for_update())
         if timer is None:
             raise ValueError(f"unknown timer {timer_id}")
+        if (timer.result or {}).get("status") == SKIPPED_CANCELLED:
+            raise ValueError(f"timer {timer_id} is already cancelled")
         if timer.routed_at is not None:
             raise ValueError(f"timer {timer_id} already fired")
         check_binding((timer.data or {}).get("api_key_id"), key)

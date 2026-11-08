@@ -125,7 +125,9 @@ def test_a_timer_runs_a_code_agent_by_slug(db_session, owner, code_agents, slug)
     assert (run.agent, run.definition_id, run.input) == (slug, None, "x")
 
 
-def test_a_code_agents_hourly_cap_sheds_its_timers(db_session, owner, code_agents, monkeypatch):
+def test_a_code_agents_hourly_cap_sheds_its_timers_and_tells_the_owner(
+    db_session, owner, code_agents, monkeypatch, told
+):
     monkeypatch.setattr(settings, "AGENT_MAX_RUNS_PER_HOUR", 1)
     timers = [
         Event(kind="timer", owner_id=owner.id, fire_at=now(), handler={"agent": "echo"}, data={"input": "x"})
@@ -139,6 +141,7 @@ def test_a_code_agents_hourly_cap_sheds_its_timers(db_session, owner, code_agent
 
     db_session.expire_all()
     assert [t.result["status"] for t in timers] == ["done", "skipped:shed:rate"]
+    assert told == ["Timer failed"]
 
 
 def test_a_redelivery_does_nothing(db_session, owner, fake_providers):
@@ -203,7 +206,7 @@ def test_a_subscription_that_can_never_run_fails_and_trips(
     assert db_session.query(AgentRun).count() == 0
 
 
-def test_a_cap_sheds_the_tick_and_keeps_the_subscription(db_session, owner, fake_providers):
+def test_a_cap_sheds_the_tick_and_tells_the_owner_once(db_session, owner, fake_providers, monkeypatch):
     d = definition(db_session, owner, SPEC | {"max_cost_usd_per_day": "0.000001"})
     db_session.add(
         AgentRun(
@@ -213,13 +216,34 @@ def test_a_cap_sheds_the_tick_and_keeps_the_subscription(db_session, owner, fake
     )
     db_session.commit()
     subscription = new_subscription(db_session, owner, d)
+    first, second = tick(db_session, subscription), tick(db_session, subscription, now() + timedelta(seconds=1))
+    told = []
+    monkeypatch.setattr(
+        "memory.agents.subscriptions.tell_owner", lambda db, owner, subject, message: told.append(subject)
+    )
+
+    start_time_run(first.id)
+    start_time_run(second.id)
+
+    db_session.expire_all()
+    assert [e.result["status"] for e in (first, second)] == ["skipped:shed:budget"] * 2
+    assert (subscription.enabled, "throttled" in subscription.state) == (True, True)
+    assert told == ["Agent subscription throttled: daily"]
+
+
+@pytest.mark.parametrize("hours_ago, kept", [(0, True), (3, False)])
+def test_a_tick_that_runs_ends_a_throttling_episode_only_once_it_is_over(
+    db_session, owner, fake_providers, hours_ago, kept
+):
+    subscription = new_subscription(db_session, owner, definition(db_session, owner))
+    last = (now() - timedelta(hours=hours_ago)).isoformat()
+    subscription.state = {"throttled": {"reason": "cap", "since": last, "last": last}}
     e = tick(db_session, subscription)
 
     start_time_run(e.id)
 
-    db_session.refresh(e)
     db_session.refresh(subscription)
-    assert (e.result["status"], subscription.enabled) == ("skipped:shed:budget", True)
+    assert ("throttled" in subscription.state) == kept
 
 
 def test_a_disabled_subscriptions_tick_is_skipped(db_session, owner, fake_providers):

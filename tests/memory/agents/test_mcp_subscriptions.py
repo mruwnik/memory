@@ -788,7 +788,7 @@ async def test_list_delete_and_cancel(db_session, regular_user, user_session):
         await delete(subscription_id=cron["id"])
         after = await list_all()
         with_fired = await list_all(include_fired=True)
-        with pytest.raises(ValueError, match="already fired"):
+        with pytest.raises(ValueError, match=f"timer {timer['id']} is already cancelled"):
             await delete(timer_id=timer["id"])
 
     assert ([s["id"] for s in listed["subscriptions"]], [t["id"] for t in listed["timers"]]) == (

@@ -22,6 +22,9 @@ a new, empty `## Unreleased` above it.
 
 ## Unreleased
 
+### Changes
+- A schedule handoff the agents worker never picks up fails, and a failed timer tells its owner, within about 2.5h instead of turning "late" after 6h; it never pauses the subscription. A cron tick a cap stops is still skipped, but the owner is told once per throttling episode, and an agent timer a cap stops tells its owner it failed. A tripped cron clears its next run time.
+
 ## v0.5.0 (2026-11-08)
 
 The event pipeline: everything that reacts to new data is now a subscription (events → subscriptions → handlers). Bullets are in the order the work landed, so later ones supersede earlier ones: the `agent_trigger_*` and `scheduler_*` tools that earlier bullets name are replaced by `subscription_*`, and `agent_triggers` / `agent_trigger_matches` / `trigger_id` are renamed `subscriptions` / `deliveries` / `subscription_id` by `20261217_subscriptions_contract`.
