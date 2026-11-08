@@ -24,7 +24,7 @@ from memory.common.db.models import (
     SlackMessage,
     SlackWorkspace,
 )
-from tests.conftest import mcp_auth_context, route_item, unique_sha256
+from tests.conftest import mcp_auth_context, route_item, shown, unique_sha256
 from tests.memory.agents.test_deliveries import BATCH, age, post, statuses
 from tests.memory.agents.test_subscriptions import posted_run
 from tests.memory.agents.test_work import backdate, expire_lease, submit_run
@@ -168,7 +168,7 @@ async def test_a_queue_delivery_is_claimed_by_its_queue_rendered_now_and_reporte
     [delivery] = db_session.query(Delivery).all()
     assert (other_queue, no_queue, fires(no_celery_dispatch)) == (None, None, [])
     assert "rewritten after routing" in claimed["input"]
-    assert claimed["input"].startswith("Look: ")
+    assert shown(claimed["input"]).startswith("Look: ")
     assert (claimed["queue"], claimed["ref"]) == (
         QUEUE,
         {"subscription_id": subscription.id, "item_ids": [item.id], "changes": {str(item.id): ["new"]}},
@@ -202,7 +202,7 @@ async def test_a_removed_item_reaches_its_queue_after_its_earlier_delivery_is_an
         "item_ids": [item_id],
         "changes": {str(item_id): ["removed"]},
     }
-    assert removal["input"] == f"Look: - [item #{item_id}] removed"
+    assert shown(removal["input"]) == f"Look: - [item #{item_id}] removed"
 
 
 @pytest.mark.asyncio
@@ -563,6 +563,9 @@ async def test_a_lapsed_run_drops_what_the_subscription_reported_posting_since(
 
     assert again is None
     assert run_status(db_session, first["id"]) == "failed"
+    assert db_session.get(AgentRun, first["id"]).error == (
+        "its subscription's runs already posted everything it can read of it"
+    )
     assert [
         d.status for d in db_session.query(Delivery).filter_by(run_id=first["id"])
     ] == ["skipped:posted"]
@@ -668,10 +671,13 @@ async def test_a_coalescing_batch_claims_an_item_once_at_its_latest(
 @pytest.mark.asyncio
 async def test_work_queues_shows_each_queues_backlog(db_session, regular_user, worker_session):
     subscription = subscribe(db_session, regular_user)
-    subscribe(db_session, regular_user, queue="idle", enabled=False)
+    idle = subscribe(db_session, regular_user, queue="idle")
     for _ in range(2):
         route_item(db_session, post(db_session, creator_id=regular_user.id).id)
     age(db_session, subscription, timedelta(minutes=5))
+    # A disabled subscription's deliveries wait for no worker.
+    idle.enabled = False
+    db_session.commit()
 
     with mcp_auth_context(worker_session.token):
         seen = (await agent.work_queues.fn())["queues"]

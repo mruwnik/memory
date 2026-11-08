@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 import redis
 from sqlalchemy.exc import InterfaceError, OperationalError
@@ -21,6 +22,8 @@ from memory.common.db.models.slack import (
 )
 from memory.common.db.models.source_items import SlackMessage
 from memory.common.redis_lock import Lock
+from memory.common.safe_http import BlockedDestination
+from memory.common.slack import SlackAPIError
 from memory.workers.tasks import slack
 
 
@@ -1171,6 +1174,22 @@ def test_add_slack_message_uses_only_the_pushing_apps_credentials(
         message_ts=sample_message_data["message_ts"]
     ).one()
     assert message.author_name == author_name
+
+
+@pytest.mark.parametrize(
+    "error",
+    [httpx.ConnectError("down"), httpx.ReadTimeout("slow"), BlockedDestination(), SlackAPIError("ratelimited")],
+)
+def test_a_message_is_stored_when_its_mentions_cannot_be_resolved(
+    db_session, sample_message_data, slack_credentials, error, qdrant
+):
+    with patch("memory.workers.tasks.slack.build_user_cache", side_effect=error):
+        result = slack.add_slack_message(**sample_message_data | {"content": "hi <@U1> " * 10})
+
+    message = db_session.query(SlackMessage).filter_by(
+        message_ts=sample_message_data["message_ts"]
+    ).one()
+    assert (result["status"], message.author_name) == ("processed", None)
 
 
 @pytest.mark.parametrize(

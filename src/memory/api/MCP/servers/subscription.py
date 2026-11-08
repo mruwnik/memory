@@ -411,16 +411,17 @@ async def upsert(
       {"mode": "per_item"} (default) or {"mode": "batch", "window_sec", "max_items"}.
       template: the delivery's text, with {items}, {items_json} and, per item,
       {item.<field>} (an unknown field is refused, listing the valid ones); text people
-      wrote arrives inside <untrusted_item> delimiters. on_edit: an item already
+      wrote arrives inside <untrusted_item_<id>> blocks, the id named on the input's
+      first line. on_edit: an item already
       delivered is delivered again when it changes; on_changes limits that to edits
       reporting one of: edited, commits, comments, review, checks, checks_complete,
       state, labels, assignees, draft, title, due, priority. An item stored before
       the subscription matches once its sync reports news about it (commits,
       comments, review, checks_complete or state). Our own bots' posts, your own
-      Slack messages (except for queue handlers; set filter.exclude_own) and items
-      the subscription's runs reported posting never match. on_remove: an item
-      the subscription was delivered is delivered again once removed, as its id
-      with the change "removed".
+      Slack and Discord messages (except for queue handlers; set
+      filter.exclude_own) and items the subscription's runs reported posting never
+      match. on_remove: an item the subscription was delivered is delivered again
+      once removed, as its id with the change "removed".
     - {"raw": {"source": github|slack|discord|transcripts, "account_id", "types",
       "outcome"}}: webhook deliveries to your own accounts of that source (one, with
       account_id) from now on, whether or not anything was stored (queue handlers).
@@ -430,7 +431,7 @@ async def upsert(
       the event's id, source, type, outcome, account and container, and the items
       it stored that you can read (not for GitHub, whose refetches aren't linked to
       deliveries); its input, the payload (kept only when nothing was stored, for 7
-      days) inside <untrusted_item>, or "payload withheld" unless both the
+      days) inside an <untrusted_item_<id>> block, or "payload withheld" unless both the
       subscription's key and yours could read the items filed where it came from.
       Anything that becomes an item is better taken as a filter source, which
       gap-fill polling also feeds. Takes max_per_hour (default

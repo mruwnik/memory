@@ -25,7 +25,7 @@ from memory.agents.fire import count_failure, hold_back, trip
 from memory.agents.principal import PrincipalRevoked
 from memory.agents.raw_events import ACCOUNTS, ROUTABLE, account_owner, container_of, reads_container
 from memory.agents.spec import MAX_TEXT_CHARS
-from memory.agents.subscription_input import bare, render_input, untrusted
+from memory.agents.subscription_input import CLIPPED, bare, new_tag, preamble, render_input, untrusted
 from memory.agents.subscriptions import (
     DELIVERY_MAX_AGE,
     DONE,
@@ -76,7 +76,6 @@ CLAIM_RETRY = timedelta(minutes=1)
 # Runs one claim walks past for a worker that can't render them, so a key narrower
 # than the queue's runs can't scan it end to end on every poll.
 MAX_PASSED_RAW = 20
-RAW_CLIPPED = "\n[payload truncated]</untrusted_item>"
 
 
 def is_delivery(run: AgentRun) -> bool:
@@ -102,7 +101,9 @@ def raw_input(event: Event, item_ids: list[int], show_payload: bool) -> str:
     """A raw delivery's input: what arrived, the items it stored, and its payload,
     untrusted and clipped to fit MAX_TEXT_CHARS, unless it is withheld."""
     where = f", container {bare(event.container)}" if event.container else ""
+    tag = new_tag()
     lines = [
+        preamble(tag),
         f"{event.source} {bare(event.type or '')} delivery (raw event {event.id}, "
         f"account {event.account_id}{where}, {event.outcome})"
     ]
@@ -112,11 +113,10 @@ def raw_input(event: Event, item_ids: list[int], show_payload: bool) -> str:
         lines.append("payload withheld")
     elif event.payload is not None:
         text = json.dumps(event.payload, separators=(",", ":"), sort_keys=True, ensure_ascii=False)
-        lines.append(untrusted(f"raw:{event.id}", "payload", text))
-    rendered = "\n".join(lines)
-    if len(rendered) <= MAX_TEXT_CHARS:
-        return rendered
-    return rendered[: MAX_TEXT_CHARS - len(RAW_CLIPPED)] + RAW_CLIPPED
+        empty = untrusted(tag, f"raw:{event.id}", "payload", "")
+        room = MAX_TEXT_CHARS - len("\n".join([*lines, empty])) - len(CLIPPED)
+        lines.append(untrusted(tag, f"raw:{event.id}", "payload", text, max(room, 0)))
+    return "\n".join(lines)
 
 
 def render_raw(db: DBSession, run: AgentRun, owner: User, claimer: APIKey | None) -> bool | None:
@@ -226,6 +226,9 @@ def rerender(db: DBSession, run: AgentRun, owner: User, claimer: APIKey | None) 
     )
     for d in gone:
         d.status = SKIPPED_POSTED if d.item_id in subscription_can else SKIPPED_INACCESSIBLE
+    if not kept and subscription_can:
+        fail(run, "its subscription's runs already posted everything it can read of it")
+        return False
     if not kept:
         fail(run, "its subscription can't read anything it was started for now")
         return False
@@ -499,7 +502,8 @@ def take_from_queue(
 
 def queue_backlogs(db: DBSession, owner_id: int | None = None) -> list[dict[str, Any]]:
     """Each queue, the owner's or everyone's, with its subscriptions and its pending
-    deliveries' count and oldest age: filter deliveries and unclaimed raw ones."""
+    deliveries' count and oldest age: filter deliveries and unclaimed raw ones of
+    its enabled subscriptions, the ones a worker can claim."""
     queue = Subscription.handler["queue"].astext
     query = (
         select(
@@ -512,7 +516,9 @@ def queue_backlogs(db: DBSession, owner_id: int | None = None) -> list[dict[str,
         .select_from(Subscription)
         .outerjoin(
             Delivery,
-            (Delivery.subscription_id == Subscription.id) & (Delivery.status == PENDING),
+            (Delivery.subscription_id == Subscription.id)
+            & (Delivery.status == PENDING)
+            & Subscription.enabled,
         )
         .where(Subscription.handler.has_key("queue"))
         .group_by(Subscription.user_id, queue)
@@ -520,7 +526,8 @@ def queue_backlogs(db: DBSession, owner_id: int | None = None) -> list[dict[str,
     )
     raw_query = (
         select(AgentRun.user_id, AgentRun.queue, func.count(AgentRun.id), func.min(AgentRun.created_at))
-        .where(*RAW_WAITING)
+        .join(Subscription, Subscription.id == AgentRun.subscription_id)
+        .where(*RAW_WAITING, Subscription.enabled)
         .group_by(AgentRun.user_id, AgentRun.queue)
     )
     if owner_id is not None:

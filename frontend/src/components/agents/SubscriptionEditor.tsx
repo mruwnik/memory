@@ -62,7 +62,7 @@ const FLAGS: [FlagField, string][] = [
 ]
 // The form's labels for the keys the server names fields by: subscription_test's `failed`, and refusals.
 const FIELD_LABELS: Record<string, string> = Object.fromEntries([
-  ['source_types', 'Source types'], ...LIST_FIELDS, ['regex', 'Regex'], ...FLAGS, ['exclude_own', 'Skip my own Slack messages'],
+  ['source_types', 'Source types'], ...LIST_FIELDS, ['regex', 'Regex'], ...FLAGS, ['exclude_own', 'Skip my own Slack and Discord messages'],
   ['window_sec', 'Window (seconds)'], ['max_items', 'Max items'], ['on_edit', 'Deliver an item again when it changes'],
   ['on_changes', 'Only for these changes'],
 ])
@@ -175,7 +175,7 @@ function FilterFields({ form, update, sourceTypes, regexError, problems }: {
         {FLAGS.map(([field, label]) => (
           <Checkbox key={field} label={label} checked={config.filter[field]} onChange={e => setFilter({ [field]: e.target.checked })} />
         ))}
-        <Checkbox label="Skip my own Slack messages" checked={config.filter.exclude_own ?? ownDefault}
+        <Checkbox label="Skip my own Slack and Discord messages" checked={config.filter.exclude_own ?? ownDefault}
           onChange={e => setFilter({ exclude_own: e.target.checked })} />
       </Fieldset>
       <Fieldset legend="Delivery" className="flex flex-col space-y-2">

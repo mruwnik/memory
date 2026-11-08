@@ -173,7 +173,7 @@ class IngestFilter(BaseModel):
 
     source_types: FilterValues = []
     tags_any: FilterValues = []
-    # Discord channel snowflakes or Slack channel ids.
+    # Discord channel snowflakes or Slack channel ids; a channel's threads match too.
     channel_ids: FilterValues = []
     # Also excludes the threads of these channels.
     exclude_channel_ids: FilterValues = []
@@ -189,7 +189,7 @@ class IngestFilter(BaseModel):
     # Who made a change, named as authors are.
     changed_by_any: FilterValues = []
     exclude_changed_by: FilterValues = []
-    # The owner's own Slack messages. None means on, except for queue handlers:
+    # The owner's own Slack and Discord messages. None means on, except for queue handlers:
     # for a bot the owner talks to, the owner's messages are its input.
     exclude_own: bool | None = None
     # GitHub "owner/name" (case-insensitive).
@@ -332,9 +332,9 @@ class Me:
 
     # Their bots, which mentions_me looks for.
     bots: frozenset[str] = frozenset()
-    # Their Slack users, which exclude_own leaves out.
-    slack_users: frozenset[str] = frozenset()
-    # Them in a thread: their bots, Slack users and the Discord accounts linked to them.
+    # Their Slack users and the Discord accounts linked to them, which exclude_own leaves out.
+    users: frozenset[str] = frozenset()
+    # Them in a thread: their bots and users.
     accounts: frozenset[str] = frozenset()
     # Their Slack apps and Discord bots, as ItemFacts.collector names them.
     collectors: frozenset[str] = frozenset()
@@ -502,15 +502,12 @@ def failed_filter(f: IngestFilter, facts: ItemFacts, me: Me = Me(), subscription
     """The first of the filter's criteria that the item's facts settle that fails, by
     field name, or regex_timeout when the regex ran out of time; None when they all hold."""
     text = facts.text[:MAX_MATCH_TEXT_CHARS].lower()
+    channels = {facts.channel_id, facts.parent_channel_id}
     checks = (
         ("source_types", lambda: facts.source_type in f.source_types, f.source_types),
         ("tags_any", lambda: bool(facts.tags & set(f.tags_any)), f.tags_any),
-        ("channel_ids", lambda: facts.channel_id in f.channel_ids, f.channel_ids),
-        (
-            "exclude_channel_ids",
-            lambda: not {facts.channel_id, facts.parent_channel_id} & set(f.exclude_channel_ids),
-            f.exclude_channel_ids,
-        ),
+        ("channel_ids", lambda: bool(channels & set(f.channel_ids)), f.channel_ids),
+        ("exclude_channel_ids", lambda: not channels & set(f.exclude_channel_ids), f.exclude_channel_ids),
         ("exclude_authors", lambda: not facts.authors & lowered(f.exclude_authors), f.exclude_authors),
         ("authors_any", lambda: bool(facts.author_ids & lowered(f.authors_any)), f.authors_any),
         ("repos", lambda: facts.repo in lowered(f.repos), f.repos),
@@ -718,7 +715,7 @@ def owner_me(db: DBSession, owner_id: int) -> Me:
     slack_apps = db.scalars(select(SlackApp.id).where(SlackApp.created_by_user_id == owner_id))
     return Me(
         bots=bots,
-        slack_users=slack_users,
+        users=slack_users | discord_accounts,
         accounts=bots | slack_users | discord_accounts,
         collectors=frozenset(
             [*(f"discord_bot:{i}" for i in discord_bots), *(f"slack_app:{i}" for i in slack_apps)]
@@ -1140,11 +1137,11 @@ def rejection(db: DBSession, t: LiveSubscription, facts: ItemFacts, lookups: Ite
     f = t.config.filter
     if failed := failed_filter(f, facts, t.me, t.subscription.id):
         return failed
-    if facts.authors & t.own:
+    if facts.author_ids & t.own:
         return "own_authors"
     if lookups.item.id not in t.readable:
         return "readable"
-    if t.exclude_own and facts.authors & t.me.slack_users:
+    if t.exclude_own and facts.author_ids & t.me.users:
         return "exclude_own"
     if f.threads_im_in and not lookups.thread_authors & t.me.accounts:
         return "threads_im_in"

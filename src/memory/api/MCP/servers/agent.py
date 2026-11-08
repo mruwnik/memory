@@ -979,7 +979,8 @@ async def work_submit(
 @visible_when(require_scopes(SCOPE_AGENTS_WORK))
 async def work_queues() -> dict:
     """Your subscriptions' queues (agent_work_claim's `queue`), each with how many deliveries
-    are waiting to be claimed and the oldest one's age in seconds (null when none).
+    of its enabled subscriptions are waiting to be claimed and the oldest one's age in
+    seconds (null when none).
     Deliveries no worker's key can read wait here and end `expired`."""
     user_id = worker_caller()
     with make_session() as db:

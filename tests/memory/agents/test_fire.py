@@ -22,7 +22,7 @@ from memory.common.db.models.sources import (
     project_teams,
     team_members,
 )
-from tests.conftest import route_item, unique_sha256
+from tests.conftest import route_item, shown, unique_sha256
 from tests.memory.agents.test_subscriptions import posted_run, slack_message
 
 SPEC = {"system_prompt": "x", "model": "anthropic/m", "reasoning": "high"}
@@ -84,8 +84,8 @@ def rendered(p, change="new", body="body"):
     return (
         f"- [blog_post #{p.id}] {change}\n"
         f"  inserted_at: {p.inserted_at.isoformat()}\n"
-        f"  <untrusted_item id={p.id} field=title>{p.title}</untrusted_item>\n"
-        f"  <untrusted_item id={p.id} field=content>{body}</untrusted_item>"
+        f"  <T id={p.id} field=title>{p.title}</T>\n"
+        f"  <T id={p.id} field=content>{body}</T>"
     )
 
 
@@ -126,7 +126,7 @@ def test_a_fire_starts_one_run_with_the_rendered_input(
         subscription.definition_id,
         subscription.id,
     )
-    assert run.input == "New:\n" + "\n".join(rendered(p) for p in (a, b))
+    assert shown(run.input) == "New:\n" + "\n".join(rendered(p) for p in (a, b))
     no_celery_dispatch.assert_called_once_with(RUN_AGENT, args=[run.id], task_id=run.id)
 
 
@@ -147,7 +147,7 @@ def test_a_removal_starts_a_run_naming_the_item_removed(
     runs = db_session.query(AgentRun).filter(AgentRun.subscription_id == subscription.id).order_by(AgentRun.created_at)
     [first, removal] = runs.all()
     assert [r.trigger_ref["changes"] for r in (first, removal)] == [{str(item_id): ["new"]}, {str(item_id): ["removed"]}]
-    assert removal.input == f"New:\n- [item #{item_id}] removed"
+    assert shown(removal.input) == f"New:\n- [item #{item_id}] removed"
 
 
 def test_a_code_slug_subscription_runs_that_agent(db_session, admin_user, code_agents, admin_keys):
@@ -160,7 +160,7 @@ def test_a_code_slug_subscription_runs_that_agent(db_session, admin_user, code_a
 
     run = db_session.get_one(AgentRun, fire_subscription(subscription.id, claimed(db_session, subscription, item)))
 
-    assert (run.agent, run.definition_id, run.input) == ("echo", None, "New:\n" + rendered(item))
+    assert (run.agent, run.definition_id, shown(run.input)) == ("echo", None, "New:\n" + rendered(item))
 
 
 @pytest.mark.parametrize(
@@ -195,7 +195,7 @@ def test_an_edit_starts_a_run_labelled_by_what_the_agent_saw_before(
     fire_dispatched(no_celery_dispatch)
 
     # Every run in a test shares one transaction, so created_at can't order them.
-    assert sorted(r.input for r in db_session.query(AgentRun)) == sorted(
+    assert sorted(shown(r.input) for r in db_session.query(AgentRun)) == sorted(
         "New:\n" + rendered(item, change, body) for change, body in inputs
     )
 

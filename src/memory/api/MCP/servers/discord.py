@@ -8,7 +8,7 @@ from fastmcp import FastMCP
 from sqlalchemy import desc, or_
 from fastmcp.server.dependencies import get_access_token
 
-from memory.agents.subscription_input import bare, untrusted
+from memory.agents.subscription_input import new_tag, preamble, untrusted
 from memory.api.MCP.access import (
     build_mcp_user_access_filter,
     fetch_user_by_token,
@@ -316,13 +316,17 @@ async def channel_history(
         )
 
 
-def thread_message(message: DiscordMessage) -> dict[str, Any]:
+def thread_message(tag: str, message: DiscordMessage) -> dict[str, Any]:
     return {
         "id": message.id,
         "message_id": str(message.message_id),
-        "author": bare(message.author.username) if message.author else str(message.author_id),
+        "author": (
+            untrusted(tag, message.id, "author", message.author.username)
+            if message.author
+            else str(message.author_id)
+        ),
         "sent_at": message.sent_at.isoformat(),
-        "text": untrusted(message.id, "text", message.content or ""),
+        "text": untrusted(tag, message.id, "text", message.content or ""),
     }
 
 
@@ -339,8 +343,9 @@ def fetch_thread(session: DBSession, item_id: int, limit: int) -> dict[str, Any]
     channel = item.channel
     in_thread = channel is not None and (channel.channel_type == "thread" or channel.parent_id is not None)
     thread_id = item.channel_id if in_thread else item.thread_id
+    tag = new_tag()
     if thread_id is None:
-        return {"thread_id": None, "parent": thread_message(item), "replies": []}
+        return {"untrusted": preamble(tag), "thread_id": None, "parent": thread_message(tag, item), "replies": []}
     parent = readable(DiscordMessage.message_id == thread_id).first()
     replies = (
         readable(DiscordMessage.channel_id == thread_id, DiscordMessage.message_id != thread_id)
@@ -349,9 +354,10 @@ def fetch_thread(session: DBSession, item_id: int, limit: int) -> dict[str, Any]
         .all()
     )
     return {
+        "untrusted": preamble(tag),
         "thread_id": str(thread_id),
-        "parent": parent and thread_message(parent),
-        "replies": [thread_message(m) for m in reversed(replies)],
+        "parent": parent and thread_message(tag, parent),
+        "replies": [thread_message(tag, m) for m in reversed(replies)],
     }
 
 
@@ -369,9 +375,10 @@ async def thread(item_id: int, limit: int = settings.CHAT_THREAD_REPLIES) -> dic
         limit: How many of the latest replies to return, oldest first (max 100)
 
     Returns:
-        Dict with thread_id (null when the message isn't in a thread), parent
-        (null if you can't read it) and replies; each message has id,
-        message_id, author, sent_at and text
+        Dict with untrusted (names the tag its author and text blocks carry),
+        thread_id (null when the message isn't in a thread), parent (null if you
+        can't read it) and replies; each message has id, message_id, author,
+        sent_at and text
     """
     with make_session() as session:
         return await asyncio.to_thread(fetch_thread, session, item_id, max(1, min(100, limit)))

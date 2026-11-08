@@ -373,6 +373,26 @@ def test_beeper_facts_carry_chat_and_sender():
             True,
         ),
         (
+            {"channel_ids": ["10"]},
+            DiscordMessage(
+                type="discord_message",
+                channel_id=20,
+                author_id=1,
+                channel=DiscordChannel(id=20, name="t", channel_type="thread", parent_id=10),
+            ),
+            True,
+        ),
+        (
+            {"channel_ids": ["10"]},
+            DiscordMessage(
+                type="discord_message",
+                channel_id=20,
+                author_id=1,
+                channel=DiscordChannel(id=20, name="t", channel_type="thread", parent_id=11),
+            ),
+            False,
+        ),
+        (
             {"channel_ids": ["C1", "C2"], "exclude_channel_ids": ["C2"]},
             SlackMessage(type="slack_message", channel_id="C1", message_ts="1.0"),
             True,
@@ -394,7 +414,7 @@ def test_beeper_facts_carry_chat_and_sender():
         ),
     ],
 )
-def test_excluded_channels_never_match(f, item, expected):
+def test_channel_filters_cover_a_channels_threads(f, item, expected):
     assert (failed_filter(IngestFilter.model_validate(f), item_facts(item)) is None) is expected
 
 
@@ -601,6 +621,16 @@ def test_our_own_discord_bots_never_trigger(
     message = discord_message(db_session, author_id, bot_token)
 
     assert bool(route_item(db_session, message.id)) is fires
+
+
+def test_a_name_that_spells_our_bots_id_still_triggers(db_session, admin_user, no_celery_dispatch):
+    """Anyone can take a display name; only an id says who posted."""
+    make_subscription(db_session, make_definition(db_session, admin_user))
+    message = discord_message(db_session, 100)
+    db_session.get(DiscordUser, 100).username = "200"
+    db_session.commit()
+
+    assert route_item(db_session, message.id) != []
 
 
 @pytest.mark.parametrize("content,fires", [("<@200>", True), ("hi", False)])
@@ -1019,6 +1049,24 @@ def test_persons_ingest_made_vouch_for_nobody(db_session, regular_user, no_celer
     message = message_by_person(db_session, regular_user)
 
     assert route_item(db_session, message.id) == []
+
+
+@pytest.mark.parametrize(
+    "f,linked_to,fires",
+    [
+        ({"tags_any": ["ai"]}, "regular_user", False),
+        ({"tags_any": ["ai"], "exclude_own": False}, "regular_user", True),
+        ({"tags_any": ["ai"]}, "stranger", True),
+    ],
+)
+def test_the_owners_linked_discord_account_triggers_only_without_exclude_own(
+    request, db_session, regular_user, no_celery_dispatch, f, linked_to, fires
+):
+    make_subscription(db_session, make_definition(db_session, regular_user), filter=f)
+    linked = request.getfixturevalue(linked_to)
+    message = message_by_person(db_session, regular_user, user_id=linked.id)
+
+    assert bool(route_item(db_session, message.id)) is fires
 
 
 def test_persons_linked_to_a_user_are_known(

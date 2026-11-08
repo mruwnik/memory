@@ -25,6 +25,7 @@ from itertools import islice
 from typing import Any
 from urllib.parse import urlparse
 
+import httpx
 import redis
 from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError, InterfaceError, OperationalError
@@ -168,8 +169,9 @@ def get_cached_user_mapping(workspace_id: str, token: str, base_url: str) -> dic
         # Cache the result
         redis_client.setex(cache_key, USER_CACHE_TTL_SECONDS, json.dumps(users_by_id))
         return users_by_id
-    except SlackAPIError:
-        logger.warning("Failed to fetch user list for mention resolution")
+    # Mentions stay unresolved rather than the message going unstored.
+    except (SlackAPIError, httpx.HTTPError):
+        logger.warning("could not fetch workspace %s's user list for mention resolution", workspace_id)
         return {}
 
 
