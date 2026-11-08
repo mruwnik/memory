@@ -94,12 +94,12 @@ function ItemTest({ form, existing }: { form: SubscriptionForm; existing?: Subsc
   const [query, setQuery] = useState('')
   const [itemId, setItemId] = useState('')
   const [result, setResult] = useState<SubscriptionTestResult | null>(null)
-  const { busy, error, submit } = useSubmit()
+  const { busy, error, setError, submit } = useSubmit()
   // Fetched on first open: most edits never test.
   const open = (e: React.SyntheticEvent<HTMLDetailsElement>) => {
     if (e.currentTarget.open && items === null) recentItems().then(setItems).catch(() => setItems([]))
   }
-  const pick = (value: string) => { setItemId(value); setResult(null) }
+  const pick = (value: string) => { setItemId(value); setResult(null); setError(null) }
   const run = () => submit(async () => {
     setResult(null)
     const { handler, source } = toUpsert(form, existing)
@@ -318,6 +318,7 @@ export function SubscriptionEditor({ existing, presetAgent, agents, sourceTypes,
   const [field, , fieldLabel] = errorField(error, form.source) ?? []
   const errorOn = (f: ErrorField) => (field === f && error ? userWording(error) : undefined)
   const problemId = useId()
+  const takenId = useId()
   // A filter or webhook subscription keeps its handler kind; a schedule may move between agent and message.
   const handlerKinds = existing && existing.kind !== 'cron' ? [form.handler] : HANDLERS_FOR[form.source]
   const setSource = (source: SourceKind) =>
@@ -408,10 +409,11 @@ export function SubscriptionEditor({ existing, presetAgent, agents, sourceTypes,
       {error && <Notice data-form-error tone="error">{fieldLabel ? `Not saved: see ${fieldLabel} above.` : userWording(error)}</Notice>}
       <FormActions>
         {/* Always rendered, so a screen reader hears each new reason. */}
-        {/* A taken name is said on the Name field. */}
+        {/* A taken name is said on the Name field, so this copy isn't live: it says why Create is off when Name is scrolled away. */}
         <span id={problemId} aria-live="polite" className="text-xs text-slate-600">{nameTaken ? null : problem}</span>
+        {nameTaken && <span id={takenId} className="text-xs text-slate-600">Name: {problem}</span>}
         <Button onClick={onCancel}>Cancel</Button>
-        <Button variant="primary" disabled={problem !== null} aria-busy={busy} aria-describedby={problem && !nameTaken ? problemId : undefined}
+        <Button variant="primary" disabled={problem !== null} aria-busy={busy} aria-describedby={problem ? (nameTaken ? takenId : problemId) : undefined}
           onClick={() => !busy && submit(() => onSave(toUpsert(form, existing)))}>
           {busy ? 'Saving...' : existing ? 'Save' : 'Create'}
         </Button>

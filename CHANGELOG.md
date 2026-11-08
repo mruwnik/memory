@@ -23,6 +23,7 @@ a new, empty `## Unreleased` above it.
 ## Unreleased
 
 ### Changes
+- Fast typing or a paste into a field with a picker no longer hits React's update-depth limit (the shared Combobox no longer resyncs on every new options array). Action notices pause their timer while hovered or focused and give focus back when they close; a dialog keeps focus inside after a click on blank space; a disabled Create says when the name is taken.
 - `slack_get_channel_history` and `discord_channel_history` wrap message text and authors the same way as the thread tools and return the tag as `untrusted`. `discord_channel_history` messages take the thread tools' shape: `id` is the item id, the Discord id is `message_id`, `content` is `text`; `discord_thread` shows authors' display names.
 - Untrusted text in agent run inputs, raw-webhook claims and the Slack/Discord thread MCP tools is wrapped in a tag named afresh for each render (`untrusted_item_<random hex>`), named in a one-line preamble, so a fake closing tag can't end a block; names anyone can set (authors, email From/To and Message-ID, GitHub check names, attendees) are wrapped too, and an oversized input clips the item text inside its block instead of cutting the template. The thread tools return the tag as `untrusted`.
 - Discord `channel_ids` filters cover the channel's threads; `exclude_own` also skips the owner's Person-linked Discord accounts (on by default for agent handlers, as for Slack) and, like our own bots' posts, matches by author id rather than display name.

@@ -1,5 +1,5 @@
 // The app's page template and UI primitives. See frontend/STYLE.md for when to use which.
-import { Children, Fragment, cloneElement, isValidElement, useCallback, useEffect, useId, useRef, useState, type ComponentProps, type KeyboardEvent as ReactKeyboardEvent, type ReactElement, type ReactNode, type RefObject } from 'react'
+import { Children, Fragment, cloneElement, isValidElement, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ComponentProps, type KeyboardEvent as ReactKeyboardEvent, type ReactElement, type ReactNode, type RefObject } from 'react'
 import { Link, useBlocker, type LinkProps } from 'react-router-dom'
 
 export const cx = (...classes: (string | false | null | undefined)[]) => classes.filter(Boolean).join(' ')
@@ -672,10 +672,12 @@ export const Combobox = ({ value, onChange, options, placeholder, allowCustom, l
   const listId = useId()
   const rootRef = useRef<HTMLDivElement>(null)
 
-  // While closed the field shows the committed value's label.
+  // While closed the field shows the committed value's label. Keyed on the label, not `options`, which callers
+  // rebuild each render: an update from every render's effect piles up in fast typing until React throws.
+  const committedLabel = value ? options.find(o => o.value === value)?.label ?? value : ''
   useEffect(() => {
-    if (!open) setQuery(value ? options.find(o => o.value === value)?.label ?? value : '')
-  }, [value, options, open])
+    if (!open) setQuery(committedLabel)
+  }, [committedLabel, open])
 
   useEffect(() => {
     if (!open) return
@@ -828,31 +830,57 @@ export const useSubmit = () => {
  * notice over the page's corner, for row actions, where a notice above the list would move the rows under the pointer.
  */
 export const useActionNotice = ({ floating = false } = {}) => {
-  const [outcome, setOutcome] = useState<{ tone: 'error' | 'success'; message: string } | null>(null)
+  const [outcome, setOutcome] = useState<{ id: number; tone: 'error' | 'success'; message: string } | null>(null)
+  const nextId = useRef(0)
   const run = useCallback(async (action: () => Promise<unknown>, success?: string) => {
     setOutcome(null)
     try {
       await action()
     } catch (e) {
-      setOutcome({ tone: 'error', message: e instanceof Error ? e.message : String(e) })
+      setOutcome({ id: ++nextId.current, tone: 'error', message: e instanceof Error ? e.message : String(e) })
       return false
     }
-    if (success) setOutcome({ tone: 'success', message: success })
+    if (success) setOutcome({ id: ++nextId.current, tone: 'success', message: success })
     return true
   }, [])
   const clear = useCallback(() => setOutcome(null), [])
-  // A floating success goes by itself, so it doesn't keep covering what's under it; an error waits to be read.
+  // Keyed per outcome, so a repeat rendered in the same batch gets its own clock.
+  const notice = outcome && <ActionNotice key={outcome.id} tone={outcome.tone} message={outcome.message} floating={floating} onClose={clear} />
+  return { run, notice, clear }
+}
+
+const ActionNotice = ({ tone, message, floating, onClose }: { tone: 'error' | 'success'; message: string; floating: boolean; onClose: () => void }) => {
+  const ref = useRef<HTMLDivElement>(null)
+  const cameFrom = useRef<HTMLElement | null>(null)
+  const [hovered, setHovered] = useState(false)
+  const [focused, setFocused] = useState(false)
+  // A floating success goes by itself, so it doesn't keep covering what's under it, but not while it is being
+  // pointed at or tabbed to; an error waits to be read.
   useEffect(() => {
-    if (!floating || outcome?.tone !== 'success') return
-    const timer = setTimeout(clear, 5000)
+    if (!floating || tone !== 'success' || hovered || focused) return
+    const timer = setTimeout(onClose, 5000)
     return () => clearTimeout(timer)
-  }, [floating, outcome, clear])
-  const notice = outcome && (
-    <Notice tone={outcome.tone} onDismiss={clear} className={cx(floating && 'fixed bottom-4 inset-x-4 z-40 shadow-lg sm:left-auto sm:w-96')}>
-      {outcome.message}
+  }, [floating, tone, hovered, focused, onClose])
+  // Gone with focus in it, focus would fall to the body. A layout cleanup still sees it in the notice.
+  useLayoutEffect(() => {
+    const notice = ref.current
+    return () => {
+      if (!notice?.contains(document.activeElement)) return
+      ;(cameFrom.current?.isConnected ? cameFrom.current : document.getElementById('main'))?.focus({ preventScroll: true })
+    }
+  }, [])
+  return (
+    <Notice ref={ref} tone={tone} onDismiss={onClose} className={cx(floating && 'fixed bottom-4 inset-x-4 z-40 shadow-lg sm:left-auto sm:w-96')}
+      onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
+      onFocus={e => {
+        if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
+        cameFrom.current = e.relatedTarget as HTMLElement | null
+        setFocused(true)
+      }}
+      onBlur={e => !e.currentTarget.contains(e.relatedTarget as Node | null) && setFocused(false)}>
+      {message}
     </Notice>
   )
-  return { run, notice, clear }
 }
 
 interface EmptyStateProps {
@@ -1016,12 +1044,17 @@ export function useDialogFocus(dialogRef: RefObject<HTMLElement | null>, initial
     const previouslyFocused = document.activeElement as HTMLElement | null
     const dialog = dialogRef.current
     const focusable = () => Array.from(dialog?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])
-    ;(initial() ?? focusable()[0])?.focus()
+    ;(initial() ?? focusable()[0] ?? dialog)?.focus()
     const trapTab = (e: KeyboardEvent) => {
       const items = focusable()
-      if (e.key !== 'Tab' || !items.length) return
+      if (e.key !== 'Tab') return
+      if (!items.length) return e.preventDefault()
       const [first, last] = [items[0], items[items.length - 1]]
-      if (e.shiftKey && document.activeElement === first) {
+      // Focus on the dialog itself (a click on its blank space) has no place in the order, so Tab would leave it.
+      if (document.activeElement === dialog) {
+        e.preventDefault()
+        ;(e.shiftKey ? last : first).focus()
+      } else if (e.shiftKey && document.activeElement === first) {
         e.preventDefault()
         last.focus()
       } else if (!e.shiftKey && document.activeElement === last) {
@@ -1047,8 +1080,9 @@ export const Modal = ({ title, onClose, children, size = 'lg', className }: Moda
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId}
-        className={cx('bg-white rounded-xl shadow-xl w-full max-h-[85vh] overflow-auto', MODAL_SIZES[size], className)}>
+      {/* Focusable, so a click on a disabled button or blank space leaves focus here rather than on the page behind. */}
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}
+        className={cx('bg-white rounded-xl shadow-xl w-full max-h-[85vh] overflow-auto focus:outline-none', MODAL_SIZES[size], className)}>
         <div className="flex items-center justify-between p-4 border-b border-slate-100">
           <h2 id={titleId} className="text-lg font-semibold text-slate-800">{title}</h2>
           {onClose && <button type="button" aria-label="Close" className="-mr-2 w-10 h-10 max-sm:w-11 max-sm:h-11 flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-100 text-2xl leading-none" onClick={onClose}>&times;</button>}

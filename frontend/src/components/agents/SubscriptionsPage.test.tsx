@@ -117,7 +117,11 @@ describe('SubscriptionsPage', () => {
     await user.type(screen.getByLabelText('Name'), 'pr reviews')
 
     expect(screen.getByLabelText('Name')).toHaveAccessibleDescription(/You already have a subscription named pr reviews/)
-    expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled()
+    const create = screen.getByRole('button', { name: 'Create' })
+    expect(create).toBeDisabled()
+    // By the buttons too, since a long form's Name is scrolled out of view, but not announced twice.
+    expect(create).toHaveAccessibleDescription('Name: You already have a subscription named pr reviews')
+    expect(liveRegions(screen.getByText('Name: You already have a subscription named pr reviews'))).toBe(0)
   })
 
   it('creates a webhook subscription on one of my accounts, handed to a queue', async () => {
@@ -243,6 +247,31 @@ describe('SubscriptionsPage', () => {
     await user.click(screen.getAllByRole('button', { name: 'Schedule' }).at(-1)!)
 
     expect(screen.queryByText('Test on an item')).not.toBeInTheDocument()
+  })
+
+  // Outside act, as a browser delivers them: each keystroke commits before React's other pending work runs.
+  it.each(['Name', 'Queue', 'Text contains any of (comma-separated)'])('keeps every character of a fast burst into %s', async label => {
+    const { user } = renderWithRouter(<SubscriptionsPage />)
+    await user.click(await screen.findByRole('button', { name: 'New subscription' }))
+    const input = screen.getByLabelText(label)
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+    const text = 'abcdefghijklmnopqrstuvwxyz'.repeat(3)
+    const errors: unknown[] = []
+    const onError = (e: ErrorEvent) => errors.push(e.error)
+    window.addEventListener('error', onError)
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', false)
+
+    for (let i = 1; i <= text.length; i += 1) {
+      setValue.call(input, text.slice(0, i))
+      input.dispatchEvent(new InputEvent('input', { bubbles: true }))
+    }
+    await new Promise(resolve => setTimeout(resolve, 0))
+    vi.unstubAllGlobals()
+    window.removeEventListener('error', onError)
+    await user.type(input, '!')
+
+    expect(errors).toEqual([])
+    expect(input).toHaveValue(`${text}!`)
   })
 
   it('tells assistive tech why Create is disabled', async () => {
@@ -389,6 +418,21 @@ describe('SubscriptionsPage', () => {
     const refusal = await screen.findByText(
       'Set at least one of “Source types”, “Any of these tags”, “Regex” or “Direct messages to my bots”')
     expect(liveRegions(refusal)).toBe(1)
+  })
+
+  it('drops a failed test once another item is picked', async () => {
+    agents.testSubscription.mockRejectedValue(new Error('Unknown item 99999999'))
+    const { user } = renderWithRouter(<SubscriptionsPage />)
+    await user.click(await screen.findByRole('button', { name: 'New subscription' }))
+    await user.click(screen.getByText('Test on an item'))
+    await user.type(screen.getByLabelText('Item'), '99999999')
+    await user.click(screen.getByRole('button', { name: 'Test' }))
+    await screen.findByText('Unknown item 99999999')
+
+    await user.clear(screen.getByLabelText('Item'))
+    await user.type(screen.getByLabelText('Item'), '42')
+
+    expect(screen.queryByText('Unknown item 99999999')).not.toBeInTheDocument()
   })
 
   it('keeps focus on Test while the test runs, and gives the verdict in a status region already there', async () => {

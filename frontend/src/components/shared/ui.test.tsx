@@ -45,6 +45,34 @@ describe('Modal', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Close' })).not.toBeInTheDocument()
   })
+
+  it('keeps focus inside when a disabled button or its blank space is clicked', async () => {
+    const user = userEvent.setup()
+    render(<main tabIndex={-1}><Modal title="Edit"><input aria-label="Name" /><button disabled>Create</button></Modal></main>)
+
+    await user.click(screen.getByRole('button', { name: 'Create' }))
+
+    expect(screen.getByRole('dialog')).toContainElement(document.activeElement as HTMLElement)
+  })
+
+  it.each([['Shift+Tab', '{Shift>}{Tab}{/Shift}'], ['Tab', '{Tab}']])('keeps %s inside after a click on its blank space', async (_, keys) => {
+    const user = userEvent.setup()
+    render(<main tabIndex={-1}><button>Behind</button><Modal title="Edit"><input aria-label="Name" /></Modal></main>)
+
+    await user.click(screen.getByRole('heading', { name: 'Edit' }))
+    await user.keyboard(keys)
+
+    expect(screen.getByRole('dialog')).toContainElement(document.activeElement as HTMLElement)
+  })
+
+  it('takes and keeps focus itself when nothing inside is focusable', async () => {
+    const user = userEvent.setup()
+    render(<><button>Behind</button><Modal title="Working"><p>Please wait</p></Modal></>)
+
+    await user.tab()
+
+    expect(screen.getByRole('dialog')).toHaveFocus()
+  })
 })
 
 describe('Escape', () => {
@@ -167,6 +195,51 @@ describe('useActionNotice', () => {
     await act(() => vi.advanceTimersByTimeAsync(6000))
 
     expect(screen.queryByRole(role) !== null).toBe(stays)
+    vi.useRealTimers()
+  })
+
+  it('floating, a repeated success gets its own few seconds', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    let run: ReturnType<typeof useActionNotice>['run'] = async () => true
+    const Floating = () => {
+      const actions = useActionNotice({ floating: true })
+      run = actions.run
+      return <>{actions.notice}</>
+    }
+    render(<Floating />)
+    await act(async () => { await run(() => Promise.resolve(), 'Saved') })
+    await act(() => vi.advanceTimersByTimeAsync(3000))
+
+    await act(async () => { await run(() => Promise.resolve(), 'Saved') })
+    await act(() => vi.advanceTimersByTimeAsync(3000))
+    expect(screen.getByRole('status')).toHaveTextContent('Saved')
+    await act(() => vi.advanceTimersByTimeAsync(2500))
+
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    vi.useRealTimers()
+  })
+
+  it.each<[string, (user: ReturnType<typeof userEvent.setup>) => Promise<void>]>([
+    ['focused', user => user.tab({ shift: true })],
+    ['hovered', user => user.hover(screen.getByRole('status'))],
+  ])('floating, a success stays while %s, and a dismiss from it returns focus', async (_, hold) => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const Floating = () => {
+      const { run, notice } = useActionNotice({ floating: true })
+      return <>{notice}<button onClick={() => run(() => Promise.resolve(), 'Sync queued')}>Go</button></>
+    }
+    render(<Floating />)
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    await act(() => user.click(screen.getByRole('button', { name: 'Go' })))
+    await act(() => hold(user))
+
+    await act(() => vi.advanceTimersByTimeAsync(6000))
+    expect(screen.getByRole('status')).toHaveTextContent('Sync queued')
+    screen.getByRole('button', { name: 'Dismiss' }).focus()
+    await act(() => user.keyboard('{Enter}'))
+
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Go' })).toHaveFocus()
     vi.useRealTimers()
   })
 })
