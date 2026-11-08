@@ -197,7 +197,11 @@ export interface GithubRepo extends SyncStatus, PushHealth {
   webhook_status: GithubWebhookStatus | null
   webhook_checked_at: string | null
   last_event_at: string | null
+  content_mode: GithubContentMode
 }
+
+/** "full" stores and indexes issue and PR text, comments and diffs; "metadata" keeps only what change detection needs. */
+export type GithubContentMode = 'full' | 'metadata'
 
 export type GithubWebhookStatus = 'installed' | 'org_hook' | 'missing_permission' | 'rejected' | 'error'
 
@@ -255,6 +259,7 @@ export interface GithubRepoCreate {
   tags?: string[]
   check_interval?: number
   full_sync_interval?: number
+  content_mode?: GithubContentMode
 }
 
 export interface GithubRepoUpdate {
@@ -268,6 +273,7 @@ export interface GithubRepoUpdate {
   check_interval?: number
   full_sync_interval?: number
   active?: boolean
+  content_mode?: GithubContentMode
 }
 
 export interface AvailableRepo {

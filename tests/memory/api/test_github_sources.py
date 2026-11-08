@@ -802,3 +802,95 @@ def test_an_account_without_recent_events_on_any_repo_is_flagged_stale(client, d
     listed = client.get(f"/github/accounts/{account.id}").json()
 
     assert listed["push_stale"] is stale
+
+
+# ====== Repo content mode ======
+
+
+def canonical_repo_client(mock_client_class) -> None:
+    mock_client_class.return_value.get_repo.return_value = {
+        "id": 12345,
+        "owner": {"login": "octocat"},
+        "name": "Hello-World",
+    }
+
+
+def make_account(db_session, user) -> GithubAccount:
+    account = GithubAccount(user_id=user.id, name="Test Account", auth_type="pat", access_token="token123")
+    db_session.add(account)
+    db_session.commit()
+    return account
+
+
+@pytest.mark.parametrize(
+    "fields, mode",
+    [({}, "full"), ({"content_mode": "full"}, "full"), ({"content_mode": "metadata"}, "metadata")],
+)
+@patch("memory.api.github_sources.GithubClient")
+def test_create_repo_sets_content_mode(mock_client_class, client, db_session, user, fields, mode):
+    canonical_repo_client(mock_client_class)
+    account = make_account(db_session, user)
+
+    response = client.post(
+        f"/github/accounts/{account.id}/repos", json={"owner": "octocat", "name": "Hello-World", **fields}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["content_mode"] == mode
+    repo = db_session.query(GithubRepo).filter_by(name="Hello-World").one()
+    assert repo.content_mode == mode
+
+
+@pytest.mark.parametrize("before, after", [("full", "metadata"), ("metadata", "full")])
+def test_update_repo_changes_content_mode(client, db_session, user, before, after):
+    account = make_account(db_session, user)
+    repo = GithubRepo(account_id=account.id, owner="o", name="r", content_mode=before)
+    db_session.add(repo)
+    db_session.commit()
+
+    response = client.patch(f"/github/accounts/{account.id}/repos/{repo.id}", json={"content_mode": after})
+
+    assert response.status_code == 200
+    assert response.json()["content_mode"] == after
+    db_session.refresh(repo)
+    assert repo.content_mode == after
+
+
+def test_update_repo_without_content_mode_keeps_it(client, db_session, user):
+    account = make_account(db_session, user)
+    repo = GithubRepo(account_id=account.id, owner="o", name="r", content_mode="metadata")
+    db_session.add(repo)
+    db_session.commit()
+
+    response = client.patch(f"/github/accounts/{account.id}/repos/{repo.id}", json={"tags": ["x"]})
+
+    assert response.json()["content_mode"] == "metadata"
+
+
+@pytest.mark.parametrize("value", ["summaries", "", None, 1])
+@patch("memory.api.github_sources.GithubClient")
+def test_create_repo_rejects_unknown_content_mode(mock_client_class, client, db_session, user, value):
+    canonical_repo_client(mock_client_class)
+    account = make_account(db_session, user)
+
+    response = client.post(
+        f"/github/accounts/{account.id}/repos",
+        json={"owner": "octocat", "name": "Hello-World", "content_mode": value},
+    )
+
+    assert response.status_code == 422
+    assert db_session.query(GithubRepo).count() == 0
+
+
+@pytest.mark.parametrize("value", ["summaries", "", "METADATA"])
+def test_update_repo_rejects_unknown_content_mode(client, db_session, user, value):
+    account = make_account(db_session, user)
+    repo = GithubRepo(account_id=account.id, owner="o", name="r")
+    db_session.add(repo)
+    db_session.commit()
+
+    response = client.patch(f"/github/accounts/{account.id}/repos/{repo.id}", json={"content_mode": value})
+
+    assert response.status_code == 422
+    db_session.refresh(repo)
+    assert repo.content_mode == "full"

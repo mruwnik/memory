@@ -1,5 +1,6 @@
 """Celery tasks for GitHub issue/PR syncing."""
 
+import hashlib
 import logging
 from collections.abc import Collection
 from datetime import datetime, timedelta, timezone
@@ -104,6 +105,49 @@ def has_body(existing: GithubItem, body: str) -> bool:
     return content == head or content.startswith(head + "\n\n\n---\n")
 
 
+def item_body_hash(data: GithubIssueData) -> str:
+    """SHA-256 of the item's body, kept by metadata_only when it drops the body."""
+    return data.get("body_hash") or hashlib.sha256(data["body"].encode()).hexdigest()
+
+
+def body_changed(existing: GithubItem, new: GithubIssueData) -> bool:
+    """Whether ``new``'s body differs from the stored one: by hash, or for items
+    stored before bodies were hashed, by the stored content."""
+    if existing.body_hash:
+        return existing.body_hash != item_body_hash(new)
+    return not has_body(existing, new["body"])
+
+
+def metadata_only(data: GithubIssueData) -> GithubIssueData:
+    """``data`` without bodies, comment and review text, diffs or file lists:
+    what a repo whose content_mode is "metadata" stores. Ids, authors and
+    timestamps stay, as item_changes and contributors detect changes by them."""
+    pr = data.get("pr_data")
+    stripped_pr = pr and cast(
+        GithubPRDataDict,
+        {
+            **pr,
+            "diff": None,
+            "files": [],
+            "reviews": [{**r, "body": None} for r in pr["reviews"]],
+            "review_comments": [
+                {**c, "body": "", "path": "", "diff_hunk": ""} for c in pr["review_comments"]
+            ],
+        },
+    )
+    return cast(
+        GithubIssueData,
+        {
+            **data,
+            "body_hash": item_body_hash(data),
+            "body": "",
+            "comments": [{**c, "body": ""} for c in data["comments"]],
+            "diff_summary": None,
+            "pr_data": stripped_pr,
+        },
+    )
+
+
 def checks_complete_key(data: GithubIssueData) -> str | None:
     """"<head sha>:<rollup state>" once the head commit's checks have all finished.
     A PR with no checks has no rollup, so it never has one."""
@@ -138,7 +182,7 @@ def item_changes(
     head_sha, checks, draft = new.get("head_sha"), new.get("checks"), new.get("draft")
     complete = checks_complete_key(new)
     changed = {
-        "edited": existing.title != new["title"] or not has_body(existing, new["body"]),
+        "edited": existing.title != new["title"] or body_changed(existing, new),
         "labels": set(existing.labels or []) != set(new["labels"]),
         "assignees": set(existing.assignees or []) != set(new["assignees"]),
         "draft": existing.draft is not None and draft is not None and draft != existing.draft,
@@ -319,8 +363,12 @@ def _create_github_item(
     milestone_id: int | None = None,
     project_id: int | None = None,
 ) -> GithubItem:
-    """Create a GithubItem from parsed issue/PR data."""
-    content = _build_content(issue_data)
+    """Create a GithubItem from parsed issue/PR data. An item from a repo that
+    doesn't store content has none, and a sha256 of its identity instead."""
+    content = _build_content(issue_data) if repo.stores_content else ""
+    sha256 = create_content_hash(content) if content else create_content_hash(
+        "", "github-metadata", repo.repo_path, issue_data["kind"], str(issue_data["number"])
+    )
 
     # Extract project status/priority if available. Use the shared
     # helper so the worker path matches the MCP fetch path's
@@ -334,7 +382,7 @@ def _create_github_item(
 
     github_item = CLASSES.get(issue_data["kind"], GithubItem)(
         modality="github",
-        sha256=create_content_hash(content),
+        sha256=sha256,
         content=content,
         kind=issue_data["kind"],
         repo_path=repo.repo_path,
@@ -353,7 +401,8 @@ def _create_github_item(
         github_updated_at=issue_data["github_updated_at"],
         comment_count=issue_data["comment_count"],
         diff_summary=issue_data["diff_summary"],
-        content_hash=issue_data["content_hash"],
+        content_hash=issue_data["content_hash"] if content else None,
+        body_hash=item_body_hash(issue_data),
         project_status=project_status,
         project_priority=project_priority,
         project_fields=project_fields if project_fields else None,
@@ -431,6 +480,10 @@ def _update_existing_item(
     existing.labels = issue_data["labels"]  # type: ignore
     existing.assignees = issue_data["assignees"]  # type: ignore
     existing.tags = (cast(list[str], repo.tags) or []) + issue_data["labels"]  # type: ignore
+    existing.body_hash = item_body_hash(issue_data)
+
+    if not repo.stores_content:
+        return update_metadata(session, existing, issue_data, milestone_id, project_id, changes, actors)
 
     if not _needs_reindex(existing, issue_data):
         if changes:
@@ -465,27 +518,10 @@ def _update_existing_item(
     content = _build_content(issue_data)
     existing.content = content  # type: ignore
     existing.sha256 = create_content_hash(content)  # type: ignore
-    existing.title = issue_data["title"]  # type: ignore
-    existing.state = issue_data["state"]  # type: ignore
-    existing.milestone_id = milestone_id  # type: ignore
-    existing.project_id = project_id  # type: ignore
-    existing.closed_at = issue_data["closed_at"]  # type: ignore
-    existing.merged_at = issue_data["merged_at"]  # type: ignore
-    existing.github_updated_at = issue_data["github_updated_at"]  # type: ignore
-    existing.comment_count = issue_data["comment_count"]  # type: ignore
     existing.diff_summary = issue_data["diff_summary"]  # type: ignore
     existing.content_hash = issue_data["content_hash"]  # type: ignore
     existing.size = len(content.encode("utf-8"))  # type: ignore
-
-    # Update project fields
-    project_fields = issue_data.get("project_fields") or {}
-    existing.project_fields = project_fields if project_fields else None  # type: ignore
-    for key, value in project_fields.items():
-        key_lower = key.lower()
-        if "status" in key_lower:
-            existing.project_status = str(value)  # type: ignore
-        elif "priority" in key_lower:
-            existing.project_priority = str(value)  # type: ignore
+    apply_metadata(existing, issue_data, milestone_id, project_id)
 
     # Update PR data if this is a PR
     if issue_data["kind"] == "pr":
@@ -510,6 +546,61 @@ def _update_existing_item(
 
     # Re-embed and push to Qdrant
     return process_content_item(existing, session, changes=changes, actors=actors)
+
+
+def apply_metadata(
+    existing: GithubItem,
+    issue_data: GithubIssueData,
+    milestone_id: int | None,
+    project_id: int | None,
+) -> None:
+    """Store the fields both content modes keep that change with the item."""
+    existing.title = issue_data["title"]  # type: ignore
+    existing.state = issue_data["state"]  # type: ignore
+    existing.milestone_id = milestone_id  # type: ignore
+    existing.project_id = project_id  # type: ignore
+    existing.closed_at = issue_data["closed_at"]  # type: ignore
+    existing.merged_at = issue_data["merged_at"]  # type: ignore
+    existing.github_updated_at = issue_data["github_updated_at"]  # type: ignore
+    existing.comment_count = issue_data["comment_count"]  # type: ignore
+
+    project_fields = issue_data.get("project_fields") or {}
+    existing.project_fields = project_fields if project_fields else None  # type: ignore
+    for key, value in project_fields.items():
+        key_lower = key.lower()
+        if "status" in key_lower:
+            existing.project_status = str(value)  # type: ignore
+        elif "priority" in key_lower:
+            existing.project_priority = str(value)  # type: ignore
+
+
+def update_metadata(
+    session: Any,
+    existing: GithubItem,
+    issue_data: GithubIssueData,
+    milestone_id: int | None,
+    project_id: int | None,
+    changes: list[str],
+    actors: dict[str, list[str]] | None,
+) -> dict[str, Any]:
+    """Update an item of a repo that stores only metadata, from metadata_only
+    data. Content stored before the repo switched modes, and its vectors, stay
+    as they were; the review and review comment lists are replaced, as the next
+    sync tells new reviews by their ids."""
+    apply_metadata(existing, issue_data, milestone_id, project_id)
+    pr = issue_data.get("pr_data")
+    if pr and existing.pr_data:
+        existing.pr_data.additions = pr["additions"]
+        existing.pr_data.deletions = pr["deletions"]
+        existing.pr_data.changed_files_count = pr["changed_files_count"]
+        existing.pr_data.reviews = pr["reviews"]  # type: ignore[assignment]
+        existing.pr_data.review_comments = pr["review_comments"]  # type: ignore[assignment]
+    elif pr:
+        existing.pr_data = _create_pr_data(issue_data)
+    if changes:
+        session.add(item_event(session, existing, changes, actors=actors))
+    session.commit()
+    return create_task_result(existing, "updated" if changes else "unchanged")
 
 
 def _deserialize_issue_data(data: dict[str, Any]) -> GithubIssueData:
@@ -711,8 +802,11 @@ def refetch_github_item(repo_id: int, number: int, kind: str) -> dict[str, Any]:
 
         client = account_client(account)
         owner, name = cast(str, repo.owner), cast(str, repo.name)
-        fetch = client.fetch_pr if kind == "pr" else client.fetch_issue
-        data = fetch(owner, name, number)
+        data = (
+            client.fetch_pr(owner, name, number, with_diff=repo.stores_content)
+            if kind == "pr"
+            else client.fetch_issue(owner, name, number)
+        )
         if data is None:
             return {"status": "not_found", "repo_id": repo_id, "number": number}
         if not matches_repo_filters(repo, data):
@@ -776,6 +870,8 @@ def sync_item(
         )
 
         changes, actors = item_changes(existing, issue_data, logins)
+        if not repo.stores_content:
+            issue_data = metadata_only(issue_data)
         if polled and push_missed(repo, issue_data, changes):
             record_push_miss(GithubRepo, repo.id, repo.account.user_id, f"GitHub repo {repo.repo_path}")
         if existing:
@@ -920,7 +1016,9 @@ def sync_repo(repo_id: int, force_full: bool) -> dict[str, Any]:
 
         # Sync PRs
         if cast(bool, repo.track_prs):
-            for pr_data in client.fetch_prs(owner, name, since, state):
+            for pr_data in client.fetch_prs(
+                owner, name, since, state, with_diff=repo.stores_content
+            ):
                 # Fetch project fields if enabled
                 if track_project_fields:
                     pr_data["project_fields"] = client.fetch_pr_project_fields(

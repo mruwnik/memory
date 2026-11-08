@@ -22,6 +22,24 @@ a new, empty `## Unreleased` above it.
 
 ## Unreleased
 
+### Changes
+- GitHub repos take a `content_mode`: `full` (the default, as before) or `metadata`. A metadata repo stores only what change detection needs (state, commit SHAs, timestamps, review and comment ids and review states, labels, assignees) and no bodies, comment or review text, diffs or file lists, and indexes nothing; subscriptions still see every change (`new`, `edited`, `commits`, `comments`, `review`, `state`, ...). Set it when adding a repo or change it on the repo row; a change applies to what later syncs store, and content stored earlier is left as it was. Metadata repos don't fetch PR diffs.
+
+### Required env vars
+None
+
+### Manual steps
+None
+
+### Other changes for operators
+None
+
+### Migrations
+- `20261219_github_content_mode`: adds `github_repos.content_mode` (default `full`) and `github_item.body_hash`. Fast: two nullable/defaulted columns.
+
+### Post-deploy commands
+None
+
 ## v0.5.1 (2026-11-08)
 
 ### Changes

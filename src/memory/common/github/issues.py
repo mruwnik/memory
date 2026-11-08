@@ -264,6 +264,7 @@ class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
         repo: str,
         since: datetime | None = None,
         state: str = "all",
+        with_diff: bool = True,
     ) -> Generator[GithubIssueData, None, None]:
         """Fetch pull requests from a repository with pagination via GraphQL.
 
@@ -271,8 +272,8 @@ class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
         comments, reviews, review comments, and file changes - eliminating the
         5+ API calls per PR that the REST approach required.
 
-        Note: The full diff still requires a separate REST call with special
-        Accept header, but this is fetched lazily only when needed.
+        The full diff takes a separate REST call per PR, skipped when
+        ``with_diff`` is False.
         """
         # Map state to GraphQL enum
         states = None
@@ -330,7 +331,7 @@ class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
                     if updated_at and updated_at < since:
                         return  # Stop iteration - PRs are ordered by updated desc
 
-                yield self._parse_pr_graphql(owner, repo, pr)
+                yield self._parse_pr_graphql(owner, repo, pr, with_diff)
 
             page_info = prs_data.get("pageInfo", {})
             if not page_info.get("hasNextPage"):
@@ -385,7 +386,7 @@ class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
         )
 
     def _parse_pr_graphql(
-        self, owner: str, repo: str, pr: dict[str, Any]
+        self, owner: str, repo: str, pr: dict[str, Any], with_diff: bool = True
     ) -> GithubIssueData:
         """Parse GraphQL PR response into GithubIssueData."""
         pr_number = pr["number"]
@@ -461,7 +462,7 @@ class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
         ]
 
         # Fetch full diff via REST (requires special Accept header)
-        full_diff = self.fetch_pr_diff(owner, repo, pr_number)
+        full_diff = self.fetch_pr_diff(owner, repo, pr_number) if with_diff else None
         diff_summary = full_diff[:5000] if full_diff else None
 
         body = pr.get("body") or ""
@@ -532,10 +533,12 @@ class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
                 checks[name] = outcome.lower()
         return checks
 
-    def fetch_pr(self, owner: str, repo: str, number: int) -> GithubIssueData | None:
+    def fetch_pr(
+        self, owner: str, repo: str, number: int, with_diff: bool = True
+    ) -> GithubIssueData | None:
         """Fetch one PR by number, parsed as fetch_prs parses each of its pages."""
         pr = self._fetch_numbered(owner, repo, number, "pullRequest", self._PR_FRAGMENT)
-        return None if pr is None else self._parse_pr_graphql(owner, repo, pr)
+        return None if pr is None else self._parse_pr_graphql(owner, repo, pr, with_diff)
 
     def fetch_issue(self, owner: str, repo: str, number: int) -> GithubIssueData | None:
         """Fetch one issue by number, parsed as fetch_issues parses each of its pages."""

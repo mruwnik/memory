@@ -24,6 +24,7 @@ const repo = {
   last_full_sync_at: null,
   active: true,
   created_at: '',
+  content_mode: 'full',
 }
 
 const account = (overrides = {}) => ({
@@ -175,6 +176,68 @@ describe('GitHubPanel add repo form', () => {
       )
       expect(post).toBeTruthy()
       expect(JSON.parse((post![1] as RequestInit).body as string)).toMatchObject({ owner: 'octocat', name: 'hello' })
+    })
+  })
+
+  it.each([
+    ['full', 'Issue and PR text, comments and diffs are stored and indexed for search.'],
+    ['metadata', 'Get notified about changes without storing or indexing text or code.'],
+  ])('sends content_mode %s for new repos and explains it', async (mode, hint) => {
+    const mock = mockFetchRoutes({
+      '/github/accounts/4/available-repos': {
+        json: [
+          { owner: 'octocat', name: 'hello', full_name: 'octocat/hello', description: 'demo', private: false, html_url: null },
+        ],
+      },
+      ...routes([account()]),
+    })
+    const { user } = renderWithUser(<GitHubPanel />)
+    await waitFor(() => expect(screen.getByText('My GH')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Add repo' }))
+    const dialog = await screen.findByRole('dialog')
+    await within(dialog).findByText('octocat/hello')
+    await user.click(within(dialog).getByRole('checkbox'))
+    const content = within(dialog).getByLabelText('Content')
+    expect(content).toHaveValue('full')
+    await user.selectOptions(content, mode)
+    expect(within(dialog).getByText(hint)).toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: /Add 1 repo$/ }))
+    await waitFor(() => {
+      const post = mock.mock.calls.find(
+        ([url, init]) => String(url).endsWith('/accounts/4/repos') && (init as RequestInit)?.method === 'POST',
+      )
+      expect(JSON.parse((post![1] as RequestInit).body as string)).toMatchObject({ owner: 'octocat', name: 'hello', content_mode: mode })
+    })
+  })
+})
+
+describe('GitHubPanel repo content mode', () => {
+  it.each([
+    ['metadata', 1],
+    ['full', 0],
+  ])('shows the metadata-only badge for a %s repo %i times', async (mode, count) => {
+    mockFetchRoutes(routes([account({ repos: [{ ...repo, content_mode: mode }] })]))
+    renderWithUser(<GitHubPanel />)
+    await waitFor(() => expect(screen.getByText('octocat/hello')).toBeInTheDocument())
+    expect(screen.queryAllByText('Metadata only')).toHaveLength(count)
+  })
+
+  it.each([
+    ['full', 'Stop storing content', 'metadata', /Content stored earlier stays as it is/],
+    ['metadata', 'Store content', 'full', /What is stored already stays as it is/],
+  ])('switches a %s repo with %s after confirming', async (mode, label, next, warning) => {
+    const mock = mockFetchRoutes(routes([account({ repos: [{ ...repo, content_mode: mode }] })]))
+    const { user } = renderWithUser(<GitHubPanel />)
+    await waitFor(() => expect(screen.getByText('octocat/hello')).toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: label }))
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByText(warning)).toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: label }))
+    await waitFor(() => {
+      const patch = mock.mock.calls.find(
+        ([url, init]) => String(url).includes('/repos/50') && (init as RequestInit)?.method === 'PATCH',
+      )
+      expect(JSON.parse((patch![1] as RequestInit).body as string)).toEqual({ content_mode: next })
     })
   })
 })

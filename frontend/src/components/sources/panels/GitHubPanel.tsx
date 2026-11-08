@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useSources, GithubAccount, GithubProject, GithubRepo, GithubWebhookStatus, AvailableRepo, AvailableProject } from '@/hooks/useSources'
+import { useSources, GithubAccount, GithubContentMode, GithubProject, GithubRepo, GithubWebhookStatus, AvailableRepo, AvailableProject } from '@/hooks/useSources'
 import { TagsInput, PauseButton, PUSH_CAUSES, PushBadge, PushMissedBadge, type PushSetup, ScheduleButton, SyncScheduleFields, StatusBadge, SyncButton, SyncFailingBadge, SyncFailure, formatRelativeTime } from '../shared'
-import { Badge, Button, Checkbox, ConfirmButton, CopyButton, DetailList, Disclosure, EmptyState, ErrorState, Field, FormActions, Input, List, LoadingState, Modal, Notice, Row, RowError, Section, SubList, cx, useActionNotice, Fieldset, NewTabLink } from '@/components/shared/ui'
+import { Badge, Button, Checkbox, ConfirmButton, CopyButton, DetailList, Disclosure, EmptyState, ErrorState, Field, FormActions, Input, List, LoadingState, Modal, Notice, Row, RowError, Section, Select, SubList, cx, useActionNotice, Fieldset, NewTabLink } from '@/components/shared/ui'
 import { useDebounce } from '@/hooks/useDebounce'
 import { useSourcesContext } from '../context'
 import { llmKeyLabel } from '../LLMKeyField'
@@ -78,6 +78,11 @@ export const GitHubPanel = () => {
     loadData()
   })
 
+  const handleSetContentMode = (accountId: number, repoId: number, content_mode: GithubContentMode) => run(async () => {
+    await updateGithubRepo(accountId, repoId, { content_mode })
+    loadData()
+  })
+
   const handleSyncRepo = (accountId: number, repoId: number) => run(async () => {
     await syncGithubRepo(accountId, repoId)
     loadData()
@@ -149,6 +154,7 @@ export const GitHubPanel = () => {
                         {repo.track_issues && <Badge tone="info">Issues</Badge>}
                         {repo.track_prs && <Badge tone="primary">PRs</Badge>}
                         {repo.track_comments && <Badge tone="success">Comments</Badge>}
+                        {repo.content_mode === 'metadata' && <Badge title={CONTENT_MODE_HINT.metadata}>Metadata only</Badge>}
                         <SyncFailingBadge status={repo} />
                         <PushMissedBadge status={repo} causes={PUSH_CAUSES.github} />
                       </>}
@@ -159,6 +165,7 @@ export const GitHubPanel = () => {
                           schedule={{ check_interval: repo.check_interval }}
                           onSave={async ({ check_interval }) => { await updateGithubRepo(account.id, repo.id, { check_interval }); loadData() }}
                         />
+                        <ContentModeButton repo={repo} onSwitch={mode => handleSetContentMode(account.id, repo.id, mode)} />
                         <PauseButton active={repo.active} onClick={() => handleToggleRepoActive(account.id, repo.id, repo.active)} />
                         <ConfirmButton confirm={`Stop tracking ${repo.repo_path}?`} onConfirm={() => run(async () => { await handleDeleteRepo(account.id, repo.id); loadData() })}>Remove</ConfirmButton>
                       </>}
@@ -228,6 +235,29 @@ export const GitHubPanel = () => {
       )}
     </Section>
   )
+}
+
+const CONTENT_MODE_HINT: Record<GithubContentMode, string> = {
+  full: 'Issue and PR text, comments and diffs are stored and indexed for search.',
+  metadata: 'Get notified about changes without storing or indexing text or code.',
+}
+
+const CONTENT_SWITCH: Record<GithubContentMode, { label: string; confirm: (repo: string) => string }> = {
+  metadata: {
+    label: 'Stop storing content',
+    confirm: repo => `Stop storing text and code for ${repo}? Later syncs keep only what change detection needs, and subscriptions still fire. Content stored earlier stays as it is.`,
+  },
+  full: {
+    label: 'Store content',
+    confirm: repo => `Store and index text and code for ${repo}? Later syncs store issue and PR text, comments and diffs. What is stored already stays as it is.`,
+  },
+}
+
+/** Switches a repo to the other content mode; the change applies to later syncs only. */
+const ContentModeButton = ({ repo, onSwitch }: { repo: GithubRepo; onSwitch: (mode: GithubContentMode) => unknown }) => {
+  const next: GithubContentMode = repo.content_mode === 'metadata' ? 'full' : 'metadata'
+  const { label, confirm } = CONTENT_SWITCH[next]
+  return <ConfirmButton variant="secondary" confirm={confirm(repo.repo_path)} onConfirm={() => onSwitch(next)}>{label}</ConfirmButton>
 }
 
 const WEBHOOK_EVENTS = 'Pull requests, Pull request reviews, Pull request review comments, Issue comments, Issues, Check runs, Check suites, Statuses'
@@ -745,6 +775,7 @@ const GitHubRepoForm = ({ accountId, existingRepos, repoIdMap, onAdd, onRemove, 
     track_project_fields: false,
     tags: [] as string[],
     check_interval: 60,
+    content_mode: 'full' as GithubContentMode,
   })
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -815,6 +846,12 @@ const GitHubRepoForm = ({ accountId, existingRepos, repoIdMap, onAdd, onRemove, 
                 <Checkbox checked={formData.track_comments} onChange={e => setFormData({ ...formData, track_comments: e.target.checked })} label="Comments" />
                 <Checkbox checked={formData.track_project_fields} onChange={e => setFormData({ ...formData, track_project_fields: e.target.checked })} label="Project fields" />
               </div>
+              <Field label="Content" hint={CONTENT_MODE_HINT[formData.content_mode]}>
+                <Select value={formData.content_mode} onChange={e => setFormData({ ...formData, content_mode: e.target.value as GithubContentMode })}>
+                  <option value="full">Full content</option>
+                  <option value="metadata">Metadata only</option>
+                </Select>
+              </Field>
             </Fieldset>
 
             <SyncScheduleFields value={formData} onChange={setFormData} />
