@@ -843,8 +843,8 @@ async def work_claim(
     With `queues`, a list of queue names or case-sensitive globs (e.g. ["messages",
     "slack-*"] or ["*"]), take instead the next delivery of your subscriptions whose
     handler is a matching queue (subscription_upsert), from the queue whose oldest
-    claimable delivery is oldest first (whatever your key can read of it); this needs
-    the read scope. Give `capabilities`
+    pending, undeferred delivery is oldest first, whether or not your key can read it;
+    this needs the read scope. Give `capabilities`
     too to take either kind, runs first: deliveries wait while any run is claimable, so
     keep a queue-only worker for queues that can't wait. Give neither to take only
     runs. It comes as a run with "queue" and "ref"

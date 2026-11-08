@@ -349,6 +349,14 @@ async def test_a_subscription_on_a_queue_named_before_globs_can_still_be_edited(
 
 
 @pytest.mark.asyncio
+async def test_a_subscription_cant_move_to_a_queue_named_with_globs(db_session, regular_user, user_session):
+    with mcp_auth_context(user_session.token):
+        created = await upsert(handler={"queue": "jobs"}, source=FILTER)
+        with pytest.raises(ValueError, match="queue name"):
+            await upsert(subscription_id=created["id"], handler={"queue": "jobs[1]"})
+
+
+@pytest.mark.asyncio
 async def test_subscribing_again_by_name_leaves_a_tripped_subscription_off(
     db_session, regular_user, user_session, fake_providers
 ):
