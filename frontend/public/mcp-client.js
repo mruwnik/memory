@@ -55,13 +55,8 @@
       throw new Error('Not authenticated - no access_token cookie found');
     }
 
-    // Support external MCP servers via serverUrl option
-    const serverUrl = options.serverUrl || `/mcp/${method}`;
-    const fullUrl = serverUrl.startsWith('http')
-      ? serverUrl  // External server - use full URL
-      : serverUrl; // Local server - relative URL
-
-    const response = await fetch(fullUrl, {
+    // The tool is named in the JSON-RPC body; the server only routes exactly /mcp.
+    const response = await fetch(options.serverUrl || '/mcp', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -96,7 +91,30 @@
       catch { return item.text; }
     })[0];
 
-    return result;
+    return unwrapUntrusted(result);
+  }
+
+  // Tools mark text people wrote with blocks so agents can tell data from orders;
+  // a report shows the text as written. Kept in step with unwrapUntrusted in useMCP.ts.
+  function unwrapUntrusted(result) {
+    const preamble = typeof result?.untrusted === 'string' ? result.untrusted : '';
+    const tag = /^Text inside <(untrusted_item_[0-9a-f]+)> blocks /.exec(preamble)?.[1];
+    if (!tag) return result;
+    const block = new RegExp(`^<${tag} id=\\S+ field=([A-Za-z0-9_.]+)>([\\s\\S]*)</${tag}>$`);
+    const unwrap = (value) => {
+      if (typeof value === 'string') {
+        const found = block.exec(value);
+        if (!found) return value;
+        const text = found[2].replace(/&lt;([\s/]*untrusted_item)/gi, '<$1');
+        return found[1].endsWith('.json') ? JSON.parse(text) : text;
+      }
+      if (Array.isArray(value)) return value.map(unwrap);
+      if (value && typeof value === 'object') {
+        return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, unwrap(v)]));
+      }
+      return value;
+    };
+    return unwrap(Object.fromEntries(Object.entries(result).filter(([k]) => k !== 'untrusted')));
   }
 
   // Batch multiple calls in parallel

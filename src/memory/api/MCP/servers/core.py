@@ -3,6 +3,7 @@ Core MCP subserver for knowledge base search and observations.
 """
 
 import base64
+import json
 import logging
 import textwrap
 from datetime import date, datetime, timedelta, timezone
@@ -15,6 +16,7 @@ from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import selectinload
 
+from memory.agents.subscription_input import new_tag, preamble, untrusted
 from memory.api.MCP.access import (
     build_mcp_user_access_filter,
     fetch_accessible_source_items,
@@ -212,7 +214,11 @@ def _build_list_items_description() -> str:
             sort_order: "asc" or "desc" (default: desc)
             include_metadata: Include each item's full metadata (default True)
 
-        Returns: {{items: [...], total: int, has_more: bool}}"""
+        Returns: {{untrusted, items: [...], total: int, has_more: bool}}. Each item has
+            id, modality, title, mime_type, filename, size, tags, inserted_at,
+            preview and metadata. untrusted names the tag of the blocks that hold
+            text people wrote; tags and metadata are JSON in a block whose field
+            ends in .json."""
     ).format(filters_section=_build_filters_section(), scope_section=SCOPE_SECTION)
 
 
@@ -262,9 +268,11 @@ def _build_search_description() -> str:
             use_bm25, use_hyde, use_reranking, use_query_analysis: Set false to skip a search enhancement. meta_get_search_defaults lists the ones available to you; true cannot enable one the server turned off or that has no key of yours to pay for it. Its semantic_search_unavailable is true while the server has no embeddings key, and search then matches keywords only
             {filters_section}
 
-        Returns: List of results with id, chunks (matching excerpts), size, mime_type,
-            content, filename, tags, metadata, created_at (when stored) and
-            search_score (relative relevance; higher is more relevant).
+        Returns: {{untrusted, results}}. untrusted names the tag of the blocks that
+            hold text people wrote; chunks, tags and metadata are JSON in a block
+            whose field ends in .json. Each result has id, chunks (matching excerpts),
+            size, mime_type, content, filename, tags, metadata, created_at (when
+            stored) and search_score (relative relevance; higher is more relevant).
             content is the item's text cut to the length above or, when the text is
             longer and the item has a summary, its summary."""
     ).format(
@@ -276,6 +284,25 @@ def _build_search_description() -> str:
 
 
 core_mcp = FastMCP("memory-core")
+
+# Item fields memory sets itself. Every other field may hold text whoever sent,
+# authored or named the item wrote, metadata included.
+SYSTEM_FIELDS = frozenset({"id", "modality", "mime_type", "size", "inserted_at", "created_at", "search_score"})
+
+
+def wrapped_item(tag: str, item: dict) -> dict:
+    """The item with each free field in one `tag` block: text as is, lists and
+    dicts as JSON in a block whose field ends in .json."""
+
+    def wrap(field: str, value: Any) -> Any:
+        if field in SYSTEM_FIELDS or value in (None, "", [], {}):
+            return value
+        if isinstance(value, (list, dict)):
+            text = json.dumps(value, ensure_ascii=False, default=str)
+            return untrusted(tag, item["id"], f"{field}.json", text)
+        return untrusted(tag, item["id"], field, str(value))
+
+    return {field: wrap(field, value) for field, value in item.items()}
 
 
 def filter_observation_source_ids(
@@ -364,7 +391,7 @@ async def search(
     use_hyde: bool | None = None,
     use_reranking: bool | None = None,
     use_query_analysis: bool | None = None,
-) -> list[dict]:
+) -> dict:
     logger.info(f"MCP search for: {query}")
     config = SearchConfig(
         limit=min(limit, 100),
@@ -413,7 +440,11 @@ async def search(
         except Exception:
             logger.exception("log_search_access failed for user_id=%s", user_id)
 
-    return [result.model_dump() for result in results]
+    tag = new_tag()
+    return {
+        "untrusted": preamble(tag),
+        "results": [wrapped_item(tag, result.model_dump()) for result in results],
+    }
 
 
 class RawObservation(BaseModel):
@@ -690,7 +721,7 @@ async def fetch(
     ids: list[int] | None = None,
     include_content: bool = True,
     include_journal: bool = False,
-) -> dict | list[dict]:
+) -> dict:
     """
     Get full details of source item(s) by ID.
     Use after search to drill down into specific results.
@@ -701,7 +732,9 @@ async def fetch(
         include_content: Whether to include full content (default True)
         include_journal: Whether to include journal entries (default False)
 
-    Returns: Full item details (single dict if id, list of dicts if ids).
+    Returns: For id, the item's details plus untrusted; for ids, {untrusted, items}.
+    untrusted names the tag of the blocks that hold text people wrote; tags,
+    metadata and journal_entries are JSON in a block whose field ends in .json.
 
     Access control behaviour differs by mode:
         - Single id: raises ValueError if the item is not found or access is denied.
@@ -790,7 +823,7 @@ async def fetch(
                 result["journal_entries"] = journal_by_item.get(item.id, [])
             results_by_id[item.id] = result
 
-        # Single-id mode: return dict (backward compatible)
+        tag = new_tag()
         if id is not None and ids is None:
             if not results_by_id:
                 raise ValueError(f"Item {id} not found or not yet indexed")
@@ -805,7 +838,7 @@ async def fetch(
                         user_id,
                         id,
                     )
-            return results_by_id[id]
+            return {"untrusted": preamble(tag)} | wrapped_item(tag, results_by_id[id])
 
         # Audit-log every item the caller actually got (post-access-check).
         if user_id is not None:
@@ -820,8 +853,10 @@ async def fetch(
                         accessed_id,
                     )
 
-        # Return results in the same order as the input ids
-        return [results_by_id[i] for i in fetch_ids if i in results_by_id]
+        return {
+            "untrusted": preamble(tag),
+            "items": [wrapped_item(tag, results_by_id[i]) for i in fetch_ids if i in results_by_id],
+        }
 
 
 def apply_access_control_to_query(query, access_filter: AccessFilter | None, session):
@@ -979,8 +1014,10 @@ async def list_items(
 
             items.append(item_dict)
 
+        tag = new_tag()
         return {
-            "items": items,
+            "untrusted": preamble(tag),
+            "items": [wrapped_item(tag, item) for item in items],
             "total": total,
             "has_more": offset + len(items) < total,
         }

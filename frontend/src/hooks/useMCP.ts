@@ -97,6 +97,33 @@ const parseJsonRpcResponse = async (response: Response): Promise<any> => {
   }
 }
 
+const UNTRUSTED_PREAMBLE = /^Text inside <(untrusted_item_[0-9a-f]+)> blocks /
+const ESCAPED_DELIMITER = /&lt;([\s/]*untrusted_item)/gi
+
+/**
+ * A tool result with the content of each untrusted block in place of the block
+ * (parsed, for a field ending in .json), and the server's escaping undone. The
+ * blocks tell agents data from orders; a person reading the UI needs the text as
+ * written. Results without `untrusted` pass through.
+ */
+export const unwrapUntrusted = (result: any): any => {
+  const tag = typeof result?.untrusted === 'string' ? UNTRUSTED_PREAMBLE.exec(result.untrusted)?.[1] : undefined
+  if (!tag) return result
+  const block = new RegExp(`^<${tag} id=\\S+ field=([A-Za-z0-9_.]+)>([\\s\\S]*)</${tag}>$`)
+  const unwrap = (value: any): any => {
+    if (typeof value === 'string') {
+      const found = block.exec(value)
+      if (!found) return value
+      const text = found[2].replace(ESCAPED_DELIMITER, '<$1')
+      return found[1].endsWith('.json') ? JSON.parse(text) : text
+    }
+    if (Array.isArray(value)) return value.map(unwrap)
+    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, unwrap(v)]))
+    return value
+  }
+  return unwrap(Object.fromEntries(Object.entries(result).filter(([k]) => k !== 'untrusted')))
+}
+
 /** `status` is the HTTP status of a failed request; `denied` marks a tool-level access denial. */
 export class MCPError extends Error {
   constructor(message: string, readonly status?: number, readonly denied = false) {
@@ -165,11 +192,13 @@ export const useMCP = () => {
     }
 
     return content.map((item: any) => {
+      let parsed
       try {
-        return JSON.parse(item.text)
+        parsed = JSON.parse(item.text)
       } catch (e) {
         return item.text
       }
+      return unwrapUntrusted(parsed)
     }) as T
   }, [apiCall])
 
@@ -204,7 +233,7 @@ export const useMCP = () => {
   }, [mcpCall])
 
   const searchKnowledgeBase = useCallback(async (query: string, modalities: string[] = [], filters: Record<string, any> = {}, config: Record<string, any> = {}) => {
-    const blocks = await mcpCall('core_search', {
+    const blocks = await mcpCall<any[]>('core_search', {
       query,
       filters,
       modalities,
@@ -213,8 +242,8 @@ export const useMCP = () => {
       use_scores: config.useScores ?? false,
       ...config.enhancements,
     })
-    // FastMCP encodes the result list in one text block; older servers use one block per item.
-    return blocks.length === 1 && Array.isArray(blocks[0]) ? blocks[0] : blocks
+    // A reply that isn't JSON comes back as text blocks, which the results view shows as they are.
+    return blocks[0]?.results ?? blocks
   }, [mcpCall])
 
   useEffect(() => {

@@ -32,7 +32,7 @@ const installFetch = (searchResults: unknown[] = [], defaults: Record<string, bo
       return mockResponse({ json: mcpEnvelopeJson(defaults) })
     }
     if (tool === 'core_search') {
-      return mockResponse({ json: mcpEnvelopeJson(...searchResults) })
+      return mockResponse({ json: mcpEnvelopeJson({ results: searchResults }) })
     }
     return mockResponse({ status: 404, json: { detail: 'nope' } })
   })

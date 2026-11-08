@@ -9,6 +9,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 from unittest.mock import Mock, patch
 
 import pytest
@@ -1184,6 +1185,25 @@ def shown(rendered: str, tag: str | None = None) -> str:
     if tag is None:
         tag, rendered = untrusted_tag(first), rest.lstrip("\n")
     return rendered.replace(tag, "T")
+
+
+def unwrapped(result: Any, tag: str | None = None) -> Any:
+    """A tool result with its preamble dropped and each block's text in place of
+    the block, for tests about what the text is rather than how it's wrapped."""
+    if isinstance(result, dict) and tag is None:
+        tag = untrusted_tag(result["untrusted"])
+        result = {k: v for k, v in result.items() if k != "untrusted"}
+    if isinstance(result, str):
+        block = re.fullmatch(rf"<{tag} id=\S+ field=([\w.]+)>(.*)</{tag}>", result, re.DOTALL)
+        if not block:
+            return result
+        text = re.sub(r"&lt;([\s/]*untrusted_item)", r"<\1", block[2], flags=re.IGNORECASE)
+        return json.loads(text) if block[1].endswith(".json") else text
+    if isinstance(result, list):
+        return [unwrapped(v, tag) for v in result]
+    if isinstance(result, dict):
+        return {k: unwrapped(v, tag) for k, v in result.items()}
+    return result
 
 
 @pytest.fixture

@@ -6,6 +6,7 @@ from typing import cast
 
 from fastmcp import FastMCP
 
+from memory.agents.subscription_input import new_tag, preamble, untrusted
 from memory.api.MCP.access import (
     build_mcp_user_access_filter,
     fetch_accessible_source_items,
@@ -26,11 +27,13 @@ github_mcp = FastMCP("memory-github")
 
 @github_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_READ), has_items(GithubPR))
-async def pr_diff(id: int) -> str:
+async def pr_diff(id: int) -> dict:
     """The full diff of a GitHub PR as it is on GitHub now, unclipped.
 
     Args:
         id: The PR's item id
+
+    Returns: {untrusted, diff}: diff is in a block whose tag untrusted names.
     """
     with make_session() as session:
         user = get_mcp_current_user(session)
@@ -58,4 +61,5 @@ async def pr_diff(id: int) -> str:
             logger.exception("log_item_access failed for user_id=%s item_id=%s", user_id, id)
     if diff is None:
         raise ValueError(f"couldn't fetch the diff of PR {id} from GitHub")
-    return diff
+    tag = new_tag()
+    return {"untrusted": preamble(tag), "diff": untrusted(tag, id, "diff", diff)}

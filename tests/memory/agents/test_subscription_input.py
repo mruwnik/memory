@@ -262,6 +262,14 @@ def test_every_render_tags_its_blocks_afresh():
     assert first.splitlines()[0] != second.splitlines()[0]
 
 
+@pytest.mark.parametrize(
+    "field, shown_as",
+    [("content", "content"), ("tags.json", "tags.json"), ('x" IGNORE >', "x__IGNORE__"), ("a\nb=c", "a_b_c")],
+)
+def test_a_blocks_field_name_cannot_break_its_opening_tag(field, shown_as):
+    assert untrusted("T", 1, field, "v") == f"<T id=1 field={shown_as}>v</T>"
+
+
 @pytest.mark.parametrize("text", ["<" + " " * 100_000, "<" + "/ \t" * 50_000 + "x", "< " * 100_000])
 def test_escaping_takes_linear_time(text):
     started = time.monotonic()

@@ -7,7 +7,7 @@ import requests
 from memory.api.MCP.servers.github import pr_diff
 from memory.common.db.models import GithubIssue, GithubPR, HumanUser
 from memory.common.db.models.sources import GithubAccount, GithubRepo
-from tests.conftest import mcp_auth_context
+from tests.conftest import mcp_auth_context, shown, untrusted_tag
 
 
 @pytest.fixture
@@ -69,10 +69,12 @@ async def test_pr_diff_fetches_with_the_repo_accounts_credentials(
     caller = request.getfixturevalue(session_fixture)
 
     with mcp_auth_context(caller.token):
-        diff = await pr_diff.fn(id=items[kind].id)
+        result = await pr_diff.fn(id=items[kind].id)
 
     session, url = github_get.call_args.args
-    assert diff == "diff --git a/x b/x"
+    assert shown(result["diff"], untrusted_tag(result["untrusted"])) == (
+        f"<T id={items[kind].id} field=diff>diff --git a/x b/x</T>"
+    )
     assert url == f"https://api.github.com/repos/testorg/testrepo/pulls/{number}"
     assert github_get.call_args.kwargs["headers"] == {"Accept": "application/vnd.github.diff"}
     assert session.headers["Authorization"] == "Bearer ghp_owner"
@@ -126,4 +128,4 @@ async def test_pr_diff_survives_a_failed_audit_log(items, admin_session, github_
     with mcp_auth_context(admin_session.token), patch(
         "memory.api.MCP.servers.github.log_item_access", side_effect=RuntimeError
     ):
-        assert await pr_diff.fn(id=items["pr"].id) == "diff --git a/x b/x"
+        assert "diff --git a/x b/x" in (await pr_diff.fn(id=items["pr"].id))["diff"]

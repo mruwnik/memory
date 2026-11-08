@@ -38,6 +38,8 @@ TAG = "untrusted_item"
 # Defence in depth only: what keeps text in its block is the tag's random id. Possessive,
 # so a long run of whitespace can't make it backtrack.
 DELIMITER = re.compile(rf"<[\s/]*+{TAG}", re.IGNORECASE)
+# Field names can come from the item's own keys, and sit inside the opening tag.
+FIELD_UNSAFE = re.compile(r"[^A-Za-z0-9_.]")
 
 Getter = Callable[[Any], Any]
 
@@ -277,7 +279,7 @@ def untrusted(tag: str, item_id: Any, field: str, text: str, limit: int | None =
     body = escaped(text)
     if limit is not None and len(body) > limit:
         body = body[:limit] + CLIPPED
-    return f"<{tag} id={item_id} field={field}>{body}</{tag}>"
+    return f"<{tag} id={item_id} field={FIELD_UNSAFE.sub('_', field)}>{body}</{tag}>"
 
 
 def bare(text: str) -> str:

@@ -273,4 +273,4 @@ async def test_generic_tools_never_expose_session_segments(
 
     assert listed["items"] == []
     assert counted["total"] == 0
-    assert fetched == []
+    assert fetched["items"] == []
