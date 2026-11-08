@@ -46,7 +46,7 @@ from memory.agents.external import (
 )
 from memory.agents.mcp_client import calling_run, memory_tools
 from memory.agents.prebuilt import PREBUILT_AGENTS, code_agent
-from memory.agents.queues import backlog, is_delivery, ready_to_claim, take_from_queue
+from memory.agents.queues import backlog, claimable_queues, is_delivery, ready_to_claim, take_from_queue
 from memory.agents.provider_keys import (
     KeyUnavailable,
     check_key,
@@ -799,21 +799,31 @@ def take_next(
                 return payload
 
 
+def require_read(user_id: int, token: str) -> None:
+    with make_session() as db:
+        user = db.get(User, user_id)
+        assert user is not None
+        if not can_read(user, token_api_key(token, db)):
+            raise ValueError("claiming queue deliveries needs the read scope")
+
+
 def take_from(
-    user_id: int, token: str, queue: str, worker: str | None, lease: timedelta
+    user_id: int, token: str, patterns: list[str], worker: str | None, lease: timedelta
 ) -> dict | None:
+    """Tries the caller's queues matching `patterns`, resolved now so a queue made
+    since the last try counts, in claimable_queues' order."""
     with make_session() as db:
         user = db.get(User, user_id)
         assert user is not None
         key = token_api_key(token, db)
-        if not can_read(user, key):
-            raise ValueError("claiming queue deliveries needs the read scope")
-        run = take_from_queue(db, user, queue, key)
-        if run is None:
-            return None
-        payload = lease_run(run, user_id, worker, lease)
-        db.commit()
-        return payload
+        for queue in claimable_queues(db, user, patterns):
+            run = take_from_queue(db, user, queue, key)
+            if run is None:
+                continue
+            payload = lease_run(run, user_id, worker, lease)
+            db.commit()
+            return payload
+        return None
 
 
 @agent_mcp.tool()
@@ -825,13 +835,18 @@ async def work_claim(
     wait: int = 0,
     run_id: str | None = None,
     lease_token: str | None = None,
-    queue: str | None = None,
+    queues: list[str] | None = None,
 ) -> dict:
     """Take the oldest of your own runs placed on workers whose requirements you meet,
     to execute yourself with your own models and tools. Returns {"run": null} if none.
 
-    With `queue`, take instead the next delivery of your subscriptions whose handler
-    is that queue (subscription_upsert), which needs the read scope. It comes as a run with "queue" and "ref"
+    With `queues`, a list of queue names or case-sensitive globs (e.g. ["messages",
+    "slack-*"] or ["*"]), take instead the next delivery of your subscriptions whose
+    handler is a matching queue (subscription_upsert), from the queue whose oldest
+    pending, undeferred delivery is oldest first, whether or not your key can read it;
+    this needs the read scope. Give `capabilities` too to take either kind, runs first:
+    deliveries wait while any run is claimable, so keep a queue-only worker for queues
+    that can't wait. Give neither to take only runs. It comes as a run with "queue" and "ref"
     ({"subscription_id", "item_ids", "changes": {"<item id>": [change tags]}, and
     "coalesced": {"<item id>": [ids of items whose deliveries were folded into it]}
     when any were}), its input rendered from the subscription's template and the items as
@@ -843,7 +858,7 @@ async def work_claim(
     for the same item or thread is answered. A removed item's delivery carries its id
     with the change "removed"; a raw subscription's carries the webhook delivery
     (see subscription_upsert). Report on it with agent_work_submit as on
-    any run; capabilities don't apply. agent_work_queues shows what is waiting.
+    any run; capabilities don't apply to it. agent_work_queues shows what is waiting.
 
     `capabilities` declares what you have, as {"models": [...], "tools": ["server:tool",
     ...], "flags": [...]} (globs allowed, e.g. "memory:*"); a run is yours to take when
@@ -870,13 +885,21 @@ async def work_claim(
         raise ValueError("give both run_id and lease_token to renew a lease, or neither")
     if run_id is not None and lease_token is not None:
         return await asyncio.to_thread(renew, run_id, lease_token, user_id, lease)
+    if queues == []:
+        raise ValueError("queues is empty: give at least one queue name or glob, or leave it out")
+    if queues is not None:
+        await asyncio.to_thread(require_read, user_id, token)
+    takes_runs = queues is None or capabilities is not None
     declared = Requirements.model_validate(capabilities or {})
     deadline = time.monotonic() + min(max(wait, 0), settings.AGENT_MAX_WAIT_SEC)
     while True:
-        if queue is None:
+        taken = None
+        # Runs first: someone usually waits on a run and each costs its owner, while a
+        # stream of queue deliveries would otherwise starve them.
+        if takes_runs:
             taken = await asyncio.to_thread(take_next, user_id, token, declared, worker, lease)
-        else:
-            taken = await asyncio.to_thread(take_from, user_id, token, queue, worker, lease)
+        if taken is None and queues is not None:
+            taken = await asyncio.to_thread(take_from, user_id, token, queues, worker, lease)
         if taken is not None:
             return {"run": taken}
         if time.monotonic() >= deadline:
@@ -978,7 +1001,7 @@ async def work_submit(
 @agent_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_AGENTS_WORK))
 async def work_queues() -> dict:
-    """Your subscriptions' queues (agent_work_claim's `queue`), each with how many deliveries
+    """Your subscriptions' queues (agent_work_claim's `queues`), each with how many deliveries
     of its enabled subscriptions are waiting to be claimed and the oldest one's age in
     seconds (null when none).
     Deliveries no worker's key can read wait here and end `expired`."""

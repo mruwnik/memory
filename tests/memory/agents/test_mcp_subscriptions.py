@@ -262,6 +262,9 @@ async def test_an_agent_runs_on_a_cron_with_its_input(
         ({"handler": NOTIFY, "source": FILTER}, "notify handlers take cron and timer sources"),
         ({"handler": {"queue": "q"}, "source": CRON}, "queue handlers take filter and raw sources"),
         ({"handler": {"queue": " "}, "source": FILTER}, "queue name"),
+        ({"handler": {"queue": "slack-*"}, "source": FILTER}, "queue name"),
+        ({"handler": {"queue": "jobs[1]"}, "source": FILTER}, "queue name"),
+        ({"handler": {"queue": "what?"}, "source": FILTER}, "queue name"),
         ({"handler": {"agent": "nope"}, "source": FILTER}, "unknown agent 'nope'"),
         ({"handler": {"agent": 999_999}, "source": FILTER}, "unknown agent definition"),
         ({"handler": {"agent": 999_999}, "source": CRON | {"input": "x"}}, "unknown agent definition"),
@@ -318,6 +321,39 @@ async def test_subscribing_again_by_name_updates_in_place(db_session, regular_us
     assert (again["id"], again["max_per_hour"], again["config"]["filter"]["tags_any"]) == (first["id"], 5, ["ml"])
     assert again["active_since"] == first["active_since"]
     assert db_session.query(Subscription).count() == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "change",
+    [{"name": "renamed"}, {"enabled": False}, {"handler": {"queue": "jobs[1]"}, "max_per_hour": 3}],
+)
+async def test_a_subscription_on_a_queue_named_before_globs_can_still_be_edited(
+    db_session, regular_user, user_session, change
+):
+    """Only new queue names are refused glob characters: existing ones keep working."""
+    subscription = Subscription(
+        user_id=regular_user.id,
+        name="old",
+        handler={"queue": "jobs[1]"},
+        kind="ingest",
+        config=subscriptions.IngestConfig.model_validate({"filter": {"tags_any": ["ai"]}}).model_dump(mode="json"),
+    )
+    db_session.add(subscription)
+    db_session.commit()
+
+    with mcp_auth_context(user_session.token):
+        updated = await upsert(subscription_id=subscription.id, **change)
+
+    assert (updated["id"], updated["handler"]) == (subscription.id, {"queue": "jobs[1]"})
+
+
+@pytest.mark.asyncio
+async def test_a_subscription_cant_move_to_a_queue_named_with_globs(db_session, regular_user, user_session):
+    with mcp_auth_context(user_session.token):
+        created = await upsert(handler={"queue": "jobs"}, source=FILTER)
+        with pytest.raises(ValueError, match="queue name"):
+            await upsert(subscription_id=created["id"], handler={"queue": "jobs[1]"})
 
 
 @pytest.mark.asyncio

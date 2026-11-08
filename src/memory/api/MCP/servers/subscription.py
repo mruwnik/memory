@@ -89,6 +89,7 @@ DEFAULT_NAME = re.compile(r"subscription-\d+")
 SOURCE_KINDS = {"filter": INGEST, "raw": RAW, "cron": CRON, "at": TIMER}
 # Sources whose subscriptions say what is read, which schedule keys don't see.
 READING_KINDS = (INGEST, RAW)
+QUEUE_GLOB_CHARS = "*?[]"
 NOTIFY_FIELDS = ("channel", "target", "message", "subject")
 FIRED_TIMERS_LISTED = 50
 MAX_HISTORY = 100
@@ -395,7 +396,8 @@ async def upsert(
       'schedule:write'; the agent's tools are checked against your access on every
       change.
     - {"queue": "<name>"}: deliveries wait until one of your workers claims them
-      with agent_work_claim(queue=...). Needs 'agents:work' (or 'agents') and 'read'.
+      with agent_work_claim(queues=[...]); the name can't contain * ? [ or ]. Needs
+      'agents:work' (or 'agents') and 'read'.
     - {"notify": {"channel": discord|slack|email, "target", "message", "subject"}}:
       sends that message. The target may be a person's name, identifier or email,
       a Discord/Slack channel or user id, or an email address; subject "" clears
@@ -519,6 +521,12 @@ async def upsert(
         one_handler(handler)
         check_combination(kind, handler, shaping)
         stored, spec, definition = await checked_handler(db, user_id, set(scopes), handler)
+        # Workers claim by glob, so a new name with glob characters couldn't be named
+        # exactly; names from before that rule keep working.
+        queue = stored.get("queue")
+        new_name = existing is None or queue != existing.handler.get("queue")
+        if queue is not None and new_name and set(queue) & set(QUEUE_GLOB_CHARS):
+            raise ValueError(f"a queue name can't contain any of {QUEUE_GLOB_CHARS}")
         if kind in (CRON, TIMER) and "agent" in stored:
             need(set(scopes), "an agent on a schedule", SCOPE_SCHEDULE_WRITE)
         if resume and kind != INGEST:

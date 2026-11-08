@@ -2,6 +2,7 @@
 """Queue handlers: a subscription's deliveries wait for its owner's workers to claim
 them by queue name, rendered and access-checked at claim, and reported back on the run."""
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -159,9 +160,9 @@ async def test_a_queue_delivery_is_claimed_by_its_queue_rendered_now_and_reporte
     item.content = "rewritten after routing"
     db_session.commit()
 
-    other_queue = await claim(worker_session.token, queue="other")
+    other_queue = await claim(worker_session.token, queues=["other"])
     no_queue = await claim(worker_session.token)
-    claimed = await claim(worker_session.token, queue=QUEUE, worker="laptop")
+    claimed = await claim(worker_session.token, queues=[QUEUE], worker="laptop")
     assert claimed is not None
     reported = await submit(worker_session.token, claimed, "reviewed")
 
@@ -185,15 +186,15 @@ async def test_a_removed_item_reaches_its_queue_after_its_earlier_delivery_is_an
     item = post(db_session, creator_id=regular_user.id)
     item_id = item.id
     route_item(db_session, item_id)
-    first = await claim(worker_session.token, queue=QUEUE)
+    first = await claim(worker_session.token, queues=[QUEUE])
     db_session.delete(item)
     db_session.commit()
     subscriptions.route_events()
 
-    held = await claim(worker_session.token, queue=QUEUE)
+    held = await claim(worker_session.token, queues=[QUEUE])
     assert first is not None
     await submit(worker_session.token, first)
-    removal = await claim(worker_session.token, queue=QUEUE)
+    removal = await claim(worker_session.token, queues=[QUEUE])
 
     assert held is None
     assert removal is not None
@@ -217,11 +218,108 @@ async def test_a_delivery_whose_item_was_hidden_since_routing_is_skipped_at_clai
     hidden.creator_id = admin_user.id
     db_session.commit()
 
-    claimed = await claim(worker_session.token, queue=QUEUE)
+    claimed = await claim(worker_session.token, queues=[QUEUE])
 
     assert claimed is not None
     assert claimed["ref"]["item_ids"] == [kept.id]
     assert statuses(db_session, subscription) == ["done", "skipped:inaccessible"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "patterns,taken",
+    [
+        (["reviews"], "reviews"),
+        (["rev*"], "reviews"),
+        (["nothing", "slack-?"], "slack-a"),
+        (["Reviews"], None),
+        (["slack"], None),
+    ],
+)
+async def test_queue_patterns_are_case_sensitive_globs_over_the_callers_queues(
+    db_session, regular_user, worker_session, no_celery_dispatch, patterns, taken
+):
+    subscribe(db_session, regular_user, queue="reviews")
+    subscribe(db_session, regular_user, queue="slack-a")
+    route_item(db_session, post(db_session, creator_id=regular_user.id).id)
+
+    claimed = await claim(worker_session.token, queues=patterns)
+
+    assert (claimed or {}).get("queue") == taken
+
+
+@pytest.mark.asyncio
+async def test_queue_patterns_take_the_queue_with_the_oldest_delivery_first(
+    db_session, regular_user, worker_session, no_celery_dispatch
+):
+    subscribe(db_session, regular_user, queue="newer")
+    older = subscribe(db_session, regular_user, queue="older")
+    route_item(db_session, post(db_session, creator_id=regular_user.id).id)
+    age(db_session, older, timedelta(minutes=5))
+
+    claimed = [await claim(worker_session.token, queues=["*"]) for _ in range(3)]
+
+    assert [(c or {}).get("queue") for c in claimed] == ["older", "newer", None]
+
+
+@pytest.mark.asyncio
+async def test_queue_patterns_rank_queues_by_their_oldest_claimable_delivery(
+    db_session, regular_user, worker_session, no_celery_dispatch
+):
+    held = subscribe(db_session, regular_user, queue="held")
+    middle = subscribe(db_session, regular_user, queue="middle")
+    route_item(db_session, post(db_session, creator_id=regular_user.id).id)
+    age(db_session, held, timedelta(minutes=10))
+    age(db_session, middle, timedelta(minutes=5))
+    for d in db_session.query(Delivery).filter_by(subscription_id=held.id):
+        d.not_before = datetime.now(timezone.utc) + timedelta(hours=1)
+    route_item(db_session, post(db_session, creator_id=regular_user.id).id)
+    db_session.commit()
+
+    claimed = [await claim(worker_session.token, queues=["*"]) for _ in range(4)]
+
+    assert [(c or {}).get("queue") for c in claimed] == ["middle", "held", "middle", None]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kwargs,taken",
+    [
+        ({"capabilities": {}, "queues": [QUEUE]}, ["run", QUEUE, None]),
+        ({"queues": [QUEUE]}, [QUEUE, None, None]),
+        ({}, ["run", None, None]),
+    ],
+)
+async def test_a_claim_takes_runs_by_capabilities_first_then_deliveries_by_queue(
+    db_session, regular_user, worker_session, no_celery_dispatch, kwargs, taken
+):
+    subscribe(db_session, regular_user)
+    route_item(db_session, post(db_session, creator_id=regular_user.id).id)
+    submit_run(db_session, regular_user)
+
+    claimed = [await claim(worker_session.token, **kwargs) for _ in range(3)]
+
+    assert [c and c.get("queue", "run") for c in claimed] == taken
+
+
+@pytest.mark.asyncio
+async def test_an_empty_queue_list_is_refused(worker_session):
+    with pytest.raises(ValueError, match="queues"):
+        await claim(worker_session.token, queues=[])
+
+
+@pytest.mark.asyncio
+async def test_a_waiting_claim_picks_up_a_queue_created_while_it_waits(
+    db_session, regular_user, worker_session, no_celery_dispatch
+):
+    waiting = asyncio.create_task(claim(worker_session.token, queues=["late-*"], wait=5))
+    await asyncio.sleep(1.5)
+    subscribe(db_session, regular_user, queue="late-one")
+    route_item(db_session, post(db_session, creator_id=regular_user.id).id)
+
+    claimed = await waiting
+
+    assert (claimed or {}).get("queue") == "late-one"
 
 
 @pytest.mark.asyncio
@@ -236,7 +334,7 @@ async def test_a_key_without_read_cant_claim_queue_deliveries_and_they_wait(
     route_item(db_session, post(db_session, creator_id=regular_user.id).id)
 
     with pytest.raises(ValueError, match="read"):
-        await claim(key.key, queue=QUEUE)
+        await claim(key.key, queues=[QUEUE])
 
     assert statuses(db_session, subscription) == ["pending"]
 
@@ -251,11 +349,11 @@ async def test_order_by_holds_an_items_later_delivery_until_the_earlier_one_is_r
     route_item(db_session, item.id)
     edit(db_session, item, "second version")
 
-    first = await claim(worker_session.token, queue=QUEUE)
-    second = await claim(worker_session.token, queue=QUEUE)
+    first = await claim(worker_session.token, queues=[QUEUE])
+    second = await claim(worker_session.token, queues=[QUEUE])
     assert first is not None
     await submit(worker_session.token, first)
-    after_report = await claim(worker_session.token, queue=QUEUE)
+    after_report = await claim(worker_session.token, queues=[QUEUE])
 
     assert (second is None, after_report is None) == (held, not held)
     assert "second version" in (second or after_report or {})["input"]
@@ -270,8 +368,8 @@ async def test_coalescing_replaces_an_unclaimed_delivery_with_the_latest_and_kee
     route_item(db_session, item.id)
     edit(db_session, item, "latest version")
 
-    claimed = await claim(worker_session.token, queue=QUEUE)
-    again = await claim(worker_session.token, queue=QUEUE)
+    claimed = await claim(worker_session.token, queues=[QUEUE])
+    again = await claim(worker_session.token, queues=[QUEUE])
 
     assert claimed is not None
     assert "latest version" in claimed["input"]
@@ -288,7 +386,7 @@ async def test_a_lapsed_queue_run_goes_back_to_its_queue_rendered_afresh(
     subscribe(db_session, regular_user)
     item = post(db_session, creator_id=regular_user.id)
     route_item(db_session, item.id)
-    first = await claim(worker_session.token, queue=QUEUE)
+    first = await claim(worker_session.token, queues=[QUEUE])
     assert first is not None
     expire_lease(db_session, first["id"])
     sweep_worker_runs()
@@ -296,7 +394,7 @@ async def test_a_lapsed_queue_run_goes_back_to_its_queue_rendered_afresh(
     db_session.commit()
 
     generic = await claim(worker_session.token)
-    again = await claim(worker_session.token, queue=QUEUE)
+    again = await claim(worker_session.token, queues=[QUEUE])
 
     assert generic is None
     assert again is not None
@@ -334,8 +432,8 @@ async def test_a_queue_subscription_over_its_hourly_rate_defers_its_deliveries(
     for _ in range(2):
         route_item(db_session, post(db_session, creator_id=regular_user.id).id)
 
-    first = await claim(worker_session.token, queue=QUEUE)
-    second = await claim(worker_session.token, queue=QUEUE)
+    first = await claim(worker_session.token, queues=[QUEUE])
+    second = await claim(worker_session.token, queues=[QUEUE])
 
     deferred = db_session.query(Delivery).filter_by(status="pending").one()
     db_session.refresh(subscription)
@@ -353,9 +451,9 @@ async def test_a_queue_batch_is_claimed_together_once_its_window_closes(
     for p in posts:
         route_item(db_session, p.id)
 
-    early = await claim(worker_session.token, queue=QUEUE)
+    early = await claim(worker_session.token, queues=[QUEUE])
     age(db_session, subscription, timedelta(minutes=2))
-    claimed = await claim(worker_session.token, queue=QUEUE)
+    claimed = await claim(worker_session.token, queues=[QUEUE])
 
     assert early is None
     assert claimed is not None
@@ -404,9 +502,9 @@ async def test_a_queue_delivery_a_narrow_key_cant_read_waits_for_a_worker_that_c
     route_item(db_session, post(db_session).id)
     narrow = narrow_key(db_session, admin_user)
 
-    passed_over = await claim(narrow.key, queue=QUEUE)
+    passed_over = await claim(narrow.key, queues=[QUEUE])
     left = statuses(db_session, subscription)
-    taken = await claim(admin_session.token, queue=QUEUE)
+    taken = await claim(admin_session.token, queues=[QUEUE])
 
     assert (passed_over, left) == (None, ["pending"])
     assert taken is not None
@@ -442,7 +540,7 @@ async def test_a_queue_subscription_whose_config_broke_trips_and_the_queue_goes_
     healthy = subscribe(db_session, regular_user, name="healthy")
     route_item(db_session, post(db_session, creator_id=regular_user.id).id)
 
-    claimed = await claim(worker_session.token, queue=QUEUE)
+    claimed = await claim(worker_session.token, queues=[QUEUE])
 
     db_session.refresh(broken)
     assert claimed is not None
@@ -489,7 +587,7 @@ async def test_a_delivery_whose_claim_keeps_failing_fails_after_its_attempts(
 
     claims = []
     for _ in range(3):
-        claims.append(await claim(worker_session.token, queue=QUEUE))
+        claims.append(await claim(worker_session.token, queues=[QUEUE]))
         # The next attempt waits for its retry.
         db_session.query(Delivery).update({"not_before": None})
         db_session.commit()
@@ -513,8 +611,8 @@ async def test_a_failed_claim_is_retried_only_after_a_wait(
     subscribe(db_session, regular_user)
     route_item(db_session, post(db_session, creator_id=regular_user.id).id)
 
-    await claim(worker_session.token, queue=QUEUE)
-    await claim(worker_session.token, queue=QUEUE)
+    await claim(worker_session.token, queues=[QUEUE])
+    await claim(worker_session.token, queues=[QUEUE])
 
     db_session.expire_all()
     [delivery] = db_session.query(Delivery).all()
@@ -540,7 +638,7 @@ async def test_a_claim_skips_what_the_subscription_reported_posting_after_routin
     route_item(db_session, reply.id)
     posted_run(db_session, subscription, [{"source": "slack", "external_id": "C1:1.0"}])
 
-    claimed = await claim(worker_session.token, queue=QUEUE)
+    claimed = await claim(worker_session.token, queues=[QUEUE])
 
     assert claimed is None
     assert statuses(db_session, subscription) == ["skipped:posted"]
@@ -553,13 +651,13 @@ async def test_a_lapsed_run_drops_what_the_subscription_reported_posting_since(
     subscription = subscribe(db_session, regular_user)
     reply = posted_reply(db_session, regular_user)
     route_item(db_session, reply.id)
-    first = await claim(worker_session.token, queue=QUEUE)
+    first = await claim(worker_session.token, queues=[QUEUE])
     assert first is not None
     expire_lease(db_session, first["id"])
     sweep_worker_runs()
     posted_run(db_session, subscription, [{"source": "slack", "external_id": "C1:1.0"}])
 
-    again = await claim(worker_session.token, queue=QUEUE)
+    again = await claim(worker_session.token, queues=[QUEUE])
 
     assert again is None
     assert run_status(db_session, first["id"]) == "failed"
@@ -600,11 +698,11 @@ async def test_a_thread_holds_its_later_message_until_the_earlier_one_is_answere
     route_item(db_session, first.id)
     route_item(db_session, second.id)
 
-    claimed = await claim(admin_session.token, queue=QUEUE)
-    held = await claim(admin_session.token, queue=QUEUE)
+    claimed = await claim(admin_session.token, queues=[QUEUE])
+    held = await claim(admin_session.token, queues=[QUEUE])
     assert claimed is not None
     await submit(admin_session.token, claimed)
-    released = await claim(admin_session.token, queue=QUEUE)
+    released = await claim(admin_session.token, queues=[QUEUE])
 
     assert claimed["ref"]["item_ids"] == [first.id]
     assert held is None
@@ -621,7 +719,7 @@ async def test_coalescing_a_thread_folds_its_earlier_messages_into_the_latest(
     route_item(db_session, first.id)
     route_item(db_session, second.id)
 
-    claimed = await claim(admin_session.token, queue=QUEUE)
+    claimed = await claim(admin_session.token, queues=[QUEUE])
 
     assert claimed is not None
     assert claimed["ref"]["item_ids"] == [second.id]
@@ -640,7 +738,7 @@ async def test_an_earlier_delivery_that_ended_without_a_run_releases_the_next(
     db_session.commit()
     edit(db_session, item, "second version")
 
-    claimed = await claim(worker_session.token, queue=QUEUE)
+    claimed = await claim(worker_session.token, queues=[QUEUE])
 
     assert claimed is not None
     assert "second version" in claimed["input"]
@@ -660,7 +758,7 @@ async def test_a_coalescing_batch_claims_an_item_once_at_its_latest(
     edit(db_session, item, "latest version")
     age(db_session, subscription, timedelta(minutes=2))
 
-    claimed = await claim(worker_session.token, queue=QUEUE)
+    claimed = await claim(worker_session.token, queues=[QUEUE])
 
     assert claimed is not None
     assert claimed["ref"]["item_ids"] == [item.id, other.id]
@@ -737,7 +835,7 @@ async def test_a_removal_is_delivered_only_for_a_gone_item_it_was_delivered(
     db_session.commit()
     removal(db_session, subscription, item_id, earlier)
 
-    claimed = await claim(worker_session.token, queue=QUEUE)
+    claimed = await claim(worker_session.token, queues=[QUEUE])
 
     assert (claimed is not None) is delivered
 
@@ -748,7 +846,7 @@ async def test_coalescing_a_thread_never_folds_a_removal(db_session, admin_user,
     first, second = thread_messages(db_session, 2)
     first_id = first.id
     route_item(db_session, first_id)
-    first_claim = await claim(admin_session.token, queue=QUEUE)
+    first_claim = await claim(admin_session.token, queues=[QUEUE])
     assert first_claim is not None
     db_session.delete(first)
     db_session.commit()
