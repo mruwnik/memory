@@ -658,10 +658,15 @@ def tracked_job(outcome: str = "done") -> dict:
     return {"outcome": outcome}
 
 
+@job_utils.tracked_task
+def cause_seen() -> int | None:
+    return CAUSING_EVENT.get()
+
+
 @job_utils.celery_app.task(name="test.causing_job")
 @job_utils.tracked_task
 def causing_job(note: str) -> dict:
-    return {"caused_by": CAUSING_EVENT.get()}
+    return {"caused_by": CAUSING_EVENT.get(), "nested": cause_seen()}
 
 
 @job_utils.celery_app.task(name="test.nesting_job")
@@ -764,8 +769,8 @@ def test_tracked_task_redelivery_after_a_finished_start_runs_again(
 def test_tracked_task_runs_under_its_cause_but_keeps_it_out_of_params(db_session):
     result = causing_job.apply(kwargs={"note": "x", "caused_by": 42}, task_id="caused-task")
 
-    assert (result.result, CAUSING_EVENT.get()) == ({"caused_by": 42}, None)
-    job = db_session.query(PendingJob).filter(PendingJob.celery_task_id == "caused-task").one()
+    assert (result.result, CAUSING_EVENT.get()) == ({"caused_by": 42, "nested": 42}, None)
+    job = db_session.query(PendingJob).filter(PendingJob.job_type == "causing_job").one()
     assert job.params == {"_task_name": "test.causing_job", "note": "x"}
 
 

@@ -19,6 +19,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ValidationError
 from sqlalchemy.orm import Session
 
 from memory.api.request_body import read_request_body_with_cap
@@ -45,7 +46,41 @@ def accepted(status: str, **extra: Any) -> JSONResponse:
     return JSONResponse({"status": status, **extra}, status_code=202)
 
 
-def numbers_at_head(db: Session, repo: GithubRepo, sha: str | None, listed: list[dict]) -> list[int]:
+class Numbered(BaseModel):
+    number: int
+
+
+class Issue(Numbered):
+    # Present on the issue side of a PR.
+    pull_request: dict | None = None
+
+
+class ListedPR(BaseModel):
+    number: int | None = None
+
+
+class Check(BaseModel):
+    head_sha: str | None = None
+    pull_requests: list[ListedPR] | None = None
+
+
+class Repository(BaseModel):
+    id: int
+
+
+class Payload(BaseModel):
+    """The parts of a delivery the endpoint reads; a signed body shaped otherwise is a 400."""
+
+    action: Any = None
+    repository: Repository | None = None
+    pull_request: Numbered | None = None
+    issue: Issue | None = None
+    check_run: Check | None = None
+    check_suite: Check | None = None
+    sha: str | None = None
+
+
+def numbers_at_head(db: Session, repo: GithubRepo, sha: str | None, listed: list[ListedPR]) -> list[int]:
     """The PRs a commit's checks belong to: those the event lists (same-repo PRs)
     and the stored PRs whose head it is (which covers forks)."""
     if not sha:
@@ -53,24 +88,22 @@ def numbers_at_head(db: Session, repo: GithubRepo, sha: str | None, listed: list
     stored = db.query(GithubItem.number).filter(
         GithubItem.repo_id == repo.id, GithubItem.kind == "pr", GithubItem.head_sha == sha
     )
-    numbers = {pr["number"] for pr in listed if pr.get("number")} | {n for (n,) in stored}
+    numbers = {pr.number for pr in listed if pr.number} | {n for (n,) in stored}
     return sorted(numbers)
 
 
-def event_targets(db: Session, repo: GithubRepo, event: str, payload: dict) -> list[tuple[int, str]]:
+def event_targets(db: Session, repo: GithubRepo, event: str, payload: Payload) -> list[tuple[int, str]]:
     """The (number, kind) of each issue or PR the event changed."""
-    action = payload.get("action")
-    if event in ("pull_request", "pull_request_review", "pull_request_review_comment"):
-        return [(payload["pull_request"]["number"], "pr")]
-    if event in ("issues", "issue_comment"):
-        issue = payload["issue"]
-        return [(issue["number"], "pr" if "pull_request" in issue else "issue")]
-    if event in ("check_run", "check_suite") and action == "completed":
-        check = payload[event]
-        listed = check.get("pull_requests") or []
-        return [(n, "pr") for n in numbers_at_head(db, repo, check.get("head_sha"), listed)]
+    pr, issue = payload.pull_request, payload.issue
+    if event in ("pull_request", "pull_request_review", "pull_request_review_comment") and pr:
+        return [(pr.number, "pr")]
+    if event in ("issues", "issue_comment") and issue:
+        return [(issue.number, "pr" if issue.pull_request is not None else "issue")]
+    check = {"check_run": payload.check_run, "check_suite": payload.check_suite}.get(event)
+    if check and payload.action == "completed":
+        return [(n, "pr") for n in numbers_at_head(db, repo, check.head_sha, check.pull_requests or [])]
     if event == "status":
-        return [(n, "pr") for n in numbers_at_head(db, repo, payload.get("sha"), [])]
+        return [(n, "pr") for n in numbers_at_head(db, repo, payload.sha, [])]
     return []
 
 
@@ -90,8 +123,8 @@ async def github_webhook(
     return await run_in_threadpool(handle_delivery, db, account_id, body, request)
 
 
-def event_type(event: str, payload: dict) -> str:
-    action = payload.get("action")
+def event_type(event: str, payload: Payload) -> str:
+    action = payload.action
     return f"{event}.{action}" if isinstance(action, str) else event
 
 
@@ -105,15 +138,14 @@ def handle_delivery(db: Session, account_id: int, body: bytes, request: Request)
 
     delivery = request.headers.get("x-github-delivery", "")
     try:
-        payload = json.loads(body)
-    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
-        payload = None
-    if not isinstance(payload, dict):
+        payload: dict = json.loads(body)
+        shape = Payload.model_validate(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValidationError):
         logger.warning("github webhook unparseable account=%s delivery=%s", account_id, delivery)
-        raise HTTPException(status_code=400, detail="Body must be a JSON object")
+        raise HTTPException(status_code=400, detail="Body must be a JSON object shaped as GitHub sends it")
 
     event = request.headers.get("x-github-event", "")
-    repo_github_id = (payload.get("repository") or {}).get("id")
+    repo_github_id = shape.repository.id if shape.repository else None
     repo = (
         db.query(GithubRepo)
         .filter(
@@ -125,7 +157,7 @@ def handle_delivery(db: Session, account_id: int, body: bytes, request: Request)
         if repo_github_id and account.active
         else None
     )
-    changed = event_targets(db, repo, event, payload) if repo else []
+    changed = event_targets(db, repo, event, shape) if repo else []
     targets = [(n, kind) for n, kind in changed if repo and tracks(repo, kind)]
     if event == "ping":
         # A ping for a repo that isn't collected is as untracked as any other event.
@@ -141,7 +173,7 @@ def handle_delivery(db: Session, account_id: int, body: bytes, request: Request)
     raw_id = record_raw_event(
         db,
         source="github",
-        event_type=event_type(event, payload),
+        event_type=event_type(event, shape),
         account_id=account.id,
         owner_id=account.user_id,
         delivery_id=hashlib.sha256(body).hexdigest(),

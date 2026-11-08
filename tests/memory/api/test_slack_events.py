@@ -17,7 +17,7 @@ import pytest
 from sqlalchemy import update
 
 from memory.api import slack as slack_api
-from memory.api.slack import _verify_slack_signature, plan_event_callback
+from memory.api.slack import SlackEnvelope, _verify_slack_signature, plan_event_callback
 from memory.common.db.models.slack import SlackApp, SlackChannel, SlackUserCredentials, SlackWorkspace
 from memory.common.encryption import encrypt_value
 from tests.conftest import raw_events
@@ -138,6 +138,10 @@ def test_verify_slack_signature_basestring_uses_colon_separator():
 # ---------------------------------------------------------------------------
 
 
+def plan(body: dict, slack_app_id: int):
+    return plan_event_callback(SlackEnvelope.model_validate(body), slack_app_id)
+
+
 def _capture_send_task():
     """Patch celery_app.send_task and return the calls list."""
     return patch("memory.api.slack.celery_app.send_task")
@@ -203,7 +207,7 @@ GOOD_CHANNEL_ID = "C12345678"
 def test_dispatch_event_callback_routes_correctly(
     event, expected_task_suffix, expected_kwarg_keys
 ):
-    label, task_name, kwargs = plan_event_callback(event, slack_app_id=42)
+    label, task_name, kwargs = plan(event, slack_app_id=42)
 
     assert task_name is not None
     assert task_name.endswith(expected_task_suffix)
@@ -216,7 +220,7 @@ def test_dispatch_event_callback_routes_correctly(
     "event_type, action", [("reaction_added", "add"), ("reaction_removed", "remove")]
 )
 def test_dispatch_reaction_event_passes_who_reacted_with_what(event_type, action):
-    _, _, kwargs = plan_event_callback(
+    _, _, kwargs = plan(
         {"event": {"type": event_type, "user": "U777", "reaction": "tada",
                    "item": {"type": "message", "channel": GOOD_CHANNEL_ID, "ts": "5.5"}},
          "team_id": GOOD_TEAM_ID},
@@ -229,7 +233,7 @@ def test_dispatch_reaction_event_passes_who_reacted_with_what(event_type, action
 
 
 def test_dispatch_ignores_reactions_on_files():
-    label, task, kwargs = plan_event_callback(
+    label, task, kwargs = plan(
         {"event": {"type": "reaction_added", "user": "U1", "reaction": "tada",
                    "item": {"type": "file", "file": "F123"}},
          "team_id": GOOD_TEAM_ID},
@@ -246,7 +250,7 @@ def test_dispatch_event_callback_ignores_unknown_event_type():
 
     Note: the team/channel validation runs before the type dispatch, so we
     pass a well-formed channel even though it's never used."""
-    label, task, kwargs = plan_event_callback(
+    label, task, kwargs = plan(
         {"event": {"type": "team_renamed", "channel": GOOD_CHANNEL_ID},
          "team_id": GOOD_TEAM_ID},
         slack_app_id=1,
@@ -260,7 +264,7 @@ def test_dispatch_event_callback_message_changed_uses_inner_message_block():
     `event.message`. The dispatcher must read fields from that nested
     object, not the outer event (which has type=message but may not
     carry the post-edit ts/text)."""
-    _, _, kwargs = plan_event_callback(
+    _, _, kwargs = plan(
         {
             "event": {
                 "type": "message",
@@ -306,7 +310,7 @@ def test_dispatch_event_callback_rejects_malformed_team_id(
     """The HMAC verifies authenticity-from-Slack but not content shape.
     Garbage team_id flowing into Celery kwargs would land as junk in
     SlackMessage.workspace_id (Text col, no DB shape constraint)."""
-    label, task, kwargs = plan_event_callback(
+    label, task, kwargs = plan(
         {"event": {"type": "message", "ts": "1.0",
                    "channel": GOOD_CHANNEL_ID},
          "team_id": team_id_value},
@@ -332,7 +336,7 @@ def test_dispatch_event_callback_rejects_malformed_channel_id(
     """Same defense-in-depth rationale as the team_id test, applied to
     channel_id (event.channel for messages, event.item.channel for
     reactions)."""
-    label, task, kwargs = plan_event_callback(
+    label, task, kwargs = plan(
         {"event": {"type": "message", "ts": "1.0",
                    "channel": channel_id_value},
          "team_id": GOOD_TEAM_ID},
@@ -346,7 +350,7 @@ def test_dispatch_event_callback_accepts_dict_channel_with_valid_id():
     """channel_* events deliver `event.channel` as a full channel object
     (dict). The dispatcher must extract `id` and validate that, not the
     outer dict literal."""
-    label, task, kwargs = plan_event_callback(
+    label, task, kwargs = plan(
         {
             "event": {
                 "type": "channel_rename",
@@ -367,7 +371,7 @@ def test_dispatch_event_callback_accepts_dict_channel_with_valid_id():
     [("channel_archive", {"is_archived": True}), ("channel_unarchive", {"is_archived": False})],
 )
 def test_dispatch_archive_events_carry_only_the_archived_flag(event_type, payload):
-    label, task, kwargs = plan_event_callback(
+    label, task, kwargs = plan(
         {"event": {"type": event_type, "channel": GOOD_CHANNEL_ID, "user": "U1"}, "team_id": GOOD_TEAM_ID},
         slack_app_id=3,
     )
@@ -377,7 +381,7 @@ def test_dispatch_archive_events_carry_only_the_archived_flag(event_type, payloa
 
 @pytest.mark.parametrize("event_type", ["channel_deleted", "channel_left", "channel_history_changed"])
 def test_dispatch_ignores_channel_events_that_carry_no_metadata(event_type):
-    label, task, kwargs = plan_event_callback(
+    label, task, kwargs = plan(
         {"event": {"type": event_type, "channel": GOOD_CHANNEL_ID}, "team_id": GOOD_TEAM_ID},
         slack_app_id=3,
     )
@@ -643,6 +647,10 @@ def test_a_secret_pasted_while_an_old_signed_request_is_handled_stays_draft(
           | {"event_id": "Ev1"}), 0),
         ({"type": "message", "ts": "12.3", "user": "U1", "text": "x", "channel": "not-a-channel"},
          ("message", None, "rejected", None), 0),
+        # Workspace events name no channel, and are left to raw subscriptions.
+        ({"type": "team_join", "user": {"id": "U9"}},
+         ("team_join", None, "no_item_type", event_callback({"type": "team_join", "user": {"id": "U9"}})
+          | {"event_id": "Ev1"}), 0),
     ],
 )
 def test_each_event_is_a_raw_event_its_task_links(client, db_session, events_app, user, event, expected, tasks):
@@ -667,6 +675,7 @@ def test_each_event_is_a_raw_event_its_task_links(client, db_session, events_app
         # Events with no item type are gated too.
         (True, False, {"type": "app_mention", "user": "U1", "text": "<@U2>", "channel": GOOD_CHANNEL_ID}),
         (False, None, {"type": "pin_added", "user": "U1", "channel_id": GOOD_CHANNEL_ID, "channel": GOOD_CHANNEL_ID}),
+        (False, None, {"type": "pin_added", "user": "U1", "channel_id": GOOD_CHANNEL_ID}),
         (False, None, {"type": "message", "ts": "14.2", "user": "U1", "text": "x", "channel": GOOD_CHANNEL_ID}),
         (False, None, {"type": "message", "ts": "14.3", "user": "U1", "text": "x", "channel": "C99999999"}),
         (True, False, {"type": "reaction_added", "user": "U1", "reaction": "tada",
@@ -740,6 +749,15 @@ def test_a_retried_event_is_taken_once(client, db_session, events_app, user):
     [
         (challenge("logged"), ("url_verification", "no_item_type")),
         (message_event(GOOD_TEAM_ID, "13.2"), ("message", "rejected")),  # no credential in that team
+        # Signed but shaped as Slack never sends.
+        ({"type": "event_callback", "team_id": GOOD_TEAM_ID, "event": "message"}, ("event_callback", "rejected")),
+        (event_callback({"type": "message", "ts": "13.3", "channel": [GOOD_CHANNEL_ID]}), ("event_callback", "rejected")),
+        (event_callback({"type": "message", "subtype": "message_changed", "channel": GOOD_CHANNEL_ID, "message": "x"}),
+         ("event_callback", "rejected")),
+        (event_callback({"type": "message", "ts": "13.4", "channel": GOOD_CHANNEL_ID, "edited": "13.5"}),
+         ("event_callback", "rejected")),
+        (event_callback({"type": "message", "ts": "13.6", "channel": GOOD_CHANNEL_ID}) | {"event_id": ["Ev"]},
+         ("event_callback", "rejected")),
     ],
 )
 def test_signed_requests_that_ingest_nothing_are_logged(client, db_session, events_app, envelope, expected):

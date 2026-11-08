@@ -508,10 +508,12 @@ async def upsert(
             raise ValueError("source is required to create a subscription")
         else:
             kind = source_kind(source)
+        # A handler the source can't take is refused before what the handler needs.
+        one_handler(handler)
+        check_combination(kind, handler, shaping)
         stored, spec, definition = await checked_handler(db, user_id, set(scopes), handler)
         if kind in (CRON, TIMER) and "agent" in stored:
             need(set(scopes), "an agent on a schedule", SCOPE_SCHEDULE_WRITE)
-        check_combination(kind, stored, shaping)
         if resume and kind != INGEST:
             raise ValueError("resume applies to filter sources")
         if kind == TIMER:

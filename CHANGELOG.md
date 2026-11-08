@@ -23,6 +23,10 @@ a new, empty `## Unreleased` above it.
 ## Unreleased
 
 ### Changes
+- A task called from inside another keeps its cause, so Discord pushed messages, edits, deletes and reactions now link their items to the webhook delivery (raw subscriptions get their item ids, the Webhook log lists them).
+- Raw deliveries routed together are claimed in event order.
+- A signed GitHub delivery whose fields have the wrong shape is a 400; a Slack one is recorded `rejected` (Slack retries non-200s). Slack events with no channel (team_join, user_change) are routed as `no_item_type`; pins and file shares are judged by their `channel_id`.
+- A raw subscription with an agent or notify handler is refused for the combination before any key check.
 - Webhook log: payloads of deliveries that stored nothing open per row, withheld where the viewer's credential couldn't read where they came from (the same rule as raw subscriptions, which now let an account's owner read its own unfiled repo or DM); outcome and type filters; repo and channel names; why a stored delivery lists no item. An admin's read-only key sees only its own accounts there.
 - A schedule handoff the agents worker never picks up fails, and a failed timer tells its owner, within about 2.5h instead of turning "late" after 6h; it never pauses the subscription. A cron tick a cap stops is still skipped, but the owner is told once per throttling episode, and an agent timer a cap stops tells its owner it failed. A tripped cron clears its next run time.
 

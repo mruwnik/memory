@@ -1303,6 +1303,9 @@ def raw_run(subscription: Subscription, event: Event) -> AgentRun:
         subscription_id=subscription.id,
         api_key_id=subscription.api_key_id,
         executor=EXECUTOR_WORKERS,
+        # Runs routed together would share the transaction's start, and the AgentRun.id
+        # tie-break is a UUID: claims go oldest first, so each gets its own time.
+        created_at=func.clock_timestamp(),
     )
 
 

@@ -186,9 +186,25 @@ def test_a_delivery_not_collected_is_a_stub_without_payload(client, db_session, 
     ]
 
 
-@pytest.mark.parametrize("body", [b"not json", b"[1, 2]"])
-def test_an_unparseable_delivery_is_400_without_an_event(client, db_session, repo, body):
-    headers = {"X-GitHub-Event": "push", "X-GitHub-Delivery": "d-bad", "X-Hub-Signature-256": sign(body)}
+def shaped(event: str, **payload) -> tuple[str, bytes]:
+    return event, json.dumps({"action": "completed", **payload}).encode()
+
+
+@pytest.mark.parametrize(
+    "event, body",
+    [
+        ("push", b"not json"),
+        ("push", b"[1, 2]"),
+        shaped("push", repository="o/r"),
+        shaped("push", repository={"id": [REPO_GITHUB_ID]}),
+        shaped("issues", issue="6"),
+        shaped("pull_request", pull_request={"title": "no number"}),
+        shaped("check_run", check_run="f00"),
+        shaped("check_run", check_run={"head_sha": "f00", "pull_requests": ["12"]}),
+    ],
+)
+def test_an_unparseable_delivery_is_400_without_an_event(client, db_session, repo, event, body):
+    headers = {"X-GitHub-Event": event, "X-GitHub-Delivery": "d-bad", "X-Hub-Signature-256": sign(body)}
 
     response = client.post(f"/github/webhook/{repo.account_id}", content=body, headers=headers)
 
@@ -284,6 +300,8 @@ def test_events_queue_a_refetch_of_their_item(client, repo, no_celery_dispatch, 
     [
         ("check_run", {"action": "created", "check_run": {"head_sha": "f00", "pull_requests": [{"number": 1}]}}),
         ("push", {"ref": "refs/heads/main"}),
+        ("issues", {"action": "opened"}),
+        ("pull_request", {"action": "opened"}),
     ],
 )
 def test_other_events_queue_nothing_but_count_as_events(client, db_session, repo, no_celery_dispatch, event, payload):

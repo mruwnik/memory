@@ -17,11 +17,11 @@ import secrets
 import threading
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response
-from pydantic import BaseModel, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -1144,10 +1144,60 @@ def _slack_app_for_event(db: Session, slack_app_id: int) -> SlackApp | None:
 SlackDispatch = tuple[str, str | None, dict]
 
 
-def slack_event_type(envelope: dict) -> str:
-    event = envelope.get("event") or {}
-    event_type, subtype = event.get("type") or "unknown", event.get("subtype")
-    return f"{event_type}.{subtype}" if subtype else str(event_type)
+class PushedEdit(BaseModel):
+    ts: str | None = None
+
+
+class PushedMessage(BaseModel):
+    ts: str | None = None
+    user: str | None = None
+    text: str | None = ""
+    thread_ts: str | None = None
+    reply_count: int | None = None
+    edited: PushedEdit | None = None
+    reactions: list | None = None
+    files: list | None = None
+
+
+class PushedItem(BaseModel):
+    channel: str | None = None
+    ts: str | None = None
+
+
+class PushedChannel(BaseModel):
+    # channel_created and channel_rename ship the whole object on to the task.
+    model_config = ConfigDict(extra="allow")
+
+    id: str | None = None
+
+
+class PushedEvent(PushedMessage):
+    type: str = "unknown"
+    subtype: str | None = None
+    # A user object on team_join and user_change.
+    user: Any = None
+    channel: str | PushedChannel | None = None
+    # pin_*, file_shared and the like name their channel here instead.
+    channel_id: str | None = None
+    item: PushedItem | None = None
+    message: PushedMessage | None = None
+    deleted_ts: str | None = None
+    reaction: str | None = None
+
+
+class SlackEnvelope(BaseModel):
+    """The parts of a pushed body the endpoint reads; a signed body shaped otherwise is rejected."""
+
+    type: str | None = None
+    team_id: str | None = None
+    event_id: str | None = None
+    challenge: str = ""
+    event: PushedEvent = Field(default_factory=PushedEvent)
+
+
+def slack_event_type(envelope: SlackEnvelope) -> str:
+    event = envelope.event
+    return f"{event.type}.{event.subtype}" if event.subtype else event.type
 
 
 def channel_collected(db: Session, workspace_id: str, channel_id: str) -> bool:
@@ -1159,11 +1209,11 @@ def channel_collected(db: Session, workspace_id: str, channel_id: str) -> bool:
     return bool(workspace and workspace.collect_messages)
 
 
-def channel_event_payload(event_type: str, raw_channel: object) -> dict | None:
+def channel_event_payload(event_type: str, channel: str | PushedChannel | None) -> dict | None:
     """The channel fields a channel_* event changes, or None if it changes none."""
     # Archive events name the channel by id only; created/rename carry the object.
-    if event_type in ("channel_created", "channel_rename") and isinstance(raw_channel, dict):
-        return raw_channel
+    if event_type in ("channel_created", "channel_rename") and isinstance(channel, PushedChannel):
+        return channel.model_dump(exclude_unset=True)
     if event_type == "channel_archive":
         return {"is_archived": True}
     if event_type == "channel_unarchive":
@@ -1171,7 +1221,7 @@ def channel_event_payload(event_type: str, raw_channel: object) -> dict | None:
     return None
 
 
-def plan_event_callback(body: dict, slack_app_id: int) -> SlackDispatch:
+def plan_event_callback(envelope: SlackEnvelope, slack_app_id: int) -> SlackDispatch:
     """Branch on event.type to the celery task that applies it.
 
     Defense-in-depth: HMAC signature proves the body came from Slack with the
@@ -1183,29 +1233,19 @@ def plan_event_callback(body: dict, slack_app_id: int) -> SlackDispatch:
     validate workspace_id and channel_id here so garbage gets rejected at the
     dispatcher rather than wasting Celery cycles + log spam in add_slack_message.
     """
-    event = body.get("event") or {}
-    event_type = event.get("type") or "unknown"
-    subtype = event.get("subtype")
-    workspace_id = body.get("team_id")
+    event = envelope.event
+    event_type, subtype = event.type, event.subtype
+    workspace_id = envelope.team_id
 
-    # `event.channel` is sometimes a dict (channel_* events deliver a full
-    # channel object), sometimes a string (message events). Reactions carry
-    # their channel under `event.item.channel` instead. Normalize per source.
-    raw_channel = event.get("channel")
-    if isinstance(raw_channel, dict):
-        primary_channel_id = raw_channel.get("id")
+    # channel_* events deliver a channel object, message events its id, and
+    # reactions carry it under `event.item.channel` instead.
+    reacted = event_type in ("reaction_added", "reaction_removed")
+    if reacted:
+        channel_id = event.item and event.item.channel
     else:
-        primary_channel_id = raw_channel
-    reaction_item = event.get("item") or {}
-    reaction_channel_id = (
-        reaction_item.get("channel") if isinstance(reaction_item, dict) else None
-    )
-    # Pick the right channel_id for this event type so the validation below
-    # rejects events that lack a usable channel_id at the right source.
-    if event_type in ("reaction_added", "reaction_removed"):
-        channel_id = reaction_channel_id
-    else:
-        channel_id = primary_channel_id
+        channel_id = (event.channel.id if isinstance(event.channel, PushedChannel) else event.channel) or event.channel_id
+    # Workspace-level events (team_join, user_change, ...) name no channel.
+    needs_channel = reacted or event_type == "message" or event_type.startswith("channel_")
 
     if not workspace_id or not _SLACK_TEAM_ID_PATTERN.fullmatch(workspace_id):
         logger.warning(
@@ -1213,7 +1253,8 @@ def plan_event_callback(body: dict, slack_app_id: int) -> SlackDispatch:
             f"slack_app_id={slack_app_id} event_type={event_type}"
         )
         return "rejected_team_id", None, {}
-    # channel_id is required for every dispatched task type below.
+    if channel_id is None and not needs_channel:
+        return "ignored", None, {"workspace_id": workspace_id, "channel_id": None}
     if not channel_id or not _SLACK_CHANNEL_ID_PATTERN.fullmatch(channel_id):
         logger.warning(
             f"Rejecting event with malformed channel_id "
@@ -1226,39 +1267,39 @@ def plan_event_callback(body: dict, slack_app_id: int) -> SlackDispatch:
             return "mark_deleted", MARK_SLACK_MESSAGE_DELETED, {
                 "workspace_id": workspace_id,
                 "channel_id": channel_id,
-                "message_ts": (event.get("deleted_ts") or event.get("ts")),
+                "message_ts": event.deleted_ts or event.ts,
                 "slack_app_id": slack_app_id,
             }
         # Both "message" and "message_changed" go through ADD_SLACK_MESSAGE,
         # which carries the merge logic from B-pre-1/B-pre-2.
-        message = event if subtype != "message_changed" else event.get("message", {})
+        message = event if subtype != "message_changed" else event.message or PushedMessage()
         return "add_message", ADD_SLACK_MESSAGE, {
             "workspace_id": workspace_id,
             "channel_id": channel_id,
-            "message_ts": message.get("ts"),
-            "author_id": message.get("user"),
-            "content": message.get("text", ""),
-            "thread_ts": message.get("thread_ts"),
-            "reply_count": message.get("reply_count"),
+            "message_ts": message.ts,
+            "author_id": message.user,
+            "content": message.text,
+            "thread_ts": message.thread_ts,
+            "reply_count": message.reply_count,
             "subtype": subtype,
-            "edited_ts": message.get("edited", {}).get("ts"),
-            "reactions": message.get("reactions"),
-            "files": message.get("files"),
+            "edited_ts": message.edited and message.edited.ts,
+            "reactions": message.reactions,
+            "files": message.files,
             "slack_app_id": slack_app_id,
         }
 
-    if event_type in ("reaction_added", "reaction_removed"):
+    if reacted:
         return "update_reactions", UPDATE_SLACK_REACTIONS, {
             "workspace_id": workspace_id,
             "channel_id": channel_id,
-            "message_ts": reaction_item.get("ts"),
+            "message_ts": event.item and event.item.ts,
             "action": "add" if event_type == "reaction_added" else "remove",
-            "emoji": event.get("reaction"),
-            "user_id": event.get("user"),
+            "emoji": event.reaction,
+            "user_id": event.user,
             "slack_app_id": slack_app_id,
         }
 
-    channel_payload = channel_event_payload(event_type, raw_channel)
+    channel_payload = channel_event_payload(event_type, event.channel)
     if channel_payload is not None:
         return "update_channel", UPDATE_SLACK_CHANNEL, {
             "workspace_id": workspace_id,
@@ -1357,8 +1398,11 @@ async def slack_events(
     if not isinstance(envelope, dict):
         log.warning("slack event unparseable", extra={"slack_app_id": slack_app_id})
         return _uniform_401()
+    try:
+        shape = SlackEnvelope.model_validate(envelope)
+    except ValidationError:
+        shape = None
 
-    envelope_type = envelope.get("type")
     # The verification token is a credential.
     logged = {k: v for k, v in envelope.items() if k != "token"}
 
@@ -1369,16 +1413,22 @@ async def slack_events(
             event_type=event_type,
             account_id=app.id,
             owner_id=app.created_by_user_id,
-            delivery_id=envelope.get("event_id") or body_sha,
+            delivery_id=(shape and shape.event_id) or body_sha,
             outcome=outcome,
             container=container,
             payload=logged,
             links_items=links_items,
         )
 
-    if envelope_type == "url_verification":
+    if shape is None:
+        log.warning("slack event of an unexpected shape", extra={"slack_app_id": slack_app_id})
+        record(str(envelope.get("type")), REJECTED)
+        db.commit()
+        return PlainTextResponse(content="", status_code=200)
+
+    if shape.type == "url_verification":
         nonce_qs = request.query_params.get("wizard_nonce")
-        challenge = envelope.get("challenge", "")
+        challenge = shape.challenge
         # An events URL registered without the wizard's nonce is verified
         # by the signature alone: it proves the sender holds the signing
         # secret the owner pasted, which is all 'signing_verified' claims.
@@ -1395,9 +1445,9 @@ async def slack_events(
         advance_setup_state(db, app, verified_secret, "draft", "signing_verified")
         return PlainTextResponse(content=challenge, status_code=200)
 
-    if envelope_type != "event_callback":
+    if shape.type != "event_callback":
         # Slack expects 200 for envelope types we don't act on.
-        record(str(envelope_type), NO_ITEM_TYPE)
+        record(str(shape.type), NO_ITEM_TYPE)
         db.commit()
         return PlainTextResponse(content="", status_code=200)
 
@@ -1410,21 +1460,21 @@ async def slack_events(
     if app.push_missing_since and push_stale(app.push_last_miss_at):
         app.push_missing_since = None
         db.commit()
-    event_type = slack_event_type(envelope)
+    event_type = slack_event_type(shape)
     # The signature only proves the app's owner sent this; an event counts
     # only for a workspace the app was authorized into.
-    if not app_has_workspace(db, app.id, envelope.get("team_id")):
+    if not app_has_workspace(db, app.id, shape.team_id):
         log.info("slack event for an unconnected workspace dropped", extra={"slack_app_id": slack_app_id})
         record(event_type, REJECTED)
         db.commit()
         return PlainTextResponse(content="", status_code=200)
 
-    label, task, kwargs = plan_event_callback(envelope, slack_app_id)
+    label, task, kwargs = plan_event_callback(shape, slack_app_id)
     # A channel a push may not reach Memory from leaves only a stub; a delete
     # still drops whatever copy Memory has.
     if label.startswith("rejected"):
         outcome = REJECTED
-    elif not channel_collected(db, kwargs["workspace_id"], kwargs["channel_id"]):
+    elif kwargs["channel_id"] and not channel_collected(db, kwargs["workspace_id"], kwargs["channel_id"]):
         outcome = NOT_COLLECTED
     else:
         # A mention's message arrives as its own event and is stored from that.

@@ -290,17 +290,19 @@ async def test_a_raw_subscription_is_refused_for_another_users_account(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "handler, raw, refusal",
+    "handler, raw, scopes, refusal",
     [
-        ({"queue": QUEUE}, {"source": "github", "outcome": ["not_collected"]}, "invalid raw source"),
-        ({"queue": QUEUE}, {"source": "smtp"}, "invalid raw source"),
-        ({"agent": "echo"}, {"source": "github"}, "raw sources take queue handlers"),
+        ({"queue": QUEUE}, {"source": "github", "outcome": ["not_collected"]}, ["agents"], "invalid raw source"),
+        ({"queue": QUEUE}, {"source": "smtp"}, ["agents"], "invalid raw source"),
+        ({"agent": "echo"}, {"source": "github"}, ["agents"], "raw sources take queue handlers"),
+        # The combination is refused before whatever the handler itself would need.
+        ({"agent": "echo"}, {"source": "github"}, [], "raw sources take queue handlers"),
     ],
 )
 async def test_a_raw_subscription_is_refused_what_it_cant_take(
-    db_session, regular_user, worker_session, code_agents, handler, raw, refusal
+    db_session, regular_user, worker_session, code_agents, handler, raw, scopes, refusal
 ):
-    regular_user.scopes = [*regular_user.scopes, "agents"]
+    regular_user.scopes = [*regular_user.scopes, *scopes]
     db_session.commit()
 
     with mcp_auth_context(worker_session.token), pytest.raises(ValueError, match=refusal):
@@ -419,6 +421,25 @@ async def test_raw_and_filter_deliveries_on_one_queue_are_claimed_oldest_first(
 
     assert first is not None
     assert ("event_id" in first["ref"]) is raw_first
+
+
+@pytest.mark.asyncio
+async def test_raw_deliveries_routed_together_are_claimed_in_event_order(db_session, regular_user, worker_session):
+    github = account(db_session, regular_user)
+    raw_subscription(db_session, regular_user)
+    event_ids = [
+        record_raw_event(
+            db_session, source="github", event_type="push", account_id=github.id, owner_id=github.user_id,
+            delivery_id=f"d-{n}", outcome="no_item_type", container="42",
+        )
+        for n in range(6)
+    ]
+    db_session.commit()
+    subscriptions.route_events()
+
+    claimed = [await claim(worker_session.token, queue=QUEUE) for _ in event_ids]
+
+    assert [run and run["ref"]["event_id"] for run in claimed] == event_ids
 
 
 def transcripts(db, user) -> TranscriptAccount:

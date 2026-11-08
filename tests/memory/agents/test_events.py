@@ -135,13 +135,17 @@ def test_a_task_given_caused_by_links_the_item_events_it_writes(db_session, even
     db_session.commit()
 
     @safe_task_execution
-    def ingest(post):
+    def store(post):
         process_content_item(post, db_session)
+
+    @safe_task_execution
+    def ingest(post):
+        store(post)
         db_session.delete(gone)
         db_session.commit()
 
     ingest(new_post(), caused_by=raw_id)
-    process_content_item(new_post(), db_session)
+    store(new_post())
 
     db_session.expire_all()
     linked = db_session.query(Event.action, Event.caused_by).filter(Event.kind == "item").order_by(Event.id)

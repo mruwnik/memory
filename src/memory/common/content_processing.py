@@ -19,7 +19,7 @@ from sqlalchemy import or_
 from memory.common import embedding, qdrant
 from memory.common.access_control import apply_access_filter_to_query, uploader_access_filter
 from memory.common.db.models import SourceItem, Chunk, item_event
-from memory.common.db.models.events import caused_by_event
+from memory.common.db.models.events import CAUSING_EVENT, caused_by_event
 from memory.common.discord import notify_task_failure
 from memory.common.metrics import record_metric
 
@@ -523,7 +523,7 @@ def safe_task_execution(
     - Log exceptions and notify on failures
     - Allow Celery to handle retries
     - Link the item events the task writes to the raw event named by a
-      ``caused_by`` kwarg, which the task itself never sees
+      ``caused_by`` kwarg (else the enclosing task's), which the task itself never sees
 
     Note: This decorator has its own metric recording rather than using the @profile
     decorator from memory.common.metrics because Celery tasks require:
@@ -555,7 +555,7 @@ def safe_task_execution(
         error_message = ""
 
         try:
-            with caused_by_event(kwargs.pop("caused_by", None)):
+            with caused_by_event(kwargs.pop("caused_by", None) or CAUSING_EVENT.get()):
                 return func(*args, **kwargs)
         except Retry:
             # Celery scheduled a retry — task is in-progress, not done. Record
