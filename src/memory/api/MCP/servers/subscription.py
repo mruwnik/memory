@@ -217,9 +217,6 @@ async def checked_handler(
         need(scopes, "a queue handler, which hands items over,", SCOPE_READ)
         if not isinstance(value, str) or not value.strip() or len(value) > MAX_NAME_CHARS:
             raise ValueError(f"a queue name is 1 to {MAX_NAME_CHARS} characters")
-        # Workers claim by glob, so a name with glob characters couldn't be named exactly.
-        if set(value) & set(QUEUE_GLOB_CHARS):
-            raise ValueError(f"a queue name can't contain any of {QUEUE_GLOB_CHARS}")
         return {"queue": value.strip()}, None, None
     if kind == "notify":
         need(scopes, "a notify handler", SCOPE_SCHEDULE_WRITE)
@@ -524,6 +521,12 @@ async def upsert(
         one_handler(handler)
         check_combination(kind, handler, shaping)
         stored, spec, definition = await checked_handler(db, user_id, set(scopes), handler)
+        # Workers claim by glob, so a new name with glob characters couldn't be named
+        # exactly; names from before that rule keep working.
+        queue = stored.get("queue")
+        new_name = existing is None or queue != existing.handler.get("queue")
+        if queue is not None and new_name and set(queue) & set(QUEUE_GLOB_CHARS):
+            raise ValueError(f"a queue name can't contain any of {QUEUE_GLOB_CHARS}")
         if kind in (CRON, TIMER) and "agent" in stored:
             need(set(scopes), "an agent on a schedule", SCOPE_SCHEDULE_WRITE)
         if resume and kind != INGEST:
