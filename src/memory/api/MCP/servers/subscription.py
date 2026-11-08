@@ -39,7 +39,9 @@ from memory.agents.subscriptions import (
     PerItem,
     accessible_ids,
     dry_run,
+    redispatch,
     resume_from_trip,
+    send_due,
 )
 from memory.api.auth import token_api_key
 from memory.api.MCP.access import get_mcp_current_user
@@ -68,6 +70,7 @@ from memory.common.db.models import (
 )
 from memory.common.db.models.agents import iso
 from memory.common.db.models.events import NOT_COLLECTED, RAW, TICK, TIMER
+from memory.common.pydantic_errors import plain
 from memory.common.scopes import (
     SCOPE_ADMIN,
     SCOPE_AGENTS,
@@ -198,7 +201,7 @@ def notify_handler(db: DBSession, fields: dict[str, Any]) -> dict[str, Any]:
     try:
         notify = Notify.model_validate(fields | {"target": resolve_and_validate_target(db, user, channel, target)})
     except ValidationError as e:
-        raise ValueError(f"invalid notify handler: {e}") from e
+        raise ValueError(f"invalid notify handler: {plain(e)}") from e
     return {"notify": notify.model_dump(exclude_none=True)}
 
 
@@ -269,7 +272,7 @@ def checked_raw(db: DBSession, user_id: int, config: dict[str, Any]) -> dict[str
     try:
         raw = RawConfig.model_validate(config.get("raw"))
     except ValidationError as e:
-        raise ValueError(f"invalid raw source: {e}") from e
+        raise ValueError(f"invalid raw source: {plain(e)}") from e
     if raw.account_id is not None and account_owner(db, raw.source, raw.account_id) != user_id:
         raise ValueError(f"unknown {raw.source} account {raw.account_id}")
     return {"raw": raw.model_dump()}
@@ -281,12 +284,15 @@ def checked_config(kind: str, config: dict[str, Any], handler: dict[str, Any], c
         try:
             parsed = CronConfig(cron=cron, input=checked_input(handler, config.get("input")))
         except ValidationError as e:
-            raise ValueError(f"invalid cron source: {e}") from e
+            raise ValueError(f"invalid cron source: {plain(e)}") from e
         return parsed.model_dump()
+    # A filter's deliveries carry their text in the template.
+    if "input" in config:
+        raise ValueError("invalid filter source: input only applies to cron and timer sources")
     try:
         ingest = IngestConfig.model_validate(config)
     except ValidationError as e:
-        raise ValueError(f"invalid filter source: {e}") from e
+        raise ValueError(f"invalid filter source: {plain(e)}") from e
     check_template(ingest.template, ingest.filter.source_types, isinstance(ingest.delivery, PerItem))
     return ingest.model_dump(mode="json")
 
@@ -546,6 +552,9 @@ async def upsert(
             subscription.order_by = "item"
         db.add(subscription)
         apply_enabled(db, subscription, was_enabled, resume, cron_changed)
+        woken = existing is not None and kind == INGEST and subscription.enabled and not was_enabled
+        if woken:
+            redispatch(db, subscription.id)
         try:
             db.flush()
         except IntegrityError as e:
@@ -553,7 +562,12 @@ async def upsert(
                 raise
             raise ValueError(f"you already have a subscription named '{subscription.name}'") from e
         warnings = await exposure_warnings(spec) if spec is not None and kind == INGEST else []
-        return subscription.serialize() | {"warnings": warnings}
+        saved = subscription.serialize() | {"warnings": warnings}
+        subscription_id = subscription.id
+    # After the commit, so the fire sees it enabled.
+    if woken:
+        send_due(subscription_id)
+    return saved
 
 
 @subscription_mcp.tool(annotations=READ_ONLY)
@@ -718,33 +732,86 @@ async def fetch(
 
 @subscription_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(*READERS))
-async def test(subscription_id: int, item_id: int) -> dict:
-    """Dry run: whether one of your filter subscriptions would take an item you can
-    read, as the item is now. `failed` names the first check it fails, else null:
-    a filter field (source_types, tags_any, channel_ids, exclude_channel_ids,
-    exclude_authors, authors_any, repos, mentions_me, dms_to_me, text_contains,
-    regex), or own_authors (our bots' and syncs' posts), readable (the
-    subscription's credential can't read it), exclude_own, threads_im_in,
-    known_people_only, posted (one of its runs reported posting it), credentials
-    (its key no longer works) or config (it no longer validates). Whether an event
-    would count (active_since, on_edit, on_changes, changed_by_any) is not checked."""
+async def test(
+    item_id: int, subscription_id: int | None = None, source: dict | None = None, handler: dict | None = None
+) -> dict:
+    """Dry run: whether a filter subscription would take an item you can read, as
+    the item is now. subscription_id names one of yours; a `source` given with it
+    is merged into the stored one as subscription_upsert would, and not saved.
+    Without subscription_id, a filter `source` and an agent or queue `handler` are
+    tried as a new subscription made with your credential. `failed` names the first
+    check it fails, else null: a filter field (source_types, tags_any, channel_ids,
+    exclude_channel_ids, exclude_authors, authors_any, repos, mentions_me,
+    dms_to_me, text_contains, regex), regex_timeout (the regex took too long on it,
+    which counts as no match), or own_authors (our bots' and syncs' posts),
+    readable (the subscription's credential can't read it), exclude_own,
+    threads_im_in, known_people_only, posted (one of its runs reported posting it),
+    credentials (its key no longer works) or config (it no longer validates). Whether
+    an event would count (active_since, on_edit, on_changes, changed_by_any) is not
+    checked."""
     user_id, _ = caller()
-    token, _ = caller_token()
+    token, scopes = caller_token()
+    if not reads_filters(set(scopes)):
+        raise ValueError("filter subscriptions need the 'agents' scope, or 'agents:work' with 'read'")
     # Off the event loop: matching queries the database and runs the filter's regex.
-    return await asyncio.to_thread(try_item, user_id, token, subscription_id, item_id)
+    return await asyncio.to_thread(try_item, user_id, token, item_id, subscription_id, source, handler)
 
 
-def try_item(user_id: int, token: str, subscription_id: int, item_id: int) -> dict:
-    with make_session() as db:
-        subscription = owned(db, subscription_id, user_id)
-        if subscription.kind != INGEST:
+def tried(
+    db: DBSession,
+    user_id: int,
+    key: APIKey | None,
+    subscription_id: int | None,
+    source: dict[str, Any] | None,
+    handler: dict[str, Any] | None,
+) -> Subscription:
+    """The subscription to try: the stored one, or a copy carrying `source`, never
+    added to the session so that nothing tried is saved."""
+    if subscription_id is not None:
+        if handler is not None:
+            raise ValueError("handler applies to a new subscription: a saved one is tried with its own")
+        stored = owned(db, subscription_id, user_id)
+        if stored.kind != INGEST:
             raise ValueError("only filter subscriptions take items")
+        if source is None:
+            return stored
+        handler, api_key_id, via_api_key = stored.handler, stored.api_key_id, stored.via_api_key
+        source = merged_source(stored.config, source, stored.handler)
+    else:
+        api_key_id, via_api_key = (key.id if key else None), key is not None
+    if source is None or handler is None:
+        raise ValueError("give subscription_id, or a source and handler to try")
+    if source_kind(source) != INGEST:
+        raise ValueError("only filter subscriptions take items")
+    if one_handler(handler)[0] == "notify":
+        raise ValueError("notify handlers take cron and timer sources")
+    return Subscription(
+        id=subscription_id,
+        user_id=user_id,
+        kind=INGEST,
+        handler=handler,
+        config=checked_config(INGEST, source, handler, cron_changed=False),
+        api_key_id=api_key_id,
+        via_api_key=via_api_key,
+    )
+
+
+def try_item(
+    user_id: int,
+    token: str,
+    item_id: int,
+    subscription_id: int | None,
+    source: dict[str, Any] | None,
+    handler: dict[str, Any] | None,
+) -> dict:
+    with make_session() as db:
         key = token_api_key(token, db)
+        subscription = tried(db, user_id, key, subscription_id, source, handler)
         item = db.get(SourceItem, item_id)
         if item is None or not accessible_ids(db, db.get_one(User, user_id), key, [item_id]):
             raise ValueError(f"unknown item {item_id}")
         failed = dry_run(db, subscription, item)
-        return {"subscription_id": subscription.id, "item_id": item_id, "matches": failed is None, "failed": failed}
+        return {"subscription_id": subscription_id, "item_id": item_id, "matches": failed is None, "failed": failed}
 
 
 @subscription_mcp.tool()

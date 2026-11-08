@@ -99,6 +99,8 @@ def test_next_cron_follows_the_wall_clock(cron, tz, after, expected):
     "cron, error",
     [
         ("not a cron", "invalid cron expression"),
+        ("99 9 * * *", "invalid cron expression: its minute field, 99, is out of range or malformed"),
+        ("0 9 * foo *", "invalid cron expression: its month field, foo, is out of range or malformed"),
         ("0 9 * * * *", "only 5-field"),
         ("* * * * *", "cron interval too short"),
     ],

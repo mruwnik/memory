@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { emptyIngestConfig, type Subscription, type IngestConfig } from '@/hooks/useAgents'
 import {
-  deliveryLabel, describeFilter, describeRaw, formFor, formProblem, newForm, sourceKind, subscriptionState, toUpsert, type SubscriptionForm,
+  deliveryLabel, describeFilter, describeRaw, FILTER_REQUIRED, formFor, formProblem, newForm, regexProblem, sourceKind, subscriptionState,
+  toUpsert, wallClock, type SubscriptionForm,
 } from './subscriptions'
 
 const filterConfig = { ...emptyIngestConfig(), filter: { ...emptyIngestConfig().filter, tags_any: ['ai'] } }
@@ -14,7 +15,7 @@ const subscription = (overrides: Partial<Subscription> = {}): Subscription => ({
   ...overrides,
 } as Subscription)
 
-const form = (overrides: Partial<SubscriptionForm>): SubscriptionForm => ({ ...newForm(), ...overrides })
+const form = (overrides: Partial<SubscriptionForm>): SubscriptionForm => ({ ...newForm(), config: filterConfig, ...overrides })
 
 describe('toUpsert', () => {
   it.each<[string, Partial<SubscriptionForm>, object]>([
@@ -63,12 +64,56 @@ describe('formProblem', () => {
     [{ queue: 'prs', maxPerHour: '1.5' }, 'Deliveries per hour must be a whole number'],
     [{ queue: 'prs', backlogMax: 'lots' }, 'Most waiting must be a whole number'],
     [{ queue: 'prs', maxPerHour: ' 10 ', backlogMax: '' }, null],
+    ...([
+      ['99 9 * * *', 'Cron minute must be 0 to 59'],
+      ['0 24 * * *', 'Cron hour must be 0 to 23'],
+      ['0 9 0 * *', 'Cron day-of-month must be 1 to 31'],
+      ['0 9 * 1-13 *', 'Cron month must be 1 to 12'],
+      ['0 9 * * 8', 'Cron day-of-week must be 0 to 7'],
+      ['*/0 9 * * *', 'Cron minute steps must be whole numbers above 0'],
+      ['0 9 * foo *', 'Cron month must be 1 to 12'],
+      ['*/15 9-17 1,15 jan-jun mon-fri', null],
+      ['0 9 L * 5#3', null],
+    ] as const).map(([cron, problem]): [Partial<SubscriptionForm>, string | null] =>
+      [{ source: 'cron', handler: 'agent', agent: '3', cron, input: 'x' }, problem]),
+    [{ queue: 'prs', config: { ...filterConfig, delivery: { mode: 'batch', window_sec: NaN, max_items: 50 } } },
+      'The batch window must be 60 to 86400 seconds'],
+    [{ queue: 'prs', config: { ...filterConfig, delivery: { mode: 'batch', window_sec: 600, max_items: 0 } } },
+      'A batch must hold 1 to 200 items'],
+    [{ queue: 'prs', config: { ...filterConfig, delivery: { mode: 'batch', window_sec: 600, max_items: 50 } } }, null],
+    [{ queue: 'prs', config: emptyIngestConfig() }, FILTER_REQUIRED],
+    [{ queue: 'prs', config: { ...emptyIngestConfig(), filter: { ...emptyIngestConfig().filter, mentions_me: true } } }, null],
   ])('%o: %s', (fields, problem) => {
     expect(formProblem(form(fields))).toBe(problem)
   })
 
+  it.each<[string, string | null]>([
+    ['2026-11-08T09:00', 'Pick a time in the future'],
+    ['2026-11-08T09:01', null],
+  ])('a timer at %s: %s', (at, problem) => {
+    const timer = form({ source: 'at', handler: 'notify', at, notify: { channel: 'email', target: 'a', message: 'b' } })
+    expect(formProblem(timer, [], '2026-11-08T09:00')).toBe(problem)
+  })
+
+  it('reads the wall clock in the given timezone', () => {
+    expect(wallClock('Asia/Tokyo', new Date('2026-11-08T00:30:00Z'))).toBe('2026-11-08T09:30')
+  })
+
   it('refuses a name another subscription has', () => {
     expect(formProblem(form({ name: ' prs ', queue: 'q' }), ['prs'])).toBe('You already have a subscription named prs')
+  })
+})
+
+describe('regexProblem', () => {
+  it.each<[string | null, boolean]>([
+    [null, false],
+    ['^fix(es)?\\b', false],
+    // Python's spellings of flags and named groups, which the server's engine takes.
+    ['(?i)urgent', false],
+    ['(?P<id>\\d+)-(?P=id)', false],
+    ['(', true],
+  ])('%s', (regex, refused) => {
+    expect(regexProblem(regex) !== null).toBe(refused)
   })
 })
 
@@ -121,7 +166,7 @@ describe('raw subscriptions', () => {
   it.each<[Partial<SubscriptionForm>, string | null]>([
     [{ source: 'raw', queue: 'hooks' }, null],
     [{ source: 'raw', handler: 'agent', agent: '3' }, "Webhooks can't go to a agent"],
-    [{ source: 'raw', queue: 'hooks', raw: { source: 'discord', accountId: '', types: '', outcome: [] } }, 'Tick at least one of Deliveries that'],
+    [{ source: 'raw', queue: 'hooks', raw: { source: 'discord', accountId: '', types: '', outcome: [] } }, 'Take deliveries that stored items, stored nothing, or both'],
   ])('%o: %s', (fields, problem) => {
     expect(formProblem(form(fields))).toBe(problem)
   })

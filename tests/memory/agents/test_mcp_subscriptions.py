@@ -6,6 +6,7 @@ import pytest
 from memory.agents import subscriptions
 from memory.api.MCP.servers import agent, subscription
 from memory.common import settings
+from memory.common.celery_app import FIRE_SUBSCRIPTION
 from memory.common.db.models import (
     AgentDefinition,
     AgentRun,
@@ -14,6 +15,7 @@ from memory.common.db.models import (
     APIKey,
     BlogPost,
     Event,
+    MailMessage,
 )
 from tests.conftest import mcp_auth_context, route_item, unique_sha256
 
@@ -737,6 +739,89 @@ async def test_a_dry_run_names_the_first_predicate_an_item_fails(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "filter, failed",
+    [
+        ({"tags_any": ["ai"]}, None),
+        ({"tags_any": ["other"]}, "tags_any"),
+        ({"tags_any": ["ai"], "regex": "^y"}, "regex"),
+    ],
+)
+async def test_a_dry_run_tries_an_unsaved_filter(db_session, regular_user, user_session, filter, failed):
+    item = post(db_session, regular_user)
+    with mcp_auth_context(user_session.token):
+        result = await dry_run(item_id=item.id, source={"filter": filter}, handler={"queue": "q"})
+
+    assert result == {"subscription_id": None, "item_id": item.id, "matches": failed is None, "failed": failed}
+    assert db_session.query(Subscription).count() == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("saved, failed", [(True, "posted"), (False, None)])
+async def test_a_dry_run_counts_only_the_subscriptions_own_posts(db_session, regular_user, user_session, saved, failed):
+    mail = MailMessage(
+        sha256=unique_sha256("m"), modality="mail", content="x", tags=["ai"], creator_id=regular_user.id,
+        message_id="<m1@example.com>", sender="a@example.com", recipients=["b@example.com"], subject="Hi",
+    )
+    db_session.add(mail)
+    db_session.commit()
+    with mcp_auth_context(user_session.token):
+        queued = await upsert(handler={"queue": "q"}, source=FILTER) if saved else None
+    # A run of the saved subscription, or one of no subscription at all, posted it.
+    db_session.add(AgentRun(
+        user_id=regular_user.id, spec=SPEC, input="x", trigger_kind="ingest", trigger_ref={}, max_cost_usd=1,
+        subscription_id=queued and queued["id"], status="done",
+        posted=[{"source": "email", "external_id": "<m1@example.com>"}],
+    ))
+    db_session.commit()
+
+    with mcp_auth_context(user_session.token):
+        tried = {"subscription_id": queued["id"]} if queued else {"source": FILTER, "handler": {"queue": "q"}}
+        result = await dry_run(item_id=mail.id, **tried)
+
+    assert result["failed"] == failed
+
+
+@pytest.mark.asyncio
+async def test_a_dry_run_tries_changes_to_a_saved_filter_without_saving_them(db_session, regular_user, user_session):
+    item = post(db_session, regular_user)
+    with mcp_auth_context(user_session.token):
+        queued = await upsert(handler={"queue": "q"}, source=FILTER)
+        changed = await dry_run(subscription_id=queued["id"], item_id=item.id, source={"filter": {"tags_any": ["other"]}})
+        saved = await dry_run(subscription_id=queued["id"], item_id=item.id)
+
+    assert (changed["failed"], saved["failed"]) == ("tags_any", None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "args, error",
+    [
+        ({}, "give subscription_id, or a source and handler"),
+        ({"source": FILTER}, "give subscription_id, or a source and handler"),
+        ({"source": CRON, "handler": {"queue": "q"}}, "only filter subscriptions take items"),
+        ({"source": FILTER, "handler": NOTIFY}, "notify handlers take cron and timer sources"),
+        ({"subscription_id": 1, "handler": {"queue": "q"}}, "handler applies to a new subscription"),
+        ({"source": {"filter": {"regex": "("}}, "handler": {"queue": "q"}}, "invalid filter source"),
+    ],
+)
+async def test_a_dry_run_refuses_what_cant_take_items(db_session, regular_user, user_session, args, error):
+    item = post(db_session, regular_user)
+    with mcp_auth_context(user_session.token):
+        with pytest.raises(ValueError, match=error):
+            await dry_run(item_id=item.id, **args)
+
+
+@pytest.mark.asyncio
+async def test_a_schedule_key_cant_dry_run_filters(db_session, regular_user):
+    item = post(db_session, regular_user)
+    key = api_key(db_session, regular_user, ["schedule"])
+    with mcp_auth_context(key.key, scopes=["schedule"]):
+        with pytest.raises(ValueError, match="filter subscriptions need"):
+            await dry_run(item_id=item.id, source=FILTER, handler={"queue": "q"})
+
+
+@pytest.mark.asyncio
 async def test_a_dry_run_fails_an_item_the_subscriptions_key_cant_read(
     db_session, regular_user, admin_user, admin_session
 ):
@@ -773,6 +858,58 @@ async def test_a_dry_run_only_takes_items_the_caller_can_read(db_session, regula
         queued = await upsert(handler={"queue": "q"}, source=FILTER)
         with pytest.raises(ValueError, match=f"unknown item {hidden.id}"):
             await dry_run(subscription_id=queued["id"], item_id=hidden.id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "source, error",
+    [
+        ({"filter": {"regex": "("}}, "invalid filter source: regex does not compile: "),
+        ({"filter": {}}, "invalid filter source: set at least one of "),
+        (
+            {"filter": {"tags_any": ["ai"]}, "delivery": {"mode": "batch", "window_sec": 5}},
+            "invalid filter source: delivery.batch.window_sec: Input should be greater than or equal to 60",
+        ),
+        ({"filter": {"tags_any": ["ai"]}, "input": "x"}, "invalid filter source: input only applies to cron and timer sources"),
+        ({"filter": {"tags_any": ["ai"]}, "on_changes": ["edited"]}, "invalid filter source: on_changes needs on_edit"),
+    ],
+)
+async def test_a_refused_source_is_said_plainly(db_session, regular_user, user_session, source, error):
+    with mcp_auth_context(user_session.token):
+        with pytest.raises(ValueError) as refused:
+            await upsert(handler={"queue": "q"}, source=source)
+
+    assert str(refused.value).startswith(error)
+    assert "pydantic" not in str(refused.value) and "\n" not in str(refused.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("resume", [True, False])
+async def test_enabling_a_tripped_subscription_sends_what_was_waiting_at_once(
+    db_session, regular_user, user_session, fake_providers, no_celery_dispatch, resume
+):
+    d = definition(db_session, regular_user)
+    item = post(db_session, regular_user)
+    with mcp_auth_context(user_session.token):
+        created = await upsert(handler={"agent": d.id}, source=FILTER)
+    stored = db_session.get_one(Subscription, created["id"])
+    # Sent, and resent, while it was tripping: the fires dropped it.
+    waiting = Delivery(
+        subscription_id=stored.id, item_id=item.id, content_hash=subscriptions.content_version(item),
+        changes=["new"], dispatched_at=datetime.now(timezone.utc) - timedelta(minutes=1), sends=3,
+    )
+    db_session.add(waiting)
+    stored.enabled, stored.state = False, {"tripped": {"reason": "x", "at": datetime.now(timezone.utc).isoformat()}}
+    db_session.commit()
+    no_celery_dispatch.reset_mock()
+
+    with mcp_auth_context(user_session.token):
+        await upsert(subscription_id=stored.id, enabled=True, resume=resume)
+
+    fires = [c.kwargs["args"] for c in no_celery_dispatch.call_args_list if c.args[0] == FIRE_SUBSCRIPTION]
+    db_session.refresh(waiting)
+    assert fires == [[stored.id, [subscriptions.delivery_ref(item.id, waiting.content_hash)]]]
+    assert waiting.sends == 1
 
 
 # --- Listing, history and deleting ----------------------------------------

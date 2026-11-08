@@ -364,6 +364,16 @@ export interface SubscriptionUpsert {
   create_only?: boolean
 }
 
+/** A dry run of a stored subscription, of `source` merged into it, or of a new one's source and handler. */
+export interface SubscriptionTest {
+  item_id: number
+  subscription_id?: number
+  source?: IngestConfig
+  handler?: Handler
+}
+export interface SubscriptionTestResult { subscription_id: number | null; item_id: number; matches: boolean; failed: string | null }
+export interface RecentItem { id: number; title: string | null; modality: string }
+
 export const DEFAULT_INGEST_TEMPLATE = 'New items matched this subscription:\n\n{items}'
 
 export const emptyFilter = (): IngestFilter => ({
@@ -485,6 +495,14 @@ export const useAgents = () => {
     [call],
   )
   const cancelTimer = useCallback((timerId: number) => call('subscription_delete', { timer_id: timerId }), [call])
+  const testSubscription = useCallback(
+    (args: SubscriptionTest) => call<SubscriptionTestResult>('subscription_test', { ...args }),
+    [call],
+  )
+  const recentItems = useCallback(
+    async (limit = 20) => (await call<{ items: RecentItem[] }>('core_list_items', { limit, include_metadata: false })).items,
+    [call],
+  )
 
   const listServers = useCallback(
     async () => (await call<{ servers: ExternalServer[] }>('agent_server_list')).servers,
@@ -536,7 +554,7 @@ export const useAgents = () => {
 
   return {
     listDefinitions, listSystemAgents, getDefinition, saveDefinition, deleteDefinition, startRun, waitRun, listRuns, cancelRun, starRun, catalog,
-    listSubscriptions, fetchSubscription, upsertSubscription, deleteSubscription, cancelTimer,
+    listSubscriptions, fetchSubscription, upsertSubscription, deleteSubscription, cancelTimer, testSubscription, recentItems,
     listServers, upsertServer, authorizeServer, refreshServerTools, disconnectServer, deleteServer,
     listKeys, upsertKey, deleteKey,
   }

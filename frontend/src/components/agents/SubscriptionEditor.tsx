@@ -1,15 +1,16 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import {
-  CHANGE_TAGS, NOTIFY_CHANNELS, RAW_SOURCES, type IngestFilter, type NotifyChannel, type RawOutcome, type RawSource,
-  type Subscription, type SubscriptionUpsert,
+  CHANGE_TAGS, NOTIFY_CHANNELS, RAW_SOURCES, useAgents, type IngestConfig, type IngestFilter, type NotifyChannel, type RawOutcome,
+  type RawSource, type RecentItem, type Subscription, type SubscriptionTestResult, type SubscriptionUpsert,
 } from '@/hooks/useAgents'
 import { useAuth } from '@/hooks/useAuth'
 import { useWebhookLog, WEBHOOK_SOURCE_NAMES, type WebhookAccount } from '@/hooks/useWebhookLog'
 import {
-  Button, Checkbox, Field, FieldRow, Fieldset, FormActions, Input, MultiSelect, Notice, Select, Textarea, ToggleGroup, useSubmit,
+  Button, Checkbox, Combobox, Disclosure, Field, FieldRow, Fieldset, FormActions, Input, MultiSelect, Notice, Select, Textarea, ToggleGroup,
+  useSubmit,
 } from '@/components/shared/ui'
 import {
-  formFor, formProblem, HANDLER_LABELS, HANDLERS_FOR, newForm, RAW_OUTCOME_LABELS, SOURCE_LABELS, toUpsert,
+  formFor, formProblem, HANDLER_LABELS, HANDLERS_FOR, newForm, RAW_OUTCOME_LABELS, regexProblem, SOURCE_LABELS, toUpsert, wallClock,
   type HandlerKind, type SourceKind, type SubscriptionForm,
 } from './subscriptions'
 
@@ -17,6 +18,22 @@ export interface AgentOption { value: string; label: string; group: string }
 
 const splitList = (text: string) => text.split(',').map(s => s.trim()).filter(Boolean)
 const joined = (values: string[] | undefined) => (values ?? []).join(', ')
+// An emptied number field stays empty, for formProblem to refuse, rather than becoming 0.
+const numberOrNaN = (text: string) => (text.trim() ? Number(text) : NaN)
+const capitalised = (text: string) => text.charAt(0).toUpperCase() + text.slice(1)
+// The server's limit on a subscription's name.
+const MAX_NAME_CHARS = 100
+
+type ErrorField = 'name' | 'regex' | 'cron'
+// A refused save names what it refused; shown on that field rather than by the buttons.
+// Each with the sources whose form shows that field; elsewhere the message stays by the buttons.
+const FIELD_ERRORS: [ErrorField, RegExp, string, (source: SourceKind) => boolean][] = [
+  ['name', /^(name |names like|you already have a subscription named)/i, 'Name', s => s !== 'at'],
+  ['regex', /regex does not compile/i, 'Regex', s => s === 'filter'],
+  ['cron', /^invalid cron (expression|source)|cron expressions are supported|cron interval/i, 'Cron', s => s === 'cron'],
+]
+const errorField = (error: string | null, source: SourceKind) =>
+  FIELD_ERRORS.find(([, pattern, , shown]) => error && pattern.test(error) && shown(source))
 
 type ListField = 'tags_any' | 'repos' | 'channel_ids' | 'exclude_channel_ids' | 'text_contains' | 'authors_any'
   | 'exclude_authors' | 'changed_by_any' | 'exclude_changed_by'
@@ -38,11 +55,72 @@ const FLAGS: [FlagField, string][] = [
   ['dms_to_me', 'Direct messages to my bots'],
   ['known_people_only', 'Only authors who are known people'],
 ]
+// subscription_test's `failed`: a filter field, by its label, or a check outside the filter.
+const CHECK_LABELS: Record<string, string> = Object.fromEntries([
+  ['source_types', 'Source types'], ...LIST_FIELDS, ['regex', 'Regex'], ...FLAGS, ['exclude_own', 'Skip my own Slack messages'],
+])
+const REASONS: Record<string, string> = {
+  own_authors: 'one of our bots or syncs posted it',
+  readable: "the subscription's credential can't read it",
+  posted: 'one of its runs reported posting it',
+  credentials: 'its key no longer works',
+  config: 'its settings no longer validate',
+  regex_timeout: 'the regex took too long on it, which counts as no match',
+}
+const verdict = ({ matches, failed }: SubscriptionTestResult) => {
+  if (matches || !failed) return 'Would match.'
+  return REASONS[failed] ? `Would not match: ${REASONS[failed]}.` : `Would not match: it fails ${CHECK_LABELS[failed] ?? failed}.`
+}
+const itemLabel = (i: RecentItem) => `${i.title || i.modality} (#${i.id})`
 
-function FilterFields({ form, update, sourceTypes }: {
+function ItemTest({ form, existing }: { form: SubscriptionForm; existing?: Subscription }) {
+  const { testSubscription, recentItems } = useAgents()
+  const [items, setItems] = useState<RecentItem[] | null>(null)
+  const [query, setQuery] = useState('')
+  const [itemId, setItemId] = useState('')
+  const [result, setResult] = useState<SubscriptionTestResult | null>(null)
+  const { busy, error, submit } = useSubmit()
+  // Fetched on first open: most edits never test.
+  const open = (e: React.SyntheticEvent<HTMLDetailsElement>) => {
+    if (e.currentTarget.open && items === null) recentItems().then(setItems).catch(() => setItems([]))
+  }
+  const pick = (value: string) => { setItemId(value); setResult(null) }
+  const run = () => submit(async () => {
+    setResult(null)
+    const { handler, source } = toUpsert(form, existing)
+    const tried = existing ? { subscription_id: existing.id } : { handler }
+    setResult(await testSubscription({ item_id: Number(itemId), source: source as IngestConfig, ...tried }))
+  })
+  const q = query.trim().toLowerCase()
+  const options = (items ?? []).map(i => ({ value: String(i.id), label: itemLabel(i) })).filter(o => o.label.toLowerCase().includes(q))
+  return (
+    <Disclosure summary="Test on an item" onToggle={open}>
+      <div className="space-y-3">
+        <p className="text-sm text-slate-600">
+          Whether this filter, as edited and unsaved, would take an item as it is now. Whether the event would count as new or
+          changed isn't checked.
+        </p>
+        <Field label="Item" hint="Pick a recent item, or type an item id.">
+          <Combobox allowCustom value={itemId} options={options} loading={items === null}
+            // A pick ends the search, so the list reopens whole and the pick keeps its label.
+            onChange={value => { setQuery(''); pick(value) }}
+            onQueryChange={text => { setQuery(text); pick(/^\d+$/.test(text.trim()) ? text.trim() : '') }} />
+        </Field>
+        <Button disabled={busy || !itemId} onClick={run}>{busy ? 'Testing...' : 'Test'}</Button>
+        <div aria-live="polite">
+          {result && <Notice tone={result.matches ? 'success' : 'warning'}>{verdict(result)}</Notice>}
+          {error && <Notice tone="error">{error}</Notice>}
+        </div>
+      </div>
+    </Disclosure>
+  )
+}
+
+function FilterFields({ form, update, sourceTypes, regexError }: {
   form: SubscriptionForm
   update: (change: Partial<SubscriptionForm>) => void
   sourceTypes: string[]
+  regexError?: string
 }) {
   // Comma lists are edited as text and split on save, so a half-typed entry isn't lost.
   const [texts, setTexts] = useState<Record<ListField, string>>(
@@ -71,7 +149,7 @@ function FilterFields({ form, update, sourceTypes }: {
             <Input value={texts[field]} onChange={e => setText(field, e.target.value)} />
           </Field>
         ))}
-        <Field label="Regex">
+        <Field label="Regex" error={regexError ?? regexProblem(config.filter.regex) ?? undefined}>
           <Input className="font-mono" value={config.filter.regex ?? ''} onChange={e => setFilter({ regex: e.target.value.trim() || null })} />
         </Field>
       </FieldRow>
@@ -88,12 +166,12 @@ function FilterFields({ form, update, sourceTypes }: {
         {batch && (
           <FieldRow>
             <Field label="Window (seconds)">
-              <Input type="number" min="60" max="86400" value={batch.window_sec}
-                onChange={e => update({ config: { ...config, delivery: { ...batch, window_sec: Number(e.target.value) } } })} />
+              <Input type="number" min="60" max="86400" value={Number.isNaN(batch.window_sec) ? '' : batch.window_sec}
+                onChange={e => update({ config: { ...config, delivery: { ...batch, window_sec: numberOrNaN(e.target.value) } } })} />
             </Field>
             <Field label="Max items">
-              <Input type="number" min="1" max="200" value={batch.max_items}
-                onChange={e => update({ config: { ...config, delivery: { ...batch, max_items: Number(e.target.value) } } })} />
+              <Input type="number" min="1" max="200" value={Number.isNaN(batch.max_items) ? '' : batch.max_items}
+                onChange={e => update({ config: { ...config, delivery: { ...batch, max_items: numberOrNaN(e.target.value) } } })} />
             </Field>
           </FieldRow>
         )}
@@ -113,7 +191,7 @@ function FilterFields({ form, update, sourceTypes }: {
           <Input type="number" min="1" placeholder="Server default" value={form.maxPerHour} onChange={e => update({ maxPerHour: e.target.value })} />
         </Field>
         <Field label="Most waiting" hint="Beyond it the oldest are dropped.">
-          <Input type="number" min="1" placeholder="No limit" value={form.backlogMax} onChange={e => update({ backlogMax: e.target.value })} />
+          <Input type="number" min="1" placeholder="No limit (default)" value={form.backlogMax} onChange={e => update({ backlogMax: e.target.value })} />
         </Field>
         <Field label="A newer event for the same item">
           <Select value={form.coalesce} onChange={e => update({ coalesce: e.target.value as SubscriptionForm['coalesce'] })}>
@@ -182,7 +260,7 @@ function RawFields({ form, update, locked }: {
       </FieldRow>
       <Fieldset legend="Deliveries that" className="flex flex-col">
         {(Object.keys(RAW_OUTCOME_LABELS) as RawOutcome[]).map(o => (
-          <Checkbox key={o} label={RAW_OUTCOME_LABELS[o]} checked={raw.outcome.includes(o)}
+          <Checkbox key={o} label={capitalised(RAW_OUTCOME_LABELS[o])} checked={raw.outcome.includes(o)}
             onChange={e => toggle(o, e.target.checked)} />
         ))}
       </Fieldset>
@@ -191,7 +269,7 @@ function RawFields({ form, update, locked }: {
           <Input type="number" min="1" placeholder="Server default" value={form.maxPerHour} onChange={e => update({ maxPerHour: e.target.value })} />
         </Field>
         <Field label="Most waiting" hint="Beyond it the oldest are dropped.">
-          <Input type="number" min="1" placeholder="1000" value={form.backlogMax} onChange={e => update({ backlogMax: e.target.value })} />
+          <Input type="number" min="1" placeholder="1000 (default)" value={form.backlogMax} onChange={e => update({ backlogMax: e.target.value })} />
         </Field>
       </FieldRow>
     </>
@@ -209,10 +287,15 @@ export function SubscriptionEditor({ existing, presetAgent, agents, sourceTypes,
   onCancel: () => void
 }) {
   const [form, setForm] = useState<SubscriptionForm>(() => (existing ? formFor(existing) : newForm(presetAgent)))
-  const { busy, error, submit } = useSubmit()
+  const { busy, error, setError, submit } = useSubmit()
   const timezone = useAuth().user?.timezone ?? 'UTC'
-  const update = (change: Partial<SubscriptionForm>) => setForm(f => ({ ...f, ...change }))
-  const problem = formProblem(form, takenNames)
+  // An edit makes a refused save's reason stale.
+  const update = (change: Partial<SubscriptionForm>) => { setError(null); setForm(f => ({ ...f, ...change })) }
+  const problem = formProblem(form, takenNames, wallClock(timezone))
+  const nameTaken = form.source !== 'at' && takenNames.includes(form.name.trim())
+  const [field, , fieldLabel] = errorField(error, form.source) ?? []
+  const errorOn = (f: ErrorField) => (field === f ? error ?? undefined : undefined)
+  const problemId = useId()
   // A filter or webhook subscription keeps its handler kind; a schedule may move between agent and message.
   const handlerKinds = existing && existing.kind !== 'cron' ? [form.handler] : HANDLERS_FOR[form.source]
   const setSource = (source: SourceKind) =>
@@ -227,9 +310,11 @@ export function SubscriptionEditor({ existing, presetAgent, agents, sourceTypes,
             options={(Object.keys(SOURCE_LABELS) as SourceKind[]).map(k => ({ value: k, label: SOURCE_LABELS[k] }))} />
         </Fieldset>
       )}
+      {existing && <p className="text-sm text-slate-600">Source: {SOURCE_LABELS[form.source]}</p>}
       {form.source !== 'at' && (
-        <Field label="Name" hint={existing ? undefined : 'Leave empty for a numbered name.'}>
-          <Input value={form.name} onChange={e => update({ name: e.target.value })} />
+        <Field label="Name" hint={existing ? undefined : 'Leave empty for a numbered name.'}
+          error={nameTaken ? problem ?? undefined : errorOn('name')}>
+          <Input value={form.name} maxLength={MAX_NAME_CHARS} onChange={e => update({ name: e.target.value })} />
         </Field>
       )}
       <Fieldset legend="Hand to">
@@ -262,7 +347,7 @@ export function SubscriptionEditor({ existing, presetAgent, agents, sourceTypes,
           <FieldRow>
             <Field label="Channel">
               <Select value={form.notify.channel} onChange={e => update({ notify: { ...form.notify, channel: e.target.value as NotifyChannel } })}>
-                {NOTIFY_CHANNELS.map(c => <option key={c} value={c}>{c}</option>)}
+                {NOTIFY_CHANNELS.map(c => <option key={c} value={c}>{capitalised(c)}</option>)}
               </Select>
             </Field>
             <Field label="To" hint="A person's name or email, a channel or user id, or an address.">
@@ -280,7 +365,7 @@ export function SubscriptionEditor({ existing, presetAgent, agents, sourceTypes,
         </>
       )}
       {form.source === 'cron' && (
-        <Field label={`Cron (${timezone})`} hint={`For example, 0 9 * * * is every day at 09:00 ${timezone}.`}>
+        <Field label={`Cron (${timezone})`} hint={`For example, 0 9 * * * is every day at 09:00 ${timezone}.`} error={errorOn('cron')}>
           <Input className="font-mono" value={form.cron} onChange={e => update({ cron: e.target.value })} />
         </Field>
       )}
@@ -291,17 +376,20 @@ export function SubscriptionEditor({ existing, presetAgent, agents, sourceTypes,
       )}
       {(form.source === 'cron' || form.source === 'at') && form.handler === 'agent' && (
         <Field label="Run input">
-          <Textarea className="h-16" placeholder="What should each run do?" value={form.input} onChange={e => update({ input: e.target.value })} />
+          <Textarea className="h-16" placeholder={form.source === 'at' ? 'What should the run do?' : 'What should each run do?'} value={form.input} onChange={e => update({ input: e.target.value })} />
         </Field>
       )}
-      {form.source === 'filter' && <FilterFields form={form} update={update} sourceTypes={sourceTypes} />}
+      {form.source === 'filter' && <FilterFields form={form} update={update} sourceTypes={sourceTypes} regexError={errorOn('regex')} />}
+      {form.source === 'filter' && <ItemTest form={form} existing={existing} />}
       {form.source === 'raw' && <RawFields form={form} update={update} locked={existing !== undefined} />}
       {/* By the buttons: a long form's top is off screen when a save is refused. */}
-      {error && <div data-form-error role="alert"><Notice tone="error">{error}</Notice></div>}
+      {error && <div data-form-error role="alert"><Notice tone="error">{fieldLabel ? `Not saved: see ${fieldLabel} above.` : error}</Notice></div>}
       <FormActions>
-        {problem && <span className="text-xs text-slate-600">{problem}</span>}
+        {/* Always rendered, so a screen reader hears each new reason. */}
+        {/* A taken name is said on the Name field. */}
+        <span id={problemId} aria-live="polite" className="text-xs text-slate-600">{nameTaken ? null : problem}</span>
         <Button onClick={onCancel}>Cancel</Button>
-        <Button variant="primary" disabled={busy || problem !== null} onClick={() => submit(() => onSave(toUpsert(form, existing)))}>
+        <Button variant="primary" disabled={busy || problem !== null} aria-describedby={problem && !nameTaken ? problemId : undefined} onClick={() => submit(() => onSave(toUpsert(form, existing)))}>
           {busy ? 'Saving...' : existing ? 'Save' : 'Create'}
         </Button>
       </FormActions>

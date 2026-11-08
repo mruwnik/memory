@@ -182,6 +182,7 @@ def test_the_creating_api_key_bounds_the_run(db_session, owner, fake_providers):
         ("key without agents scope", "'agents' scope"),
         ("user without agents scope", "'agents' scope"),
         ("invalid spec", "reasoning"),
+        ("unparseable spec", "max_turns: Input should be a valid integer"),
     ],
 )
 def test_a_subscription_that_can_never_run_fails_and_trips(
@@ -192,6 +193,7 @@ def test_a_subscription_that_can_never_run_fails_and_trips(
         "key without agents scope": lambda: (SPEC, api_key(db_session, owner, ["read"])),
         "user without agents scope": lambda: setattr(owner, "scopes", ["read"]) or (SPEC, None),
         "invalid spec": lambda: (SPEC | {"reasoning": "medium", "model": "openai/m"}, None),
+        "unparseable spec": lambda: (SPEC | {"max_turns": "many"}, None),
     }
     spec, key = setups[case]()
     subscription = new_subscription(db_session, owner, definition(db_session, owner, spec), key)
@@ -203,6 +205,7 @@ def test_a_subscription_that_can_never_run_fails_and_trips(
     db_session.refresh(subscription)
     assert (e.result["status"], subscription.enabled, told) == ("failed", False, ["Schedule paused: daily"])
     assert expected in e.result["error"]
+    assert "pydantic" not in e.result["error"] and "\n" not in e.result["error"]
     assert db_session.query(AgentRun).count() == 0
 
 

@@ -102,12 +102,20 @@ def next_cron(expression: str, tz: str, after: datetime) -> datetime:
             return candidate
 
 
+CRON_FIELDS = ("minute", "hour", "day-of-month", "month", "day-of-week")
+
+
 def check_cron_syntax(expression: str) -> str:
+    fields = expression.split()
+    if len(fields) == 5:
+        # croniter's own error doesn't say which field it refused.
+        for i, name in enumerate(CRON_FIELDS):
+            if not croniter.is_valid(" ".join(fields[i] if j == i else "*" for j in range(5))):
+                raise ValueError(f"invalid cron expression: its {name} field, {fields[i]}, is out of range or malformed")
     if not croniter.is_valid(expression):
         raise ValueError("invalid cron expression")
-    fields = len(expression.split())
-    if fields != 5:
-        raise ValueError(f"only 5-field cron expressions are supported, got {fields}")
+    if len(fields) != 5:
+        raise ValueError(f"only 5-field cron expressions are supported, got {len(fields)}")
     return expression
 
 

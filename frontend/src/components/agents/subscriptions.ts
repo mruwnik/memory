@@ -4,6 +4,7 @@ import {
 } from '@/hooks/useAgents'
 import type { Tone } from '@/components/shared/ui'
 import { WEBHOOK_SOURCE_NAMES } from '@/hooks/useWebhookLog'
+import { formatRelativeTime } from '@/components/sources/shared'
 
 export type SourceKind = 'filter' | 'raw' | 'cron' | 'at'
 export type HandlerKind = 'agent' | 'queue' | 'notify'
@@ -37,6 +38,12 @@ export const deliveryLabel = (status: string) => {
 export const handlerKind = (handler: Handler): HandlerKind =>
   'queue' in handler ? 'queue' : 'notify' in handler ? 'notify' : 'agent'
 export const sourceKind = (s: Subscription): SourceKind => (s.kind === 'ingest' ? 'filter' : s.kind)
+
+/** formatRelativeTime, which can sit mid-sentence. */
+export const ago = (at: string | null) => {
+  const text = formatRelativeTime(at)
+  return text === 'Just now' ? 'just now' : text
+}
 
 export const RAW_OUTCOME_LABELS: Record<RawOutcome, string> = { stored: 'stored items', no_item_type: 'stored nothing' }
 
@@ -168,26 +175,83 @@ export const formFor = (s: Subscription): SubscriptionForm => {
   }
 }
 
+export const FILTER_REQUIRED = 'Set at least one of types, tags, repos, channels, text, regex, authors, changes by, mentions, threads or DMs'
+
 // Sources whose deliveries take a rate and backlog cap.
 const capped = (source: SourceKind) => source === 'filter' || source === 'raw'
-const isCron = (cron: string) => cron.trim().split(/\s+/).length === 5
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
+const DAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
+const CRON_FIELDS: [name: string, min: number, max: number, names: string[]][] = [
+  ['minute', 0, 59, []], ['hour', 0, 23, []], ['day-of-month', 1, 31, []], ['month', 1, 12, MONTHS], ['day-of-week', 0, 7, DAYS],
+]
+
+const cronProblem = (cron: string): string | null => {
+  const fields = cron.trim().split(/\s+/)
+  if (fields.length !== 5) return 'Use five cron fields: minute hour day-of-month month day-of-week'
+  for (const [i, [name, min, max, names]] of CRON_FIELDS.entries()) {
+    for (const part of fields[i].split(',')) {
+      const [range, step, ...rest] = part.split('/')
+      if (rest.length > 0 || (step !== undefined && !/^[1-9]\d*$/.test(step))) return `Cron ${name} steps must be whole numbers above 0`
+      if (range === '*') continue
+      const bounds = range.split('-')
+      const fits = (v: string) => names.includes(v.toLowerCase()) || (/^\d+$/.test(v) && Number(v) >= min && Number(v) <= max)
+        // L, W, # and ? are croniter's extensions, left to the server.
+        || /[LW#?]/.test(v)
+      if (bounds.length > 2 || !bounds.every(fits)) return `Cron ${name} must be ${min} to ${max}`
+    }
+  }
+  return null
+}
+
+/** Why the regex may not compile, or null. The browser's engine is close to the server's once Python's
+ * spellings of flags and named groups are translated; the server has the last word. */
+export const regexProblem = (regex: string | null): string | null => {
+  if (!regex) return null
+  const js = regex.replace(/^\(\?[aiLmsux]+\)/, '').replace(/\(\?P</g, '(?<').replace(/\(\?P=(\w+)\)/g, '\\k<$1>')
+  try {
+    new RegExp(js)
+    return null
+  } catch (e) {
+    return `This regex may not compile: ${(e as Error).message}`
+  }
+}
+const between = (n: number, min: number, max: number) => Number.isInteger(n) && n >= min && n <= max
 // Empty, for the default, or a whole number.
 const isCount = (value: string) => /^\d*$/.test(value.trim())
 
-/** What stops the form being sent, or null; the server checks the rest. */
-export const formProblem = (form: SubscriptionForm, takenNames: string[] = []): string | null => {
+const narrows = (f: IngestConfig['filter']) =>
+  [f.source_types, f.tags_any, f.channel_ids, f.text_contains, f.repos, f.authors_any, f.changed_by_any].some(v => v.length > 0)
+  || Boolean(f.regex) || f.mentions_me || f.threads_im_in || f.dms_to_me
+
+/** The wall clock in `timezone`, as a datetime-local input writes it. */
+export const wallClock = (timezone: string, at = new Date()) =>
+  new Intl.DateTimeFormat('sv-SE', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+    .format(at).replace(' ', 'T')
+
+/** What stops the form being sent, or null; the server checks the rest. `now` is wallClock() in the user's timezone. */
+export const formProblem = (form: SubscriptionForm, takenNames: string[] = [], now?: string): string | null => {
   const name = form.name.trim()
   if (form.source !== 'at' && name && takenNames.includes(name)) return `You already have a subscription named ${name}`
   if (!HANDLERS_FOR[form.source].includes(form.handler)) return `${SOURCE_LABELS[form.source]} can't go to a ${HANDLER_LABELS[form.handler].toLowerCase()}`
   if (form.handler === 'agent' && !form.agent) return 'Pick an agent'
   if (form.handler === 'queue' && !form.queue.trim()) return 'Name the queue'
   if (form.handler === 'notify' && !(form.notify.target.trim() && form.notify.message.trim())) return 'A message needs a recipient and text'
-  if (form.source === 'cron' && !isCron(form.cron)) return 'Use five cron fields: minute hour day-of-month month day-of-week'
+  if (form.source === 'cron') {
+    const problem = cronProblem(form.cron)
+    if (problem) return problem
+  }
   if (form.source === 'at' && !form.at) return 'Pick when the timer fires'
-  if (form.source === 'raw' && form.raw.outcome.length === 0) return 'Tick at least one of Deliveries that'
+  if (form.source === 'at' && now && form.at <= now) return 'Pick a time in the future'
+  if (form.source === 'filter' && !narrows(form.config.filter)) return FILTER_REQUIRED
+  if (form.source === 'raw' && form.raw.outcome.length === 0) return 'Take deliveries that stored items, stored nothing, or both'
   if ((form.source === 'cron' || form.source === 'at') && form.handler === 'agent' && !form.input.trim()) return 'Say what each run should do'
   if (capped(form.source) && !isCount(form.maxPerHour)) return 'Deliveries per hour must be a whole number'
   if (capped(form.source) && !isCount(form.backlogMax)) return 'Most waiting must be a whole number'
+  const delivery = form.config.delivery
+  if (form.source === 'filter' && delivery.mode === 'batch') {
+    if (!between(delivery.window_sec, 60, 86400)) return 'The batch window must be 60 to 86400 seconds'
+    if (!between(delivery.max_items, 1, 200)) return 'A batch must hold 1 to 200 items'
+  }
   return null
 }
 

@@ -480,8 +480,9 @@ def item_facts(item: SourceItem, with_direct: bool = False) -> ItemFacts:
     )
 
 
-def regex_search(pattern: str, text: str, subscription_id: int | None = None) -> bool:
-    """A regex search under a time limit, on any thread; a timeout counts as no match.
+def regex_search(pattern: str, text: str, subscription_id: int | None = None) -> bool | None:
+    """A regex search under a time limit, on any thread; None when it timed out, which
+    counts as no match.
 
     The `regex` engine checks its timeout while backtracking, so a pathological
     pattern stops in time, unlike `re`, which only a signal can interrupt.
@@ -490,7 +491,7 @@ def regex_search(pattern: str, text: str, subscription_id: int | None = None) ->
         return regex.search(pattern, text[:MAX_MATCH_TEXT_CHARS], timeout=REGEX_TIMEOUT_SEC) is not None
     except TimeoutError:
         logger.warning("subscription %s's regex timed out", subscription_id)
-        return False
+        return None
     # Validated when set, but a later engine release may read the pattern otherwise.
     except regex.error:
         logger.warning("subscription %s's regex could not be matched", subscription_id)
@@ -499,7 +500,7 @@ def regex_search(pattern: str, text: str, subscription_id: int | None = None) ->
 
 def failed_filter(f: IngestFilter, facts: ItemFacts, me: Me = Me(), subscription_id: int | None = None) -> str | None:
     """The first of the filter's criteria that the item's facts settle that fails, by
-    field name; None when they all hold."""
+    field name, or regex_timeout when the regex ran out of time; None when they all hold."""
     text = facts.text[:MAX_MATCH_TEXT_CHARS].lower()
     checks = (
         ("source_types", lambda: facts.source_type in f.source_types, f.source_types),
@@ -518,7 +519,11 @@ def failed_filter(f: IngestFilter, facts: ItemFacts, me: Me = Me(), subscription
         ("text_contains", lambda: any(t.lower() in text for t in f.text_contains), f.text_contains),
         ("regex", lambda: regex_search(cast(str, f.regex), facts.text, subscription_id), f.regex is not None),
     )
-    return next((name for name, holds, given in checks if given and not holds()), None)
+    for name, holds, given in checks:
+        if given and not (held := holds()):
+            # A dry run tells a runaway regex from one that doesn't match.
+            return "regex_timeout" if held is None else name
+    return None
 
 
 def changes_caused(
@@ -1120,7 +1125,8 @@ def live_subscriptions(
                 own,
                 readable,
                 excludes_own(config.filter, subscription.handler),
-                bool(db.scalar(select(posts))),
+                # An unsaved subscription, tried in a dry run, has no runs of its own.
+                subscription.id is not None and bool(db.scalar(select(posts))),
                 can_read(owner, key),
             )
         )
@@ -1755,6 +1761,27 @@ def due_sends(db: DBSession, subscription: Subscription, now: datetime) -> list[
     for m in itertools.chain.from_iterable(groups):
         m.dispatched_at, m.sends = now, m.sends + 1
     return [[delivery_ref(m.item_id, m.content_hash) for m in group] for group in groups]
+
+
+def redispatch(db: DBSession, subscription_id: int) -> None:
+    """Make the subscription's waiting deliveries due at once, as if never sent: the
+    fires of those sent while it was disabled dropped them."""
+    db.execute(
+        update(Delivery)
+        .where(Delivery.subscription_id == subscription_id, Delivery.status == PENDING)
+        .values(dispatched_at=None, sends=0)
+    )
+
+
+def send_due(subscription_id: int) -> None:
+    """Send the subscription's due deliveries now rather than at the next sweep."""
+    with make_session() as db:
+        subscription = db.get(Subscription, subscription_id, with_for_update={"key_share": True})
+        if subscription is None or not subscription.enabled or handler_queue(subscription) is not None:
+            return
+        due = due_sends(db, subscription, datetime.now(timezone.utc))
+    for refs in due:
+        send(subscription_id, refs)
 
 
 def sweep_deliveries() -> dict[str, int]:

@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAgents, type ItemDelivery, type RawDelivery, type Subscription, type TickDelivery } from '@/hooks/useAgents'
-import { formatRelativeTime } from '@/components/sources/shared'
 import { formatUserDateTime } from '@/utils/timezones'
 import { Badge, LoadingState, Notice, Row, RowError, SubList } from '@/components/shared/ui'
 import { StatusBadge } from './StatusBadge'
-import { deliveryLabel, deliveryTone } from './subscriptions'
+import { ago, deliveryLabel, deliveryTone } from './subscriptions'
 
 const HISTORY = 20
 
@@ -21,7 +20,7 @@ const ItemRow = ({ d }: { d: ItemDelivery }) => (
     title={`Item ${d.item_id}`}
     badges={deliveryBadge(d)}
     meta={[
-      formatRelativeTime(d.created_at),
+      ago(d.created_at),
       d.not_before && `held until ${formatUserDateTime(new Date(d.not_before))}`,
       d.changes.length > 0 && d.changes.join(', '),
       d.coalesced.length > 0 && `replaces ${d.coalesced.length} earlier`,
@@ -42,10 +41,10 @@ const webhookLogLink = (source: string, accountId: number) =>
 const RawRow = ({ d, source }: { d: RawDelivery; source: string }) => (
   <Row
     compact
-    title={d.type ?? 'Webhook delivery'}
+    title={d.type || 'Webhook delivery'}
     badges={deliveryBadge(d)}
     meta={[
-      formatRelativeTime(d.created_at),
+      ago(d.created_at),
       d.account_id !== null && <Link to={webhookLogLink(source, d.account_id)} className="text-primary hover:underline">webhook log</Link>,
       d.run_id && <RunLink runId={d.run_id} status={d.run_status} />,
     ]}

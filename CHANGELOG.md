@@ -23,6 +23,8 @@ a new, empty `## Unreleased` above it.
 ## Unreleased
 
 ### Changes
+- Subscriptions page: a dry run ("Test on an item") tries the unsaved form on an item and names what fails; `subscription_test` takes an unsaved source and handler. Server errors are plain sentences on the field at fault (cron errors name the bad field), the form checks cron ranges, regexes, batch fields, a filter criterion and past timers before saving, row actions keep focus and announce their result, and a Timer source filter and Clear filters were added.
+- Re-enabling a filter subscription sends its waiting deliveries at once; a dry run reports a regex that took too long; trip reasons are plain sentences.
 - A task called from inside another keeps its cause, so Discord pushed messages, edits, deletes and reactions now link their items to the webhook delivery (raw subscriptions get their item ids, the Webhook log lists them).
 - Raw deliveries routed together are claimed in event order.
 - A signed GitHub delivery whose fields have the wrong shape is a 400; a Slack one is recorded `rejected` (Slack retries non-200s). Slack events with no channel (team_join, user_change) are routed as `no_item_type`; pins and file shares are judged by their `channel_id`.

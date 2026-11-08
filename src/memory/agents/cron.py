@@ -38,6 +38,7 @@ from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import AgentDefinition, AgentRun, Event
 from memory.common.db.models.agents import iso
 from memory.common.db.models.events import TICK, TIMER
+from memory.common.pydantic_errors import plain
 from memory.common.scopes import SCOPE_AGENTS
 
 logger = logging.getLogger(__name__)
@@ -139,7 +140,7 @@ def start_time_run(event_id: int) -> str | None:
             db.rollback()
             event = db.get_one(Event, event_id, with_for_update=True)
             notices = Notices()
-            fail(db, event, target, str(e), notices)
+            fail(db, event, target, plain(e), notices)
             db.commit()
             notices.tell(db)
         return None

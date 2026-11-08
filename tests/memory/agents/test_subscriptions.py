@@ -407,11 +407,13 @@ def test_regexes_match_off_the_main_thread():
     assert found == [True]
 
 
-def test_a_runaway_regex_times_out_as_no_match():
+def test_a_runaway_regex_times_out_as_no_match_named_apart():
     started = time.monotonic()
+    runaway = IngestFilter.model_validate({"regex": r"(a|aa)+$"})
 
-    assert regex_search(r"(a+)+$", "a" * 40 + "!") is False
-    assert time.monotonic() - started < 2
+    assert regex_search(r"(a|aa)+$", "a" * 60 + "!") is None
+    assert failed_filter(runaway, facts(text="a" * 60 + "!")) == "regex_timeout"
+    assert time.monotonic() - started < 3
 
 
 def test_discord_facts_carry_channel_and_author_identities():
