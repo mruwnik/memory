@@ -421,7 +421,7 @@ def slow(result=None, error=None):
     """A Drive call that outlasts the patched idle-in-transaction timeout."""
 
     def call(*_args, **_kwargs):
-        time.sleep(0.5)
+        time.sleep(1.5)
         if error:
             raise error
         return result
@@ -431,7 +431,8 @@ def slow(result=None, error=None):
 
 @pytest.fixture
 def short_idle_timeout(monkeypatch):
-    monkeypatch.setattr(db_connection, "IDLE_IN_TRANSACTION_TIMEOUT_MS", 100)
+    # Wide enough that a loaded machine's gaps between statements stay under it.
+    monkeypatch.setattr(db_connection, "IDLE_IN_TRANSACTION_TIMEOUT_MS", 500)
 
 
 @pytest.mark.transactional_db
