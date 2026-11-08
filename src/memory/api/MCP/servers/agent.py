@@ -46,7 +46,7 @@ from memory.agents.external import (
 )
 from memory.agents.mcp_client import calling_run, memory_tools
 from memory.agents.prebuilt import PREBUILT_AGENTS, code_agent
-from memory.agents.queues import backlog, is_delivery, matching_queues, ready_to_claim, take_from_queue
+from memory.agents.queues import backlog, claimable_queues, is_delivery, ready_to_claim, take_from_queue
 from memory.agents.provider_keys import (
     KeyUnavailable,
     check_key,
@@ -811,12 +811,12 @@ def take_from(
     user_id: int, token: str, patterns: list[str], worker: str | None, lease: timedelta
 ) -> dict | None:
     """Tries the caller's queues matching `patterns`, resolved now so a queue made
-    since the last try counts, in matching_queues' order."""
+    since the last try counts, in claimable_queues' order."""
     with make_session() as db:
         user = db.get(User, user_id)
         assert user is not None
         key = token_api_key(token, db)
-        for queue in matching_queues(db, user_id, patterns):
+        for queue in claimable_queues(db, user, patterns):
             run = take_from_queue(db, user, queue, key)
             if run is None:
                 continue
@@ -843,8 +843,10 @@ async def work_claim(
     With `queues`, a list of queue names or case-sensitive globs (e.g. ["messages",
     "slack-*"] or ["*"]), take instead the next delivery of your subscriptions whose
     handler is a matching queue (subscription_upsert), from the queue whose oldest
-    delivery is oldest first; this needs the read scope. Give `capabilities` too to
-    take either kind, runs first; give neither to take only runs. It comes as a run with "queue" and "ref"
+    claimable delivery is oldest first; this needs the read scope. Give `capabilities`
+    too to take either kind, runs first: deliveries wait while any run is claimable, so
+    keep a queue-only worker for queues that can't wait. Give neither to take only
+    runs. It comes as a run with "queue" and "ref"
     ({"subscription_id", "item_ids", "changes": {"<item id>": [change tags]}, and
     "coalesced": {"<item id>": [ids of items whose deliveries were folded into it]}
     when any were}), its input rendered from the subscription's template and the items as

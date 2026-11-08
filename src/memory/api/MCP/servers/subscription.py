@@ -89,6 +89,7 @@ DEFAULT_NAME = re.compile(r"subscription-\d+")
 SOURCE_KINDS = {"filter": INGEST, "raw": RAW, "cron": CRON, "at": TIMER}
 # Sources whose subscriptions say what is read, which schedule keys don't see.
 READING_KINDS = (INGEST, RAW)
+QUEUE_GLOB_CHARS = "*?[]"
 NOTIFY_FIELDS = ("channel", "target", "message", "subject")
 FIRED_TIMERS_LISTED = 50
 MAX_HISTORY = 100
@@ -216,6 +217,9 @@ async def checked_handler(
         need(scopes, "a queue handler, which hands items over,", SCOPE_READ)
         if not isinstance(value, str) or not value.strip() or len(value) > MAX_NAME_CHARS:
             raise ValueError(f"a queue name is 1 to {MAX_NAME_CHARS} characters")
+        # Workers claim by glob, so a name with glob characters couldn't be named exactly.
+        if set(value) & set(QUEUE_GLOB_CHARS):
+            raise ValueError(f"a queue name can't contain any of {QUEUE_GLOB_CHARS}")
         return {"queue": value.strip()}, None, None
     if kind == "notify":
         need(scopes, "a notify handler", SCOPE_SCHEDULE_WRITE)
@@ -395,7 +399,8 @@ async def upsert(
       'schedule:write'; the agent's tools are checked against your access on every
       change.
     - {"queue": "<name>"}: deliveries wait until one of your workers claims them
-      with agent_work_claim(queues=[...]). Needs 'agents:work' (or 'agents') and 'read'.
+      with agent_work_claim(queues=[...]); the name can't contain * ? [ or ]. Needs
+      'agents:work' (or 'agents') and 'read'.
     - {"notify": {"channel": discord|slack|email, "target", "message", "subject"}}:
       sends that message. The target may be a person's name, identifier or email,
       a Discord/Slack channel or user id, or an email address; subject "" clears

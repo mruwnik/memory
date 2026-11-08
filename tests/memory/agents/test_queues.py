@@ -263,16 +263,35 @@ async def test_queue_patterns_take_the_queue_with_the_oldest_delivery_first(
 
 
 @pytest.mark.asyncio
+async def test_queue_patterns_rank_queues_by_their_oldest_claimable_delivery(
+    db_session, regular_user, worker_session, no_celery_dispatch
+):
+    held = subscribe(db_session, regular_user, queue="held")
+    middle = subscribe(db_session, regular_user, queue="middle")
+    route_item(db_session, post(db_session, creator_id=regular_user.id).id)
+    age(db_session, held, timedelta(minutes=10))
+    age(db_session, middle, timedelta(minutes=5))
+    for d in db_session.query(Delivery).filter_by(subscription_id=held.id):
+        d.not_before = datetime.now(timezone.utc) + timedelta(hours=1)
+    route_item(db_session, post(db_session, creator_id=regular_user.id).id)
+    db_session.commit()
+
+    claimed = [await claim(worker_session.token, queues=["*"]) for _ in range(4)]
+
+    assert [(c or {}).get("queue") for c in claimed] == ["middle", "held", "middle", None]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "kwargs,kinds",
+    "kwargs,taken",
     [
-        ({"capabilities": {}, "queues": [QUEUE]}, {None, QUEUE}),
-        ({"queues": [QUEUE]}, {QUEUE}),
-        ({}, {None}),
+        ({"capabilities": {}, "queues": [QUEUE]}, ["run", QUEUE, None]),
+        ({"queues": [QUEUE]}, [QUEUE, None, None]),
+        ({}, ["run", None, None]),
     ],
 )
-async def test_a_claim_takes_runs_by_capabilities_and_deliveries_by_queue(
-    db_session, regular_user, worker_session, no_celery_dispatch, kwargs, kinds
+async def test_a_claim_takes_runs_by_capabilities_first_then_deliveries_by_queue(
+    db_session, regular_user, worker_session, no_celery_dispatch, kwargs, taken
 ):
     subscribe(db_session, regular_user)
     route_item(db_session, post(db_session, creator_id=regular_user.id).id)
@@ -280,8 +299,7 @@ async def test_a_claim_takes_runs_by_capabilities_and_deliveries_by_queue(
 
     claimed = [await claim(worker_session.token, **kwargs) for _ in range(3)]
 
-    taken = [c for c in claimed if c is not None]
-    assert ({c.get("queue") for c in taken}, len(taken)) == (kinds, len(kinds))
+    assert [c and c.get("queue", "run") for c in claimed] == taken
 
 
 @pytest.mark.asyncio

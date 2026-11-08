@@ -18,7 +18,7 @@ from fnmatch import fnmatchcase
 from typing import Any, Collection, cast
 
 from pydantic import ValidationError
-from sqlalchemy import distinct, exists, func, or_, select, tuple_
+from sqlalchemy import distinct, exists, func, or_, select, tuple_, union_all
 from sqlalchemy.orm import aliased, undefer
 
 from memory.agents.caps import CapExceeded, check_subscription_rate
@@ -257,21 +257,26 @@ def ready_to_claim(db: DBSession, run: AgentRun, owner: User, claimer: APIKey | 
     return False
 
 
-def queue_runs(owner: User, queue: str, raw: bool) -> tuple[Any, ...]:
-    """Runs of the owner's live subscriptions still on `queue`: with `raw`, raw
-    deliveries no worker claimed yet, else runs whose lease lapsed."""
+def on_queue(queue: str | None) -> tuple[Any, ...]:
+    """Conditions for `queue`, or for every queue when it is None."""
+    return () if queue is None else (Subscription.handler["queue"].astext == queue,)
+
+
+def queue_runs(owner: User, queue: str | None, raw: bool) -> tuple[Any, ...]:
+    """Runs of the owner's live subscriptions still on `queue` (any, if None): with
+    `raw`, raw deliveries no worker claimed yet, else runs whose lease lapsed."""
     hold = timedelta(seconds=settings.AGENT_WORK_HOLD_MAX_SEC)
     which = RAW_WAITING if raw else (AgentRun.started_at > datetime.now(timezone.utc) - hold,)
     return (
         Subscription.id == AgentRun.subscription_id,
         AgentRun.user_id == owner.id,
-        AgentRun.queue == queue,
+        AgentRun.queue == Subscription.handler["queue"].astext,
         AgentRun.status == RunStatus.PENDING.value,
         AgentRun.executor == EXECUTOR_WORKERS,
         *which,
         Subscription.kind.in_((INGEST, RAW)),
         Subscription.enabled,
-        Subscription.handler["queue"].astext == queue,
+        *on_queue(queue),
     )
 
 
@@ -307,8 +312,9 @@ def oldest_raw(db: DBSession, owner: User, queue: str) -> datetime | None:
     return db.scalar(select(func.min(AgentRun.created_at)).where(*queue_runs(owner, queue, raw=True)))
 
 
-def claimable(owner: User, queue: str, now: datetime) -> tuple[Any, ...]:
-    """Pending, undeferred deliveries of the owner's live subscriptions to `queue` that
+def claimable(owner: User, queue: str | None, now: datetime) -> tuple[Any, ...]:
+    """Pending, undeferred deliveries of the owner's live subscriptions to `queue` (any,
+    if None) that
     no earlier unfinished delivery with the same order key holds back. Deliveries
     end within DELIVERY_MAX_AGE and their runs within the hold cap, so only those
     recent enough to be unfinished are looked at."""
@@ -331,7 +337,7 @@ def claimable(owner: User, queue: str, now: datetime) -> tuple[Any, ...]:
         Subscription.id == Delivery.subscription_id,
         Subscription.user_id == owner.id,
         *LIVE_INGEST,
-        Subscription.handler["queue"].astext == queue,
+        *on_queue(queue),
         Delivery.status == PENDING,
         or_(Delivery.not_before.is_(None), Delivery.not_before <= now),
         ~held,
@@ -558,12 +564,19 @@ def backlog(db: DBSession, owner_id: int) -> list[dict[str, Any]]:
     ]
 
 
-def matching_queues(db: DBSession, owner_id: int, patterns: list[str]) -> list[str]:
-    """The owner's queues whose names match any of the globs, the one with the oldest
-    pending delivery first and those with none last."""
-    matched = [q for q in backlog(db, owner_id) if any(fnmatchcase(q["queue"], p) for p in patterns)]
-    matched.sort(key=lambda q: (q["oldest_age_sec"] is None, -(q["oldest_age_sec"] or 0)))
-    return [q["queue"] for q in matched]
+def claimable_queues(db: DBSession, owner: User, patterns: list[str]) -> list[str]:
+    """The owner's queues matching any of the globs that have work take_from_queue
+    could take now (a lapsed run, a raw delivery or a claimable delivery), the one
+    whose oldest such work is oldest first."""
+    name = Subscription.handler["queue"].astext
+    now = datetime.now(timezone.utc)
+    work = union_all(
+        select(name.label("queue"), Delivery.created_at.label("at")).where(*claimable(owner, None, now)),
+        *(select(name, AgentRun.created_at).where(*queue_runs(owner, None, raw)) for raw in (False, True)),
+    ).subquery()
+    oldest = func.min(work.c.at)
+    ranked = db.scalars(select(work.c.queue).group_by(work.c.queue).order_by(oldest, work.c.queue))
+    return [q for q in ranked if any(fnmatchcase(q, p) for p in patterns)]
 
 
 def queue_health(db: DBSession) -> list[dict[str, Any]]:
