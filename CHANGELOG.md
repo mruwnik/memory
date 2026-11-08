@@ -22,6 +22,8 @@ a new, empty `## Unreleased` above it.
 
 ## Unreleased
 
+## v0.5.2 (2026-11-08)
+
 ### Changes
 - GitHub repos take a `content_mode`: `full` (the default, as before) or `metadata`. A metadata repo stores titles, state and activity (authors, branch names, labels, assignees, milestone, project fields, commit SHAs, timestamps, review and comment ids and review states) but not issue or PR text, comments, review text or code (diffs, file lists), and indexes nothing; subscriptions still see every change (`new`, `edited`, `commits`, `comments`, `review`, `state`, ...). Set it when adding a repo or change it on the repo row; a change applies to what later syncs store, and content stored earlier is left as it was. Metadata repos don't fetch PR diffs.
 - Breaking for queue workers: `agent_work_claim` takes `queues`, a list of queue names or case-sensitive globs (e.g. `["messages", "slack-*"]`), in place of `queue`. It claims from the matching queue whose oldest pending, undeferred delivery is oldest, and picks up queues made while it waits. With `capabilities` also given it claims either runs or deliveries, runs first: deliveries wait while any run is claimable, so latency-sensitive queues want a queue-only worker. Workers passing `queue="x"` must pass `queues=["x"]`; an empty list is refused.
@@ -34,7 +36,7 @@ None
 None
 
 ### Other changes for operators
-None
+- Python requirements now need `fastapi>=0.140.0` and `sse-starlette>=3` (fresh installs already got these; images rebuild them on update).
 
 ### Migrations
 - `20261219_github_content_mode`: adds `github_repos.content_mode` (default `full`) and `github_item.body_hash`. Fast: two nullable/defaulted columns.
