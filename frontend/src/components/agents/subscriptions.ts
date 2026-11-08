@@ -228,6 +228,22 @@ export const wallClock = (timezone: string, at = new Date()) =>
   new Intl.DateTimeFormat('sv-SE', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
     .format(at).replace(' ', 'T')
 
+export type ProblemField = 'cron' | 'maxPerHour' | 'backlogMax' | 'window' | 'maxItems'
+
+/** Each field's own problem, so every field in error says so at once. */
+export const fieldProblems = (form: SubscriptionForm): Partial<Record<ProblemField, string>> => {
+  const delivery = form.config.delivery
+  const batch = form.source === 'filter' && delivery.mode === 'batch' ? delivery : null
+  const problems: [ProblemField, string | null | false][] = [
+    ['cron', form.source === 'cron' && cronProblem(form.cron)],
+    ['maxPerHour', capped(form.source) && !isCount(form.maxPerHour) && 'Deliveries per hour must be a whole number'],
+    ['backlogMax', capped(form.source) && !isCount(form.backlogMax) && 'Most waiting must be a whole number'],
+    ['window', batch !== null && !between(batch.window_sec, 60, 86400) && 'The batch window must be 60 to 86400 seconds'],
+    ['maxItems', batch !== null && !between(batch.max_items, 1, 200) && 'A batch must hold 1 to 200 items'],
+  ]
+  return Object.fromEntries(problems.filter(([, problem]) => problem))
+}
+
 /** What stops the form being sent, or null; the server checks the rest. `now` is wallClock() in the user's timezone. */
 export const formProblem = (form: SubscriptionForm, takenNames: string[] = [], now?: string): string | null => {
   const name = form.name.trim()
@@ -236,23 +252,12 @@ export const formProblem = (form: SubscriptionForm, takenNames: string[] = [], n
   if (form.handler === 'agent' && !form.agent) return 'Pick an agent'
   if (form.handler === 'queue' && !form.queue.trim()) return 'Name the queue'
   if (form.handler === 'notify' && !(form.notify.target.trim() && form.notify.message.trim())) return 'A message needs a recipient and text'
-  if (form.source === 'cron') {
-    const problem = cronProblem(form.cron)
-    if (problem) return problem
-  }
   if (form.source === 'at' && !form.at) return 'Pick when the timer fires'
   if (form.source === 'at' && now && form.at <= now) return 'Pick a time in the future'
   if (form.source === 'filter' && !narrows(form.config.filter)) return FILTER_REQUIRED
   if (form.source === 'raw' && form.raw.outcome.length === 0) return 'Take deliveries that stored items, stored nothing, or both'
   if ((form.source === 'cron' || form.source === 'at') && form.handler === 'agent' && !form.input.trim()) return 'Say what each run should do'
-  if (capped(form.source) && !isCount(form.maxPerHour)) return 'Deliveries per hour must be a whole number'
-  if (capped(form.source) && !isCount(form.backlogMax)) return 'Most waiting must be a whole number'
-  const delivery = form.config.delivery
-  if (form.source === 'filter' && delivery.mode === 'batch') {
-    if (!between(delivery.window_sec, 60, 86400)) return 'The batch window must be 60 to 86400 seconds'
-    if (!between(delivery.max_items, 1, 200)) return 'A batch must hold 1 to 200 items'
-  }
-  return null
+  return Object.values(fieldProblems(form))[0] ?? null
 }
 
 const agentRef = (agent: string): number | string => (/^\d+$/.test(agent) ? Number(agent) : agent)

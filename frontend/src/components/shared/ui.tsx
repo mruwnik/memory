@@ -654,6 +654,8 @@ interface ComboboxProps {
   loading?: boolean
   /** For async search: options are then shown unfiltered (the parent filters). */
   onQueryChange?: (query: string) => void
+  /** Opens the list above the field: for a picker near the end of a scrolling dialog, where a list below would cover its buttons. */
+  above?: boolean
   disabled?: boolean
   className?: string
   id?: string
@@ -663,7 +665,7 @@ interface ComboboxProps {
 }
 
 /** Single-value searchable picker, optionally grouped and accepting free-typed values. */
-export const Combobox = ({ value, onChange, options, placeholder, allowCustom, loading, onQueryChange, disabled, className, ...inputProps }: ComboboxProps) => {
+export const Combobox = ({ value, onChange, options, placeholder, allowCustom, loading, onQueryChange, above, disabled, className, ...inputProps }: ComboboxProps) => {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [highlight, setHighlight] = useState(0)
@@ -734,7 +736,7 @@ export const Combobox = ({ value, onChange, options, placeholder, allowCustom, l
         onChange={e => { setQuery(e.target.value); setOpen(true); setHighlight(0); onQueryChange?.(e.target.value) }}
         onFocus={() => setOpen(true)} onBlur={commitTyped} onKeyDown={onKeyDown} />
       {open && (
-        <div className="absolute z-20 mt-1 w-full max-h-64 overflow-auto bg-white border border-slate-200 rounded-lg shadow-lg py-1">
+        <div className={cx('absolute z-20 w-full max-h-64 overflow-auto bg-white border border-slate-200 rounded-lg shadow-lg py-1', above ? 'bottom-full mb-1' : 'mt-1')}>
           {loading && <p className="px-3 py-2 text-sm text-slate-500">Loading...</p>}
           {!loading && !filtered.length && (
             <p className="px-3 py-2 text-sm text-slate-500">{allowCustom ? 'No matches. Press Enter to use as typed' : 'No matches'}</p>
@@ -822,9 +824,10 @@ export const useSubmit = () => {
 
 /**
  * Runs actions on a loaded page (sync, toggle, delete) and keeps the outcome for a `Notice`,
- * so a failure is never silent. `run` resolves to whether the action succeeded.
+ * so a failure is never silent. `run` resolves to whether the action succeeded. `floating` shows the
+ * notice over the page's corner, for row actions, where a notice above the list would move the rows under the pointer.
  */
-export const useActionNotice = () => {
+export const useActionNotice = ({ floating = false } = {}) => {
   const [outcome, setOutcome] = useState<{ tone: 'error' | 'success'; message: string } | null>(null)
   const run = useCallback(async (action: () => Promise<unknown>, success?: string) => {
     setOutcome(null)
@@ -838,7 +841,17 @@ export const useActionNotice = () => {
     return true
   }, [])
   const clear = useCallback(() => setOutcome(null), [])
-  const notice = outcome && <Notice tone={outcome.tone} onDismiss={clear}>{outcome.message}</Notice>
+  // A floating success goes by itself, so it doesn't keep covering what's under it; an error waits to be read.
+  useEffect(() => {
+    if (!floating || outcome?.tone !== 'success') return
+    const timer = setTimeout(clear, 5000)
+    return () => clearTimeout(timer)
+  }, [floating, outcome, clear])
+  const notice = outcome && (
+    <Notice tone={outcome.tone} onDismiss={clear} className={cx(floating && 'fixed bottom-4 inset-x-4 z-40 shadow-lg sm:left-auto sm:w-96')}>
+      {outcome.message}
+    </Notice>
+  )
   return { run, notice, clear }
 }
 

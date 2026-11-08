@@ -10,8 +10,8 @@ import {
   useSubmit,
 } from '@/components/shared/ui'
 import {
-  formFor, formProblem, HANDLER_LABELS, HANDLERS_FOR, newForm, RAW_OUTCOME_LABELS, regexProblem, SOURCE_LABELS, toUpsert, wallClock,
-  type HandlerKind, type SourceKind, type SubscriptionForm,
+  fieldProblems, formFor, formProblem, HANDLER_LABELS, HANDLERS_FOR, newForm, RAW_OUTCOME_LABELS, regexProblem, SOURCE_LABELS, toUpsert, wallClock,
+  type HandlerKind, type ProblemField, type SourceKind, type SubscriptionForm,
 } from './subscriptions'
 
 export interface AgentOption { value: string; label: string; group: string }
@@ -23,6 +23,11 @@ const numberOrNaN = (text: string) => (text.trim() ? Number(text) : NaN)
 const capitalised = (text: string) => text.charAt(0).toUpperCase() + text.slice(1)
 // The server's limit on a subscription's name.
 const MAX_NAME_CHARS = 100
+const nameHint = (name: string, creating: boolean) => name.length >= MAX_NAME_CHARS - 20
+  ? `${name.length}/${MAX_NAME_CHARS} characters`
+  : creating ? 'Leave empty for a numbered name.' : undefined
+
+type Problems = Partial<Record<ProblemField, string>>
 
 type ErrorField = 'name' | 'regex' | 'cron'
 // A refused save names what it refused; shown on that field rather than by the buttons.
@@ -55,10 +60,20 @@ const FLAGS: [FlagField, string][] = [
   ['dms_to_me', 'Direct messages to my bots'],
   ['known_people_only', 'Only authors who are known people'],
 ]
-// subscription_test's `failed`: a filter field, by its label, or a check outside the filter.
-const CHECK_LABELS: Record<string, string> = Object.fromEntries([
+// The form's labels for the keys the server names fields by: subscription_test's `failed`, and refusals.
+const FIELD_LABELS: Record<string, string> = Object.fromEntries([
   ['source_types', 'Source types'], ...LIST_FIELDS, ['regex', 'Regex'], ...FLAGS, ['exclude_own', 'Skip my own Slack messages'],
+  ['window_sec', 'Window (seconds)'], ['max_items', 'Max items'], ['on_edit', 'Deliver an item again when it changes'],
+  ['on_changes', 'Only for these changes'],
 ])
+// The server keeps its keys and an "invalid filter source:" lead-in for MCP callers. What it quotes
+// (a name, a value) is the user's own text, so it is left alone.
+const userWording = (message: string) => capitalised(message
+  .replace(/^invalid \w+ (source|handler):\s*/i, '')
+  .split(/('[^']*')/)
+  .map((part, i) => i % 2 ? part : part.replace(/(?<![\w-])(?:filter\.|delivery\.)?([a-z]+(?:_[a-z]+)*)(?![\w-])/g,
+    (key, name: string) => (FIELD_LABELS[name] ? `“${FIELD_LABELS[name]}”` : key)))
+  .join(''))
 const REASONS: Record<string, string> = {
   own_authors: 'one of our bots or syncs posted it',
   readable: "the subscription's credential can't read it",
@@ -69,7 +84,7 @@ const REASONS: Record<string, string> = {
 }
 const verdict = ({ matches, failed }: SubscriptionTestResult) => {
   if (matches || !failed) return 'Would match.'
-  return REASONS[failed] ? `Would not match: ${REASONS[failed]}.` : `Would not match: it fails ${CHECK_LABELS[failed] ?? failed}.`
+  return REASONS[failed] ? `Would not match: ${REASONS[failed]}.` : `Would not match: it fails ${FIELD_LABELS[failed] ?? failed}.`
 }
 const itemLabel = (i: RecentItem) => `${i.title || i.modality} (#${i.id})`
 
@@ -101,26 +116,29 @@ function ItemTest({ form, existing }: { form: SubscriptionForm; existing?: Subsc
           changed isn't checked.
         </p>
         <Field label="Item" hint="Pick a recent item, or type an item id.">
-          <Combobox allowCustom value={itemId} options={options} loading={items === null}
+          <Combobox allowCustom above value={itemId} options={options} loading={items === null}
             // A pick ends the search, so the list reopens whole and the pick keeps its label.
             onChange={value => { setQuery(''); pick(value) }}
             onQueryChange={text => { setQuery(text); pick(/^\d+$/.test(text.trim()) ? text.trim() : '') }} />
         </Field>
-        <Button disabled={busy || !itemId} onClick={run}>{busy ? 'Testing...' : 'Test'}</Button>
-        <div aria-live="polite">
-          {result && <Notice tone={result.matches ? 'success' : 'warning'}>{verdict(result)}</Notice>}
-          {error && <Notice tone="error">{error}</Notice>}
+        {/* Busy rather than disabled, so a keyboard user's focus stays on it. */}
+        <Button disabled={!itemId} aria-busy={busy} onClick={() => !busy && run()}>{busy ? 'Testing...' : 'Test'}</Button>
+        {/* Always rendered: a status region inserted along with its text is often not read. */}
+        <div role="status" aria-label="Test result">
+          {result && <Notice role="none" tone={result.matches ? 'success' : 'warning'}>{verdict(result)}</Notice>}
         </div>
+        {error && <Notice tone="error">{userWording(error)}</Notice>}
       </div>
     </Disclosure>
   )
 }
 
-function FilterFields({ form, update, sourceTypes, regexError }: {
+function FilterFields({ form, update, sourceTypes, regexError, problems }: {
   form: SubscriptionForm
   update: (change: Partial<SubscriptionForm>) => void
   sourceTypes: string[]
   regexError?: string
+  problems: Problems
 }) {
   // Comma lists are edited as text and split on save, so a half-typed entry isn't lost.
   const [texts, setTexts] = useState<Record<ListField, string>>(
@@ -165,11 +183,11 @@ function FilterFields({ form, update, sourceTypes, regexError }: {
           onChange={e => update({ config: { ...config, delivery: e.target.checked ? { mode: 'batch', window_sec: 3600, max_items: 50 } : { mode: 'per_item' } } })} />
         {batch && (
           <FieldRow>
-            <Field label="Window (seconds)">
+            <Field label="Window (seconds)" error={problems.window}>
               <Input type="number" min="60" max="86400" value={Number.isNaN(batch.window_sec) ? '' : batch.window_sec}
                 onChange={e => update({ config: { ...config, delivery: { ...batch, window_sec: numberOrNaN(e.target.value) } } })} />
             </Field>
-            <Field label="Max items">
+            <Field label="Max items" error={problems.maxItems}>
               <Input type="number" min="1" max="200" value={Number.isNaN(batch.max_items) ? '' : batch.max_items}
                 onChange={e => update({ config: { ...config, delivery: { ...batch, max_items: numberOrNaN(e.target.value) } } })} />
             </Field>
@@ -187,10 +205,10 @@ function FilterFields({ form, update, sourceTypes, regexError }: {
         <Textarea className="h-20" value={config.template} onChange={e => update({ config: { ...config, template: e.target.value } })} />
       </Field>
       <FieldRow>
-        <Field label="Deliveries per hour" hint="Beyond it they wait an hour, then are dropped.">
+        <Field label="Deliveries per hour" hint="Beyond it they wait an hour, then are dropped." error={problems.maxPerHour}>
           <Input type="number" min="1" placeholder="Server default" value={form.maxPerHour} onChange={e => update({ maxPerHour: e.target.value })} />
         </Field>
-        <Field label="Most waiting" hint="Beyond it the oldest are dropped.">
+        <Field label="Most waiting" hint="Beyond it the oldest are dropped." error={problems.backlogMax}>
           <Input type="number" min="1" placeholder="No limit (default)" value={form.backlogMax} onChange={e => update({ backlogMax: e.target.value })} />
         </Field>
         <Field label="A newer event for the same item">
@@ -213,9 +231,10 @@ function FilterFields({ form, update, sourceTypes, regexError }: {
   )
 }
 
-function RawFields({ form, update, locked }: {
+function RawFields({ form, update, locked, problems }: {
   form: SubscriptionForm
   update: (change: Partial<SubscriptionForm>) => void
+  problems: Problems
   // A stored subscription keeps its source.
   locked: boolean
 }) {
@@ -265,10 +284,10 @@ function RawFields({ form, update, locked }: {
         ))}
       </Fieldset>
       <FieldRow>
-        <Field label="Deliveries per hour" hint="Beyond it they are dropped.">
+        <Field label="Deliveries per hour" hint="Beyond it they are dropped." error={problems.maxPerHour}>
           <Input type="number" min="1" placeholder="Server default" value={form.maxPerHour} onChange={e => update({ maxPerHour: e.target.value })} />
         </Field>
-        <Field label="Most waiting" hint="Beyond it the oldest are dropped.">
+        <Field label="Most waiting" hint="Beyond it the oldest are dropped." error={problems.backlogMax}>
           <Input type="number" min="1" placeholder="1000 (default)" value={form.backlogMax} onChange={e => update({ backlogMax: e.target.value })} />
         </Field>
       </FieldRow>
@@ -292,9 +311,12 @@ export function SubscriptionEditor({ existing, presetAgent, agents, sourceTypes,
   // An edit makes a refused save's reason stale.
   const update = (change: Partial<SubscriptionForm>) => { setError(null); setForm(f => ({ ...f, ...change })) }
   const problem = formProblem(form, takenNames, wallClock(timezone))
+  const problems = fieldProblems(form)
+  // Every cron is incomplete while it is typed, so its problem waits until the field is left.
+  const [cronLeft, setCronLeft] = useState(false)
   const nameTaken = form.source !== 'at' && takenNames.includes(form.name.trim())
   const [field, , fieldLabel] = errorField(error, form.source) ?? []
-  const errorOn = (f: ErrorField) => (field === f ? error ?? undefined : undefined)
+  const errorOn = (f: ErrorField) => (field === f && error ? userWording(error) : undefined)
   const problemId = useId()
   // A filter or webhook subscription keeps its handler kind; a schedule may move between agent and message.
   const handlerKinds = existing && existing.kind !== 'cron' ? [form.handler] : HANDLERS_FOR[form.source]
@@ -312,7 +334,7 @@ export function SubscriptionEditor({ existing, presetAgent, agents, sourceTypes,
       )}
       {existing && <p className="text-sm text-slate-600">Source: {SOURCE_LABELS[form.source]}</p>}
       {form.source !== 'at' && (
-        <Field label="Name" hint={existing ? undefined : 'Leave empty for a numbered name.'}
+        <Field label="Name" hint={nameHint(form.name, !existing)}
           error={nameTaken ? problem ?? undefined : errorOn('name')}>
           <Input value={form.name} maxLength={MAX_NAME_CHARS} onChange={e => update({ name: e.target.value })} />
         </Field>
@@ -365,8 +387,8 @@ export function SubscriptionEditor({ existing, presetAgent, agents, sourceTypes,
         </>
       )}
       {form.source === 'cron' && (
-        <Field label={`Cron (${timezone})`} hint={`For example, 0 9 * * * is every day at 09:00 ${timezone}.`} error={errorOn('cron')}>
-          <Input className="font-mono" value={form.cron} onChange={e => update({ cron: e.target.value })} />
+        <Field label={`Cron (${timezone})`} hint={`For example, 0 9 * * * is every day at 09:00 ${timezone}.`} error={errorOn('cron') ?? (cronLeft ? problems.cron : undefined)}>
+          <Input className="font-mono" value={form.cron} onChange={e => update({ cron: e.target.value })} onBlur={() => setCronLeft(true)} />
         </Field>
       )}
       {form.source === 'at' && (
@@ -379,17 +401,18 @@ export function SubscriptionEditor({ existing, presetAgent, agents, sourceTypes,
           <Textarea className="h-16" placeholder={form.source === 'at' ? 'What should the run do?' : 'What should each run do?'} value={form.input} onChange={e => update({ input: e.target.value })} />
         </Field>
       )}
-      {form.source === 'filter' && <FilterFields form={form} update={update} sourceTypes={sourceTypes} regexError={errorOn('regex')} />}
+      {form.source === 'filter' && <FilterFields form={form} update={update} sourceTypes={sourceTypes} regexError={errorOn('regex')} problems={problems} />}
       {form.source === 'filter' && <ItemTest form={form} existing={existing} />}
-      {form.source === 'raw' && <RawFields form={form} update={update} locked={existing !== undefined} />}
+      {form.source === 'raw' && <RawFields form={form} update={update} locked={existing !== undefined} problems={problems} />}
       {/* By the buttons: a long form's top is off screen when a save is refused. */}
-      {error && <div data-form-error role="alert"><Notice tone="error">{fieldLabel ? `Not saved: see ${fieldLabel} above.` : error}</Notice></div>}
+      {error && <Notice data-form-error tone="error">{fieldLabel ? `Not saved: see ${fieldLabel} above.` : userWording(error)}</Notice>}
       <FormActions>
         {/* Always rendered, so a screen reader hears each new reason. */}
         {/* A taken name is said on the Name field. */}
         <span id={problemId} aria-live="polite" className="text-xs text-slate-600">{nameTaken ? null : problem}</span>
         <Button onClick={onCancel}>Cancel</Button>
-        <Button variant="primary" disabled={busy || problem !== null} aria-describedby={problem && !nameTaken ? problemId : undefined} onClick={() => submit(() => onSave(toUpsert(form, existing)))}>
+        <Button variant="primary" disabled={problem !== null} aria-busy={busy} aria-describedby={problem && !nameTaken ? problemId : undefined}
+          onClick={() => !busy && submit(() => onSave(toUpsert(form, existing)))}>
           {busy ? 'Saving...' : existing ? 'Save' : 'Create'}
         </Button>
       </FormActions>

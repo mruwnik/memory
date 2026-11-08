@@ -151,6 +151,24 @@ describe('useActionNotice', () => {
     await act(() => userEvent.setup().click(screen.getByRole('button', { name: 'Go' })))
     expect(screen.getByRole(role)).toHaveTextContent(text)
   })
+
+  it.each([
+    ['a success goes', () => Promise.resolve(), 'status', false],
+    ['an error stays', () => Promise.reject(new Error('Workspace is paused')), 'alert', true],
+  ])('floating, %s after a few seconds', async (_, action, role, stays) => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const Floating = () => {
+      const { run, notice } = useActionNotice({ floating: true })
+      return <>{notice}<button onClick={() => run(action, 'Sync queued')}>Go</button></>
+    }
+    render(<Floating />)
+    await act(() => userEvent.setup({ advanceTimers: vi.advanceTimersByTime }).click(screen.getByRole('button', { name: 'Go' })))
+
+    await act(() => vi.advanceTimersByTimeAsync(6000))
+
+    expect(screen.queryByRole(role) !== null).toBe(stays)
+    vi.useRealTimers()
+  })
 })
 
 describe('Tabs', () => {

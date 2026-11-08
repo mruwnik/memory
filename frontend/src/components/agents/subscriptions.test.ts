@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { emptyIngestConfig, type Subscription, type IngestConfig } from '@/hooks/useAgents'
 import {
-  deliveryLabel, describeFilter, describeRaw, FILTER_REQUIRED, formFor, formProblem, newForm, regexProblem, sourceKind, subscriptionState,
+  deliveryLabel, describeFilter, describeRaw, fieldProblems, FILTER_REQUIRED, formFor, formProblem, newForm, regexProblem, sourceKind, subscriptionState,
   toUpsert, wallClock, type SubscriptionForm,
 } from './subscriptions'
 
@@ -101,6 +101,15 @@ describe('formProblem', () => {
 
   it('refuses a name another subscription has', () => {
     expect(formProblem(form({ name: ' prs ', queue: 'q' }), ['prs'])).toBe('You already have a subscription named prs')
+  })
+
+  it('names every field with a problem, not just the first', () => {
+    const bad = form({ queue: 'prs', maxPerHour: 'x', config: { ...filterConfig, delivery: { mode: 'batch', window_sec: NaN, max_items: 0 } } })
+    expect(fieldProblems(bad)).toEqual({
+      maxPerHour: 'Deliveries per hour must be a whole number',
+      window: 'The batch window must be 60 to 86400 seconds',
+      maxItems: 'A batch must hold 1 to 200 items',
+    })
   })
 })
 

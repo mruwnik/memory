@@ -69,12 +69,16 @@ export default function SubscriptionsPage() {
     setSourceState(value)
     if (!handlerFilters(value).some(h => h.value === handler)) setHandler('all')
   }
+  const listRef = useRef<HTMLDivElement>(null)
+  // Removing a row, or Clear filters (which goes away with the filters), moves focus to the row now in its
+  // place, else to the list. Applied once the list has rendered.
+  const focusRow = useRef<number | null>(null)
   const clearFilters = () => {
     setSourceState('all')
     setHandler('all')
     if (agentParam !== null) setParams({})
+    focusRow.current = 0
   }
-  const listRef = useRef<HTMLDivElement>(null)
   const [editing, setEditingState] = useState<Subscription | 'new' | null>(params.get('new') ? 'new' : null)
   // ?new=1 opens the form once; a reload after it closed shouldn't reopen it.
   const setEditing = (value: Subscription | 'new' | null) => {
@@ -85,7 +89,7 @@ export default function SubscriptionsPage() {
   const [warnings, setWarnings] = useState<string[]>([])
   // Subscriptions and timers have separate id spaces: `subscription:3`, `timer:3`.
   const [busy, setBusy] = useState<string | null>(null)
-  const { run, notice } = useActionNotice()
+  const { run, notice } = useActionNotice({ floating: true })
 
   const load = useCallback(() => {
     setLoadError(null)
@@ -125,9 +129,6 @@ export default function SubscriptionsPage() {
     await run(async () => { await action(); await load() }, success)
     setBusy(null)
   }
-  // A removed row's focus moves to the row now in its place, else to the list.
-  // Applied once the reloaded list has rendered without the removed row.
-  const focusRow = useRef<number | null>(null)
   const remove = (key: string, action: () => Promise<unknown>, success: string, index: number) =>
     act(key, async () => { await action(); focusRow.current = index }, success)
   useLayoutEffect(() => {
@@ -137,7 +138,7 @@ export default function SubscriptionsPage() {
     const rows = listRef.current?.querySelectorAll<HTMLElement>(`li.${ROW_MARK}`)
     const next = rows?.[Math.min(index, rows.length - 1)]?.querySelector<HTMLElement>('button, a')
     ;(next ?? listRef.current)?.focus()
-  }, [subscriptions, timers])
+  }, [subscriptions, timers, source, handler, agentParam])
 
   const save = async (args: SubscriptionUpsert) => {
     const saved = await upsertSubscription(args)
@@ -197,12 +198,14 @@ export default function SubscriptionsPage() {
       {subscriptions?.length === 0 && timers.length === 0 && (
         <EmptyState message="Nothing subscribed yet. Your workers subscribe themselves, or start one here." />
       )}
-      <div ref={listRef} tabIndex={-1} className="space-y-4 focus:outline-none">
+      <div ref={listRef} tabIndex={-1} role="region" aria-label="Subscriptions" className="space-y-4 focus:outline-none">
       {shown.length > 0 && (
         <List separate>
           {shown.map((s, index) => {
             const state = subscriptionState(s)
             const last = s.activity.last
+            const saving = busy === `subscription:${s.id}`
+            const toggleLabel = saving ? 'Saving...' : s.enabled ? 'Pause' : s.state.tripped ? 'Resume from now' : 'Resume'
             return (
               <Row
                 key={s.id}
@@ -220,13 +223,11 @@ export default function SubscriptionsPage() {
                 meta={[origin(s), backlogFact(s), lastFact(s)]}
                 actions={<>
                   {s.state.tripped && s.kind === 'ingest' && (
-                    <Button size="sm" aria-busy={busy === `subscription:${s.id}`} onClick={() => toggle(s, true)}>Resume from trip</Button>
+                    <Button size="sm" aria-busy={saving} aria-label={`Resume from trip ${s.name}`} onClick={() => toggle(s, true)}>Resume from trip</Button>
                   )}
-                  <Button size="sm" aria-busy={busy === `subscription:${s.id}`} onClick={() => toggle(s)}>
-                    {busy === `subscription:${s.id}` ? 'Saving...' : s.enabled ? 'Pause' : s.state.tripped ? 'Resume from now' : 'Resume'}
-                  </Button>
-                  <Button size="sm" onClick={() => { setWarnings([]); setEditing(s) }}>Edit</Button>
-                  <ConfirmButton confirm={`Delete ${s.name} and its waiting deliveries?`} onConfirm={() => remove(`subscription:${s.id}`, () => deleteSubscription(s.id), `Deleted ${s.name}`, index)} />
+                  <Button size="sm" aria-busy={saving} aria-label={`${toggleLabel} ${s.name}`} onClick={() => toggle(s)}>{toggleLabel}</Button>
+                  <Button size="sm" aria-label={`Edit ${s.name}`} onClick={() => { setWarnings([]); setEditing(s) }}>Edit</Button>
+                  <ConfirmButton aria-label={`Delete ${s.name}`} confirm={`Delete ${s.name} and its waiting deliveries?`} onConfirm={() => remove(`subscription:${s.id}`, () => deleteSubscription(s.id), `Deleted ${s.name}`, index)} />
                 </>}
               >
                 <p className="text-slate-600 break-words">{sourceSummary(s, accountNames)}</p>
@@ -252,16 +253,19 @@ export default function SubscriptionsPage() {
       {shownTimers.length > 0 && (
         <Section title="Timers" description="One-off deliveries waiting to fire.">
           <List>
-            {shownTimers.map((t, index) => (
-              <Row
-                key={t.id}
-                className={ROW_MARK}
-                title={t.fire_at ? formatUserDateTime(new Date(t.fire_at)) : `Timer ${t.id}`}
-                badges={<Badge tone="primary">{HANDLER_LABELS[handlerKind(t.handler)]}</Badge>}
-                meta={[describeTimer(t, agentNames)]}
-                actions={<ConfirmButton confirm="Cancel this timer?" confirmLabel="Cancel timer" cancelLabel="Keep" onConfirm={() => remove(`timer:${t.id}`, () => cancelTimer(t.id), 'Cancelled the timer', shown.length + index)}>Cancel</ConfirmButton>}
-              />
-            ))}
+            {shownTimers.map((t, index) => {
+              const title = t.fire_at ? formatUserDateTime(new Date(t.fire_at)) : `Timer ${t.id}`
+              return (
+                <Row
+                  key={t.id}
+                  className={ROW_MARK}
+                  title={title}
+                  badges={<Badge tone="primary">{HANDLER_LABELS[handlerKind(t.handler)]}</Badge>}
+                  meta={[describeTimer(t, agentNames)]}
+                  actions={<ConfirmButton aria-label={`Cancel ${t.fire_at ? `the timer at ${title}` : title}`} confirm="Cancel this timer?" confirmLabel="Cancel timer" cancelLabel="Keep" onConfirm={() => remove(`timer:${t.id}`, () => cancelTimer(t.id), 'Cancelled the timer', shown.length + index)}>Cancel</ConfirmButton>}
+                />
+              )
+            })}
           </List>
         </Section>
       )}

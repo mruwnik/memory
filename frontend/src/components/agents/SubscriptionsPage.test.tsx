@@ -41,6 +41,15 @@ const queued = {
   activity: { pending: 3, oldest_pending_at: new Date().toISOString(), last: { status: 'done', at: new Date().toISOString(), run_id: 'r1', run_status: 'done' } },
 } as Subscription
 
+// How many live regions would announce `element`'s text.
+const liveRegions = (element: HTMLElement) => {
+  let count = 0
+  for (let e: HTMLElement | null = element; e; e = e.parentElement) {
+    if (e.matches('[role="alert"], [role="status"], [aria-live]')) count += 1
+  }
+  return count
+}
+
 beforeEach(() => {
   agents.listSubscriptions.mockResolvedValue({ subscriptions: [queued], timers: [] })
   agents.listDefinitions.mockResolvedValue([])
@@ -70,7 +79,7 @@ describe('SubscriptionsPage', () => {
   it('resumes a tripped subscription from when it tripped', async () => {
     const { user } = renderWithRouter(<SubscriptionsPage />)
 
-    await user.click(await screen.findByRole('button', { name: 'Resume from trip' }))
+    await user.click(await screen.findByRole('button', { name: 'Resume from trip pr reviews' }))
 
     await waitFor(() => expect(agents.upsertSubscription).toHaveBeenCalledWith({ subscription_id: 7, enabled: true, resume: true }))
   })
@@ -154,7 +163,7 @@ describe('SubscriptionsPage', () => {
 
     await user.click(screen.getByRole('button', { name: 'Create' }))
 
-    const refusal = await screen.findByText('unknown slack account 9')
+    const refusal = await screen.findByText('Unknown slack account 9')
     expect(refusal.closest('[data-form-error]')).not.toBeNull()
   })
 
@@ -189,7 +198,7 @@ describe('SubscriptionsPage', () => {
     agents.listSubscriptions.mockResolvedValue({ subscriptions: [raw], timers: [] })
     const { user } = renderWithRouter(<SubscriptionsPage />)
 
-    await user.click(await screen.findByRole('button', { name: 'Edit' }))
+    await user.click(await screen.findByRole('button', { name: 'Edit hooks' }))
 
     const saved = await screen.findByRole('option', { name: 'Slack account 99 (not one of yours now)' })
     expect((saved as HTMLOptionElement).selected).toBe(true)
@@ -198,7 +207,7 @@ describe('SubscriptionsPage', () => {
   it('tries the unsaved filter on a recent item and names the check it fails', async () => {
     agents.testSubscription.mockResolvedValue({ subscription_id: 7, item_id: 10, matches: false, failed: 'tags_any' })
     const { user } = renderWithRouter(<SubscriptionsPage />)
-    await user.click(await screen.findByRole('button', { name: 'Edit' }))
+    await user.click(await screen.findByRole('button', { name: 'Edit pr reviews' }))
     await user.clear(screen.getByLabelText('Any of these tags (comma-separated)'))
     await user.type(screen.getByLabelText('Any of these tags (comma-separated)'), 'ml')
 
@@ -278,24 +287,38 @@ describe('SubscriptionsPage', () => {
   it('shows a refused name on the Name field and drops it once edited', async () => {
     agents.upsertSubscription.mockRejectedValue(new Error("Error calling tool 'upsert': you already have a subscription named 'x'"))
     const { user } = renderWithRouter(<SubscriptionsPage />)
-    await user.click(await screen.findByRole('button', { name: 'Edit' }))
+    await user.click(await screen.findByRole('button', { name: 'Edit pr reviews' }))
 
     await user.click(screen.getByRole('button', { name: 'Save' }))
 
     expect(await screen.findByText('Not saved: see Name above.')).toBeInTheDocument()
-    expect(screen.getByLabelText('Name')).toHaveAccessibleDescription("you already have a subscription named 'x'")
+    expect(screen.getByLabelText('Name')).toHaveAccessibleDescription("You already have a subscription named 'x'")
     await user.type(screen.getByLabelText('Name'), '2')
     expect(screen.queryByText('Not saved: see Name above.')).not.toBeInTheDocument()
+  })
+
+  it.each<[string, string, string]>([
+    ['leaves quoted names alone', "you already have a subscription named 'pr-regex repos'", "You already have a subscription named 'pr-regex repos'"],
+    ['names both fields by label', 'invalid filter source: on_changes needs on_edit: only edits are filtered by change',
+      '“Only for these changes” needs “Deliver an item again when it changes”: only edits are filtered by change'],
+  ])("a refused save's wording %s", async (_, refusal, shown) => {
+    agents.upsertSubscription.mockRejectedValue(new Error(refusal))
+    const { user } = renderWithRouter(<SubscriptionsPage />)
+    await user.click(await screen.findByRole('button', { name: 'Edit pr reviews' }))
+
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    expect(await screen.findAllByText(shown)).not.toHaveLength(0)
   })
 
   it('keeps focus on a paused subscription and says it paused', async () => {
     agents.listSubscriptions.mockResolvedValue({ subscriptions: [{ ...queued, enabled: true, state: {} }], timers: [] })
     const { user } = renderWithRouter(<SubscriptionsPage />)
 
-    await user.click(await screen.findByRole('button', { name: 'Pause' }))
+    await user.click(await screen.findByRole('button', { name: 'Pause pr reviews' }))
 
     expect(await screen.findByRole('status')).toHaveTextContent('Paused pr reviews')
-    expect(screen.getByRole('button', { name: 'Pause' })).toHaveFocus()
+    expect(screen.getByRole('button', { name: 'Pause pr reviews' })).toHaveFocus()
   })
 
   it('offers only the handlers a source can go to, and clears filters that hide everything', async () => {
@@ -306,7 +329,8 @@ describe('SubscriptionsPage', () => {
 
     expect(screen.queryByRole('button', { name: 'Message' })).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Clear filters' }))
-    expect(screen.getByRole('button', { name: 'pr reviews' })).toBeInTheDocument()
+    // The button is gone, so focus goes to the first row it revealed rather than the page.
+    expect(screen.getByRole('button', { name: 'pr reviews' })).toHaveFocus()
   })
 
   it('moves focus to the next row once a deleted one is gone', async () => {
@@ -319,7 +343,7 @@ describe('SubscriptionsPage', () => {
     const { user } = renderWithRouter(<SubscriptionsPage />)
     const row = (await screen.findByRole('button', { name: 'pr reviews' })).closest('li')!
 
-    await user.click(within(row).getByRole('button', { name: 'Delete' }))
+    await user.click(within(row).getByRole('button', { name: 'Delete pr reviews' }))
     await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
 
     await waitFor(() => expect(screen.queryByRole('button', { name: 'pr reviews' })).not.toBeInTheDocument())
@@ -327,15 +351,104 @@ describe('SubscriptionsPage', () => {
   })
 
   it.each<[string, string, string]>([
-    ['a cron error on a filter', 'invalid cron expression', 'invalid cron expression'],
-    ['a regex error on a filter', 'regex does not compile: missing )', 'Not saved: see Regex above.'],
+    ['a cron error on a filter', 'invalid cron expression', 'Invalid cron expression'],
+    ['a regex error on a filter', 'invalid filter source: regex does not compile: missing )', 'Not saved: see Regex above.'],
   ])('shows %s where it can be read', async (_, refusal, alert) => {
     agents.upsertSubscription.mockRejectedValue(new Error(refusal))
     const { user } = renderWithRouter(<SubscriptionsPage />)
-    await user.click(await screen.findByRole('button', { name: 'Edit' }))
+    await user.click(await screen.findByRole('button', { name: 'Edit pr reviews' }))
 
     await user.click(screen.getByRole('button', { name: 'Save' }))
 
     await waitFor(() => expect(document.querySelector('[data-form-error]')).toHaveTextContent(alert))
+  })
+
+  it("says a refused regex on the Regex field in the form's words, in one live region", async () => {
+    agents.upsertSubscription.mockRejectedValue(new Error('invalid filter source: regex does not compile: missing ) at position 4'))
+    const { user } = renderWithRouter(<SubscriptionsPage />)
+    await user.click(await screen.findByRole('button', { name: 'Edit pr reviews' }))
+
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    const alert = await screen.findByText('Not saved: see Regex above.')
+    expect(liveRegions(alert)).toBe(1)
+    expect(screen.getByLabelText('Regex')).toHaveAccessibleDescription('“Regex” does not compile: missing ) at position 4')
+    expect(screen.getByLabelText('Regex')).toBeInvalid()
+  })
+
+  it("says a refused item test in the form's words, in one live region", async () => {
+    agents.testSubscription.mockRejectedValue(new Error(
+      'invalid filter source: set at least one of source_types, tags_any, regex or dms_to_me'))
+    const { user } = renderWithRouter(<SubscriptionsPage />)
+    await user.click(await screen.findByRole('button', { name: 'New subscription' }))
+
+    await user.click(screen.getByText('Test on an item'))
+    await user.type(screen.getByLabelText('Item'), '42')
+    await user.click(screen.getByRole('button', { name: 'Test' }))
+
+    const refusal = await screen.findByText(
+      'Set at least one of “Source types”, “Any of these tags”, “Regex” or “Direct messages to my bots”')
+    expect(liveRegions(refusal)).toBe(1)
+  })
+
+  it('keeps focus on Test while the test runs, and gives the verdict in a status region already there', async () => {
+    let finish = (_: unknown) => {}
+    agents.testSubscription.mockReturnValue(new Promise(resolve => { finish = resolve }))
+    const { user } = renderWithRouter(<SubscriptionsPage />)
+    await user.click(await screen.findByRole('button', { name: 'New subscription' }))
+    await user.click(screen.getByText('Test on an item'))
+    await user.type(screen.getByLabelText('Item'), '42')
+    const region = screen.getByRole('status', { name: 'Test result' })
+
+    await user.click(screen.getByRole('button', { name: 'Test' }))
+    await user.click(screen.getByRole('button', { name: 'Testing...' }))
+
+    expect(agents.testSubscription).toHaveBeenCalledTimes(1)
+    const test = screen.getByRole('button', { name: 'Testing...' })
+    expect(test).toHaveFocus()
+    expect(test).toHaveAttribute('aria-busy', 'true')
+    finish({ subscription_id: null, item_id: 42, matches: true, failed: null })
+    await waitFor(() => expect(region).toHaveTextContent('Would match.'))
+    expect(liveRegions(screen.getByText('Would match.'))).toBe(1)
+  })
+
+  it('marks each invalid field with its own problem at once', async () => {
+    const { user } = renderWithRouter(<SubscriptionsPage />)
+    await user.click(await screen.findByRole('button', { name: 'New subscription' }))
+    await user.type(screen.getByLabelText('Queue'), 'q')
+    await user.type(screen.getByLabelText('Any of these tags (comma-separated)'), 'ai')
+
+    await user.click(screen.getByLabelText('Batch items together'))
+    await user.clear(screen.getByLabelText('Window (seconds)'))
+    await user.clear(screen.getByLabelText('Max items'))
+
+    expect(screen.getByLabelText('Window (seconds)')).toBeInvalid()
+    expect(screen.getByLabelText('Window (seconds)')).toHaveAccessibleDescription('The batch window must be 60 to 86400 seconds')
+    expect(screen.getByLabelText('Max items')).toHaveAccessibleDescription('A batch must hold 1 to 200 items')
+    expect(screen.getByRole('button', { name: 'Create' })).toHaveAccessibleDescription('The batch window must be 60 to 86400 seconds')
+  })
+
+  it('marks a bad cron on the Cron field once the field is left', async () => {
+    const { user } = renderWithRouter(<SubscriptionsPage />)
+    await user.click(await screen.findByRole('button', { name: 'New subscription' }))
+    await user.click(screen.getAllByRole('button', { name: 'Schedule' }).at(-1)!)
+
+    await user.clear(screen.getByLabelText(/^Cron/))
+    await user.type(screen.getByLabelText(/^Cron/), '99 9 * * *')
+    expect(screen.getByLabelText(/^Cron/)).toBeValid()
+    await user.tab()
+
+    expect(screen.getByLabelText(/^Cron/)).toBeInvalid()
+    expect(screen.getByLabelText(/^Cron/)).toHaveAccessibleDescription(/Cron minute must be 0 to 59/)
+  })
+
+  it('shows the name length against its limit once it nears it', async () => {
+    const { user } = renderWithRouter(<SubscriptionsPage />)
+    await user.click(await screen.findByRole('button', { name: 'New subscription' }))
+
+    await user.click(screen.getByLabelText('Name'))
+    await user.paste('x'.repeat(95))
+
+    expect(screen.getByLabelText('Name')).toHaveAccessibleDescription(/95\/100 characters/)
   })
 })
