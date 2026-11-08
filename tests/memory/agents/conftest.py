@@ -3,7 +3,6 @@ from datetime import datetime, timedelta
 
 import pytest
 import pytest_asyncio
-from sse_starlette.sse import AppStatus
 
 from memory.agents.prebuilt import FACT_CHECK, PREBUILT_AGENTS
 from memory.agents.system import SYSTEM_AGENTS
@@ -98,8 +97,6 @@ def loopback_allowed(monkeypatch):
 async def fake_mcp(request, monkeypatch, loopback_allowed):
     """A live MCP server on loopback; parametrize indirectly with (auth, transport)."""
     auth, transport = getattr(request, "param", ("oauth", "http"))
-    # sse_starlette keeps one process-wide exit event, bound to the first test's loop.
-    monkeypatch.setattr(AppStatus, "should_exit_event", None)
     async with run_fake_mcp(auth, transport) as fake:
         yield fake
 

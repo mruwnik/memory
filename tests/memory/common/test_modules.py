@@ -91,6 +91,7 @@ def test_default_install_has_no_module_tools_or_scopes():
         "memory.api.app.record_running = lambda db, modules: None\n"
         "from memory.api.MCP.base import mcp\n"
         "from memory.api.users import list_available_scopes\n"
+        "from fastapi.routing import iter_route_contexts\n"
         "async def boot():\n"
         "    async with lifespan(app):\n"
         "        pass\n"
@@ -98,7 +99,7 @@ def test_default_install_has_no_module_tools_or_scopes():
         "print(json.dumps({\n"
         "    'tools': sorted(asyncio.run(mcp.get_tools())),\n"
         "    'scopes': [s.value for s in list_available_scopes(user=None)],\n"
-        "    'routes': [getattr(r, 'path', '') for r in app.routes],\n"
+        "    'routes': [r.path for r in iter_route_contexts(app.routes)],\n"
         "}))\n"
     )
     # Set rather than unset, so load_dotenv can't fill them from a local .env; every module
