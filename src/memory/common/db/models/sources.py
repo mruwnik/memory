@@ -472,9 +472,10 @@ class GithubAccount(LLMKeyChoice, Base):
 
 
 # GithubRepo.content_mode: "full" stores and indexes bodies, comments and diffs;
-# "metadata" stores only what change detection needs (state, SHAs, timestamps,
-# review and comment ids, labels), so subscriptions still see every change but
-# nothing is indexed.
+# "metadata" stores titles, state and activity (authors, branch names, labels,
+# assignees, milestone, project fields, SHAs, timestamps, review and comment ids)
+# but not issue or PR text, comments, review text or code, so subscriptions still
+# see every change but nothing is indexed.
 CONTENT_FULL, CONTENT_METADATA = "full", "metadata"
 CONTENT_MODES = (CONTENT_FULL, CONTENT_METADATA)
 
@@ -565,7 +566,7 @@ class GithubRepo(PolledSource, SyncStatusMixin, PushHealthMixin, Base):
         Index("github_repos_active_idx", "active", "last_sync_at"),
         Index("github_repos_owner_name_idx", "owner", "name"),
         CheckConstraint(
-            f"content_mode IN ('{CONTENT_FULL}', '{CONTENT_METADATA}')",
+            "content_mode IN ({})".format(", ".join(f"'{m}'" for m in CONTENT_MODES)),
             name="github_repos_content_mode_check",
         ),
     )

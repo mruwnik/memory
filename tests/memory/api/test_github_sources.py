@@ -1,12 +1,18 @@
 """Tests for GitHub Sources API endpoints."""
 
 from datetime import datetime, timedelta, timezone
+from typing import get_args
 from unittest.mock import Mock, patch
 
 import pytest
 
+from memory.api.github_sources import ContentMode
 from memory.common.db.models import HumanUser
-from memory.common.db.models.sources import GithubAccount, GithubRepo
+from memory.common.db.models.sources import CONTENT_MODES, GithubAccount, GithubRepo
+
+
+def test_the_api_takes_the_content_modes_the_db_allows():
+    assert get_args(ContentMode) == CONTENT_MODES
 
 
 @pytest.fixture

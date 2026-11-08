@@ -30,13 +30,14 @@ from memory.common.db.models.sources import CONTENT_FULL, GithubAccount, GithubR
 from memory.common.github import GithubClient, GithubCredentials, webhook_url
 from memory.common.push_health import GITHUB_PUSH_STATUSES, push_stale
 
-# "full" stores and indexes bodies, comments and diffs; "metadata" stores only
-# what change detection needs, so subscriptions fire but nothing is indexed.
+# The modes of GithubRepo.content_mode (memory.common.db.models.sources).
 ContentMode = Literal["full", "metadata"]
 CONTENT_MODE_DESCRIPTION = (
-    "full: store and index bodies, comments and diffs. metadata: store only state, "
-    "SHAs, timestamps and review/comment ids, so subscriptions still fire but nothing "
-    "is indexed. A change applies to what later syncs store."
+    "full: store and index bodies, comments and diffs. metadata: store titles, state "
+    "and activity (authors, branch names, labels, assignees, milestone, project fields, "
+    "SHAs, timestamps, review and comment ids) but not issue or PR text, comments, "
+    "review text or code; subscriptions still fire but nothing is indexed. A change "
+    "applies to what later syncs store."
 )
 
 logger = logging.getLogger(__name__)

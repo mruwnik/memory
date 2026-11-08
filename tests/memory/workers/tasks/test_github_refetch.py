@@ -9,10 +9,12 @@ import requests
 from sqlalchemy import inspect
 from sqlalchemy.exc import IntegrityError
 
+from memory.agents import subscriptions
+from memory.agents.subscriptions import IngestConfig
 from memory.common.celery_app import SEND_NOTIFICATION
 from memory.common.content_processing import create_content_hash
 from memory.common.db import connection as db_connection
-from memory.common.db.models import Event, GithubItem, User
+from memory.common.db.models import AgentDefinition, Delivery, Event, GithubItem, Subscription, User
 from memory.common.db.models.sources import CONTENT_FULL, CONTENT_METADATA, GithubAccount, GithubRepo
 from memory.common.github import (
     GithubClient,
@@ -26,7 +28,7 @@ from memory.common.github import (
 )
 from memory.common.github.refetch import queue_refetch
 from memory.workers.tasks import github
-from tests.conftest import item_events
+from tests.conftest import item_events, route_item
 
 OWN = "memory-bot"
 
@@ -839,3 +841,63 @@ def test_refetch_fetches_the_diff_only_for_repos_that_store_content(
     assert item.pr_data is not None
     assert fetch_diff.call_count == diff_fetches
     assert item.pr_data.diff == stored_diff
+
+
+@pytest.fixture
+def on_edit_subscription(db_session, account):
+    definition = AgentDefinition(
+        user_id=account.user_id, name="t", spec={"system_prompt": "x", "model": "anthropic/m", "reasoning": "high"}
+    )
+    db_session.add(definition)
+    db_session.commit()
+    subscription = Subscription(
+        user_id=account.user_id,
+        name="repo watcher",
+        definition_id=definition.id,
+        handler={"agent": definition.id},
+        kind="ingest",
+        config=IngestConfig.model_validate(
+            {"filter": {"repos": ["testorg/testrepo"]}, "on_edit": True}
+        ).model_dump(mode="json"),
+    )
+    db_session.add(subscription)
+    db_session.commit()
+    return subscription
+
+
+def deliveries(db, subscription) -> list[list[str] | None]:
+    db.expire_all()
+    return [d.changes for d in db.query(Delivery).filter_by(subscription_id=subscription.id).order_by(Delivery.created_at)]
+
+
+def recent(hours_ago: float) -> datetime:
+    """A time recent enough that a sync of it is live, not a backfill."""
+    return datetime.now(timezone.utc) - timedelta(hours=hours_ago)
+
+
+@pytest.mark.parametrize(
+    "changed, delivered",
+    [
+        (lambda: {"body": "New body"}, [["new"], ["edited"]]),
+        (
+            lambda: {"comments": [comment(1, "alice", recent(1.5).isoformat())], "comment_count": 1},
+            [["new"], ["comments"]],
+        ),
+        (lambda: with_review_comments(review_comment(9, "carol")), [["new"], ["comments"]]),
+        (lambda: {}, [["new"]]),
+    ],
+)
+def test_metadata_repo_changes_reach_on_edit_subscriptions_once(
+    db_session, metadata_repo, on_edit_subscription, no_celery_dispatch, changed, delivered
+):
+    github.sync_item(metadata_repo.id, pr_data(github_updated_at=recent(2)), {OWN})
+    subscriptions.route_events()
+    new = pr_data(github_updated_at=recent(1), **changed())
+    github.sync_item(metadata_repo.id, new, {OWN})
+    subscriptions.route_events()
+    github.sync_item(metadata_repo.id, new, {OWN})
+    subscriptions.route_events()
+    # A reprocess of the item as it stands, which only a changed version lets through.
+    route_item(db_session, stored(db_session).id)
+
+    assert deliveries(db_session, on_edit_subscription) == delivered

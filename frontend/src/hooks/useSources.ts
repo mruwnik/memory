@@ -200,7 +200,7 @@ export interface GithubRepo extends SyncStatus, PushHealth {
   content_mode: GithubContentMode
 }
 
-/** "full" stores and indexes issue and PR text, comments and diffs; "metadata" keeps only what change detection needs. */
+/** "full" stores and indexes issue and PR text, comments and diffs; "metadata" keeps titles, state and activity but not that text or code. */
 export type GithubContentMode = 'full' | 'metadata'
 
 export type GithubWebhookStatus = 'installed' | 'org_hook' | 'missing_permission' | 'rejected' | 'error'

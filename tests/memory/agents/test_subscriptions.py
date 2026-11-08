@@ -46,6 +46,7 @@ from memory.common.db.models import (
     SlackWorkspace,
 )
 from memory.common.db.models.slack import SlackApp, SlackUserCredentials
+from memory.common.db.models.sources import CONTENT_FULL, CONTENT_METADATA, GithubRepo
 from memory.common.content_processing import process_content_item
 from tests.conftest import route_item, unique_sha256
 
@@ -786,6 +787,34 @@ def pr(**overrides):
 def test_content_version_counts_what_a_github_sync_reports(changed):
     assert content_version(pr()) == content_version(pr())
     assert content_version(pr()) != content_version(pr(**changed))
+
+
+METADATA_CHANGES = [
+    {"body_hash": "edited"},
+    {"comment_count": 2},
+    {"pr_data": GithubPRData(review_comments=[{"id": 9}, {"id": 10}])},
+]
+
+
+def stored_pr(repo, **changed):
+    fields = {"body_hash": "body", "comment_count": 1, "pr_data": GithubPRData(review_comments=[{"id": 9}])}
+    return pr(repo=repo, **{**fields, **changed})
+
+
+def metadata_pr(**changed):
+    return stored_pr(GithubRepo(content_mode=CONTENT_METADATA), **changed)
+
+
+@pytest.mark.parametrize("changed", METADATA_CHANGES)
+def test_content_version_of_a_metadata_repo_item_counts_its_body_hash_and_comments(changed):
+    assert content_version(metadata_pr()) == content_version(metadata_pr())
+    assert content_version(metadata_pr()) != content_version(metadata_pr(**changed))
+
+
+@pytest.mark.parametrize("changed", METADATA_CHANGES)
+@pytest.mark.parametrize("repo", [None, GithubRepo(content_mode=CONTENT_FULL)])
+def test_content_version_of_a_full_repo_item_reads_comments_off_its_content(changed, repo):
+    assert content_version(pr(repo=repo)) == content_version(stored_pr(repo, **changed))
 
 
 def test_content_version_ignores_label_and_assignee_order():

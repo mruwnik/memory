@@ -239,13 +239,13 @@ export const GitHubPanel = () => {
 
 const CONTENT_MODE_HINT: Record<GithubContentMode, string> = {
   full: 'Issue and PR text, comments and diffs are stored and indexed for search.',
-  metadata: 'Get notified about changes without storing or indexing text or code.',
+  metadata: 'Stores titles, state and activity, but not issue or PR text, comments, review text or code. Nothing is indexed; subscriptions still fire.',
 }
 
 const CONTENT_SWITCH: Record<GithubContentMode, { label: string; confirm: (repo: string) => string }> = {
   metadata: {
     label: 'Stop storing content',
-    confirm: repo => `Stop storing text and code for ${repo}? Later syncs keep only what change detection needs, and subscriptions still fire. Content stored earlier stays as it is.`,
+    confirm: repo => `Stop storing issue and PR text, comments, review text and code for ${repo}? Later syncs keep titles, state and activity, and subscriptions still fire. Content stored earlier stays as it is.`,
   },
   full: {
     label: 'Store content',

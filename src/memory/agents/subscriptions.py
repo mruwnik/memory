@@ -398,21 +398,35 @@ def item_text(item: SourceItem) -> str:
     return "\n".join(p for p in (item_title(item), item_body(item)) if p)
 
 
+def stores_github_content(item: GithubItem) -> bool:
+    return item.repo is None or item.repo.stores_content
+
+
+def github_metadata_part(item: GithubItem) -> dict[str, Any]:
+    """What stands in for the body and comments of an item whose repo doesn't store them."""
+    review_comments = item.pr_data.review_comments if item.pr_data else None
+    return {
+        "body_hash": item.body_hash,
+        "comment_count": item.comment_count,
+        "review_comments": sorted(c["id"] for c in review_comments or []),
+    }
+
+
 def github_version_part(item: GithubItem) -> str:
     reviews = item.pr_data.reviews if item.pr_data else None
-    return json.dumps(
-        {
-            "head_sha": item.head_sha,
-            "state": item.state,
-            "merged_at": item.merged_at.isoformat() if item.merged_at else None,
-            "checks": item.checks,
-            "reviews": sorted([r.get("id"), r.get("state")] for r in reviews or []),
-            "labels": sorted(item.labels or []),
-            "assignees": sorted(item.assignees or []),
-            "draft": item.draft,
-        },
-        sort_keys=True,
-    )
+    part = {
+        "head_sha": item.head_sha,
+        "state": item.state,
+        "merged_at": item.merged_at.isoformat() if item.merged_at else None,
+        "checks": item.checks,
+        "reviews": sorted([r.get("id"), r.get("state")] for r in reviews or []),
+        "labels": sorted(item.labels or []),
+        "assignees": sorted(item.assignees or []),
+        "draft": item.draft,
+    }
+    if not stores_github_content(item):
+        part |= github_metadata_part(item)
+    return json.dumps(part, sort_keys=True)
 
 
 # The version a removal claims: no item version hashes to it.
@@ -427,7 +441,11 @@ def content_version(item: SourceItem) -> bytes:
     as it was. The migration that added claim versions backfills this in SQL.
     GitHub items also count what their sync reports as changes beyond the
     content (comments are in it): head commit, state, checks, reviews, labels,
-    assignees and draft.
+    assignees and draft. Items of a repo that doesn't store content, whose
+    content is empty or frozen at what was stored before, also count the body
+    hash, comment count and review comment ids, so body edits and new comments
+    still change the version. Other items leave these out, so their versions
+    are the ones the SQL backfill computes.
     """
     parts = (item_title(item) or "", item.content or "", item_body(item))
     if isinstance(item, GithubItem):

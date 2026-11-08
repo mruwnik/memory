@@ -181,7 +181,7 @@ describe('GitHubPanel add repo form', () => {
 
   it.each([
     ['full', 'Issue and PR text, comments and diffs are stored and indexed for search.'],
-    ['metadata', 'Get notified about changes without storing or indexing text or code.'],
+    ['metadata', 'Stores titles, state and activity, but not issue or PR text, comments, review text or code. Nothing is indexed; subscriptions still fire.'],
   ])('sends content_mode %s for new repos and explains it', async (mode, hint) => {
     const mock = mockFetchRoutes({
       '/github/accounts/4/available-repos': {
@@ -223,7 +223,7 @@ describe('GitHubPanel repo content mode', () => {
   })
 
   it.each([
-    ['full', 'Stop storing content', 'metadata', /Content stored earlier stays as it is/],
+    ['full', 'Stop storing content', 'metadata', /Later syncs keep titles, state and activity, .* Content stored earlier stays as it is/],
     ['metadata', 'Store content', 'full', /What is stored already stays as it is/],
   ])('switches a %s repo with %s after confirming', async (mode, label, next, warning) => {
     const mock = mockFetchRoutes(routes([account({ repos: [{ ...repo, content_mode: mode }] })]))
