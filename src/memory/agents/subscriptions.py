@@ -293,7 +293,7 @@ class IngestConfig(BaseModel):
 
     def reacts_to(self, changes: list[str] | None) -> bool:
         """Whether reported `changes` are news about an item this subscription never saw."""
-        news = NEWS & set(changes or [])
+        news = {c for c in changes or [] if c in NEWS}
         wanted = set(self.on_changes)
         return bool(news) and (not wanted or bool(wanted & news))
 
