@@ -2,10 +2,12 @@
 
 import asyncio
 import logging
+from datetime import datetime
 from typing import Any
 
 from fastmcp import FastMCP
 from sqlalchemy import desc, or_
+from sqlalchemy.orm import joinedload
 from fastmcp.server.dependencies import get_access_token
 
 from memory.agents.subscription_input import new_tag, preamble, untrusted
@@ -28,9 +30,10 @@ from memory.common.scopes import (
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import DiscordBot, DiscordMessage, DiscordServer, DiscordUser
 from memory.common.people import find_person, primary_contact
+from memory.common.reactions import reaction_counts
 from memory.common.discord_data import (
+    CHANNEL_FIELDS,
     caller_can_see_discord_user,
-    fetch_channel_history,
     fetch_channels,
     find_visible_channel,
 )
@@ -285,7 +288,10 @@ async def channel_history(
         after: ISO datetime - only get messages after this time
 
     Returns:
-        Dict with messages list and metadata
+        Dict with untrusted (names the tag its author and text blocks carry),
+        channel (id, name, server_id, server_name), messages oldest first, count
+        and limit; each message has id, message_id, author, author_id, sent_at,
+        edited_at, text, is_pinned, reactions and reply_to (a message_id)
     """
     if channel_id is None and channel_name is None:
         raise ValueError("Must specify either channel_id or channel_name")
@@ -321,12 +327,54 @@ def thread_message(tag: str, message: DiscordMessage) -> dict[str, Any]:
         "id": message.id,
         "message_id": str(message.message_id),
         "author": (
-            untrusted(tag, message.id, "author", message.author.username)
+            untrusted(tag, message.id, "author", message.author.name)
             if message.author
             else str(message.author_id)
         ),
         "sent_at": message.sent_at.isoformat(),
         "text": untrusted(tag, message.id, "text", message.content or ""),
+    }
+
+
+def history_message(tag: str, message: DiscordMessage) -> dict[str, Any]:
+    return thread_message(tag, message) | {
+        "author_id": str(message.author_id),
+        "edited_at": message.edited_at and message.edited_at.isoformat(),
+        "is_pinned": message.is_pinned,
+        "reactions": reaction_counts(message.reactions),
+        "reply_to": message.reply_to_message_id and str(message.reply_to_message_id),
+    }
+
+
+def fetch_channel_history(
+    session: DBSession,
+    caller: UserProxy,
+    channel_id: str | None,
+    channel_name: str | None,
+    before_dt: datetime | None,
+    after_dt: datetime | None,
+    limit: int,
+) -> dict[str, Any]:
+    channel = find_visible_channel(session, caller, channel_id, channel_name)
+    query = (
+        session.query(DiscordMessage)
+        .options(joinedload(DiscordMessage.author))
+        .filter(DiscordMessage.channel_id == channel.id)
+    )
+    if before_dt:
+        query = query.filter(DiscordMessage.sent_at < before_dt)
+    if after_dt:
+        query = query.filter(DiscordMessage.sent_at > after_dt)
+    messages = query.order_by(desc(DiscordMessage.sent_at)).limit(limit).all()
+    tag = new_tag()
+    return {
+        "untrusted": preamble(tag),
+        "channel": {
+            field: CHANNEL_FIELDS[field](channel) for field in ("id", "name", "server_id", "server_name")
+        },
+        "messages": [history_message(tag, m) for m in reversed(messages)],
+        "count": len(messages),
+        "limit": limit,
     }
 
 

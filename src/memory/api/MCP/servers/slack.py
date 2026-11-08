@@ -274,6 +274,17 @@ def thread_message(tag: str, message: SlackMessage) -> dict[str, Any]:
     }
 
 
+def history_message(tag: str, message: dict[str, Any]) -> dict[str, Any]:
+    ts, user = message.get("ts"), message.get("user")
+    return {
+        "ts": ts,
+        "user": user and bare(user),
+        "text": untrusted(tag, ts, "text", message.get("text") or ""),
+        "thread_ts": message.get("thread_ts"),
+        "reply_count": message.get("reply_count"),
+    }
+
+
 def fetch_thread(session: DBSession, item_id: int, limit: int) -> dict[str, Any]:
     access = build_mcp_user_access_filter(session, get_mcp_current_user(session))
 
@@ -508,7 +519,9 @@ async def get_channel_history(
         after: ISO datetime or message ts - only get messages after this
 
     Returns:
-        Dict with messages list
+        Dict with untrusted (names the tag its text blocks carry), channel_id,
+        workspace_id, messages newest first, count and has_more; each message has
+        ts, user (a Slack user id), text, thread_ts and reply_count
     """
     if not channel:
         raise ValueError("Channel is required")
@@ -540,25 +553,13 @@ async def get_channel_history(
         slack_token, "conversations.history", base_url=base_url, **params
     )
     messages = data.get("messages", [])
-
-    # Format messages (user names not available without additional API calls)
-    formatted_messages = []
-    for msg in messages:
-        formatted_messages.append(
-            {
-                "ts": msg.get("ts"),
-                "user": msg.get("user"),  # Slack user ID
-                "text": msg.get("text", ""),
-                "thread_ts": msg.get("thread_ts"),
-                "reply_count": msg.get("reply_count"),
-            }
-        )
-
+    tag = new_tag()
     return {
+        "untrusted": preamble(tag),
         "channel_id": channel_id,
         "workspace_id": ws_id,
-        "messages": formatted_messages,
-        "count": len(formatted_messages),
+        "messages": [history_message(tag, m) for m in messages],
+        "count": len(messages),
         "has_more": data.get("has_more", False),
     }
 

@@ -5,22 +5,19 @@ Used by both REST API and MCP endpoints to avoid duplication.
 """
 
 from collections.abc import Callable
-from datetime import datetime
 from typing import Any
 
-from sqlalchemy import and_, desc, or_
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Query, joinedload
 
 from memory.common.access_control import UserLike, has_admin_scope
 from memory.common.db.connection import DBSession
-from memory.common.reactions import reaction_counts
 from memory.common.db.models import (
     DiscordBot,
     DiscordBotServer,
     DiscordChannel,
     DiscordMessage,
     DiscordServer,
-    DiscordUser,
     User,
 )
 from memory.common.db.models.discord import DM_CHANNEL_TYPES
@@ -130,94 +127,6 @@ def get_bot_for_user(session: DBSession, bot_id: int, user: User) -> DiscordBot 
     if not bot or not bot.is_authorized(user):
         return None
     return bot
-
-
-def fetch_channel_history(
-    session: DBSession,
-    caller: UserLike,
-    channel_id: str | None,
-    channel_name: str | None,
-    before_dt: datetime | None,
-    after_dt: datetime | None,
-    limit: int,
-) -> dict[str, Any]:
-    """
-    Fetch message history from a Discord channel.
-
-    Args:
-        session: Database session
-        caller: Whose bots decide which channels are readable
-        channel_id: Discord channel ID (snowflake, can be string or int)
-        channel_name: Discord channel name
-        before_dt: Only get messages before this time
-        after_dt: Only get messages after this time
-        limit: Maximum number of messages to return
-
-    Returns:
-        Dict with channel info, messages list, and metadata
-    """
-    channel = find_visible_channel(session, caller, channel_id, channel_name)
-    channel_info = {
-        "id": str(channel.id),
-        "name": channel.name,
-        "server_id": CHANNEL_FIELDS["server_id"](channel),
-        "server_name": CHANNEL_FIELDS["server_name"](channel),
-    }
-
-    # Build query
-    query = session.query(DiscordMessage).filter(
-        DiscordMessage.channel_id == channel.id
-    )
-
-    if before_dt:
-        query = query.filter(DiscordMessage.sent_at < before_dt)
-    if after_dt:
-        query = query.filter(DiscordMessage.sent_at > after_dt)
-
-    # Order by sent_at descending (newest first), then limit
-    query = query.order_by(desc(DiscordMessage.sent_at)).limit(limit)
-
-    messages = query.all()
-
-    # Prefetch all authors in a single query to avoid N+1
-    author_ids = {msg.author_id for msg in messages}
-    authors = {
-        u.id: u
-        for u in session.query(DiscordUser).filter(DiscordUser.id.in_(author_ids)).all()
-    }
-
-    # Format messages
-    formatted = []
-    for msg in messages:
-        # Get author info from prefetched cache
-        author = authors.get(msg.author_id)
-        author_name = author.name if author else f"user_{msg.author_id}"
-
-        formatted.append(
-            {
-                "id": str(msg.message_id),
-                "author": author_name,
-                "author_id": str(msg.author_id),
-                "content": msg.content,
-                "sent_at": msg.sent_at.isoformat() if msg.sent_at else None,
-                "edited_at": msg.edited_at.isoformat() if msg.edited_at else None,
-                "is_pinned": msg.is_pinned,
-                "reactions": reaction_counts(msg.reactions),
-                "reply_to": str(msg.reply_to_message_id)
-                if msg.reply_to_message_id
-                else None,
-            }
-        )
-
-    # Reverse to get chronological order
-    formatted.reverse()
-
-    return {
-        "channel": channel_info,
-        "messages": formatted,
-        "count": len(formatted),
-        "limit": limit,
-    }
 
 
 CHANNEL_FIELDS: dict[str, Callable[[DiscordChannel], Any]] = {
