@@ -108,10 +108,8 @@ def bump_config_version_on_ac_change(session, flush_context, instances):
             continue
 
         state = inspect(obj)
-        if not any(
-            ac_field_value_changed(state, field)
-            for field in ACCESS_CONTROL_FIELDS
-        ):
+        fields = ACCESS_CONTROL_FIELDS + getattr(type(obj), "access_chain_fields", ())
+        if not any(ac_field_value_changed(state, field) for field in fields):
             continue
 
         obj.config_version = (obj.config_version or 0) + 1

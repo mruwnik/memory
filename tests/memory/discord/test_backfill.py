@@ -16,6 +16,7 @@ from memory.common.db.models import (
 from memory.discord import backfill, rest
 from memory.discord.backfill import snowflake_at
 from memory.discord.rest import BotAccess
+from memory.workers.tasks.discord import add_discord_message
 
 BASE = "https://chat.example.com/discord/api/v10"
 ACCESS = BotAccess(bot_id=42, token="tok", api_base_url=BASE, push_only=True)
@@ -260,19 +261,6 @@ async def test_a_partly_read_window_deletes_nothing(db_session, fake_api):
 
 
 @pytest.mark.asyncio
-async def test_backfilled_messages_land_in_the_channels_server(db_session, fake_api):
-    make_discord_rows(db_session)
-    db_session.commit()
-    celery_app = MagicMock()
-
-    with fake_api(FakeDiscord([5])):
-        await backfill.backfill_channel_messages(ACCESS, 10, celery_app, max_messages=100)
-
-    kwargs = celery_app.send_task.call_args.kwargs["kwargs"]
-    assert (kwargs["server_id"], kwargs["bot_id"], kwargs["channel_id"]) == (1, 42, 10)
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "status, code",
     [(403, 50001), (404, 10003), (403, None)],
@@ -382,7 +370,9 @@ async def test_discover_channel_threads_ensures_rows_and_dispatches(db_session, 
     fake = FakeDiscord(
         routes={
             "/guilds/1/threads/active": (200, {"threads": [THREAD | {"id": "201", "name": "a"}, THREAD | {"id": "300", "parent_id": "99"}]}),
-            "/channels/10/threads/archived/public": (200, {"threads": [THREAD | {"id": "202", "name": "b"}], "has_more": False}),
+            "/channels/10/threads/archived/public": (200, {"threads": [
+                THREAD | {"id": "202", "name": "b"}, THREAD | {"id": "203", "guild_id": "2"},
+            ], "has_more": False}),
             "/channels/10/threads/archived/private": (403, {"code": 50001}),
         }
     )
@@ -393,12 +383,41 @@ async def test_discover_channel_threads_ensures_rows_and_dispatches(db_session, 
 
     assert set(thread_ids) == {201, 202}
     db_session.expire_all()
+    assert db_session.get(DiscordChannel, 203) is None
     assert (db_session.get(DiscordChannel, 201).name, db_session.get(DiscordChannel, 202).channel_type) == ("a", "thread")
     assert {db_session.get(DiscordChannel, t).parent_id for t in (201, 202)} == {10}
     assert {(c.args[0], c.kwargs["args"][0]) for c in celery_app.send_task.call_args_list} == {
         (BACKFILL_DISCORD_CHANNEL, 201),
         (BACKFILL_DISCORD_CHANNEL, 202),
     }
+
+
+def test_a_crawl_never_files_its_channel_back_under_the_server_it_started_in(db_session):
+    make_discord_rows(db_session)
+    db_session.add(DiscordServer(id=2, name="moved to", collect_messages=True, bot_id=42))
+    db_session.flush()
+    db_session.get(DiscordChannel, 10).server_id = 2
+    db_session.commit()
+
+    backfill.queue_messages(ACCESS, [api_message(5)], 1, MagicMock(), is_edit=False)
+
+    db_session.expire_all()
+    assert db_session.get(DiscordChannel, 10).server_id == 2
+
+
+def test_a_message_crawled_before_its_channel_moved_is_filed_under_the_server_it_moved_to(db_session, qdrant):
+    make_discord_rows(db_session)
+    db_session.add(DiscordServer(id=2, name="moved to", collect_messages=True, bot_id=42))
+    db_session.commit()
+    celery_app = MagicMock()
+    backfill.queue_messages(ACCESS, [api_message(5) | {"content": "a message long enough to be embedded"}], 1, celery_app, is_edit=False)
+    db_session.get(DiscordChannel, 10).server_id = 2
+    db_session.commit()
+
+    add_discord_message(**celery_app.send_task.call_args.kwargs["kwargs"])
+
+    db_session.expire_all()
+    assert db_session.query(DiscordMessage).filter_by(message_id=5).one().server_id == 2
 
 
 @pytest.mark.asyncio
@@ -516,10 +535,10 @@ async def test_discovery_records_membership_of_servers_others_own(db_session, fa
     ids=["server error", "rate limited", "timeout"],
 )
 @pytest.mark.asyncio
-async def test_confirming_a_dm_is_one_short_try(fake_api, first_replies):
+async def test_reading_a_channel_for_a_push_is_one_short_try(fake_api, first_replies):
     fake = FakeDiscord(first_replies=first_replies)
 
     with fake_api(fake):
-        confirmed = await rest.confirmed_dm(ACCESS, 10)
+        confirmed = await rest.token_channel(ACCESS, 10)
 
     assert (confirmed, len(fake.requests), fake.requests[0].extensions["timeout"]["read"]) == (None, 1, 5.0)

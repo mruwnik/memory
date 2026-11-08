@@ -5,7 +5,10 @@ Webhook Events and the REST catch-up deliver raw JSON, not discord.py objects,
 so this mirrors ``memory.discord.ingest`` without importing discord.py.
 """
 
-from typing import Any
+import logging
+import re
+from datetime import datetime
+from typing import Any, Callable
 
 from sqlalchemy import select, update
 
@@ -19,10 +22,13 @@ from memory.common.db.models import (
     DiscordServer,
     DiscordUser,
     Event,
+    SourceItem,
 )
 from memory.common.db.models.discord import DM_CHANNEL_TYPES
 from memory.common.db.models.events import NOT_COLLECTED, RAW
 from memory.common.db.upsert import get_or_insert, insert_missing
+
+logger = logging.getLogger(__name__)
 
 # Gateway message types that are ordinary messages: DEFAULT and REPLY.
 ORDINARY_MESSAGE_TYPES = {0, 19}
@@ -39,8 +45,74 @@ CHANNEL_TYPE_NAMES = {
 }
 
 
+# Discord ids are unsigned 64-bit, but none fills the top bit, so all fit a BIGINT.
+SNOWFLAKE = re.compile(r"[0-9]{1,19}")
+MAX_SNOWFLAKE = 2**63 - 1
+ID_FIELDS = ("id", "channel_id", "guild_id", "parent_id", "message_id", "user_id")
+NESTED_IDS = {"author": "id", "message_reference": "message_id", "thread": "id"}
+TIMESTAMP_FIELDS = ("timestamp", "edited_timestamp")
+
+
+def is_snowflake(value: Any) -> bool:
+    return (
+        isinstance(value, (str, int))
+        and not isinstance(value, bool)
+        and SNOWFLAKE.fullmatch(str(value)) is not None
+        and int(value) <= MAX_SNOWFLAKE
+    )
+
+
 def snowflake(value: Any) -> int | None:
-    return int(value) if value not in (None, "") else None
+    return int(value) if is_snowflake(value) else None
+
+
+def absent_or(value: Any, check: Callable[[Any], bool]) -> bool:
+    return value in (None, "") or check(value)
+
+
+def is_timestamp(value: Any) -> bool:
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (AttributeError, ValueError):
+        return False
+    return True
+
+
+def is_text(value: Any) -> bool:
+    return isinstance(value, (str, type(None)))
+
+
+def texts(obj: dict, *fields: str) -> bool:
+    return all(is_text(obj.get(field)) for field in fields)
+
+
+def well_formed(data: Any) -> bool:
+    """Whether a payload has the shape Discord gives its events: every id a
+    snowflake, nested objects objects, names and types of their kind. A bot's
+    key signs whatever its owner sends, so a push may be any JSON."""
+    if not isinstance(data, dict):
+        return False
+    nested = [data.get(field) for field in NESTED_IDS]
+    if not all(value is None or isinstance(value, dict) for value in nested):
+        return False
+    ids = data.get("ids")
+    attachments = data.get("attachments")
+    emoji = data.get("emoji")
+    kind = data.get("type")
+    return (
+        all(absent_or(data.get(field), is_snowflake) for field in ID_FIELDS)
+        and all(absent_or((data.get(f) or {}).get(key), is_snowflake) for f, key in NESTED_IDS.items())
+        and texts(data.get("author") or {}, "username", "global_name")
+        and (ids is None or (isinstance(ids, list) and all(is_snowflake(i) for i in ids)))
+        and (attachments is None or (
+            isinstance(attachments, list)
+            and all(isinstance(a, dict) and texts(a, "filename", "content_type", "url") for a in attachments)
+        ))
+        and (emoji is None or (isinstance(emoji, dict) and texts(emoji, "name") and absent_or(emoji.get("id"), is_snowflake)))
+        and (kind is None or (isinstance(kind, int) and not isinstance(kind, bool)))
+        and texts(data, "content", "name")
+        and all(absent_or(data.get(field), is_timestamp) for field in TIMESTAMP_FIELDS)
+    )
 
 
 def is_image(attachment: dict) -> bool:
@@ -76,7 +148,6 @@ def message_task_kwargs(data: dict, bot_id: int, is_edit: bool = False) -> dict:
         "bot_id": bot_id,
         "message_id": int(data["id"]),
         "channel_id": int(data["channel_id"]),
-        "server_id": snowflake(data.get("guild_id")),
         "author_id": int(data["author"]["id"]),
         "content": data.get("content") or "",
         "sent_at": data["timestamp"],
@@ -119,19 +190,51 @@ def verify_server(
 ) -> DiscordServer:
     """Record that a bot's own token lists this server. The bot claims a server
     no verified bot owns; one first claimed by a push, or left by its owning
-    bot, starts over with default access settings. Only the owning bot renames it."""
+    bot, starts over with default access settings, and what owners not in a
+    server first claimed by a push pushed into it is disowned. Only the
+    owning bot renames it."""
     server, created = get_or_insert(
         session, DiscordServer, server_id,
         id=server_id, name=name or f"Server {server_id}", bot_id=bot_id, collect_messages=collect, verified=True,
     )
-    if not created and (not server.verified or server.bot_id is None):
+    pushed = not created and not server.verified
+    if not created and (pushed or server.bot_id is None):
         server.bot_id, server.verified = bot_id, True
         server.project_id, server.sensitivity = None, "basic"
         server.name = name or server.name
     elif name and server.bot_id == bot_id:
         server.name = name
     insert_missing(session, DiscordBotServer, bot_id=bot_id, server_id=server_id)
+    if pushed:
+        session.flush()
+        disown_outsiders(session, server_id)
     return server
+
+
+def disown_outsiders(session: DBSession, server_id: int, channel_id: int | None = None) -> None:
+    """Take the messages in this server (or in one channel of it) that bots
+    whose owner may not push into it delivered from that owner: it is no
+    longer their creator, nor can it change them. They are what pushes filed
+    there before a token showed whose server, or channel, it is, but also
+    what a bot that has since left delivered, so they are kept."""
+    channels = select(DiscordChannel.id).where(DiscordChannel.server_id == server_id)
+    if channel_id is not None:
+        channels = channels.where(DiscordChannel.id == channel_id)
+    in_server = DiscordMessage.channel_id.in_(channels)
+    delivered_by = session.scalars(
+        select(DiscordMessage.bot_id).where(in_server, DiscordMessage.bot_id.is_not(None)).distinct()
+    ).all()
+    outsiders = [
+        bot_id for bot_id in delivered_by
+        if not may_push_into(session, server_id, owner_bot_ids(session, session.get_one(DiscordBot, bot_id)))
+    ]
+    if not outsiders:
+        return
+    ids = session.scalars(select(DiscordMessage.id).where(in_server, DiscordMessage.bot_id.in_(outsiders))).all()
+    # creator_id is on source_item and bot_id on discord_message: one UPDATE per table.
+    session.execute(update(SourceItem).where(SourceItem.id.in_(ids)).values(creator_id=None))
+    session.execute(update(DiscordMessage).where(DiscordMessage.id.in_(ids)).values(bot_id=None))
+    logger.info("Discord server %s channel %s: disowned %s messages of bots %s", server_id, channel_id, len(ids), outsiders)
 
 
 def hand_off_server(session: DBSession, server: DiscordServer, leaving: DiscordBot) -> None:
@@ -170,9 +273,10 @@ def ensure_channel(
     only set on creation, so later choices made in the UI stand; only the
     bot owning the channel (or its server) renames it.
 
-    A DM row can sit on an id that is really a server's channel. Seen in a
-    server by ``trusted`` data (the gateway or a token-read listing), the row
-    becomes that server's channel, with the settings a new one has."""
+    A push can store an id that is really another server's channel as a DM,
+    or under the wrong server. Seen in a server by ``trusted`` data (the
+    gateway or a token-read listing), the row becomes that server's channel,
+    with the settings a new one has."""
     channel, created = get_or_insert(
         session, DiscordChannel, channel_id,
         id=channel_id,
@@ -184,7 +288,7 @@ def ensure_channel(
     )
     if created:
         return channel
-    if trusted and server_id is not None and channel.server_id is None:
+    if trusted and server_id is not None and channel.server_id != server_id:
         move_to_server(session, channel, server_id, bot_id, channel_type or "text")
     if name and owns_channel(channel, {bot_id}):
         channel.name = name
@@ -198,10 +302,21 @@ def reset_access(channel: DiscordChannel) -> None:
 def move_to_server(
     session: DBSession, channel: DiscordChannel, server_id: int, bot_id: int | None, channel_type: str
 ) -> None:
-    channel.server_id, channel.bot_id, channel.channel_type = server_id, bot_id, channel_type
+    """File a channel under the server trusted data shows it in, as a new one.
+    Its stored parent came from the server it is leaving, and what owners who
+    may not push into its server pushed into it is disowned. Server messages
+    have no creator, so a DM owner's creator rights over its messages end."""
+    if channel.server_id is None:
+        in_channel = select(DiscordMessage.id).where(DiscordMessage.channel_id == channel.id)
+        session.execute(update(SourceItem).where(SourceItem.id.in_(in_channel)).values(creator_id=None))
+    channel.server_id, channel.bot_id, channel.channel_type, channel.parent_id = server_id, bot_id, channel_type, None
     reset_access(channel)
+    session.execute(
+        update(DiscordMessage).where(DiscordMessage.channel_id == channel.id).values(server_id=server_id)
+    )
     session.flush()
-    session.expire(channel, ["server"])
+    session.expire(channel, ["server", "parent"])
+    disown_outsiders(session, server_id, channel.id)
 
 
 def claim_dm(
@@ -211,7 +326,8 @@ def claim_dm(
     whether it is this bot's. A row held as a server's channel becomes this
     bot's DM, with the settings a new one has; one another bot of the same
     owner holds passes to this one. A DM another owner holds stays theirs:
-    owners who registered the same application share its DMs' ids."""
+    owners who registered the same application share its DMs' ids. Messages
+    other owners' bots delivered stay, but are no longer theirs to change."""
     channel, created = get_or_insert(
         session, DiscordChannel, channel_id,
         id=channel_id, server_id=None, bot_id=bot.id, name=name or f"Channel {channel_id}", channel_type=channel_type,
@@ -219,8 +335,10 @@ def claim_dm(
     if not created and channel.server_id is not None:
         channel.server_id, channel.bot_id, channel.channel_type, channel.parent_id = None, bot.id, channel_type, None
         reset_access(channel)
+        session.execute(update(DiscordMessage).where(DiscordMessage.channel_id == channel_id).values(server_id=None))
         session.flush()
         session.expire(channel, ["server", "parent", "bot"])
+        disown_others(session, channel_id, bot)
     elif not created and channel.bot_id != bot.id:
         holder = channel.bot.created_by_user_id if channel.bot else None
         if holder is None or holder != bot.created_by_user_id:
@@ -228,9 +346,19 @@ def claim_dm(
         channel.bot_id = bot.id
         session.flush()
         session.expire(channel, ["bot"])
+        disown_others(session, channel_id, bot)
     if name:
         channel.name = name
     return channel, True
+
+
+def disown_others(session: DBSession, channel_id: int, bot: DiscordBot) -> None:
+    """Take the messages of a DM this bot now holds from other owners' bots."""
+    session.execute(
+        update(DiscordMessage)
+        .where(DiscordMessage.channel_id == channel_id, DiscordMessage.bot_id.not_in(owner_bot_ids(session, bot)))
+        .values(bot_id=None)
+    )
 
 
 def may_push_into(session: DBSession, server_id: int, bot_ids: set[int]) -> bool:
@@ -289,11 +417,16 @@ def owns_channel(channel: DiscordChannel, bot_ids: set[int]) -> bool:
     return channel.bot_id in bot_ids
 
 
-def may_change(message: DiscordMessage, bot_ids: set[int]) -> bool:
-    """Whether events from these bots may edit, delete or react to a stored message."""
-    return message.bot_id in bot_ids or (
-        message.channel is not None and owns_channel(message.channel, bot_ids)
-    )
+def may_change(session: DBSession, message: DiscordMessage, bot_ids: set[int]) -> bool:
+    """Whether events from these bots may edit, delete or react to a stored
+    message: one in a channel they own, or one they delivered, if in a server
+    only while they may push into it."""
+    channel = message.channel
+    if channel is not None and owns_channel(channel, bot_ids):
+        return True
+    if message.bot_id not in bot_ids:
+        return False
+    return channel is None or channel.server_id is None or may_push_into(session, channel.server_id, bot_ids)
 
 
 def owner_bot_ids(session: DBSession, bot: DiscordBot) -> set[int]:
@@ -316,15 +449,24 @@ def ensure_user(session: DBSession, author: dict) -> DiscordUser:
 
 
 def ensure_message_entities(
-    session: DBSession, data: dict, bot_id: int, push_only: bool, *, trusted: bool = False
+    session: DBSession,
+    data: dict,
+    bot_id: int,
+    push_only: bool,
+    *,
+    trusted: bool = False,
+    listed: dict | None = None,
 ) -> DiscordChannel:
-    """Server, channel and author rows for a message. Servers first seen
-    through a push-only bot collect everything: that bot receives only what
-    it was sent."""
+    """Server, channel and author rows for a message; the channel as the
+    bot's token ``listed`` it, when it did. Servers first seen through a
+    push-only bot collect everything: that bot receives only what it was sent."""
     server_id = snowflake(data.get("guild_id"))
     if server_id is not None:
         ensure_server(session, server_id, bot_id, collect=push_only)
-    channel = ensure_channel(session, int(data["channel_id"]), server_id, bot_id, trusted=trusted)
+    if listed is not None:
+        channel = ensure_listed_channel(session, listed, server_id, bot_id, trusted=True)
+    else:
+        channel = ensure_channel(session, int(data["channel_id"]), server_id, bot_id, trusted=trusted)
     ensure_user(session, data["author"])
     return channel
 
@@ -332,16 +474,24 @@ def ensure_message_entities(
 def ensure_listed_channel(
     session: DBSession, data: dict, server_id: int | None, bot_id: int, *, trusted: bool = False
 ) -> DiscordChannel:
-    """A channel or thread object from the API, with its name and type."""
+    """A channel or thread object, from the API (``trusted``) or a push. Only
+    trusted data retypes a stored channel; a push may re-parent only a thread
+    its bot owns. Trusted data placing a channel in a server shows the bot is
+    in it, so a push its token confirmed makes its owner a member."""
     channel_type = CHANNEL_TYPE_NAMES.get(data.get("type", 0), "text")
+    if trusted and server_id is not None:
+        insert_missing(session, DiscordBotServer, bot_id=bot_id, server_id=server_id)
     existed = session.get(DiscordChannel, int(data["id"])) is not None
     channel = ensure_channel(
         session, int(data["id"]), server_id, bot_id, name=data.get("name"), channel_type=channel_type, trusted=trusted
     )
-    # A thread first stored from a message event was taken for a text channel.
-    channel.channel_type = channel_type
+    if existed and not trusted and not owns_channel(channel, {bot_id}):
+        return channel
+    if trusted:
+        # A thread first stored from a message event was taken for a text channel.
+        channel.channel_type = channel_type
     parent_id = snowflake(data.get("parent_id"))
-    if channel_type == "thread":
+    if channel.channel_type == "thread":
         # A thread first stored from a message event has no parent yet.
         set_thread_parent(session, channel, parent_id)
     elif not existed and parent_id is not None:

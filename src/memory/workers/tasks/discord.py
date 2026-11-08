@@ -32,6 +32,7 @@ from memory.common.db.connection import make_session
 from memory.common.db.models import DiscordMessage, Person
 from memory.common import discord_events
 from memory.common.db.models.discord import DM_CHANNEL_TYPES, DiscordBot, DiscordChannel, DiscordUser
+from memory.common.db.models.events import CAUSING_EVENT, reject_raw_event
 from memory.common.people import DBSession, json_string
 from memory.common.reactions import ReactionAction, Reactions, apply_reaction
 from memory.common.content_processing import (
@@ -41,7 +42,7 @@ from memory.common.content_processing import (
     process_content_item,
 )
 from memory.common.jobs import tracked_task
-from memory.discord.rest import bot_access, confirmed_dm
+from memory.discord.rest import bot_access, token_channel
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +139,6 @@ def add_discord_message(
     author_id: int,
     content: str,
     sent_at: str,
-    server_id: int | None = None,
     edited_at: str | None = None,
     reply_to_message_id: int | None = None,
     thread_id: int | None = None,
@@ -157,7 +157,9 @@ def add_discord_message(
 
     ``link_by_username`` is off for pushed messages, whose author names are
     only as trustworthy as the pushing bot's owner. ``backfill`` marks history
-    read below what was stored, which subscriptions don't react to.
+    read below what was stored, which subscriptions don't react to. A new
+    message is filed under its channel's server as stored now: the channel
+    may have moved since the message was queued.
     """
     logger.debug(f"Adding Discord message {message_id}")
 
@@ -222,7 +224,7 @@ def add_discord_message(
             bot_id=bot_id,
             message_id=message_id,
             channel_id=channel_id,
-            server_id=server_id,
+            server_id=session.get_one(DiscordChannel, channel_id).server_id,
             author_id=author_id,
             sent_at=sent_at_dt,
             edited_at=edited_at_dt,
@@ -261,7 +263,7 @@ def find_message(session, message_id: int, bot_ids: set[int] | None, lock: bool 
     if lock:
         query = query.with_for_update(of=DiscordMessage.__table__)
     message = query.first()
-    if message is None or bot_ids is None or discord_events.may_change(message, bot_ids):
+    if message is None or bot_ids is None or discord_events.may_change(session, message, bot_ids):
         return message
     logger.info("Discord message %s not changed: it belongs to another owner", message_id)
     return None
@@ -352,7 +354,7 @@ def delete_discord_messages(message_ids: list[int], bot_ids: list[int] | None = 
         messages = [
             m
             for m in session.query(DiscordMessage).filter(DiscordMessage.message_id.in_(message_ids)).all()
-            if bot_ids is None or discord_events.may_change(m, set(bot_ids))
+            if bot_ids is None or discord_events.may_change(session, m, set(bot_ids))
         ]
         for message in messages:
             clear_item_chunks(message, session)
@@ -369,13 +371,30 @@ REACTION_EVENTS: dict[str, ReactionAction] = {
 }
 
 
-def read_dm(bot_id: int, channel_id: int) -> dict | None:
-    """The DM, as the bot's own token reads it."""
+# Discord's channel types for a DM and a group DM.
+DM_TYPES = frozenset({1, 3})
+
+
+def read_channel(bot_id: int, channel_id: int) -> dict | None:
+    """The channel, as the bot's own token reads it."""
     with make_session() as session:
         access = bot_access(session.get(DiscordBot, bot_id))
     if access is None:
         return None
-    return asyncio.run(confirmed_dm(access, channel_id))
+    return asyncio.run(token_channel(access, channel_id))
+
+
+def read_dm(bot_id: int, channel_id: int) -> dict | None:
+    channel = read_channel(bot_id, channel_id)
+    return channel if channel is not None and channel.get("type") in DM_TYPES else None
+
+
+def read_server_channel(bot_id: int, channel_id: int, guild_id: int) -> dict | None:
+    """The channel, if the bot's token reads it as one in this server."""
+    channel = read_channel(bot_id, channel_id)
+    if channel is None or discord_events.snowflake(channel.get("guild_id")) != guild_id:
+        return None
+    return channel
 
 
 def dm_name(dm: dict) -> str | None:
@@ -389,9 +408,10 @@ def store_message(bot: DiscordBot, bot_ids: set[int], data: dict, is_edit: bool,
     """Store a pushed or gateway message. A push is held to
     ``discord_events.push_refusal``; a DM it names is stored only once the
     bot's token reads the channel as its DM, and a new one only from someone
-    who shares a server with the bot. The gateway starts DMs itself, so an
-    edit it relays never does. The message is filed under its stored
-    channel's server, never the one a payload names."""
+    who shares a server with the bot; a new server channel only once the
+    token reads it in the pushed server, and as the token lists it. The
+    gateway starts DMs itself, so an edit it relays never does. The message
+    is filed under its stored channel's server, never the one a payload names."""
     channel_id = int(data["channel_id"])
     guild_id = discord_events.snowflake(data.get("guild_id"))
     with make_session() as session:
@@ -399,11 +419,18 @@ def store_message(bot: DiscordBot, bot_ids: set[int], data: dict, is_edit: bool,
         new = existing is None
         # The token can show a stored server channel to be a DM, but never takes one from its holder.
         claimable = new or existing.server_id is not None
+        # Checked before the token is asked as well as after: a refused push mustn't cost a REST call.
+        refusal = pushed and guild_id is not None and discord_events.push_refusal(session, channel_id, guild_id, bot_ids)
+    if refusal:
+        return {"status": "skipped", "reason": refusal}
     if guild_id is None and new and not pushed:
         return {"status": "skipped", "reason": "not_collected"}
     dm = read_dm(bot.id, channel_id) if pushed and guild_id is None and claimable else None
     if new and guild_id is None and dm is None:
         return {"status": "skipped", "reason": "unconfirmed_dm"}
+    listed = read_server_channel(bot.id, channel_id, guild_id) if pushed and guild_id is not None and new else None
+    if pushed and guild_id is not None and new and listed is None:
+        return {"status": "skipped", "reason": "unconfirmed_channel"}
     with make_session() as session:
         if dm is not None:
             recipients = [int(r["id"]) for r in dm.get("recipients") or []]
@@ -415,17 +442,15 @@ def store_message(bot: DiscordBot, bot_ids: set[int], data: dict, is_edit: bool,
         if pushed and (refusal := discord_events.push_refusal(session, channel_id, guild_id, bot_ids)):
             return {"status": "skipped", "reason": refusal}
         channel = discord_events.ensure_message_entities(
-            session, data, bot.id, push_only=not bot.runs_gateway, trusted=not pushed
+            session, data, bot.id, push_only=not bot.runs_gateway, trusted=not pushed, listed=listed
         )
         if channel.is_direct and channel.bot_id not in bot_ids:
             return {"status": "skipped", "reason": "not_owner"}
-        collect, server_id = channel.should_collect, channel.server_id
+        collect = channel.should_collect
         session.commit()
     if not collect:
         return {"status": "skipped", "reason": "not_collected"}
-    return add_discord_message(
-        **discord_events.message_task_kwargs(data, bot.id, is_edit) | {"server_id": server_id}, link_by_username=False
-    )
+    return add_discord_message(**discord_events.message_task_kwargs(data, bot.id, is_edit), link_by_username=False)
 
 
 def update_message(bot: DiscordBot, bot_ids: set[int], data: dict, pushed: bool) -> dict[str, Any]:
@@ -445,6 +470,12 @@ def update_message(bot: DiscordBot, bot_ids: set[int], data: dict, pushed: bool)
     return edit_discord_message(message_id, data["content"], data.get("edited_timestamp"), sorted(bot_ids))
 
 
+# What a push is refused for; other skips (not collected, too short to embed) store or drop it as Memory would anyway.
+PUSH_REFUSALS = frozenset(
+    {"guild_mismatch", "no_server", "not_owner", "not_member", "unconfirmed_dm", "unconfirmed_channel", "malformed"}
+)
+
+
 @app.task(name=HANDLE_DISCORD_EVENT)
 @tracked_task
 def handle_discord_event(bot_id: int, event_type: str, data: dict, pushed: bool = True) -> dict[str, Any]:
@@ -454,7 +485,19 @@ def handle_discord_event(bot_id: int, event_type: str, data: dict, pushed: bool 
     Every branch is idempotent: Discord retries deliveries and doesn't order
     them. The bot's key only proves its owner sent a pushed event, so edits,
     deletes and reactions only touch messages that owner's bots may change.
+    A push it refuses (``PUSH_REFUSALS``) marks its delivery rejected.
     """
+    result = apply_discord_event(bot_id, event_type, data, pushed)
+    if pushed and result.get("status") == "skipped" and result.get("reason") in PUSH_REFUSALS:
+        with make_session() as session:
+            reject_raw_event(session, CAUSING_EVENT.get())
+            session.commit()
+    return result
+
+
+def apply_discord_event(bot_id: int, event_type: str, data: dict, pushed: bool) -> dict[str, Any]:
+    if not discord_events.well_formed(data):
+        return {"status": "skipped", "reason": "malformed"}
     with make_session() as session:
         bot = session.get(DiscordBot, bot_id)
         if bot is None:
@@ -484,17 +527,37 @@ def handle_discord_event(bot_id: int, event_type: str, data: dict, pushed: bool 
     if event_type in ("THREAD_CREATE", "THREAD_UPDATE"):
         if discord_events.CHANNEL_TYPE_NAMES.get(data.get("type", 11)) in DM_CHANNEL_TYPES:
             return {"status": "skipped", "reason": "no_server"}
-        with make_session() as session:
-            refusal = pushed and discord_events.push_refusal(
-                session, int(data["id"]), discord_events.snowflake(data.get("guild_id")), bot_ids,
-                parent_id=discord_events.snowflake(data.get("parent_id")),
-            )
-            if refusal:
-                return {"status": "skipped", "reason": refusal}
-            thread = discord_events.ensure_thread(
-                session, data, bot.id, push_only=not bot.runs_gateway, trusted=not pushed
-            )
-            session.commit()
-            return {"status": "updated", "channel_id": thread.id}
+        return store_thread(bot, bot_ids, data, pushed)
 
     return {"status": "ignored"}
+
+
+def store_thread(bot: DiscordBot, bot_ids: set[int], data: dict, pushed: bool) -> dict[str, Any]:
+    """A THREAD_CREATE or THREAD_UPDATE. A push is held to
+    ``discord_events.push_refusal``, and creates a thread only once the bot's
+    token reads it in the pushed server, and then as the token lists it."""
+    thread_id, guild_id = int(data["id"]), discord_events.snowflake(data.get("guild_id"))
+    listed = None
+    if pushed and guild_id is not None:
+        with make_session() as session:
+            new = session.get(DiscordChannel, thread_id) is None
+            refusal = discord_events.push_refusal(
+                session, thread_id, guild_id, bot_ids, parent_id=discord_events.snowflake(data.get("parent_id")),
+            )
+        if refusal:
+            return {"status": "skipped", "reason": refusal}
+        listed = read_server_channel(bot.id, thread_id, guild_id) if new else None
+        if new and listed is None:
+            return {"status": "skipped", "reason": "unconfirmed_channel"}
+    data = listed or data
+    with make_session() as session:
+        refusal = pushed and discord_events.push_refusal(
+            session, thread_id, guild_id, bot_ids, parent_id=discord_events.snowflake(data.get("parent_id")),
+        )
+        if refusal:
+            return {"status": "skipped", "reason": refusal}
+        thread = discord_events.ensure_thread(
+            session, data, bot.id, push_only=not bot.runs_gateway, trusted=not pushed or listed is not None
+        )
+        session.commit()
+        return {"status": "updated", "channel_id": thread.id}

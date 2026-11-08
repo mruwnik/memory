@@ -84,7 +84,6 @@ def sample_message_data(discord_bot, discord_user, discord_channel):
         "author_id": discord_user.id,
         "content": "This is a test Discord message with enough content to be processed.",
         "sent_at": "2024-01-01T12:00:00Z",
-        "server_id": None,
     }
 
 
@@ -433,12 +432,9 @@ def test_add_discord_message_datetime_parsing(
     assert message.sent_at.hour == expected_hour
 
 
-def test_add_discord_message_with_server(
+def test_add_discord_message_takes_its_channels_server(
     db_session, sample_message_data, discord_server, qdrant
 ):
-    """Test adding a Discord message with a server reference."""
-    sample_message_data["server_id"] = discord_server.id
-
     discord.add_discord_message(**sample_message_data)
 
     message = (

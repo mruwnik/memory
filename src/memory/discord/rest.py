@@ -172,19 +172,15 @@ class DiscordRest:
             before = batch[-1].get("thread_metadata", {}).get("archive_timestamp")
 
 
-# Discord's channel types for a DM and a group DM.
-DM_TYPES = frozenset({1, 3})
-
-
-async def confirmed_dm(access: BotAccess, channel_id: int) -> dict | None:
-    """The channel, if this bot's token can read it as a DM or group DM. One
-    short try: anyone can push DMs, and a flood of them mustn't hold workers."""
+async def token_channel(access: BotAccess, channel_id: int) -> dict | None:
+    """The channel as this bot's token reads it, if it can. One short try:
+    anyone can push events naming any channel, and a flood of them mustn't
+    hold workers."""
     try:
         async with DiscordRest(access, retries=0, timeout=5.0) as rest:
-            channel = await rest.channel(channel_id)
+            return await rest.channel(channel_id)
     except DiscordAPIError:
         return None
-    return channel if channel.get("type") in DM_TYPES else None
 
 
 def retry_after(response: httpx.Response) -> float:

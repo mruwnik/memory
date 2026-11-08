@@ -45,7 +45,6 @@ def test_build_message_task_kwargs_plain_message():
         "bot_id": 42,
         "message_id": 111,
         "channel_id": 333,
-        "server_id": 222,
         "author_id": 444,
         "content": "hello world",
         "sent_at": "2024-01-01T00:00:00+00:00",
@@ -59,11 +58,6 @@ def test_build_message_task_kwargs_plain_message():
         "attachments": None,
         "is_edit": False,
     }
-
-
-def test_build_message_task_kwargs_no_guild_means_null_server():
-    kwargs = build_message_task_kwargs(fake_message(guild=None), bot_id=42)
-    assert kwargs["server_id"] is None
 
 
 def test_build_message_task_kwargs_splits_image_and_other_attachments():
@@ -150,3 +144,19 @@ def test_a_thread_records_its_parent_channel(db_session):
     channel_model = ensure_message_entities(db_session, message, bot_id=42)
 
     assert (channel_model.channel_type, channel_model.parent_id) == ("thread", 10)
+
+
+def test_the_gateway_takes_a_channel_back_from_the_server_a_push_filed_it_under(db_session):
+    db_session.add(DiscordBot(id=42, application_id=42, name="Test Bot"))
+    db_session.flush()
+    db_session.add_all([
+        DiscordServer(id=222, name="Real", bot_id=42),
+        DiscordServer(id=5, name="Squatter's", sensitivity="public"),
+    ])
+    db_session.flush()
+    db_session.add(DiscordChannel(id=333, server_id=5, name="general", channel_type="text", sensitivity="public"))
+    db_session.commit()
+
+    channel_model = ensure_message_entities(db_session, fake_db_message(), bot_id=42)
+
+    assert (channel_model.server_id, channel_model.bot_id, channel_model.sensitivity) == (222, 42, "basic")

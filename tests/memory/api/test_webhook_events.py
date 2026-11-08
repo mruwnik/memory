@@ -13,7 +13,9 @@ from memory.common.db.models import (
     Delivery,
     BlogPost,
     DiscordBot,
+    DiscordBotServer,
     DiscordChannel,
+    DiscordServer,
     Event,
     GithubAccount,
     GithubRepo,
@@ -358,6 +360,39 @@ def test_a_discord_dm_payload_shows_only_to_the_owner_of_the_bot_it_belongs_to(
     [event] = member_client.get(f"/webhook-events/discord/{bots['mine'].id}", params={"payload": True}).json()
 
     assert event["payload_withheld"] is not shown
+
+
+@pytest.mark.parametrize(
+    "channel, known",
+    [
+        (DiscordChannel(id=901, name="dm", channel_type="dm", bot_id=1), True),
+        (DiscordChannel(id=901, name="dm", channel_type="dm", bot_id=2), False),
+        (DiscordChannel(id=901, name="c", channel_type="text", server_id=11), True),
+        (DiscordChannel(id=901, name="c", channel_type="text", server_id=12), True),
+        (DiscordChannel(id=901, name="c", channel_type="text", server_id=22), False),
+    ],
+    ids=["own dm", "their dm", "own server", "server it is listed in", "their server"],
+)
+def test_a_discord_delivery_knows_only_channels_its_bots_owner_may_push_into(db_session, user, channel, known):
+    """What a pushed delivery's channel is, or whether it exists, is the bot owner's to learn only there."""
+    db_session.add_all([
+        DiscordBot(id=1, application_id=1, name="Mine", created_by_user_id=user.id),
+        DiscordBot(id=2, application_id=2, name="Theirs", created_by_user_id=other_user(db_session).id),
+    ])
+    db_session.flush()
+    db_session.add_all([
+        DiscordServer(id=11, name="mine", bot_id=1, verified=True),
+        DiscordServer(id=12, name="listed", bot_id=2, verified=True),
+        DiscordServer(id=22, name="theirs", bot_id=2, verified=True),
+    ])
+    db_session.flush()
+    db_session.add_all([DiscordBotServer(bot_id=1, server_id=12), channel])
+    raw(db_session, user.id, "d1", source="discord", account_id=1, container="901", outcome="stored")
+    db_session.commit()
+
+    [event] = db_session.query(Event).filter_by(kind="raw").all()
+
+    assert (raw_events.container_of(db_session, event) is not None) is known
 
 
 def test_a_container_of_non_ascii_digits_has_no_name(client, db_session, user):

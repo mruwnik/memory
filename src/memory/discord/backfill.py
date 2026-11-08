@@ -69,17 +69,15 @@ def queue_messages(
 ) -> None:
     with make_session() as session:
         for message in messages:
+            # server_id was read when the crawl began; the channel may have moved since.
             discord_events.ensure_message_entities(
-                session, message | {"guild_id": server_id}, access.bot_id, access.push_only, trusted=True
+                session, message | {"guild_id": server_id}, access.bot_id, access.push_only
             )
         session.commit()
     for message in messages:
         celery_app.send_task(
             ADD_DISCORD_MESSAGE,
-            kwargs=discord_events.message_task_kwargs(
-                message | {"guild_id": server_id}, access.bot_id, is_edit
-            )
-            | {"backfill": backfill},
+            kwargs=discord_events.message_task_kwargs(message, access.bot_id, is_edit) | {"backfill": backfill},
         )
 
 
@@ -228,6 +226,11 @@ async def discover_channel_threads(access: BotAccess, channel_id: int, celery_ap
             raise
         logger.info("Cannot access Discord channel %s for thread discovery (%s)", channel_id, e)
 
+    # The parent's stored server was read before the listing; a thread in another one means it has moved since.
+    threads = {
+        thread_id: thread for thread_id, thread in threads.items()
+        if discord_events.snowflake(thread.get("guild_id")) == server_id
+    }
     if not threads:
         return []
     with make_session() as session:

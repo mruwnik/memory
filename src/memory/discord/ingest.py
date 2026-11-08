@@ -138,8 +138,8 @@ def ensure_channel(
     )
     if created:
         return channel_model
-    if guild_id is not None and channel_model.server_id is None:
-        # The gateway's word beats a push that stored this id as a DM.
+    if guild_id is not None and channel_model.server_id != guild_id:
+        # The gateway's word beats a push that stored this id as a DM or under another server.
         move_to_server(session, channel_model, guild_id, bot_id, get_channel_type(channel))
     name = channel_name(channel)
     if name and channel_model.name != name:
@@ -187,7 +187,6 @@ def build_message_task_kwargs(message: Message, bot_id: int, is_edit: bool = Fal
     Shared by the live collector (``on_message``) and the history backfill so the
     two paths can never drift in how a Message maps to a stored row.
     """
-    guild_id = message.guild.id if message.guild else None
     images = [
         a.url
         for a in message.attachments
@@ -208,7 +207,6 @@ def build_message_task_kwargs(message: Message, bot_id: int, is_edit: bool = Fal
         "bot_id": bot_id,
         "message_id": message.id,
         "channel_id": message.channel.id,
-        "server_id": guild_id,
         "author_id": message.author.id,
         "content": message.content,
         "sent_at": message.created_at.isoformat(),

@@ -167,6 +167,7 @@ def test_a_delivery_is_recorded_once_per_source_account(db_session):
     "outcome, payload, kept, with_payload",
     [
         ("no_item_type", {"text": "a\x00b\ud800", "list": ["\x00"]}, {"text": "ab", "list": [""]}, 1),
+        ("no_item_type", {"n": [float("nan"), float("inf"), 1.5]}, {"n": [None, None, 1.5]}, 1),
         ("no_item_type", {"text": "x" * (MAX_RAW_PAYLOAD_BYTES + 1)}, {"truncated": True, "bytes": MAX_RAW_PAYLOAD_BYTES + 13}, 1),
         ("no_item_type", {"deep": reduce(lambda inner, _: [inner], range(5000), [])}, {"truncated": True}, 1),
         ("stored", {"text": "in the item"}, None, 0),
@@ -191,6 +192,16 @@ def test_a_delivery_not_collected_never_names_its_channel(db_session, outcome, c
     db_session.commit()
 
     assert [e.container for e in raw_events(db_session)] == [container]
+
+
+def test_a_delivery_naming_itself_in_text_postgres_cannot_hold_is_recorded_without_it(db_session):
+    record_raw_event(
+        db_session, source="slack", event_type="mess\ud800age", account_id=1, owner_id=None,
+        delivery_id="d-\ud800", outcome="stored", container="C\ud8001",
+    )
+    db_session.commit()
+
+    assert [(e.type, e.delivery_id, e.container) for e in raw_events(db_session)] == [("message", "d-", "C1")]
 
 
 @pytest.mark.transactional_db

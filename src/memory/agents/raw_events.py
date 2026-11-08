@@ -18,6 +18,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
+from memory.common import discord_events
 from memory.common.access_control import (
     UserProxy,
     credential_scopes,
@@ -134,6 +135,20 @@ def milestone_number(payload: Any) -> int | None:
     return None
 
 
+def pushes_reach(db: DBSession, event: Event, channel: DiscordChannel) -> bool:
+    """Whether the Discord bot an event came in on is of an owner whose pushes
+    may reach this channel: a DM of theirs, or one in a server they may push
+    into. Anyone can push a delivery naming any channel id, so of any other
+    neither its settings nor whether it exists is theirs to learn."""
+    bot = db.get(DiscordBot, event.account_id)
+    if bot is None:
+        return False
+    bot_ids = discord_events.owner_bot_ids(db, bot)
+    if channel.server_id is None:
+        return channel.bot_id in bot_ids
+    return discord_events.may_push_into(db, channel.server_id, bot_ids)
+
+
 def container_of(db: DBSession, event: Event) -> Container | None:
     """Where the event's items are filed, and whether Memory collects it; None when
     the event names nothing Memory has stored, whose access is unknown."""
@@ -167,6 +182,8 @@ def container_of(db: DBSession, event: Event) -> Container | None:
         chain = [channel, channel.workspace] if channel else []
     elif event.source == "discord" and (channel_id := snowflake(event.container)):
         channel = db.get(DiscordChannel, channel_id)
+        if channel is not None and not pushes_reach(db, event, channel):
+            return None
         chain = [channel, channel.server] if channel else []
     else:
         return None

@@ -3,7 +3,7 @@
 import pytest
 
 from memory.common.celery_app import UPDATE_SOURCE_ACCESS_CONTROL
-from memory.common.db.models import EmailAccount, Project
+from memory.common.db.models import DiscordChannel, DiscordServer, EmailAccount, Project
 
 
 def make_account(db_session, test_user, **overrides):
@@ -143,3 +143,19 @@ def test_ac_change_advances_updated_at(db_session, test_user, no_celery_dispatch
     db_session.commit()
 
     assert account.updated_at > updated_before
+
+
+@pytest.mark.transactional_db
+def test_moving_a_discord_channel_to_another_server_dispatches(db_session, no_celery_dispatch):
+    """A channel's content inherits from its server, so a new server re-resolves it."""
+    db_session.add_all([DiscordServer(id=1, name="one"), DiscordServer(id=2, name="two")])
+    db_session.flush()
+    channel = DiscordChannel(id=3, server_id=1, name="general", channel_type="text")
+    db_session.add(channel)
+    db_session.commit()
+    no_celery_dispatch.reset_mock()
+
+    channel.server_id = 2
+    db_session.commit()
+
+    assert no_celery_dispatch.call_args.kwargs["args"] == ["discord_channel", 3, channel.config_version]

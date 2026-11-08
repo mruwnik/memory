@@ -34,14 +34,22 @@ from memory.common.data_source_access import (
 )
 from memory.common.db.connection import get_session
 from memory.common.db.models import User
-from memory.common.db.models.events import NO_ITEM_TYPE, NOT_COLLECTED, STORED, record_raw_event
+from memory.common.db.models.events import NO_ITEM_TYPE, NOT_COLLECTED, STORED, record_raw_event, storable
 from memory.common.db.models.discord import (
     DM_CHANNEL_TYPES,
     DiscordBot,
     DiscordChannel,
     DiscordServer,
 )
-from memory.common.discord_events import hand_off_server, knows_user, reclaim_dms
+from memory.common.discord_events import (
+    hand_off_server,
+    knows_user,
+    owner_bot_ids,
+    push_refusal,
+    reclaim_dms,
+    snowflake,
+    well_formed,
+)
 from memory.common.push_health import push_stale
 from memory.common.discord_data import (
     fetch_servers,
@@ -627,15 +635,16 @@ def verify_discord_signature(public_key_hex: str, timestamp: str, body: bytes, s
     return True
 
 
+def reject_constant(name: str) -> None:
+    """NaN and Infinity: Python parses them, but JSONB can't hold them."""
+    raise ValueError(name)
+
+
 def is_fresh(timestamp: str) -> bool:
     try:
         return abs(time.time() - int(timestamp)) <= DISCORD_EVENT_MAX_TS_SKEW_SECONDS
     except ValueError:
         return False
-
-
-def snowflake(value: object) -> int | None:
-    return int(value) if isinstance(value, (str, int)) and str(value).isdigit() else None
 
 
 THREAD_EVENT_TYPES = frozenset({"THREAD_CREATE", "THREAD_UPDATE"})
@@ -647,26 +656,28 @@ def event_channel_id(event_type: str, data: dict) -> int | None:
     return snowflake(data.get("id" if event_type in THREAD_EVENT_TYPES else "channel_id"))
 
 
-def channel_collected(db: Session, bot_id: int, event_type: str, data: dict) -> bool | None:
+def channel_collected(db: Session, bot_id: int, event_type: str, data: dict, *, learnable: bool = True) -> bool | None:
     """Whether the event's channel is collected, as DiscordChannel.should_collect
     decides; None for an event about no channel. A thread event names the thread
     and its parent. A channel not stored yet follows its server, and one of a
     server not stored yet is collected, as a push-only bot stores that server so;
     one with no server is a DM to the bot, collected when its author shares a
-    server with the bot (the worker checks it against the bot's token)."""
+    server with the bot (the worker checks it against the bot's token). Unless
+    ``learnable``, the answer is the one for a channel, parent and server never
+    stored."""
     channel_id = event_channel_id(event_type, data)
     if channel_id is None:
         return None
-    if channel := db.get(DiscordChannel, channel_id):
+    if learnable and (channel := db.get(DiscordChannel, channel_id)):
         return channel.should_collect
     parent_id = snowflake(data.get("parent_id")) if event_type in THREAD_EVENT_TYPES else None
-    if parent_id and (parent := db.get(DiscordChannel, parent_id)):
+    if learnable and parent_id and (parent := db.get(DiscordChannel, parent_id)):
         return parent.should_collect
     server_id = snowflake(data.get("guild_id"))
     if server_id is None:
         author = snowflake((data.get("author") or {}).get("id"))
         return author is not None and knows_user(db, bot_id, [author])
-    server = db.get(DiscordServer, server_id)
+    server = db.get(DiscordServer, server_id) if learnable else None
     return server is None or server.collect_messages
 
 
@@ -678,10 +689,26 @@ def writes_items(event_type: str, data: object) -> bool:
     return event_type in {"MESSAGE_CREATE", *DELETE_EVENT_TYPES}
 
 
-def discord_outcome(db: Session, bot_id: int, event_type: str, data: object) -> str:
+def may_learn_collection(db: Session, bot: DiscordBot, event_type: str, data: dict) -> bool:
+    """Whether the pusher may learn if the event's channel is collected: one it
+    may push into, or a new DM with no stored parent, which its own bot's
+    servers decide. Any other is taken for a channel never stored, so a push
+    can't probe another owner's rows or settings."""
+    channel_id = event_channel_id(event_type, data)
+    if channel_id is None:
+        return True
+    server_id = snowflake(data.get("guild_id"))
+    parent_id = snowflake(data.get("parent_id")) if event_type in THREAD_EVENT_TYPES else None
+    stored = [db.get(DiscordChannel, i) for i in (channel_id, parent_id) if i is not None]
+    if server_id is None and not any(stored):
+        return True
+    return push_refusal(db, channel_id, server_id, owner_bot_ids(db, bot), parent_id=parent_id) is None
+
+
+def discord_outcome(db: Session, bot_id: int, event_type: str, data: object, learnable: bool) -> str:
     if not isinstance(data, dict):
         return NO_ITEM_TYPE
-    if channel_collected(db, bot_id, event_type, data) is False:
+    if channel_collected(db, bot_id, event_type, data, learnable=learnable) is False:
         return NOT_COLLECTED
     return STORED if event_type in CARRIED_EVENT_TYPES else NO_ITEM_TYPE
 
@@ -707,10 +734,12 @@ async def discord_events(bot_id: int, request: Request, db: Session = Depends(ge
         return unauthorized
 
     try:
-        envelope = json.loads(body)
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        envelope = None
-    if not isinstance(envelope, dict):
+        envelope = json.loads(body, parse_constant=reject_constant)
+        # Postgres can't hold NULs or lone surrogates, which the worker would store.
+        unstorable = storable(envelope) != envelope
+    except (UnicodeDecodeError, ValueError, RecursionError):
+        envelope, unstorable = None, True
+    if not isinstance(envelope, dict) or unstorable:
         logger.warning("Discord event unparseable for bot %s", bot_id)
         return Response(status_code=400)
 
@@ -724,7 +753,11 @@ async def discord_events(bot_id: int, request: Request, db: Session = Depends(ge
     event = event if isinstance(event, dict) else {}
     event_type = str(event.get("type") or ("PING" if envelope.get("type") == DISCORD_PING else "unknown"))
     data = event.get("data")
-    outcome = discord_outcome(db, bot.id, event_type, data)
+    if isinstance(data, dict) and not well_formed(data):
+        logger.warning("Discord event of the wrong shape for bot %s", bot_id)
+        return Response(status_code=400)
+    learnable = isinstance(data, dict) and may_learn_collection(db, bot, event_type, data)
+    outcome = discord_outcome(db, bot.id, event_type, data, learnable)
     # A delete still drops whatever copy Memory has.
     untracked_delete = event_type in DELETE_EVENT_TYPES and outcome == NOT_COLLECTED
     channel_id = event_channel_id(event_type, data) if isinstance(data, dict) else None

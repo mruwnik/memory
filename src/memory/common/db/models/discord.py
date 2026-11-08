@@ -202,6 +202,8 @@ class DiscordChannel(Base):
     __tablename__ = "discord_channels"
     # source_type key for the access-control reconciliation pipeline.
     data_source_type: ClassVar[str] = "discord_channel"
+    # Its content inherits from its server too, so moving it re-resolves that content.
+    access_chain_fields: ClassVar[tuple[str, ...]] = ("server_id",)
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)  # Discord channel snowflake ID
     server_id: Mapped[int | None] = mapped_column(

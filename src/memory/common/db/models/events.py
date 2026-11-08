@@ -1,4 +1,5 @@
 import json
+import math
 import re
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -18,6 +19,7 @@ from sqlalchemy import (
     event,
     inspect,
     text,
+    update,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, insert
 from sqlalchemy.orm import Mapped, Session, mapped_column
@@ -169,9 +171,12 @@ UNSTORABLE_CHARS = re.compile("[\x00\ud800-\udfff]")
 
 
 def storable(value: Any) -> Any:
-    """`value` without the NULs and lone surrogates JSONB rejects."""
+    """`value` without the NULs, lone surrogates and non-finite numbers JSONB
+    rejects; the numbers become nulls."""
     if isinstance(value, str):
         return UNSTORABLE_CHARS.sub("", value)
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
     if isinstance(value, dict):
         return {storable(k): storable(v) for k, v in value.items()}
     if isinstance(value, list):
@@ -211,16 +216,17 @@ def record_raw_event(
     of the delivery waits on this one. A delivery not collected keeps no
     container: an untracked channel stays unseen. `links_items`: the caller sends
     an ingest task that links the item events it writes (caused_by), which a raw
-    subscription's delivery waits for."""
+    subscription's delivery waits for. Text a sender chose is kept storable,
+    as Postgres text can't hold lone surrogates."""
     values = dict(
         kind=RAW,
         source=source,
-        type=event_type,
+        type=storable(event_type),
         account_id=account_id,
         owner_id=owner_id,
-        delivery_id=delivery_id,
+        delivery_id=storable(delivery_id),
         outcome=outcome,
-        container=None if outcome == NOT_COLLECTED else container,
+        container=None if outcome == NOT_COLLECTED else storable(container),
         payload=kept_payload(outcome, payload),
         data={LINKS_ITEMS: True} if links_items else None,
     )
@@ -233,6 +239,16 @@ def record_raw_event(
         .returning(Event.id)
     )
     return db.scalar(statement)
+
+
+def reject_raw_event(session: Session, event_id: int | None) -> None:
+    """Mark, uncommitted, a raw event whose delivery its task refused."""
+    if event_id is None:
+        return
+    # A stub a concurrent untracking made of it stays one.
+    session.execute(
+        update(Event).where(Event.id == event_id, Event.kind == RAW, Event.outcome == STORED).values(outcome=REJECTED)
+    )
 
 
 @contextmanager

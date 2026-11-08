@@ -51,8 +51,9 @@ def post_event(client, bot_id, envelope, key=SIGNING_KEY, timestamp=None):
 
 
 @pytest.fixture
-def collected_channel(db_session):
-    db_session.add(DiscordChannel(id=2, name="loud", channel_type="text", collect_messages=True))
+def collected_channel(db_session, webhook_bot):
+    """A DM of the bot's: events about it need no server."""
+    db_session.add(DiscordChannel(id=2, name="loud", channel_type="dm", bot_id=webhook_bot.id, collect_messages=True))
     db_session.commit()
 
 
@@ -106,7 +107,7 @@ def test_carried_events_are_queued(client, db_session, webhook_bot, collected_ch
     )
 
 
-OFF, ON, NEW, THREAD_UNDER_OFF, DM_OFF = "2", "5", "3", "4", "6"
+OFF, ON, NEW, THREAD_UNDER_OFF, DM_OFF, THEIRS_OFF, THEIR_DM_OFF, THEIRS_ON = "2", "5", "3", "4", "6", "12", "13", "14"
 KNOWN, STRANGER = "70", "71"
 
 
@@ -118,6 +119,17 @@ KNOWN, STRANGER = "70", "71"
         # Channels not stored yet follow their server; a DM is collected from someone sharing a server with the bot.
         ("MESSAGE_CREATE", {"channel_id": NEW, "guild_id": "7"}, "stored", 1, NEW),
         ("MESSAGE_CREATE", {"channel_id": NEW, "guild_id": "9"}, "not_collected", 0, None),
+        # Of a channel the pusher may not push into it learns nothing: it is taken for one not stored yet.
+        ("MESSAGE_CREATE", {"channel_id": THEIRS_OFF, "guild_id": "10"}, "stored", 1, THEIRS_OFF),
+        ("MESSAGE_CREATE", {"channel_id": NEW, "guild_id": "10"}, "stored", 1, NEW),
+        ("MESSAGE_CREATE", {"channel_id": THEIR_DM_OFF, "author": {"id": KNOWN}}, "stored", 1, THEIR_DM_OFF),
+        ("MESSAGE_CREATE", {"channel_id": THEIR_DM_OFF, "author": {"id": STRANGER}}, "not_collected", 0, None),
+        ("MESSAGE_CREATE", {"channel_id": THEIRS_OFF, "author": {"id": STRANGER}}, "not_collected", 0, None),
+        ("MESSAGE_REACTION_ADD", {"channel_id": THEIRS_OFF, "guild_id": "10", "message_id": "1"}, "stored", 1, THEIRS_OFF),
+        ("THREAD_CREATE", {"id": "52", "parent_id": THEIRS_OFF}, "not_collected", 0, None),
+        ("THREAD_CREATE", {"id": "53", "parent_id": THEIRS_ON}, "not_collected", 0, None),
+        ("THREAD_CREATE", {"id": "54", "parent_id": "99"}, "not_collected", 0, None),
+        ("THREAD_CREATE", {"id": "55", "parent_id": THEIRS_OFF, "guild_id": "10"}, "stored", 1, "55"),
         ("MESSAGE_CREATE", {"channel_id": NEW, "author": {"id": KNOWN}}, "stored", 1, NEW),
         ("MESSAGE_CREATE", {"channel_id": NEW, "author": {"id": STRANGER}}, "not_collected", 0, None),
         ("MESSAGE_CREATE", {"channel_id": NEW}, "not_collected", 0, None),
@@ -141,13 +153,23 @@ KNOWN, STRANGER = "70", "71"
 def test_only_events_in_collected_channels_are_queued(
     client, db_session, webhook_bot, event_type, data, outcome, queued, container
 ):
-    db_session.add_all([DiscordServer(id=7, name="S", collect_messages=True), DiscordServer(id=9, name="Q")])
+    other = DiscordBot(application_id=5, name="Theirs", realtime="webhook", public_key=public_hex(OTHER_KEY))
+    db_session.add(other)
+    db_session.flush()
+    db_session.add_all([
+        DiscordServer(id=7, name="S", collect_messages=True),
+        DiscordServer(id=9, name="Q", bot_id=webhook_bot.id),
+        DiscordServer(id=10, name="Theirs", bot_id=other.id, verified=True, collect_messages=False),
+    ])
     db_session.flush()
     db_session.add_all([
         DiscordChannel(id=int(OFF), name="off", channel_type="text", server_id=7, collect_messages=False),
         DiscordChannel(id=int(ON), name="on", channel_type="text", server_id=7),
         DiscordChannel(id=int(THREAD_UNDER_OFF), name="t", channel_type="thread", server_id=7, parent_id=int(OFF)),
-        DiscordChannel(id=int(DM_OFF), name="dm", channel_type="dm", collect_messages=False),
+        DiscordChannel(id=int(DM_OFF), name="dm", channel_type="dm", collect_messages=False, bot_id=webhook_bot.id),
+        DiscordChannel(id=int(THEIRS_OFF), name="off", channel_type="text", server_id=10, collect_messages=False),
+        DiscordChannel(id=int(THEIRS_ON), name="on", channel_type="text", server_id=10, collect_messages=True),
+        DiscordChannel(id=int(THEIR_DM_OFF), name="dm", channel_type="dm", collect_messages=False, bot_id=other.id),
         DiscordBotServer(bot_id=webhook_bot.id, server_id=7),
         DiscordUser(id=int(KNOWN), username="known"),
     ])
@@ -163,6 +185,55 @@ def test_only_events_in_collected_channels_are_queued(
 
     assert [(e.container, e.outcome, e.payload) for e in raw_events(db_session)] == [(container, outcome, None)]
     assert [c.kwargs["kwargs"]["data"] for c in send.call_args_list] == [{"id": "1", **data}] * queued
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"channel_id": "2", "author": "alice"},
+        {"channel_id": "2", "guild_id": {"id": "7"}},
+        {"id": "50", "parent_id": ["2"]},
+        {"channel_id": "1" * 40},
+        {"channel_id": "2", "ids": ["x"]},
+        {"channel_id": "2", "message_reference": "1"},
+        {"channel_id": "2", "content": {"text": "hi"}},
+    ],
+)
+def test_a_signed_payload_of_the_wrong_shape_gets_400(client, db_session, webhook_bot, data):
+    with patch("memory.api.discord.celery_app.send_task") as send:
+        response = post_event(client, webhook_bot.id, event("MESSAGE_CREATE", {"id": "1", **data}))
+
+    assert response.status_code == 400
+    send.assert_not_called()
+    assert raw_events(db_session) == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        '{"version": 1, "application_id": "123456789012345678", "type": 1, '
+        '"event": {"type": "TYPING_START", "data": {"channel_id": "2", "nonce": "a\\u0000b"}}}',
+        '{"version": 1, "application_id": "123456789012345678", "type": 1, '
+        '"event": {"type": "TYPING_START", "data": {"channel_id": "2", "nonce": NaN}}}',
+        '{"version": 1, "application_id": "123456789012345678", "type": 1, '
+        '"event": {"type": "TYPING\\u0000", "data": {"channel_id": "2", "nonce": Infinity}}}',
+        '{"version": 1, "application_id": "123456789012345678", "type": 1, '
+        '"event": {"type": "MESSAGE_CREATE", "data": {"channel_id": "2", "content": "\\ud800"}}}',
+        '{"version": 1, "application_id": "123456789012345678", "type": 1, '
+        '"event": {"type": "TYPING_START", "data": {"channel_id": "2", "x": ' + '{"a": ' * 1500 + "1" + "}" * 1500 + "}}}",
+    ],
+    ids=["nul", "nan", "infinity", "lone surrogate", "nested deeper than Python recurses"],
+)
+def test_a_body_json_columns_cannot_hold_gets_400(client, db_session, webhook_bot, body):
+    ts = str(int(time.time()))
+    response = client.post(
+        f"/discord/events/{webhook_bot.id}",
+        content=body.encode(),
+        headers={"X-Signature-Ed25519": SIGNING_KEY.sign(ts.encode() + body.encode()).hex(), "X-Signature-Timestamp": ts},
+    )
+
+    assert response.status_code == 400
+    assert raw_events(db_session) == []
 
 
 def test_an_event_with_no_item_type_in_a_collected_channel_keeps_its_payload(
