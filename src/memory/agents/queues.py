@@ -14,6 +14,7 @@ import json
 import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from fnmatch import fnmatchcase
 from typing import Any, Collection, cast
 
 from pydantic import ValidationError
@@ -555,6 +556,14 @@ def backlog(db: DBSession, owner_id: int) -> list[dict[str, Any]]:
     return [
         {k: q[k] for k in ("queue", "pending", "oldest_age_sec")} for q in queue_backlogs(db, owner_id)
     ]
+
+
+def matching_queues(db: DBSession, owner_id: int, patterns: list[str]) -> list[str]:
+    """The owner's queues whose names match any of the globs, the one with the oldest
+    pending delivery first and those with none last."""
+    matched = [q for q in backlog(db, owner_id) if any(fnmatchcase(q["queue"], p) for p in patterns)]
+    matched.sort(key=lambda q: (q["oldest_age_sec"] is None, -(q["oldest_age_sec"] or 0)))
+    return [q["queue"] for q in matched]
 
 
 def queue_health(db: DBSession) -> list[dict[str, Any]]:

@@ -395,7 +395,7 @@ async def upsert(
       'schedule:write'; the agent's tools are checked against your access on every
       change.
     - {"queue": "<name>"}: deliveries wait until one of your workers claims them
-      with agent_work_claim(queue=...). Needs 'agents:work' (or 'agents') and 'read'.
+      with agent_work_claim(queues=[...]). Needs 'agents:work' (or 'agents') and 'read'.
     - {"notify": {"channel": discord|slack|email, "target", "message", "subject"}}:
       sends that message. The target may be a person's name, identifier or email,
       a Discord/Slack channel or user id, or an email address; subject "" clears

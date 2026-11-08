@@ -360,8 +360,8 @@ export function SubscriptionEditor({ existing, presetAgent, agents, sourceTypes,
         <Field label="Queue" hint={existing?.kind === 'raw'
           ? "A webhook subscription's queue can't change."
           : form.source === 'raw'
-            ? "Your workers claim its deliveries with agent_work_claim(queue=...). It can't be changed later."
-            : 'Your workers claim its deliveries with agent_work_claim(queue=...).'}>
+            ? "Your workers claim its deliveries with agent_work_claim(queues=[...]). It can't be changed later."
+            : 'Your workers claim its deliveries with agent_work_claim(queues=[...]).'}>
           <Input value={form.queue} disabled={existing?.kind === 'raw'} onChange={e => update({ queue: e.target.value })} />
         </Field>
       )}
