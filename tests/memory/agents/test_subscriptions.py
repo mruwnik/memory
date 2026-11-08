@@ -789,32 +789,55 @@ def test_content_version_counts_what_a_github_sync_reports(changed):
     assert content_version(pr()) != content_version(pr(**changed))
 
 
-METADATA_CHANGES = [
+STORED_FIELDS = {
+    "body_hash": "body",
+    "github_updated_at": datetime(2024, 1, 1, tzinfo=timezone.utc),
+    "pr_data": GithubPRData(review_comments=[{"id": 9}]),
+}
+
+STANDIN_CHANGES = [
     {"body_hash": "edited"},
-    {"comment_count": 2},
+    {"github_updated_at": datetime(2024, 1, 2, tzinfo=timezone.utc)},
+    {"github_updated_at": None},
     {"pr_data": GithubPRData(review_comments=[{"id": 9}, {"id": 10}])},
+]
+
+REPOS = [
+    None,
+    GithubRepo(content_mode=CONTENT_FULL),
+    GithubRepo(content_mode=CONTENT_METADATA),
 ]
 
 
 def stored_pr(repo, **changed):
-    fields = {"body_hash": "body", "comment_count": 1, "pr_data": GithubPRData(review_comments=[{"id": 9}])}
-    return pr(repo=repo, **{**fields, **changed})
+    return pr(repo=repo, **{**STORED_FIELDS, **changed})
 
 
-def metadata_pr(**changed):
-    return stored_pr(GithubRepo(content_mode=CONTENT_METADATA), **changed)
+@pytest.mark.parametrize("changed", STANDIN_CHANGES)
+@pytest.mark.parametrize("repo", REPOS)
+def test_content_version_counts_body_hash_updated_at_and_review_comments(changed, repo):
+    assert content_version(stored_pr(repo)) == content_version(stored_pr(repo))
+    assert content_version(stored_pr(repo)) != content_version(stored_pr(repo, **changed))
 
 
-@pytest.mark.parametrize("changed", METADATA_CHANGES)
-def test_content_version_of_a_metadata_repo_item_counts_its_body_hash_and_comments(changed):
-    assert content_version(metadata_pr()) == content_version(metadata_pr())
-    assert content_version(metadata_pr()) != content_version(metadata_pr(**changed))
+def test_content_version_ignores_the_comment_count():
+    assert content_version(stored_pr(None, comment_count=1)) == content_version(
+        stored_pr(None, comment_count=2)
+    )
 
 
-@pytest.mark.parametrize("changed", METADATA_CHANGES)
-@pytest.mark.parametrize("repo", [None, GithubRepo(content_mode=CONTENT_FULL)])
-def test_content_version_of_a_full_repo_item_reads_comments_off_its_content(changed, repo):
-    assert content_version(pr(repo=repo)) == content_version(stored_pr(repo, **changed))
+@pytest.mark.parametrize("before", [CONTENT_FULL, CONTENT_METADATA])
+@pytest.mark.parametrize("after", [CONTENT_FULL, CONTENT_METADATA])
+def test_flipping_the_repo_content_mode_keeps_the_item_version(before, after):
+    item = stored_pr(GithubRepo(content_mode=before))
+    version = content_version(item)
+
+    assert item.repo is not None
+    item.repo.content_mode = after
+    flipped = content_version(item)
+    item.repo = None
+
+    assert (flipped, content_version(item)) == (version, version)
 
 
 def test_content_version_ignores_label_and_assignee_order():

@@ -875,29 +875,53 @@ def recent(hours_ago: float) -> datetime:
     return datetime.now(timezone.utc) - timedelta(hours=hours_ago)
 
 
+def commented(id: int, author: str, hours_ago: float) -> dict:
+    return {"comments": [comment(id, author, recent(hours_ago).isoformat())], "comment_count": 1}
+
+
+@pytest.mark.parametrize("mode", [CONTENT_FULL, CONTENT_METADATA])
 @pytest.mark.parametrize(
-    "changed, delivered",
+    "before, changed, delivered",
     [
-        (lambda: {"body": "New body"}, [["new"], ["edited"]]),
-        (
-            lambda: {"comments": [comment(1, "alice", recent(1.5).isoformat())], "comment_count": 1},
-            [["new"], ["comments"]],
-        ),
-        (lambda: with_review_comments(review_comment(9, "carol")), [["new"], ["comments"]]),
-        (lambda: {}, [["new"]]),
+        (dict, lambda: {"body": "New body"}, [["new"], ["edited"]]),
+        (dict, lambda: commented(1, "alice", 1.5), [["new"], ["comments"]]),
+        # One comment deleted and another posted: the count stays, updated-at moves.
+        (lambda: commented(1, "alice", 3), lambda: commented(2, "bob", 1.5), [["new"], ["comments"]]),
+        (dict, lambda: with_review_comments(review_comment(9, "carol")), [["new"], ["comments"]]),
     ],
 )
-def test_metadata_repo_changes_reach_on_edit_subscriptions_once(
-    db_session, metadata_repo, on_edit_subscription, no_celery_dispatch, changed, delivered
+def test_repo_changes_reach_on_edit_subscriptions_once(
+    db_session, repo, qdrant, on_edit_subscription, no_celery_dispatch, mode, before, changed, delivered
 ):
-    github.sync_item(metadata_repo.id, pr_data(github_updated_at=recent(2)), {OWN})
+    repo.content_mode = mode
+    db_session.commit()
+    github.sync_item(repo.id, pr_data(github_updated_at=recent(2), **before()), {OWN})
     subscriptions.route_events()
     new = pr_data(github_updated_at=recent(1), **changed())
-    github.sync_item(metadata_repo.id, new, {OWN})
+    github.sync_item(repo.id, new, {OWN})
     subscriptions.route_events()
-    github.sync_item(metadata_repo.id, new, {OWN})
+    github.sync_item(repo.id, new, {OWN})
     subscriptions.route_events()
     # A reprocess of the item as it stands, which only a changed version lets through.
     route_item(db_session, stored(db_session).id)
 
     assert deliveries(db_session, on_edit_subscription) == delivered
+
+
+@pytest.mark.parametrize("mode", [CONTENT_FULL, CONTENT_METADATA])
+def test_a_sync_moving_only_updated_at_delivers_nothing(
+    db_session, repo, qdrant, on_edit_subscription, no_celery_dispatch, mode
+):
+    repo.content_mode = mode
+    db_session.commit()
+    github.sync_item(repo.id, pr_data(github_updated_at=recent(2)), {OWN})
+    subscriptions.route_events()
+    version = subscriptions.content_version(stored(db_session))
+    forget_events(db_session)
+
+    github.sync_item(repo.id, pr_data(github_updated_at=recent(1)), {OWN})
+    subscriptions.route_events()
+
+    assert subscriptions.content_version(stored(db_session)) != version
+    assert reported_events(db_session) == []
+    assert deliveries(db_session, on_edit_subscription) == [["new"]]
