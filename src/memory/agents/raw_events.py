@@ -11,6 +11,7 @@ Routed on the maintenance queue, so this module must stay importable by the
 standard worker image.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal
 
@@ -96,6 +97,15 @@ class Container:
     collected: bool
     project_id: int | None = None
     sensitivity: str = "basic"
+    creator_id: int | None = None
+
+
+def chain_creator(chain: list[Any], event: Event) -> int | None:
+    """The creator SourceItem.resolve_creator_id gives items from this chain, when
+    it is the event's own account owner: a Discord DM first delivered by another
+    user's bot is theirs, not this bot's owner's."""
+    owner = next((o for s in chain if (o := getattr(s, "content_owner_id", None)) is not None), None)
+    return owner if owner == event.owner_id else None
 
 
 def chain_access(chain: list[Any]) -> tuple[int | None, str]:
@@ -107,7 +117,8 @@ def chain_access(chain: list[Any]) -> tuple[int | None, str]:
 
 
 def snowflake(value: str | None) -> int | None:
-    return int(value) if value and value.isdigit() else None
+    # isdigit alone takes "²", which int() refuses.
+    return int(value) if value and value.isascii() and value.isdigit() else None
 
 
 def milestone_number(payload: Any) -> int | None:
@@ -128,7 +139,11 @@ def container_of(db: DBSession, event: Event) -> Container | None:
     the event names nothing Memory has stored, whose access is unknown."""
     if event.source == "transcripts":
         account = db.get(TranscriptAccount, event.account_id)
-        return None if account is None else Container(account.active, *chain_access([account]))
+        return (
+            None
+            if account is None
+            else Container(account.active, *chain_access([account]), chain_creator([account], event))
+        )
     if event.source == "github":
         repo_id = snowflake(event.container)
         repo = db.scalars(
@@ -144,7 +159,9 @@ def container_of(db: DBSession, event: Event) -> Container | None:
         project = db.scalar(select(Project.id).where(Project.repo_id == repo.id, filed))
         if number is not None and project is None:
             return None
-        return Container(repo.active and bool(account and account.active), project)
+        return Container(
+            repo.active and bool(account and account.active), project, creator_id=chain_creator([repo], event)
+        )
     if event.source == "slack" and event.container:
         channel = db.get(SlackChannel, event.container)
         chain = [channel, channel.workspace] if channel else []
@@ -155,13 +172,21 @@ def container_of(db: DBSession, event: Event) -> Container | None:
         return None
     if channel is None:
         return None
-    return Container(bool(channel.should_collect), *chain_access([c for c in chain if c is not None]))
+    chain = [c for c in chain if c is not None]
+    return Container(bool(channel.should_collect), *chain_access(chain), chain_creator(chain, event))
+
+
+def container_reader(db: DBSession, owner: User, key: APIKey | None) -> Callable[[Container], bool]:
+    """Whether `owner` through `key` could read items filed as a container is,
+    with its roles looked up once for checking many."""
+    scopes = credential_scopes(owner, key)
+    if not {SCOPE_READ, SCOPE_ADMIN} & set(scopes):
+        return lambda _: False
+    reader = UserProxy.from_user(owner, scopes=scopes)
+    roles = get_user_project_roles(db, reader)
+    return lambda container: user_can_access(reader, container, roles)
 
 
 def reads_container(db: DBSession, owner: User, key: APIKey | None, container: Container) -> bool:
     """Whether `owner` through `key` could read items filed as `container` is."""
-    scopes = credential_scopes(owner, key)
-    if not {SCOPE_READ, SCOPE_ADMIN} & set(scopes):
-        return False
-    reader = UserProxy.from_user(owner, scopes=scopes)
-    return user_can_access(reader, container, get_user_project_roles(db, reader))
+    return container_reader(db, owner, key)(container)

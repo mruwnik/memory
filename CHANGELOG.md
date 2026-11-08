@@ -23,6 +23,7 @@ a new, empty `## Unreleased` above it.
 ## Unreleased
 
 ### Changes
+- Webhook log: payloads of deliveries that stored nothing open per row, withheld where the viewer's credential couldn't read where they came from (the same rule as raw subscriptions, which now let an account's owner read its own unfiled repo or DM); outcome and type filters; repo and channel names; why a stored delivery lists no item. An admin's read-only key sees only its own accounts there.
 - A schedule handoff the agents worker never picks up fails, and a failed timer tells its owner, within about 2.5h instead of turning "late" after 6h; it never pauses the subscription. A cron tick a cap stops is still skipped, but the owner is told once per throttling episode, and an agent timer a cap stops tells its owner it failed. A tripped cron clears its next run time.
 
 ## v0.5.0 (2026-11-08)

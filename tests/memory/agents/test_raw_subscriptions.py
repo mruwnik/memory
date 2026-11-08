@@ -21,6 +21,9 @@ from memory.common.db.models import (
     GithubRepo,
     Person,
     Project,
+    SlackApp,
+    SlackChannel,
+    SlackWorkspace,
     Team,
     TranscriptAccount,
     project_teams,
@@ -39,15 +42,18 @@ def ceilings(monkeypatch):
     monkeypatch.setattr(settings, "AGENT_MAX_RUNS_PER_HOUR", 60)
 
 
-def account(db, user, member=True) -> GithubAccount:
+def account(db, user, member=True, filed=True) -> GithubAccount:
     """A GitHub account of `user`'s with repo 42, filed in a project `user` is a
-    member of (or, without `member`, isn't)."""
+    member of (or, without `member`, isn't; without `filed`, in none)."""
     a = GithubAccount(user_id=user.id, name="gh", auth_type="pat", active=True)
     db.add(a)
     db.flush()
     repo = GithubRepo(account_id=a.id, github_id=42, owner="o", name="r", active=True)
     db.add(repo)
     db.flush()
+    if not filed:
+        db.commit()
+        return a
     project = Project(title="P", state="open", repo_id=repo.id)
     team = Team(name="T", slug=f"t-raw-{a.id}")
     db.add_all([project, team])
@@ -302,12 +308,51 @@ async def test_a_raw_subscription_is_refused_what_it_cant_take(
 
 
 @pytest.mark.asyncio
-async def test_a_payload_from_a_repo_its_subscription_cant_read_is_withheld(
+@pytest.mark.parametrize(
+    "filed", [True, False], ids=["unreadable project", "no project"]
+)
+async def test_a_payload_from_the_owners_own_repo_shows_wherever_it_is_filed(
+    db_session, regular_user, worker_session, filed
+):
+    # Its items are the owner's (their creator), so its payload is too.
+    source_account = account(db_session, regular_user, member=False, filed=filed)
+    raw_subscription(db_session, regular_user)
+    delivered(db_session, source_account, payload={"secret": "x"})
+
+    claimed = await claim(worker_session.token, queue=QUEUE)
+
+    assert claimed is not None
+    assert '"secret":"x"' in claimed["input"]
+
+
+def slack_app(db, user) -> SlackApp:
+    """A Slack app of `user`'s in a workspace whose collected channel C1 has no project."""
+    app = SlackApp(client_id=f"raw.app.{user.id}", name="App", created_by_user_id=user.id)
+    db.add_all([app, SlackWorkspace(id="T1", name="w")])
+    db.flush()
+    db.add(SlackChannel(id="C1", workspace_id="T1", name="general", channel_type="channel", collect_messages=True))
+    db.commit()
+    return app
+
+
+def pinned(db, app: SlackApp, delivery_id="d-1") -> int:
+    event_id = record_raw_event(
+        db, source="slack", event_type="pin_added", account_id=app.id, owner_id=app.created_by_user_id,
+        delivery_id=delivery_id, outcome="no_item_type", container="C1", payload={"secret": "x"},
+    )
+    db.commit()
+    subscriptions.route_events()
+    assert event_id is not None
+    return event_id
+
+
+@pytest.mark.asyncio
+async def test_a_payload_from_a_channel_its_subscription_cant_read_is_withheld(
     db_session, regular_user, worker_session
 ):
-    gh = account(db_session, regular_user, member=False)
-    raw_subscription(db_session, regular_user)
-    event_id = delivered(db_session, gh, payload={"secret": "x"})
+    app = slack_app(db_session, regular_user)
+    raw_subscription(db_session, regular_user, source="slack")
+    event_id = pinned(db_session, app)
 
     claimed = await claim(worker_session.token, queue=QUEUE)
 
@@ -501,21 +546,12 @@ async def test_a_stored_delivery_that_sent_no_ingest_task_goes_at_once(db_sessio
     assert await claim(worker_session.token, queue=QUEUE) is not None
 
 
-def milestone(db, source_account, number: int) -> Project:
-    """A milestone of repo 42, filed in a project nobody is a member of."""
-    repo = db.query(GithubRepo).filter_by(account_id=source_account.id).one()
-    project = Project(title="M", state="open", repo_id=repo.id, number=number)
-    db.add(project)
-    db.commit()
-    return project
-
-
 @pytest.mark.asyncio
-async def test_a_payload_about_a_milestone_its_subscription_cant_read_is_withheld(
+async def test_a_payload_about_a_milestone_memory_hasnt_stored_is_withheld(
     db_session, regular_user, worker_session
 ):
+    # Where its items would be filed is unknown, so who may read them is too.
     source_account = account(db_session, regular_user)
-    milestone(db_session, source_account, 3)
     raw_subscription(db_session, regular_user)
     delivered(db_session, source_account, payload={"issue": {"milestone": {"number": 3}}, "secret": "x"})
 
@@ -546,9 +582,9 @@ async def test_a_payload_is_withheld_when_an_item_it_stored_is_unreadable(
 async def test_a_payload_only_the_claimer_cant_read_waits_for_a_worker_that_can(
     db_session, admin_user, admin_session
 ):
-    source_account = account(db_session, admin_user, member=False)
-    raw_subscription(db_session, admin_user)
-    delivered(db_session, source_account, payload={"secret": "x"})
+    app = slack_app(db_session, admin_user)
+    raw_subscription(db_session, admin_user, source="slack")
+    pinned(db_session, app)
     narrow = APIKey.create(user_id=admin_user.id, name="narrow", scopes=["agents:work", "read"])
     db_session.add(narrow)
     db_session.commit()
@@ -595,10 +631,10 @@ async def test_a_claim_walks_past_only_so_many_raw_runs_the_claimer_cant_render(
     db_session, admin_user, monkeypatch
 ):
     monkeypatch.setattr(queues, "MAX_PASSED_RAW", 2)
-    source_account = account(db_session, admin_user, member=False)
-    raw_subscription(db_session, admin_user)
+    app = slack_app(db_session, admin_user)
+    raw_subscription(db_session, admin_user, source="slack")
     for n in range(3):
-        delivered(db_session, source_account, payload={"secret": "x"}, delivery_id=f"d-{n}")
+        pinned(db_session, app, delivery_id=f"d-{n}")
     narrow = APIKey.create(user_id=admin_user.id, name="narrow", scopes=["agents:work", "read"])
     db_session.add(narrow)
     db_session.commit()

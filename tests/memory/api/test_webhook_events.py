@@ -8,30 +8,41 @@ from sqlalchemy import select, text
 
 from memory.common.db.models import (
     AgentRun,
+    APIKey,
     Subscription,
     Delivery,
     BlogPost,
+    DiscordBot,
+    DiscordChannel,
     Event,
     GithubAccount,
+    GithubRepo,
     HumanUser,
     SlackApp,
+    SlackChannel,
+    SlackWorkspace,
 )
+from memory.agents import raw_events
 from memory.api.webhook_events import RAW_RUN_EVENT
 from memory.common.db.models.events import record_raw_event
 from tests.conftest import unique_sha256
 
 
-def raw(db, owner_id, delivery_id, *, source="github", account_id=5, payload=None, outcome="no_item_type"):
+def raw(
+    db, owner_id, delivery_id, *, source="github", account_id=5, payload=None, outcome="no_item_type",
+    event_type="pull_request.opened", container="555", links_items=False,
+):
     return record_raw_event(
         db,
         source=source,
-        event_type="pull_request.opened",
+        event_type=event_type,
         account_id=account_id,
         owner_id=owner_id,
         delivery_id=delivery_id,
         outcome=outcome,
-        container="555",
+        container=container,
         payload={"secret": "untrusted"} if payload is None else payload,
+        links_items=links_items,
     )
 
 
@@ -243,3 +254,177 @@ def test_an_admin_sees_every_account_marked_by_whose_it_is(client, db_session, u
     listed = [(a["account_id"], a["own"]) for a in client.get("/webhook-events").json()]
 
     assert listed == [(mine.id, True), (theirs.id, False)]
+
+
+@pytest.mark.parametrize(
+    "params, shown",
+    [
+        ({"outcome": "stored"}, ["d2"]),
+        ({"type": "issues"}, ["d3"]),
+        # A prefix; an untracked channel's delivery never matches, as its type is hidden.
+        ({"type": "pull_request"}, ["d2", "d1"]),
+        ({"type": "pull_request", "outcome": "no_item_type"}, ["d1"]),
+        ({"type": "pull_%"}, []),
+    ],
+)
+def test_deliveries_filter_by_outcome_and_type_prefix(member_client, db_session, user, params, shown):
+    ids = {
+        raw(db_session, user.id, "d1", event_type="pull_request.opened"): "d1",
+        raw(db_session, user.id, "d2", event_type="pull_request.closed", outcome="stored"): "d2",
+        raw(db_session, user.id, "d3", event_type="issues.opened"): "d3",
+        raw(db_session, user.id, "d4", event_type="pull_request.opened", outcome="not_collected"): "d4",
+    }
+    db_session.commit()
+
+    listed = member_client.get("/webhook-events/github/5", params=params).json()
+
+    assert [ids[e["id"]] for e in listed] == shown
+
+
+def test_a_github_delivery_names_its_repo(member_client, db_session, user):
+    account = GithubAccount(user_id=user.id, name="acct", auth_type="pat", access_token="ghp_x", active=True)
+    db_session.add(account)
+    db_session.flush()
+    db_session.add(GithubRepo(account_id=account.id, github_id=555, owner="acme", name="api"))
+    raw(db_session, user.id, "d1", account_id=account.id)
+    raw(db_session, user.id, "d2", account_id=account.id, container="556")
+    db_session.commit()
+
+    listed = member_client.get(f"/webhook-events/github/{account.id}").json()
+
+    assert [(e["container"], e["container_name"]) for e in listed] == [("556", None), ("555", "acme/api")]
+
+
+def test_a_discord_delivery_names_only_channels_the_viewer_can_see(member_client, db_session, user):
+    mine = DiscordBot(application_id=1, name="Mine", created_by_user_id=user.id)
+    theirs = DiscordBot(application_id=2, name="Theirs", created_by_user_id=other_user(db_session).id)
+    db_session.add_all([mine, theirs])
+    db_session.flush()
+    db_session.add_all([
+        DiscordChannel(id=901, name="my-dm", channel_type="dm", bot_id=mine.id),
+        DiscordChannel(id=902, name="their-dm", channel_type="dm", bot_id=theirs.id),
+    ])
+    raw(db_session, user.id, "d1", source="discord", account_id=mine.id, container="901")
+    raw(db_session, user.id, "d2", source="discord", account_id=mine.id, container="902")
+    db_session.commit()
+
+    listed = member_client.get(f"/webhook-events/discord/{mine.id}").json()
+
+    assert [(e["container"], e["container_name"]) for e in listed] == [("902", None), ("901", "my-dm")]
+
+
+def test_a_payload_from_a_channel_the_viewer_cant_read_is_withheld(client, member_client, db_session, user):
+    db_session.add(SlackWorkspace(id="T1", name="w"))
+    db_session.add(SlackChannel(id="C1", workspace_id="T1", name="general", channel_type="channel"))
+    raw(db_session, user.id, "d1", source="slack", container="C1", payload={"pinned": "secret"})
+    db_session.commit()
+
+    [as_member] = member_client.get("/webhook-events/slack/5", params={"payload": True}).json()
+    user.scopes = ["*"]
+    db_session.flush()
+    [as_admin] = client.get("/webhook-events/slack/5", params={"payload": True}).json()
+
+    assert (as_member["payload"], as_member["payload_withheld"]) == (None, True)
+    assert (as_admin["payload"], as_admin["payload_withheld"]) == ({"pinned": "secret"}, False)
+
+
+def test_the_owner_sees_payloads_from_their_own_project_less_repo(member_client, db_session, user):
+    account = GithubAccount(user_id=user.id, name="acct", auth_type="pat", access_token="ghp_x", active=True)
+    db_session.add(account)
+    db_session.flush()
+    db_session.add(GithubRepo(account_id=account.id, github_id=555, owner="acme", name="api"))
+    raw(db_session, user.id, "d1", account_id=account.id, payload={"n": 1})
+    db_session.commit()
+
+    [shown] = member_client.get(f"/webhook-events/github/{account.id}", params={"payload": True}).json()
+
+    assert (shown["payload"], shown["payload_withheld"]) == ({"n": 1}, False)
+
+
+@pytest.mark.parametrize("first_bot, shown", [("mine", True), ("theirs", False)])
+def test_a_discord_dm_payload_shows_only_to_the_owner_of_the_bot_it_belongs_to(
+    member_client, db_session, user, first_bot, shown
+):
+    bots = {
+        "mine": DiscordBot(application_id=1, name="Mine", created_by_user_id=user.id),
+        "theirs": DiscordBot(application_id=2, name="Theirs", created_by_user_id=other_user(db_session).id),
+    }
+    db_session.add_all(bots.values())
+    db_session.flush()
+    db_session.add(DiscordChannel(id=901, name="dm", channel_type="dm", bot_id=bots[first_bot].id))
+    raw(db_session, user.id, "d1", source="discord", account_id=bots["mine"].id, container="901", payload={"n": 1})
+    db_session.commit()
+
+    [event] = member_client.get(f"/webhook-events/discord/{bots['mine'].id}", params={"payload": True}).json()
+
+    assert event["payload_withheld"] is not shown
+
+
+def test_a_container_of_non_ascii_digits_has_no_name(client, db_session, user):
+    raw(db_session, user.id, "d1", source="discord", container="²")
+    db_session.commit()
+
+    response = client.get("/webhook-events/discord/5", params={"payload": True})
+
+    assert [e["container_name"] for e in response.json()] == [None]
+
+
+def test_payload_access_looks_up_the_viewers_roles_once_a_page(member_client, db_session, user, monkeypatch):
+    db_session.add(SlackWorkspace(id="T1", name="w"))
+    db_session.add(SlackChannel(id="C1", workspace_id="T1", name="general", channel_type="channel"))
+    for n in range(3):
+        raw(db_session, user.id, f"d{n}", source="slack", container="C1")
+    db_session.commit()
+    looked_up = []
+    real = raw_events.get_user_project_roles
+    monkeypatch.setattr(raw_events, "get_user_project_roles", lambda *a: looked_up.append(1) or real(*a))
+
+    member_client.get("/webhook-events/slack/5", params={"payload": True})
+
+    assert len(looked_up) == 1
+
+
+def read_key(db, user):
+    key = APIKey.create(user_id=user.id, name="read", scopes=["read"])
+    db.add(key)
+    db.commit()
+    return {"Authorization": f"Bearer {key.key}"}
+
+
+def test_an_admins_read_only_key_sees_only_their_own_accounts_and_deliveries(client, db_session, user):
+    other = other_user(db_session)
+    db_session.add_all([
+        SlackApp(client_id="mine.app", name="Mine", created_by_user_id=user.id),
+        SlackApp(client_id="their.app", name="Theirs", created_by_user_id=other.id),
+    ])
+    raw(db_session, other.id, "d1")
+    headers = read_key(db_session, user)
+
+    accounts = client.get("/webhook-events", headers=headers).json()
+    deliveries = client.get("/webhook-events/github/5", headers=headers).json()
+
+    assert ([a["name"] for a in accounts], deliveries) == (["Mine"], [])
+
+
+def test_an_admins_read_only_key_names_only_channels_its_bots_see(client, db_session, user):
+    mine = DiscordBot(application_id=1, name="Mine", created_by_user_id=user.id)
+    theirs = DiscordBot(application_id=2, name="Theirs", created_by_user_id=other_user(db_session).id)
+    db_session.add_all([mine, theirs])
+    db_session.flush()
+    db_session.add(DiscordChannel(id=902, name="their-dm", channel_type="dm", bot_id=theirs.id))
+    raw(db_session, user.id, "d1", source="discord", account_id=mine.id, container="902")
+    headers = read_key(db_session, user)
+
+    [shown] = client.get(f"/webhook-events/discord/{mine.id}", headers=headers).json()
+
+    assert shown["container_name"] is None
+
+
+@pytest.mark.parametrize("links_items", [True, False])
+def test_a_delivery_says_whether_its_ingest_links_items(member_client, db_session, user, links_items):
+    raw(db_session, user.id, "d1", outcome="stored", links_items=links_items)
+    db_session.commit()
+
+    [shown] = member_client.get("/webhook-events/github/5").json()
+
+    assert shown["links_items"] is links_items

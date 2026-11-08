@@ -7,13 +7,26 @@ from sqlalchemy import BigInteger, cast as sql_cast, func, select
 from sqlalchemy.orm import Session, undefer
 
 from memory.agents.activity import run_outcome
+from memory.agents.raw_events import container_of, container_reader
 from memory.agents.subscriptions import accessible_ids
 from memory.api.auth import request_api_key, require_rest_access
-from memory.common.access_control import has_admin_scope
+from memory.common.access_control import UserProxy, credential_scopes, has_admin_scope
 from memory.common.db.connection import get_session
-from memory.common.db.models import AgentRun, Subscription, Delivery, Event, GithubAccount, TranscriptAccount, User
+from memory.common.db.models import (
+    AgentRun,
+    APIKey,
+    Delivery,
+    DiscordChannel,
+    Event,
+    GithubAccount,
+    GithubRepo,
+    Subscription,
+    TranscriptAccount,
+    User,
+)
 from memory.common.db.models.discord import DiscordBot
-from memory.common.db.models.events import NOT_COLLECTED, RAW
+from memory.common.db.models.events import LINKS_ITEMS, NOT_COLLECTED, RAW
+from memory.common.discord_data import visible_channels
 from memory.common.db.models.slack import SlackApp
 
 EVENT_ARRIVAL_RESOLUTION = timedelta(minutes=1)
@@ -31,6 +44,7 @@ def record_event_arrival(db: Session, row: SlackApp | DiscordBot) -> None:
 router = APIRouter(prefix="/webhook-events", tags=["sources"])
 
 Source = Literal["github", "slack", "discord", "transcripts"]
+Outcome = Literal["stored", "not_collected", "no_item_type", "rejected"]
 # Each source's account table and the owner its raw events are recorded for.
 ACCOUNTS: dict[str, tuple[Any, Any]] = {
     "github": (GithubAccount, GithubAccount.user_id),
@@ -65,17 +79,30 @@ class RawEventView(BaseModel):
     outcome: str
     type: str | None
     container: str | None
+    # The repo's full name or the channel's name, where the viewer may see it.
+    container_name: str | None = None
+    # Whether its ingest links the items it writes; others (GitHub refetches,
+    # Discord reactions) change items without linking them here.
+    links_items: bool = False
     item_ids: list[int]
     triggered: list[Triggered]
     payload: Any = None
+    # The viewer couldn't read items filed where it came from, so its payload is left out.
+    payload_withheld: bool = False
+
+
+def credential_viewer(user: User, key: APIKey | None) -> UserProxy:
+    """The caller as its credential sees: an admin's read-only key is no admin."""
+    return UserProxy.from_user(user, scopes=credential_scopes(user, key))
 
 
 @router.get("")
 def webhook_accounts(
-    user: User = Depends(require_rest_access), db: Session = Depends(get_session)
+    request: Request, user: User = Depends(require_rest_access), db: Session = Depends(get_session)
 ) -> list[WebhookAccount]:
     """The source accounts whose webhook logs the caller may read (an admin: all),
     each with its latest delivery."""
+    viewer = credential_viewer(user, request_api_key(request, db))
     accounts: list[tuple[str, int, str, int | None, bool]] = []
     for source, (model, owner) in ACCOUNTS.items():
         latest = (
@@ -84,7 +111,7 @@ def webhook_accounts(
             .scalar_subquery()
         )
         query = select(model.id, model.name, latest, owner == user.id).order_by(model.id)
-        if not has_admin_scope(user):
+        if not has_admin_scope(viewer):
             query = query.where(owner == user.id)
         accounts += [(source, id, name, last, bool(own)) for id, name, last, own in db.execute(query)]
     latest_ids = [last for *_, last, _ in accounts if last is not None]
@@ -121,7 +148,7 @@ def started_run(run_id: str | None, started: bool) -> str | None:
     return run_id if started else None
 
 
-def triggered_by(db: Session, user: User, raw_ids: list[int]) -> dict[int, list[Triggered]]:
+def triggered_by(db: Session, user: UserProxy, raw_ids: list[int]) -> dict[int, list[Triggered]]:
     """For each raw event, the deliveries its items were routed into, of the
     caller's subscriptions (an admin: everyone's)."""
     query = (
@@ -160,7 +187,27 @@ def triggered_by(db: Session, user: User, raw_ids: list[int]) -> dict[int, list[
     return found
 
 
-def event_view(e: Event, items: list[int], triggered: list[Triggered], payload: bool) -> RawEventView:
+def container_names(db: Session, user: UserProxy, source: str, account_id: int, containers: set[str]) -> dict[str, str]:
+    """Names for the repos of this GitHub account, or the Discord channels the viewer can see."""
+    ids = [int(c) for c in containers if c.isascii() and c.isdigit()]
+    if source == "github":
+        rows = db.execute(
+            select(GithubRepo.github_id, GithubRepo.owner + "/" + GithubRepo.name).where(
+                GithubRepo.account_id == account_id, GithubRepo.github_id.in_(ids)
+            )
+        )
+    elif source == "discord":
+        rows = visible_channels(db, user).filter(DiscordChannel.id.in_(ids)).with_entities(
+            DiscordChannel.id, DiscordChannel.name
+        )
+    else:
+        return {}
+    return {str(id): name for id, name in rows}
+
+
+def event_view(
+    e: Event, items: list[int], triggered: list[Triggered], payload: bool, withheld: bool, names: dict[str, str]
+) -> RawEventView:
     # An untracked channel is untracked: its stub says only that something arrived.
     if e.outcome == NOT_COLLECTED:
         return RawEventView(
@@ -172,9 +219,12 @@ def event_view(e: Event, items: list[int], triggered: list[Triggered], payload: 
         outcome=e.outcome or "",
         type=e.type,
         container=e.container,
+        container_name=names.get(e.container) if e.container else None,
+        links_items=bool((e.data or {}).get(LINKS_ITEMS)),
         item_ids=items,
         triggered=triggered,
-        payload=e.payload if payload else None,
+        payload=e.payload if payload and not withheld else None,
+        payload_withheld=withheld,
     )
 
 
@@ -186,23 +236,33 @@ def webhook_log(
     before: int | None = None,
     limit: int = Query(50, ge=1, le=200),
     payload: bool = False,
+    outcome: Outcome | None = None,
+    event_type: str | None = Query(None, alias="type"),
     user: User = Depends(require_rest_access),
     db: Session = Depends(get_session),
 ) -> list[RawEventView]:
     """The newest webhook deliveries to one of the caller's source accounts (an
-    admin: any account's), before event id `before`, with the items each stored
-    and the deliveries those were routed into. Payloads are untrusted and only
-    included on request, until they expire."""
+    admin: any account's), before event id `before`, with `outcome` and a type
+    starting with `type`, with the items each stored and the deliveries those
+    were routed into. Payloads are untrusted and only included on request,
+    until they expire."""
     query = (
         select(Event)
         .where(Event.kind == RAW, Event.source == source, Event.account_id == account_id)
         .order_by(Event.id.desc())
         .limit(limit)
     )
-    if not has_admin_scope(user):
+    key = request_api_key(request, db)
+    viewer = credential_viewer(user, key)
+    if not has_admin_scope(viewer):
         query = query.where(Event.owner_id == user.id)
     if before is not None:
         query = query.where(Event.id < before)
+    if outcome is not None:
+        query = query.where(Event.outcome == outcome)
+    # A delivery not collected shows no type, so a type never finds one.
+    if event_type:
+        query = query.where(Event.type.startswith(event_type, autoescape=True), Event.outcome != NOT_COLLECTED)
     if payload:
         query = query.options(undefer(Event.payload))
     events = db.scalars(query).all()
@@ -211,13 +271,26 @@ def webhook_log(
         select(Event.caused_by, Event.item_id).where(Event.caused_by.in_(raw_ids)).order_by(Event.id)
     ).all()
     # The account's owner may since have lost access to an item it stored.
-    readable = set(accessible_ids(db, user, request_api_key(request, db), [i for _, i in caused if i is not None]))
+    readable = set(accessible_ids(db, user, key, [i for _, i in caused if i is not None]))
     items: dict[int, list[int]] = {}
     for raw_id, item_id in caused:
         if item_id in readable:
             items.setdefault(raw_id, []).append(item_id)
     triggered = {
         raw_id: [t for t in found if t.item_id is None or t.item_id in readable]
-        for raw_id, found in triggered_by(db, user, raw_ids).items()
+        for raw_id, found in triggered_by(db, viewer, raw_ids).items()
     }
-    return [event_view(e, items.get(e.id, []), triggered.get(e.id, []), payload) for e in events]
+    # The raw subscriptions' rule. Only deliveries that store nothing keep a
+    # payload, so there are no stored items to check as well.
+    withheld: set[int] = set()
+    if payload:
+        reads = container_reader(db, user, key)
+        withheld = {
+            e.id
+            for e in events
+            if e.payload is not None and not ((c := container_of(db, e)) is not None and reads(c))
+        }
+    names = container_names(db, viewer, source, account_id, {e.container for e in events if e.container})
+    return [
+        event_view(e, items.get(e.id, []), triggered.get(e.id, []), payload, e.id in withheld, names) for e in events
+    ]

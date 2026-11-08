@@ -186,7 +186,7 @@ export const Row = ({ title, to, onSelect, selected, expanded, leading, badges, 
               {badges}
             </div>
             {!!facts?.length && (
-              <div className="flex flex-wrap gap-x-1.5 text-xs text-slate-500">
+              <div className="flex flex-wrap gap-x-1.5 text-xs text-slate-500 wrap-anywhere">
                 {facts.map((m, i) => <span key={i}>{i > 0 && <span aria-hidden="true" className="mr-1.5">·</span>}{m}</span>)}
               </div>
             )}
