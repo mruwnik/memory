@@ -141,19 +141,26 @@ def test_stream_download_to_path_creates_parent_directory(tmp_path: pathlib.Path
     assert dest.exists()
 
 
-def test_stream_download_to_path_handles_request_exception(tmp_path: pathlib.Path):
-    """Network failure returns False AND removes any partial file."""
-    dest = tmp_path / "failed.bin"
-    # Pre-create the file to verify cleanup on failure.
-    dest.write_bytes(b"stale content")
+@pytest.mark.parametrize(
+    "reply",
+    [
+        {"side_effect": requests.RequestException("boom")},
+        {"return_value": _FakeChunkResponse([], raises_on_status=requests.HTTPError("404"))},
+        {"return_value": _FakeChunkResponse([b"X" * 1024] * 4)},
+    ],
+    ids=["network failure", "error status", "cap exceeded mid-stream"],
+)
+def test_a_failed_download_keeps_the_file_already_there(tmp_path: pathlib.Path, reply):
+    """A failure leaves no partial file, and never removes one a previous download wrote."""
+    dest = tmp_path / "download" / "kept.bin"
+    dest.parent.mkdir()
+    dest.write_bytes(b"earlier download")
 
-    with patch(
-        "memory.common.downloads.checked_get",
-        side_effect=requests.RequestException("boom"),
-    ):
-        ok = stream_download_to_path("http://example.com/f", dest, max_bytes=1024)
+    with patch("memory.common.downloads.checked_get", **reply):
+        ok = stream_download_to_path("http://example.com/f", dest, max_bytes=2048)
+
     assert ok is False
-    assert not dest.exists()
+    assert (dest.read_bytes(), [p.name for p in dest.parent.iterdir()]) == (b"earlier download", ["kept.bin"])
 
 
 def test_stream_download_to_bytes_return_content_type_surfaces_header():

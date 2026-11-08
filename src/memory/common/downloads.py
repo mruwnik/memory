@@ -2,6 +2,7 @@
 
 import logging
 import pathlib
+import uuid
 from typing import Any, Literal, Mapping, overload
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
@@ -411,14 +412,16 @@ def stream_download_to_path(
     follow_redirects: bool = True,
     validate_url: bool = True,
 ) -> bool:
-    """Stream ``url`` directly to ``destination``. Returns True on success.
+    """Stream ``url`` to ``destination``. Returns True on success.
 
-    Cleans up the partial file if the size cap is exceeded mid-stream so
-    we never leave an incomplete file behind. The destination's parent
-    directory is created if it doesn't exist. Redirects are followed
-    manually with SSRF validation per hop — see :func:`safe_get`.
+    The body goes to a temporary file beside it, moved into place only once
+    complete, so a failure leaves no partial file and never removes one a
+    previous download wrote. The destination's parent directory is created
+    if it doesn't exist. Redirects are followed manually with SSRF
+    validation per hop — see :func:`safe_get`.
     """
     destination.parent.mkdir(parents=True, exist_ok=True)
+    partial = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.part")
     try:
         with safe_get(
             url,
@@ -433,20 +436,18 @@ def stream_download_to_path(
             if _content_length_exceeds_cap(response.headers, max_bytes, url):
                 return False
 
-            return _write_streaming(
-                destination,
-                response.iter_content(chunk_size=_CHUNK_SIZE),
-                max_bytes,
-                url,
-            )
+            if not _write_streaming(partial, response.iter_content(chunk_size=_CHUNK_SIZE), max_bytes, url):
+                return False
+        partial.replace(destination)
+        return True
     except UnsafeURLError as e:
         logger.warning("Refusing to download %s: %s", url, e)
-        destination.unlink(missing_ok=True)
         return False
     except requests.RequestException as e:
         logger.warning("Failed to download %s: %s", url, e)
-        destination.unlink(missing_ok=True)
         return False
+    finally:
+        partial.unlink(missing_ok=True)
 
 
 def _write_streaming(

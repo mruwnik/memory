@@ -28,6 +28,7 @@ from memory.common.celery_app import (
     EDIT_DISCORD_MESSAGE,
     HANDLE_DISCORD_EVENT,
     UPDATE_REACTIONS,
+    VERIFY_DISCORD_MESSAGES,
     app,
 )
 from memory.common.db.connection import make_session
@@ -44,7 +45,7 @@ from memory.common.content_processing import (
     process_content_item,
 )
 from memory.common.jobs import tracked_task
-from memory.discord.rest import bot_access, token_channel
+from memory.discord.rest import BotAccess, DiscordAPIError, DiscordRest, bot_access, token_channel
 
 logger = logging.getLogger(__name__)
 
@@ -79,23 +80,26 @@ def download_and_save_images(image_urls: list[str], message_id: int) -> list[str
     parsers/html.py — pre-fix this site used MD5, an inconsistency that
     showed the three sites had drifted independently.
     """
-    image_dir = settings.DISCORD_STORAGE_DIR / str(message_id)
-    image_dir.mkdir(parents=True, exist_ok=True)
-
+    (settings.DISCORD_STORAGE_DIR / str(message_id)).mkdir(parents=True, exist_ok=True)
     saved_paths = []
     for url in image_urls:
-        # SHA-256 truncated, matches parsers/html.py (was MD5 before).
-        url_hash = hashlib.sha256(url.encode()).hexdigest()[:32]
-        ext = pathlib.Path(url).suffix or ".jpg"
-        ext = ext.split("?")[0][:10]
-        filename = f"{url_hash}{ext}"
-        local_path = image_dir / filename
-
+        local_path = image_path(url, message_id)
         if not stream_download_to_path(url, local_path, MAX_IMAGE_SIZE):
             continue
         saved_paths.append(paths.to_db_filename(local_path))
 
     return saved_paths
+
+
+def image_path(url: str, message_id: int) -> pathlib.Path:
+    """Named by the URL without its query: Discord's CDN signs attachment URLs
+    with a query that changes over time, while the path (channel, attachment
+    id, filename) stays the same."""
+    unsigned = url.split("?")[0]
+    # SHA-256 truncated, matches parsers/html.py.
+    url_hash = hashlib.sha256(unsigned.encode()).hexdigest()[:32]
+    ext = (pathlib.Path(unsigned).suffix or ".jpg")[:10]
+    return settings.DISCORD_STORAGE_DIR / str(message_id) / f"{url_hash}{ext}"
 
 
 def person_for_discord_user(session: DBSession, discord_user: DiscordUser) -> Person:
@@ -126,9 +130,20 @@ def person_for_discord_user(session: DBSession, discord_user: DiscordUser) -> Pe
     return person
 
 
+def parse_time(value: str | None) -> datetime | None:
+    return datetime.fromisoformat(value.replace("Z", "+00:00")) if value else None
+
+
 def is_stale_edit(message: DiscordMessage, edited_at: datetime | None) -> bool:
     """Edits can arrive out of order; one older than the stored edit is ignored."""
     return bool(message.edited_at and edited_at and edited_at < message.edited_at)
+
+
+def changes(message: DiscordMessage, is_edit: bool, content: str, edited_at: datetime | None) -> bool:
+    """Whether storing this over the stored message changes it: only an edit
+    does, and not one that is unchanged or older than the stored edit."""
+    unchanged = message.content == content and edited_at in (None, message.edited_at)
+    return is_edit and not unchanged and not is_stale_edit(message, edited_at)
 
 
 @app.task(name=ADD_DISCORD_MESSAGE)
@@ -164,36 +179,23 @@ def add_discord_message(
     # Include message_id in hash to ensure uniqueness
     content_hash = hashlib.sha256(f"{message_id}:{content}".encode()).digest()
     sent_at_dt = datetime.fromisoformat(sent_at.replace("Z", "+00:00"))
-    edited_at_dt = (
-        datetime.fromisoformat(edited_at.replace("Z", "+00:00"))
-        if edited_at
-        else None
-    )
+    edited_at_dt = parse_time(edited_at)
 
-    # Download and save images to disk
-    saved_image_paths = []
-    if images:
-        saved_image_paths = download_and_save_images(images, message_id)
+    # Images are fetched only for a message this call stores or edits: they
+    # live under the message id, which a push may name for someone else's message.
+    with make_session() as session:
+        existing = cast(DiscordMessage | None, check_content_exists(session, DiscordMessage, message_id=message_id))
+        if existing and not changes(existing, is_edit, content, edited_at_dt):
+            return create_task_result(existing, "already_exists", message_id=message_id)
+    saved_image_paths = download_and_save_images(images, message_id) if images else []
 
     with make_session() as session:
-        # Check if message already exists
-        existing = check_content_exists(
-            session, DiscordMessage, message_id=message_id
-        )
+        existing = cast(DiscordMessage | None, check_content_exists(session, DiscordMessage, message_id=message_id))
+        if existing and not changes(existing, is_edit, content, edited_at_dt):
+            return create_task_result(existing, "already_exists", message_id=message_id)
 
-        if existing and not is_edit:
-            existing_msg = cast(DiscordMessage, existing)
-            logger.info(f"Discord message already exists: {existing_msg.message_id}")
-            return create_task_result(
-                existing_msg, "already_exists", message_id=message_id
-            )
-
-        if existing and is_edit:
-            # Update existing message
-            existing_msg = cast(DiscordMessage, existing)
-            unchanged = existing_msg.content == content and edited_at_dt in (None, existing_msg.edited_at)
-            if unchanged or is_stale_edit(existing_msg, edited_at_dt):
-                return create_task_result(existing_msg, "already_exists", message_id=message_id)
+        if existing:
+            existing_msg = existing
             existing_msg.content = content  # type: ignore
             if edited_at_dt:
                 existing_msg.edited_at = edited_at_dt
@@ -275,7 +277,7 @@ def edit_discord_message(
 ) -> dict[str, Any]:
     """Edit a stored message's content. An edit older than the stored one is
     ignored; without an edit time the stored one stays."""
-    edited_at_dt = datetime.fromisoformat(edited_at.replace("Z", "+00:00")) if edited_at else None
+    edited_at_dt = parse_time(edited_at)
     with make_session() as session:
         message = find_message(session, message_id, set(bot_ids) if bot_ids is not None else None)
         if message is None:
@@ -359,6 +361,123 @@ def delete_discord_messages(message_ids: list[int], bot_ids: list[int] | None = 
         return {"status": "deleted", "deleted": len(messages)}
 
 
+# Discord's error code for a message that doesn't exist; 404s for an unknown channel keep the messages.
+UNKNOWN_MESSAGE = 10008
+
+
+async def read_messages(
+    access: BotAccess, targets: list[tuple[int, int, int]]
+) -> tuple[dict[int, dict | None], DiscordAPIError | None]:
+    """Each (item id, channel id, message id) as the token reads it, in
+    order: None for one Discord says doesn't exist, left out for one it
+    can't reach, and with it every other one in that channel. Reading stops
+    at the first other error (a rejected token, rate limit, server error or
+    dropped connection), which is returned with what was read before it."""
+    read: dict[int, dict | None] = {}
+    unreachable: set[int] = set()
+    async with DiscordRest(access) as rest:
+        for item_id, channel_id, message_id in targets:
+            if channel_id in unreachable:
+                continue
+            try:
+                read[item_id] = await rest.get(f"/channels/{channel_id}/messages/{message_id}")
+            except DiscordAPIError as e:
+                if e.code == UNKNOWN_MESSAGE:
+                    read[item_id] = None
+                elif e.unreachable:
+                    unreachable.add(channel_id)
+                else:
+                    return read, e
+    return read, None
+
+
+def rewrite_message(session: DBSession, message: DiscordMessage, data: dict) -> bool:
+    """Make a stored message what Discord says it is; whether it differed.
+    Reactions are cleared either way, as a message read doesn't say who
+    reacted. Images are downloaded again only when their attachments differ."""
+    kwargs = discord_events.message_task_kwargs(data, bot_id=0)
+    images = [paths.to_db_filename(image_path(url, message.message_id)) for url in kwargs["images"] or []]
+    fields = {
+        "content": kwargs["content"],
+        "author_id": kwargs["author_id"],
+        "sent_at": parse_time(kwargs["sent_at"]),
+        "edited_at": parse_time(kwargs["edited_at"]),
+        "reply_to_message_id": kwargs["reply_to_message_id"],
+        "thread_id": kwargs["thread_id"],
+        "message_type": kwargs["message_type"],
+        "is_pinned": kwargs["is_pinned"],
+        "images": images or None,
+        "embeds": kwargs["embeds"],
+        "attachments": kwargs["attachments"],
+    }
+    message.reactions = None
+    if all(getattr(message, field) == value for field, value in fields.items()):
+        return False
+    if fields["images"] != message.images:
+        fields["images"] = kwargs["images"] and download_and_save_images(kwargs["images"], message.message_id) or None
+    author = discord_events.ensure_user(session, data["author"])
+    if not author.person:
+        author.person = person_for_discord_user(session, author)
+    for field, value in fields.items():
+        setattr(message, field, value)
+    message.people = [author.person]
+    return True
+
+
+@app.task(name=VERIFY_DISCORD_MESSAGES, bind=True, max_retries=6)
+@tracked_task
+def verify_discord_messages(self, bot_id: int, item_ids: list[int]) -> dict[str, Any]:
+    """Check stored messages with this bot's token: one Discord says doesn't
+    exist is deleted, one it reads otherwise is rewritten as it reads it, and
+    one the token can't reach stays as it is. Without API access (paused, no
+    token, or a token Discord rejects, which isn't retried: rejections count
+    towards Discord's per-IP limit) the check is skipped, and logged. A rate
+    limit, server error or dropped connection keeps what was read and
+    retries the rest with backoff; only the last attempt alerts."""
+    access = access_of(bot_id)
+    if access is None:
+        logger.warning("Discord bot %s has no API access: %s disowned messages left unchecked", bot_id, len(item_ids))
+        return {"status": "skipped", "reason": "no_access"}
+    with make_session() as session:
+        rows = (
+            session.query(DiscordMessage.id, DiscordMessage.channel_id, DiscordMessage.message_id)
+            .filter(DiscordMessage.id.in_(item_ids))
+            .order_by(DiscordMessage.id)
+        )
+        targets = [(row.id, row.channel_id, row.message_id) for row in rows]
+    read, stopped = asyncio.run(read_messages(access, targets))
+    deleted, rewritten = apply_reads(read)
+    if stopped is not None and stopped.status == 401:
+        logger.warning("Discord bot %s: token rejected, %s disowned messages left unchecked", bot_id, len(targets) - len(read))
+        return {"status": "skipped", "reason": "unauthorized"}
+    if stopped is not None:
+        remaining = [item_id for item_id, *_ in targets if item_id not in read]
+        countdown = min(60 * 2**self.request.retries, 3600)
+        raise self.retry(exc=stopped, args=[bot_id, remaining], countdown=countdown)
+    return {"status": "verified", "deleted": deleted, "rewritten": rewritten}
+
+
+def apply_reads(read: dict[int, dict | None]) -> tuple[int, int]:
+    """Delete or rewrite each stored message as it was read; the counts of both."""
+    deleted = rewritten = 0
+    for item_id, data in read.items():
+        with make_session() as session:
+            message = session.get(DiscordMessage, item_id)
+            if message is None:
+                continue
+            if data is None:
+                clear_item_chunks(message, session)
+                session.delete(message)
+                session.commit()
+                deleted += 1
+            elif rewrite_message(session, message, data):
+                safe_process_discord_message(message, session, message_id=message.message_id, operation="verifying")
+                rewritten += 1
+            else:
+                session.commit()
+    return deleted, rewritten
+
+
 REACTION_EVENTS: dict[str, ReactionAction] = {
     "MESSAGE_REACTION_ADD": "add",
     "MESSAGE_REACTION_REMOVE": "remove",
@@ -371,13 +490,15 @@ REACTION_EVENTS: dict[str, ReactionAction] = {
 DM_TYPES = frozenset({1, 3})
 
 
+def access_of(bot_id: int) -> BotAccess | None:
+    with make_session() as session:
+        return bot_access(session.get(DiscordBot, bot_id))
+
+
 def read_channel(bot_id: int, channel_id: int) -> dict | None:
     """The channel, as the bot's own token reads it."""
-    with make_session() as session:
-        access = bot_access(session.get(DiscordBot, bot_id))
-    if access is None:
-        return None
-    return asyncio.run(token_channel(access, channel_id))
+    access = access_of(bot_id)
+    return asyncio.run(token_channel(access, channel_id)) if access else None
 
 
 def read_dm(bot_id: int, channel_id: int) -> dict | None:
@@ -405,23 +526,26 @@ def store_message(bot: DiscordBot, bot_ids: set[int], data: dict, is_edit: bool,
     ``discord_events.push_refusal``; a DM it names is stored only once the
     bot's token reads the channel as its DM, and a new one only from someone
     who shares a server with the bot; a new server channel only once the
-    token reads it in the pushed server, and as the token lists it. The
-    gateway starts DMs itself, so an edit it relays never does. The message
-    is filed under its stored channel's server, never the one a payload names."""
+    token reads it in the pushed server, and as the token lists it. A push
+    naming no server is about its stored channel's server, if that has one:
+    only unknown channel ids cost a REST call. The gateway starts DMs
+    itself, so an edit it relays never does. The message is filed under its
+    stored channel's server, never the one a payload names."""
     channel_id = int(data["channel_id"])
     guild_id = discord_events.snowflake(data.get("guild_id"))
     with make_session() as session:
         existing = session.get(DiscordChannel, channel_id)
         new = existing is None
-        # The token can show a stored server channel to be a DM, but never takes one from its holder.
-        claimable = new or existing.server_id is not None
+        if pushed and guild_id is None and existing is not None and existing.server_id is not None:
+            guild_id = existing.server_id
+            data = data | {"guild_id": str(guild_id)}
         # Checked before the token is asked as well as after: a refused push mustn't cost a REST call.
         refusal = pushed and guild_id is not None and discord_events.push_refusal(session, channel_id, guild_id, bot_ids)
     if refusal:
         return {"status": "skipped", "reason": refusal}
     if guild_id is None and new and not pushed:
         return {"status": "skipped", "reason": "not_collected"}
-    dm = read_dm(bot.id, channel_id) if pushed and guild_id is None and claimable else None
+    dm = read_dm(bot.id, channel_id) if pushed and guild_id is None and new else None
     if new and guild_id is None and dm is None:
         return {"status": "skipped", "reason": "unconfirmed_dm"}
     listed = read_server_channel(bot.id, channel_id, guild_id) if pushed and guild_id is not None and new else None
@@ -468,7 +592,10 @@ def update_message(bot: DiscordBot, bot_ids: set[int], data: dict, pushed: bool)
 
 # What a push is refused for; other skips (not collected, too short to embed) store or drop it as Memory would anyway.
 PUSH_REFUSALS = frozenset(
-    {"guild_mismatch", "no_server", "not_owner", "not_member", "unconfirmed_dm", "unconfirmed_channel", "malformed"}
+    {
+        "guild_mismatch", "no_server", "not_owner", "not_member",
+        "held_by_other", "unconfirmed_dm", "unconfirmed_channel", "malformed",
+    }
 )
 
 
@@ -491,6 +618,17 @@ def handle_discord_event(bot_id: int, event_type: str, data: dict, pushed: bool 
     return result
 
 
+def message_ids(event_type: str, data: dict) -> list[int]:
+    """The messages an event is about."""
+    if event_type == "MESSAGE_DELETE_BULK":
+        return [int(i) for i in data.get("ids", [])]
+    if event_type in REACTION_EVENTS:
+        return [int(data["message_id"])]
+    if event_type in ("MESSAGE_CREATE", "MESSAGE_UPDATE", "MESSAGE_DELETE"):
+        return [int(data["id"])]
+    return []
+
+
 def apply_discord_event(bot_id: int, event_type: str, data: dict, pushed: bool) -> dict[str, Any]:
     if not discord_events.well_formed(data):
         return {"status": "skipped", "reason": "malformed"}
@@ -500,6 +638,8 @@ def apply_discord_event(bot_id: int, event_type: str, data: dict, pushed: bool) 
             return {"status": "skipped", "reason": "unknown_bot"}
         bot_ids = discord_events.owner_bot_ids(session, bot)
         session.expunge(bot)
+        if pushed and discord_events.held_by_other(session, message_ids(event_type, data), bot_ids):
+            return {"status": "skipped", "reason": "held_by_other"}
 
     if event_type == "MESSAGE_CREATE":
         return store_message(bot, bot_ids, data, is_edit=False, pushed=pushed)

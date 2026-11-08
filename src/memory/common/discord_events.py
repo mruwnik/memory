@@ -8,10 +8,11 @@ so this mirrors ``memory.discord.ingest`` without importing discord.py.
 import logging
 import re
 from datetime import datetime
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 from sqlalchemy import select, update
 
+from memory.common.celery_app import VERIFY_DISCORD_MESSAGES, app
 from memory.common.content_processing import clear_item_chunks
 from memory.common.db.connection import DBSession
 from memory.common.db.models import (
@@ -207,16 +208,17 @@ def verify_server(
     insert_missing(session, DiscordBotServer, bot_id=bot_id, server_id=server_id)
     if pushed:
         session.flush()
-        disown_outsiders(session, server_id)
+        disown_outsiders(session, server_id, bot_id)
     return server
 
 
-def disown_outsiders(session: DBSession, server_id: int, channel_id: int | None = None) -> None:
+def disown_outsiders(session: DBSession, server_id: int, bot_id: int | None, channel_id: int | None = None) -> None:
     """Take the messages in this server (or in one channel of it) that bots
     whose owner may not push into it delivered from that owner: it is no
     longer their creator, nor can it change them. They are what pushes filed
     there before a token showed whose server, or channel, it is, but also
-    what a bot that has since left delivered, so they are kept."""
+    what a bot that has since left delivered, so they are kept until
+    ``bot_id``'s token, which showed it, checks them."""
     channels = select(DiscordChannel.id).where(DiscordChannel.server_id == server_id)
     if channel_id is not None:
         channels = channels.where(DiscordChannel.id == channel_id)
@@ -235,6 +237,20 @@ def disown_outsiders(session: DBSession, server_id: int, channel_id: int | None 
     session.execute(update(SourceItem).where(SourceItem.id.in_(ids)).values(creator_id=None))
     session.execute(update(DiscordMessage).where(DiscordMessage.id.in_(ids)).values(bot_id=None))
     logger.info("Discord server %s channel %s: disowned %s messages of bots %s", server_id, channel_id, len(ids), outsiders)
+    verify_disowned(bot_id, ids)
+
+
+# Messages per verification task: each is one REST call.
+VERIFY_CHUNK = 100
+
+
+def verify_disowned(bot_id: int | None, item_ids: Sequence[int]) -> None:
+    """Queue a check of disowned messages with the token of the bot that now
+    holds them: their text is only what another owner pushed."""
+    if bot_id is None:
+        return
+    for start in range(0, len(item_ids), VERIFY_CHUNK):
+        app.send_task(VERIFY_DISCORD_MESSAGES, args=[bot_id, list(item_ids[start:start + VERIFY_CHUNK])])
 
 
 def hand_off_server(session: DBSession, server: DiscordServer, leaving: DiscordBot) -> None:
@@ -316,7 +332,7 @@ def move_to_server(
     )
     session.flush()
     session.expire(channel, ["server", "parent"])
-    disown_outsiders(session, server_id, channel.id)
+    disown_outsiders(session, server_id, bot_id, channel.id)
 
 
 def claim_dm(
@@ -353,12 +369,15 @@ def claim_dm(
 
 
 def disown_others(session: DBSession, channel_id: int, bot: DiscordBot) -> None:
-    """Take the messages of a DM this bot now holds from other owners' bots."""
-    session.execute(
+    """Take the messages of a DM this bot now holds from other owners' bots,
+    and have its token check them."""
+    ids = session.scalars(
         update(DiscordMessage)
         .where(DiscordMessage.channel_id == channel_id, DiscordMessage.bot_id.not_in(owner_bot_ids(session, bot)))
         .values(bot_id=None)
-    )
+        .returning(DiscordMessage.id)
+    ).all()
+    verify_disowned(bot.id, ids)
 
 
 def may_push_into(session: DBSession, server_id: int, bot_ids: set[int]) -> bool:
@@ -373,6 +392,31 @@ def may_push_into(session: DBSession, server_id: int, bot_ids: set[int]) -> bool
     return member.first() is not None
 
 
+def holds_server(session: DBSession, server_id: int, bot_ids: set[int]) -> bool:
+    """Whether the owner of these bots holds a server, or would by pushing
+    into it first. Only the holder's pushes change a server: a member's push
+    could forge its authors and text, or take ownership of a real message."""
+    server = session.get(DiscordServer, server_id)
+    return server is None or server.bot_id in bot_ids
+
+
+def held_by_other(session: DBSession, message_ids: list[int], bot_ids: set[int]) -> bool:
+    """Whether any of these stored messages is in a server another owner
+    holds and these bots' owner may push into. To an outsider such a message
+    stays unknown: ``may_change`` keeps it from them."""
+    servers = session.scalars(
+        select(DiscordChannel.server_id)
+        .join(DiscordMessage, DiscordMessage.channel_id == DiscordChannel.id)
+        .where(DiscordMessage.message_id.in_(message_ids))
+        .distinct()
+    ).all()
+    return any(
+        may_push_into(session, server_id, bot_ids) and not holds_server(session, server_id, bot_ids)
+        for server_id in servers
+        if server_id is not None
+    )
+
+
 def push_refusal(
     session: DBSession, channel_id: int, server_id: int | None, bot_ids: set[int], parent_id: int | None = None
 ) -> str | None:
@@ -381,7 +425,8 @@ def push_refusal(
     server it may push into, or a DM of its owner's, and only as that row
     stands (its stored server, never a pushed one); it may only create a row
     under a server it may push into, as a DM needs the bot's token to show it.
-    A thread's parent must be a channel of the same server."""
+    Of a server it may push into, it may only touch one its owner holds. A
+    thread's parent must be a channel of the same server."""
     channel = session.get(DiscordChannel, channel_id)
     if channel is not None and channel.server_id != server_id:
         return "guild_mismatch"
@@ -391,6 +436,8 @@ def push_refusal(
         return "not_owner"
     if server_id is not None and not may_push_into(session, server_id, bot_ids):
         return "not_member"
+    if server_id is not None and not holds_server(session, server_id, bot_ids):
+        return "held_by_other"
     parent = session.get(DiscordChannel, parent_id) if parent_id is not None else None
     if parent is not None and parent.server_id != server_id:
         return "guild_mismatch"

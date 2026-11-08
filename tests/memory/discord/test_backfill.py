@@ -371,7 +371,8 @@ async def test_discover_channel_threads_ensures_rows_and_dispatches(db_session, 
         routes={
             "/guilds/1/threads/active": (200, {"threads": [THREAD | {"id": "201", "name": "a"}, THREAD | {"id": "300", "parent_id": "99"}]}),
             "/channels/10/threads/archived/public": (200, {"threads": [
-                THREAD | {"id": "202", "name": "b"}, THREAD | {"id": "203", "guild_id": "2"},
+                # Not every server speaking the API names a thread's guild; its parent's stands.
+                {"id": "202", "name": "b", "parent_id": "10", "type": 11}, THREAD | {"id": "203", "guild_id": "2"},
             ], "has_more": False}),
             "/channels/10/threads/archived/private": (403, {"code": 50001}),
         }

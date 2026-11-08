@@ -227,9 +227,10 @@ async def discover_channel_threads(access: BotAccess, channel_id: int, celery_ap
         logger.info("Cannot access Discord channel %s for thread discovery (%s)", channel_id, e)
 
     # The parent's stored server was read before the listing; a thread in another one means it has moved since.
+    # A thread naming no server is in its parent's.
     threads = {
         thread_id: thread for thread_id, thread in threads.items()
-        if discord_events.snowflake(thread.get("guild_id")) == server_id
+        if (discord_events.snowflake(thread.get("guild_id")) or server_id) == server_id
     }
     if not threads:
         return []

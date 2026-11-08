@@ -157,7 +157,7 @@ def test_only_events_in_collected_channels_are_queued(
     db_session.add(other)
     db_session.flush()
     db_session.add_all([
-        DiscordServer(id=7, name="S", collect_messages=True),
+        DiscordServer(id=7, name="S", bot_id=webhook_bot.id, collect_messages=True),
         DiscordServer(id=9, name="Q", bot_id=webhook_bot.id),
         DiscordServer(id=10, name="Theirs", bot_id=other.id, verified=True, collect_messages=False),
     ])
