@@ -40,6 +40,8 @@ from memory.common.celery_app import app as celery_app
 from memory.common.db.connection import DBSession, make_session
 from memory.common.scopes import SCOPE_READ, SCOPE_WRITE
 from memory.common.notify import (
+    CHANNEL_PRIORITY,
+    channel_problems,
     format_notification_message,
     get_notification_channel,
     user_info_for,
@@ -262,9 +264,10 @@ async def notify_user(
     Send a notification to the current user.
 
     Delivery priority (unless overridden by channel parameter):
-    1. Discord DM (if user has Discord account linked)
+    1. Discord DM (if a Discord account is linked to your Person and you registered
+       a Discord bot, which sends it)
     2. Slack DM (if user has Slack account linked)
-    3. Email (if user has email account configured)
+    3. Email (if user has an email account with sending enabled)
 
     Args:
         subject: Notification subject/title (shown as bold header)
@@ -282,6 +285,8 @@ async def notify_user(
         For an immediate send: ``{"queued": True, "scheduled": False, ...}`` —
         the delivery task is enqueued but NOT confirmed delivered (fire-and-forget,
         no row/metric to read back).
+        Both carry ``skipped_channels``: why each channel ahead of the one used
+        couldn't be used. A forced channel that can't be used errors with why.
     """
     if not subject:
         raise ValueError("Subject is required")
@@ -298,14 +303,18 @@ async def notify_user(
         if not user_id:
             raise ValueError("User not found")
 
-        # Determine channel
         channel_info = get_notification_channel(current_user, channel)
+        problems = channel_problems(current_user)
         if not channel_info:
             if channel:
-                raise ValueError(f"{channel.title()} account not configured")
-            raise ValueError("No notification channel available (Discord, Slack, or Email)")
+                raise ValueError(f"Can't notify over {channel}: {problems.get(channel, 'it is not available')}")
+            reasons = "; ".join(f"{name}: {why}" for name, why in problems.items())
+            raise ValueError(f"No notification channel available ({reasons})")
 
         channel_type, channel_identifier, extra_data = channel_info
+        # Why channels ahead of the chosen one in the priority order were passed over.
+        passed_over = () if channel else CHANNEL_PRIORITY[: CHANNEL_PRIORITY.index(channel_type)]
+        skipped = {name: problems[name] for name in passed_over if name in problems}
         full_message = format_notification_message(subject, message, details_url)
 
         if scheduled_time:
@@ -341,6 +350,7 @@ async def notify_user(
                 "scheduled": True,
                 "notification_id": notification.id,
                 "channel_type": channel_type,
+                "skipped_channels": skipped,
                 "scheduled_time": scheduled_dt.isoformat() + "Z",
             }
 
@@ -357,6 +367,7 @@ async def notify_user(
         "scheduled": False,
         "notification_id": None,
         "channel_type": channel_type,
+        "skipped_channels": skipped,
         "scheduled_time": None,
     }
 

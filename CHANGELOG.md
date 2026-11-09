@@ -28,6 +28,9 @@ a new, empty `## Unreleased` above it.
 - The daily open-items sweep of project-tracking repos also fetches what changed since the last sync, so issues and PRs closed in between are no longer missed.
 - Webhook deliveries of deleted or transferred issues no longer queue a refetch, and a refetch of an item GitHub no longer has finishes as `not_found`.
 - The webhook log lists a GitHub account's repo sync errors above its deliveries, since refetches fail the same way.
+- `agent_run` and `agent_upsert` advertise the inline spec's fields in their parameter schema, and a spec with an unknown top-level field is refused with the list of accepted fields.
+- `agent_run(notify=true)` notifies you when the run ends, on the same channel `meta_notify_user` picks (Discord, Slack or email); runs started by runs can't ask to. `agent_wait(result_only=true)` returns the run's status, result and error without its spec. `agent_list_runs(unseen=true)` lists the runs you started with `agent_run` that ended since `agent_wait` or an unseen listing last handed them to you.
+- `meta_notify_user` says why it can't use a channel: for Discord, whether no Discord account is linked to your Person or you have no Discord bot of your own (notifications go out through a bot you registered). Results list `skipped_channels`, why each channel ahead of the one used was passed over. A Discord user id in the Person's `contact_info.discord` counts as a linked account when no Discord account is linked.
 
 ### Required env vars
 None
@@ -36,10 +39,12 @@ None
 None
 
 ### Other changes for operators
+- New beat task `notify-finished-runs` (every 30s, `scheduler` queue) sends `agent_run(notify=true)` notifications.
 - A repo synced before this release while GitHub refused queries may have had its `last_sync_at` moved past items it never stored. After granting the missing permissions, run Sync on the repo with `force_full=true` (`POST /github/accounts/{account_id}/repos/{repo_id}/sync?force_full=true`), or clear `last_sync_at` for it. Later incidents catch up by themselves.
 
 ### Migrations
 - `20261220_github_incomplete_since` adds a nullable `github_repos.incomplete_since` column and a `github_repos.sync_incomplete` boolean defaulting to false (instant).
+- `20261221_agent_run_notify_seen` adds `agent_runs.notify_on_finish`, `notified_at` and `seen_at` with two partial indexes, and backfills `seen_at = finished_at` for ended runs started through MCP or by hand that aren't sub-runs (an `UPDATE` scanning all of `agent_runs`: slow on a large table, and the indexes are built without `CONCURRENTLY`).
 
 ### Post-deploy commands
 None

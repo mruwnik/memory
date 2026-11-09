@@ -44,6 +44,14 @@ def primary_contact(value: Any) -> Any:
     return next(iter(contact_values(value)), None)
 
 
+def discord_ids(contact_info: dict | None) -> list[str]:
+    """Discord user ids from contact_info["discord"], primary first. Usernames are
+    skipped: one can pass to another account after a rename. So are numbers too big
+    to be a snowflake, which the BigInteger id columns can't hold."""
+    values = (str(v).strip() for v in contact_values((contact_info or {}).get("discord")))
+    return [v for v in values if re.fullmatch(r"[0-9]{1,19}", v) and int(v) < 2**63]
+
+
 def slack_accounts(contact_info: dict | None) -> list[tuple[str, str]]:
     """(workspace_id, user_id) pairs from contact_info["slack"], primary first."""
     return [

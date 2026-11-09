@@ -20,7 +20,7 @@ from typing import Annotated, Any
 
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_access_token
-from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, ValidationError, WithJsonSchema
 from sqlalchemy import and_, func, or_, tuple_
 from sqlalchemy.exc import IntegrityError
 
@@ -56,8 +56,11 @@ from memory.agents.provider_keys import (
 )
 from memory.agents.spec import (
     DEFAULT_AGENT_MODEL,
+    MAX_DECLARED,
+    MAX_GLOB_CHARS,
     MAX_NAME_CHARS,
     AgentSpec,
+    Declared,
     Placement,
     Requirements,
     external_tool_name,
@@ -94,6 +97,7 @@ from memory.common.db.models import (
 from memory.common.db.models.events import TIMER, Event
 from memory.common.db.models.agents import (
     EXECUTOR_WORKERS,
+    STARTED_BY_CALLER,
     TERMINAL_STATUSES,
     RunStatus,
     iso,
@@ -200,11 +204,52 @@ def readable_run(
     return run
 
 
+def unknown_field_hint(error: ValidationError) -> str:
+    """The accepted fields, when the spec has a top-level field AgentSpec lacks."""
+    if not any(e["type"] == "extra_forbidden" and len(e["loc"]) == 1 for e in error.errors()):
+        return ""
+    return (
+        f"\naccepted fields: {', '.join(AgentSpec.model_fields)} (only system_prompt is "
+        "required); a definition's name and description are agent_upsert arguments, "
+        "not spec fields"
+    )
+
+
 def parse_spec(spec: dict[str, Any]) -> AgentSpec:
     try:
         return AgentSpec.model_validate(spec)
     except ValidationError as e:
-        raise ValueError(f"invalid spec: {e}") from e
+        raise ValueError(f"invalid spec: {e}{unknown_field_hint(e)}") from e
+
+
+def inline_refs(node: Any, defs: dict[str, Any]) -> Any:
+    """`node` with each local $ref replaced by its definition, for clients that can't
+    follow refs into a parameter's nested schema."""
+    if isinstance(node, list):
+        return [inline_refs(item, defs) for item in node]
+    if not isinstance(node, dict):
+        return node
+    if "$ref" in node:
+        rest = {k: v for k, v in node.items() if k != "$ref"}
+        return inline_refs(defs[node["$ref"].rsplit("/", 1)[-1]], defs) | rest
+    return {k: inline_refs(v, defs) for k, v in node.items() if k != "$defs"}
+
+
+def spec_json_schema() -> dict[str, Any]:
+    """AgentSpec's JSON schema as the tools take it: provider_key also by name."""
+    schema = AgentSpec.model_json_schema()
+    inlined = inline_refs(schema, schema.get("$defs", {}))
+    inlined["properties"]["provider_key"] = {
+        "anyOf": [{"type": "integer", "minimum": 1}, {"type": "string"}, {"type": "null"}],
+        "default": None,
+        "description": "One of your agent_key_list keys, by id or name; "
+        "omit for your default key for the model's provider",
+    }
+    return inlined
+
+
+# Validated by parse_spec; the schema only tells clients the fields.
+SpecInput = Annotated[dict[str, Any], WithJsonSchema(spec_json_schema())]
 
 
 def keyed_spec(db: DBSession, user_id: int, spec: dict[str, Any]) -> AgentSpec:
@@ -274,7 +319,7 @@ async def check_spec(spec: AgentSpec) -> None:
 @agent_mcp.tool()
 @visible_when(require_scopes(SCOPE_AGENTS))
 async def upsert(
-    name: str, spec: dict, description: str = "", definition_id: int | None = None
+    name: str, spec: SpecInput, description: str = "", definition_id: int | None = None
 ) -> dict:
     """Create or update an agent definition.
 
@@ -468,16 +513,24 @@ def placement_overrides(
 @visible_when(require_scopes(SCOPE_AGENTS))
 async def run(
     input: str,
-    agent: int | str | dict,
+    agent: int | str | SpecInput,
     placement: Placement | None = None,
     fallback_after: int | None = None,
     requires: dict | None = None,
+    notify: bool = False,
 ) -> dict:
     """Start a run, paid with your key. Returns its run_id at once; follow it with agent_wait.
 
     `agent` is one of your definitions (its id or name), a prebuilt agent's slug
     (agent_catalog) or a system agent's (agent_system_list, "system:..."), or an
-    inline spec (the fields agent_upsert takes), which runs without being saved.
+    inline spec, which runs without being saved. An inline spec takes the fields of
+    agent_upsert's `spec` (listed in this parameter's schema); only system_prompt is
+    required. A definition's name and description are not spec fields.
+
+    With `notify`, memory notifies you (as meta_notify_user would: Discord, Slack or
+    email) when the run ends, with its status, the start of its result and its run_id.
+    Either way, agent_list_runs(unseen=true) lists your ended runs that neither
+    agent_wait nor an unseen listing has handed you yet.
 
     `placement`, `fallback_after` and `requires` override the agent's own for this run
     (see agent_upsert); with `placement` given, an omitted fallback_after means never.
@@ -500,6 +553,8 @@ async def run(
             raise ValueError("runs started by runs can't override placement")
         if overrides and slug in SYSTEM_AGENTS:
             raise ValueError("system agents run on the server only")
+        if notify and parent_id is not None:
+            raise ValueError("runs started by runs can't ask to notify")
         if overrides:
             parsed = parse_spec(parsed.model_dump(mode="json") | overrides)
         await check_spec(parsed)
@@ -525,6 +580,7 @@ async def run(
                 agent=slug,
                 api_key=api_key,
                 parent=parent,
+                notify=notify,
             )
         except (SpecInvalid, CapExceeded) as e:
             raise ValueError(str(e)) from e
@@ -534,34 +590,53 @@ async def run(
 @agent_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_AGENTS))
 async def wait(
-    run_id: str, after_seq: int = -1, wait: int = 0, limit: int = 100
+    run_id: str,
+    after_seq: int = -1,
+    wait: int = 0,
+    limit: int = 100,
+    result_only: bool = False,
 ) -> dict:
     """A run plus up to `limit` of its transcript steps with seq > after_seq.
 
     With wait > 0, blocks (up to AGENT_MAX_WAIT_SEC) until new steps appear or the
-    run finishes; call again with the last seq you saw to follow a live run. Called by
-    a run, it reaches only that run's children.
+    run finishes; call again with the last seq you saw to follow a live run. With
+    `result_only`, returns the run (its status, result and error) without its spec or
+    transcript, and with wait > 0 blocks until it finishes. Handing you an ended run of
+    yours marks it seen (agent_list_runs unseen). Called by a run, it reaches only that
+    run's children.
     """
     user_id, is_admin = caller()
+    by_run = calling_run(get_access_token()) is not None
     deadline = time.monotonic() + min(max(wait, 0), settings.AGENT_MAX_WAIT_SEC)
     while True:
         with make_session() as db:
             found = readable_run(db, run_id, user_id, is_admin)
-            steps = (
-                db.query(AgentRunStep)
-                .filter(AgentRunStep.run_id == run_id, AgentRunStep.seq > after_seq)
-                .order_by(AgentRunStep.seq)
-                .limit(min(max(limit, 1), 500))
-                .all()
-            )
-            payload = {
-                "run": found.serialize(include_spec=True),
-                "steps": [s.serialize() for s in steps],
-            }
             finished = found.status in TERMINAL_STATUSES
+            if finished and found.user_id == user_id and not by_run:
+                mark_seen(found)
+            if result_only:
+                payload = {"run": found.serialize()}
+                steps = []
+            else:
+                steps = (
+                    db.query(AgentRunStep)
+                    .filter(AgentRunStep.run_id == run_id, AgentRunStep.seq > after_seq)
+                    .order_by(AgentRunStep.seq)
+                    .limit(min(max(limit, 1), 500))
+                    .all()
+                )
+                payload = {
+                    "run": found.serialize(include_spec=True),
+                    "steps": [s.serialize() for s in steps],
+                }
         if steps or finished or time.monotonic() >= deadline:
             return payload
         await asyncio.sleep(1)
+
+
+def mark_seen(run: AgentRun) -> None:
+    if run.seen_at is None:
+        run.seen_at = datetime.now(timezone.utc)
 
 
 @agent_mcp.tool(annotations=READ_ONLY)
@@ -573,11 +648,26 @@ async def list_runs(
     limit: int = 50,
     before: str | None = None,
     before_id: str | None = None,
+    unseen: bool = False,
 ) -> dict:
-    """Your runs, newest first, optionally only a definition's or a prebuilt or system agent's (by slug). To page, pass the last run's `created_at` as `before` and its `id` as `before_id`."""
+    """Your runs, newest first, optionally only a definition's or a prebuilt or system agent's (by slug). To page, pass the last run's `created_at` as `before` and its `id` as `before_id`.
+
+    With `unseen`, only the runs you started with agent_run that have ended and that
+    neither agent_wait nor an unseen listing has handed you yet. It marks the runs it
+    returns seen; runs past `limit` or left out by other filters stay unseen. Called by
+    a run, it marks nothing seen.
+    """
     user_id, _ = caller()
+    by_run = calling_run(get_access_token()) is not None
     with make_session() as db:
         query = db.query(AgentRun).filter(AgentRun.user_id == user_id)
+        if unseen:
+            query = query.filter(
+                AgentRun.seen_at.is_(None),
+                AgentRun.finished_at.is_not(None),
+                AgentRun.parent_run_id.is_(None),
+                AgentRun.trigger_kind.in_(STARTED_BY_CALLER),
+            )
         if definition_id is not None:
             query = query.filter(AgentRun.definition_id == definition_id)
         if agent is not None:
@@ -598,7 +688,11 @@ async def list_runs(
             .limit(min(max(limit, 1), 200))
             .all()
         )
-        return {"runs": [r.serialize() for r in runs]}
+        payload = {"runs": [r.serialize() for r in runs]}
+        if unseen and not by_run:
+            for r in runs:
+                mark_seen(r)
+        return payload
 
 
 @agent_mcp.tool()
@@ -739,12 +833,14 @@ def lease_run(run: AgentRun, user_id: int, worker: str | None, lease: timedelta)
 
 
 def take_next(
-    user_id: int, token: str, declared: Requirements, worker: str | None, lease: timedelta
+    user_id: int, token: str, declared: Declared, worker: str | None, lease: timedelta
 ) -> dict | None:
     """Scans the queue oldest first in CLAIM_SCAN batches, by (created_at, id) cursor,
     without locks, then locks only the run it picks, passing over it if another worker
     has it or took it since the scan. The requirement globs are matched here: either
-    side may be a glob, which SQL can't match. A run of subscription deliveries is rendered
+    side may be a glob, which SQL can't match. Each distinct `requires` is matched once
+    per scan, as one agent's runs share it and a declaration may be long. A run of
+    subscription deliveries is rendered
     as its items are now (queues.rerender); one the claiming credential can't read all
     of is passed over for a worker that can."""
     with make_session() as db:
@@ -752,6 +848,7 @@ def take_next(
         assert user is not None
         key = token_api_key(token, db)
         cursor = None
+        met: dict[str, bool] = {}
         while True:
             now = datetime.now(timezone.utc)
             claimable = (
@@ -776,7 +873,10 @@ def take_next(
                 return None
             for created_at, run_id, requires in batch:
                 cursor = (created_at, run_id)
-                if not satisfies(Requirements.model_validate(requires or {}), declared):
+                needs = json.dumps(requires or {}, sort_keys=True)
+                if needs not in met:
+                    met[needs] = satisfies(Requirements.model_validate(requires or {}), declared)
+                if not met[needs]:
                     continue
                 run = (
                     db.query(AgentRun)
@@ -797,6 +897,20 @@ def take_next(
                 payload = lease_run(run, user_id, worker, lease)
                 db.commit()
                 return payload
+
+
+def parse_capabilities(capabilities: dict | None) -> Declared:
+    try:
+        return Declared.model_validate(capabilities or {})
+    except ValidationError as e:
+        problems = "; ".join(
+            f"{'.'.join(map(str, err['loc']))}: {err['msg']}" for err in e.errors()
+        )
+        raise ValueError(
+            f"invalid capabilities: {problems} (capabilities takes models, tools and flags, "
+            f"each a list of at most {MAX_DECLARED} globs of at most {MAX_GLOB_CHARS} "
+            "characters)"
+        ) from e
 
 
 def require_read(user_id: int, token: str) -> None:
@@ -861,7 +975,8 @@ async def work_claim(
     any run; capabilities don't apply to it. agent_work_queues shows what is waiting.
 
     `capabilities` declares what you have, as {"models": [...], "tools": ["server:tool",
-    ...], "flags": [...]} (globs allowed, e.g. "memory:*"); a run is yours to take when
+    ...], "flags": [...]}, each at most 1000 entries of at most 200 characters (globs
+    allowed, e.g. "memory:*"); a run is yours to take when
     each of its spec's `requires` entries matches one of them. The run comes with its
     input, spec (system_prompt, model, tools, result_schema, limits, ...), a lease_token
     and lease_expires_at: finish it with agent_work_submit before the lease runs out
@@ -890,7 +1005,7 @@ async def work_claim(
     if queues is not None:
         await asyncio.to_thread(require_read, user_id, token)
     takes_runs = queues is None or capabilities is not None
-    declared = Requirements.model_validate(capabilities or {})
+    declared = parse_capabilities(capabilities)
     deadline = time.monotonic() + min(max(wait, 0), settings.AGENT_MAX_WAIT_SEC)
     while True:
         taken = None

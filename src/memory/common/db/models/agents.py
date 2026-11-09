@@ -43,6 +43,8 @@ MAX_RETENTION_DAYS = 3650
 TERMINAL_STATUSES = frozenset(
     {RunStatus.DONE, RunStatus.FAILED, RunStatus.BUDGET_EXCEEDED, RunStatus.CANCELLED}
 )
+# Trigger kinds of runs someone started with agent_run (over an API key, or not).
+STARTED_BY_CALLER = ("mcp", "manual")
 
 
 def iso(dt: datetime | None) -> str | None:
@@ -186,6 +188,13 @@ class AgentRun(Base):
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # The owner asked to be notified when the run ends; notified_at is when they were.
+    notify_on_finish: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # When the ended run was first handed to its owner (agent_wait or an unseen listing).
+    seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (
         CheckConstraint(
@@ -207,6 +216,19 @@ class AgentRun(Base):
         Index("agent_runs_provider_key_created_idx", "provider_key_id", "created_at"),
         Index("agent_runs_parent_idx", "parent_run_id"),
         Index("agent_runs_finished_idx", "finished_at"),
+        Index(
+            "agent_runs_notify_pending_idx",
+            "finished_at",
+            postgresql_where=text("notify_on_finish AND notified_at IS NULL"),
+        ),
+        Index(
+            "agent_runs_unseen_idx",
+            "user_id",
+            "finished_at",
+            postgresql_where=text(
+                "seen_at IS NULL AND parent_run_id IS NULL AND trigger_kind IN ('mcp', 'manual')"
+            ),
+        ),
         Index(
             "agent_runs_workers_queue_idx",
             "created_at",
@@ -283,6 +305,8 @@ class AgentRun(Base):
             "created_at": iso(self.created_at),
             "started_at": iso(self.started_at),
             "finished_at": iso(self.finished_at),
+            "notify_on_finish": self.notify_on_finish,
+            "seen_at": iso(self.seen_at),
         }
         return data | ({"spec": self.spec} if include_spec else {})
 

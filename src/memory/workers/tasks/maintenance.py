@@ -24,7 +24,7 @@ from memory.common import (
     summarizer,
     summary_batch,
 )
-from memory.agents import clock, subscriptions
+from memory.agents import clock, run_notify, subscriptions
 from memory.agents.cancel import cancel_tree
 from memory.common.db.models.agents import EXECUTOR_SERVER, MAX_RETENTION_DAYS, RunStatus
 from memory.common.db.models.events import ITEM, REMOVED
@@ -43,6 +43,7 @@ from memory.common.celery_app import (
     PURGE_AGENT_RUNS,
     ROUTE_EVENTS,
     RUN_CLOCK,
+    NOTIFY_FINISHED_RUNS,
     SWEEP_AGENT_RUNS,
     SWEEP_DELIVERIES,
     CLEANUP_OLD_CLAUDE_SESSIONS,
@@ -1665,6 +1666,12 @@ def route_events() -> dict[str, int]:
 def run_clock() -> dict[str, int]:
     """Write the ticks of cron subscriptions that are due and deliver due ticks and timers."""
     return clock.run_clock()
+
+
+@app.task(name=NOTIFY_FINISHED_RUNS)
+def notify_finished_runs() -> dict[str, int]:
+    """Tell owners that the runs they asked to hear about have ended."""
+    return run_notify.notify_finished_runs()
 
 
 @app.task(name=SWEEP_DELIVERIES)
