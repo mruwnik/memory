@@ -28,6 +28,8 @@ a new, empty `## Unreleased` above it.
 - The daily open-items sweep of project-tracking repos also fetches what changed since the last sync, so issues and PRs closed in between are no longer missed.
 - Webhook deliveries of deleted or transferred issues no longer queue a refetch, and a refetch of an item GitHub no longer has finishes as `not_found`.
 - The webhook log lists a GitHub account's repo sync errors above its deliveries, since refetches fail the same way.
+- `people_list_all` search also matches every contact_info value (emails, phone numbers, Slack user id, username and display name, Discord id), linked Discord accounts (username, display name) and linked GitHub accounts (login, name, email), so an email address or chat handle finds its person.
+- `people_list_all` search and tag filters only match tidbits the caller can read. Before, a match on an unreadable or hidden tidbit returned its person.
 
 ### Required env vars
 None
