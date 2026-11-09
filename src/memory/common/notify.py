@@ -149,8 +149,8 @@ def channel_problems(user_info: dict) -> dict[str, str]:
     problems = {}
     if not user.get("discord_accounts"):
         problems["discord"] = (
-            "no Discord account is linked to your Person (an admin can link it, "
-            "or put your Discord user id in its contact_info)"
+            "no Discord account is linked to your Person (ask an admin to link your "
+            "Discord account, or to add your Discord user id to its contact_info)"
         )
     elif not user.get("discord_bots"):
         problems["discord"] = (
