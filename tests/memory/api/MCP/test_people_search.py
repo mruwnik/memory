@@ -261,3 +261,60 @@ async def test_list_all_tidbit_readable_by_its_creator(db_session, regular_user,
     db_session.commit()
 
     assert await search_people(user_session.token, search="owes me lunch") == ["mine"]
+
+
+LITERAL = "under_score 100%"
+DECOY = "underXscore 1000"  # what "_" and "%" would match as wildcards
+
+
+@pytest.fixture
+def literal_and_decoy(db_session, admin_user):
+    """Persons "literal" and "decoy" holding LITERAL and DECOY in one searchable field."""
+
+    def in_field(field: str) -> None:
+        literal = Person(identifier="literal", display_name="Literal Person")
+        decoy = Person(identifier="decoy", display_name="Decoy Person")
+        db_session.add_all([literal, decoy])
+        db_session.flush()
+        for person, value, offset in [(literal, LITERAL, 0), (decoy, DECOY, 1)]:
+            put = {
+                "display_name": lambda: setattr(person, "display_name", value),
+                "alias": lambda: setattr(person, "aliases", [value]),
+                "contact_info": lambda: setattr(person, "contact_info", {"email": value}),
+                "discord": lambda: db_session.add(
+                    DiscordUser(id=8800 + offset, username=value, person_id=person.id)
+                ),
+                "tidbit": lambda: db_session.add(
+                    PersonTidbit(
+                        person_id=person.id,
+                        content=value,
+                        tidbit_type="note",
+                        creator_id=admin_user.id,
+                        modality="text",
+                        sha256=create_content_hash(value),
+                    )
+                ),
+            }
+            put[field]()
+        db_session.commit()
+
+    return in_field
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["display_name", "alias", "contact_info", "discord", "tidbit"])
+@pytest.mark.parametrize(
+    "search, expected",
+    [
+        ("r_s", ["literal"]),
+        ("0%", ["literal"]),
+        ("%", ["literal"]),
+        ("_", ["literal"]),
+        ("\\", []),  # the escape character is literal too
+    ],
+)
+async def test_list_all_search_treats_like_wildcards_literally(
+    db_session, admin_session, literal_and_decoy, field, search, expected
+):
+    literal_and_decoy(field)
+    assert await search_people(admin_session.token, search=search) == expected

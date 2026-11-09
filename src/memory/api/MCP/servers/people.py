@@ -19,6 +19,7 @@ from memory.api.MCP.access import (
     require_project_membership,
 )
 from memory.api.MCP.visibility import READ_ONLY, require_scopes, visible_when
+from memory.api.search.filters import escape_like
 from memory.common import settings
 from memory.common.scopes import SCOPE_ADMIN, SCOPE_PEOPLE, SCOPE_PEOPLE_WRITE
 from memory.common.access_control import (
@@ -553,10 +554,11 @@ async def fetch(
 CONTACT_INFO_MATCH = text(
     "EXISTS (SELECT 1 FROM jsonb_path_query(people.contact_info, '$.**') AS v"
     " WHERE jsonb_typeof(v) IN ('string', 'number')"
-    " AND v #>> '{}' ILIKE :contact_pattern)"
+    " AND v #>> '{}' ILIKE :contact_pattern ESCAPE '\\')"
 )
 ALIAS_MATCH = text(
-    "EXISTS (SELECT 1 FROM unnest(people.aliases) AS alias WHERE alias ILIKE :alias_pattern)"
+    "EXISTS (SELECT 1 FROM unnest(people.aliases) AS alias"
+    " WHERE alias ILIKE :alias_pattern ESCAPE '\\')"
 )
 
 
@@ -580,7 +582,10 @@ def linked_discord_match(pattern: str, caller: UserLike | None) -> ColumnElement
     display name matches ``pattern``."""
     return exists().where(
         DiscordUser.person_id == Person.id,
-        or_(DiscordUser.username.ilike(pattern), DiscordUser.display_name.ilike(pattern)),
+        or_(
+            DiscordUser.username.ilike(pattern, escape="\\"),
+            DiscordUser.display_name.ilike(pattern, escape="\\"),
+        ),
         visible_discord_users(caller),
     )
 
@@ -596,13 +601,13 @@ def person_search_clause(
     Each match is an EXISTS/IN on Person, so a Person matching through several
     fields or accounts is returned once.
     """
-    pattern = f"%{search}%"
+    pattern = f"%{escape_like(search)}%"
     tidbit_match = readable_tidbits(session, tidbit_filter).filter(
-        PersonTidbit.content.ilike(pattern)  # type: ignore[union-attr]
+        PersonTidbit.content.ilike(pattern, escape="\\")  # type: ignore[union-attr]
     )
     return or_(
-        Person.display_name.ilike(pattern),
-        Person.identifier.ilike(pattern),
+        Person.display_name.ilike(pattern, escape="\\"),
+        Person.identifier.ilike(pattern, escape="\\"),
         ALIAS_MATCH.bindparams(alias_pattern=pattern),
         CONTACT_INFO_MATCH.bindparams(contact_pattern=pattern),
         linked_discord_match(pattern, caller),
