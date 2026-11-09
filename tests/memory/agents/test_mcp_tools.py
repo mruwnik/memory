@@ -590,8 +590,9 @@ async def test_run_with_an_unknown_inline_field_names_the_accepted_fields(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("notify", [True, False])
 async def test_run_stores_whether_to_notify(
-    db_session, regular_user, user_session, fake_providers, notify
+    db_session, regular_user, user_session, fake_providers, add_sending_email, notify
 ):
+    add_sending_email(regular_user)
     with mcp_auth_context(user_session.token):
         started = await agent.run.fn(input="hi", agent=SPEC, notify=notify)
 
@@ -599,6 +600,35 @@ async def test_run_stores_whether_to_notify(
     assert found is not None
     assert found.notify_on_finish is notify
     assert found.serialize()["notify_on_finish"] is notify
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "no Discord account is linked",
+        "slack: no Slack account is connected",
+        "no email account you can send from",
+        "Start the run without notify",
+    ],
+)
+async def test_run_refuses_to_notify_an_owner_with_no_channel(
+    db_session, regular_user, user_session, fake_providers, reason
+):
+    with mcp_auth_context(user_session.token):
+        with pytest.raises(ValueError, match="notify needs a channel") as refused:
+            await agent.run.fn(input="hi", agent=SPEC, notify=True)
+
+    assert reason in str(refused.value)
+    assert db_session.query(AgentRun).count() == 0
+
+
+@pytest.mark.asyncio
+async def test_run_without_notify_needs_no_channel(db_session, regular_user, user_session, fake_providers):
+    with mcp_auth_context(user_session.token):
+        started = await agent.run.fn(input="hi", agent=SPEC)
+
+    assert db_session.get(AgentRun, started["run_id"]) is not None
 
 
 RUN_TOOLS = ["agent_run", "agent_wait", "agent_list_runs"]

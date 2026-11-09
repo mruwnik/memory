@@ -107,6 +107,7 @@ from memory.common.db.models.provider_keys import KEY_PROVIDERS, KeyStatus
 from memory.common.llms.neutral import BUILTIN_TOOLS, Capabilities
 from memory.common.llms.registry import PROVIDERS, all_models, split_model
 from memory.common.mcp_oauth import MCPServerError, describe, revoke
+from memory.common.notify import channel_problems, get_notification_channel, user_info_for
 from memory.common.rate_limit import check_rate_limit
 from memory.common.scopes import SCOPE_AGENTS, SCOPE_AGENTS_WORK, SCOPE_WRITE
 
@@ -509,6 +510,21 @@ def placement_overrides(
     return overrides
 
 
+def require_notify_channel(db: DBSession, user_id: int) -> None:
+    """Raise ValueError, naming why each channel is unusable, when none can notify the user."""
+    user = db.get(User, user_id)
+    if user is None:
+        raise ValueError(f"user {user_id} not found")
+    user_info = {"user": user_info_for(db, user)}
+    if get_notification_channel(user_info, None) is not None:
+        return
+    reasons = "; ".join(f"{name}: {why}" for name, why in channel_problems(user_info).items())
+    raise ValueError(
+        f"notify needs a channel to reach you on, and none is usable ({reasons}). "
+        "Start the run without notify and follow it with agent_wait or agent_list_runs(unseen=true)."
+    )
+
+
 @agent_mcp.tool()
 @visible_when(require_scopes(SCOPE_AGENTS))
 async def run(
@@ -529,6 +545,7 @@ async def run(
 
     With `notify`, memory notifies you (as meta_notify_user would: Discord, Slack or
     email) when the run ends, with its status, the start of its result and its run_id.
+    It is refused, with the reason each channel can't be used, when none can reach you.
     Either way, agent_list_runs(unseen=true) lists your ended runs that neither
     agent_wait nor an unseen listing has handed you yet.
 
@@ -555,6 +572,8 @@ async def run(
             raise ValueError("system agents run on the server only")
         if notify and parent_id is not None:
             raise ValueError("runs started by runs can't ask to notify")
+        if notify:
+            require_notify_channel(db, user_id)
         if overrides:
             parsed = parse_spec(parsed.model_dump(mode="json") | overrides)
         await check_spec(parsed)

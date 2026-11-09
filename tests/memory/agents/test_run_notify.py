@@ -1,3 +1,4 @@
+import logging
 import os
 import subprocess
 import sys
@@ -114,6 +115,19 @@ def test_an_owner_with_no_channel_counts_as_unsent(db_session, regular_user, no_
     assert sent_notifications(no_celery_dispatch) == []
     # Not retried every sweep.
     assert notified_at(db_session, run.id) is not None
+
+
+def test_an_owner_with_no_channel_is_logged_by_id(db_session, regular_user, no_celery_dispatch, caplog):
+    run = add_run(db_session, regular_user, agent="secret-agent", result={"text": "private words"})
+
+    with caplog.at_level(logging.INFO, logger=run_notify.__name__):
+        notify_finished_runs()
+
+    [record] = [r for r in caplog.records if r.name == run_notify.__name__]
+    assert record.levelno == logging.INFO
+    assert record.getMessage() == (
+        f"run {run.id} ended but its owner, user {regular_user.id}, has no channel to notify on"
+    )
 
 
 def test_a_failure_to_notify_one_run_does_not_stop_the_others(

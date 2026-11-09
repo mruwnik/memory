@@ -66,7 +66,10 @@ def notify_owner(db: DBSession, run: AgentRun) -> bool:
     if owner is None:
         return False
     subject, message = notification_for(db, run)
-    return notify_user_now(db, owner, subject, message, run_url(run)) is not None
+    if notify_user_now(db, owner, subject, message, run_url(run)) is None:
+        logger.info("run %s ended but its owner, user %s, has no channel to notify on", run.id, owner.id)
+        return False
+    return True
 
 
 def claim_finished_runs() -> list[str]:
