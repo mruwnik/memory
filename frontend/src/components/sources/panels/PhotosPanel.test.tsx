@@ -6,6 +6,7 @@ const apiCall = vi.fn()
 const deletePhoto = vi.fn()
 
 vi.mock('@/hooks/useAuth', () => ({
+  SERVER_URL: '',
   useAuth: () => ({ apiCall }),
 }))
 
@@ -73,6 +74,12 @@ describe('PhotosPanel - load states', () => {
     expect(screen.getByText('cat.png')).toBeInTheDocument()
     expect(screen.getByText('2 photos')).toBeInTheDocument()
     expect(screen.getByText('Pixel 8')).toBeInTheDocument()
+  })
+
+  it('loads the image from its file with the name encoded', async () => {
+    routePhotos([photo({ file_path: 'photos/#1 at 100%.jpg' })])
+    renderWithUser(<PhotosPanel />)
+    expect(await screen.findByRole('img', { name: 'beach.jpg' })).toHaveAttribute('src', '/files/photos/%231%20at%20100%25.jpg')
   })
 
   it('omits the image element when file_path is null', async () => {

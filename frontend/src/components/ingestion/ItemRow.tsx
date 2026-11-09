@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react'
-import { SERVER_URL } from '@/hooks/useAuth'
 import { useIngestedItems, type EmbedStatus, type IngestedItem } from '@/hooks/useIngestedItems'
 import { Badge, Button, ButtonLink, ExpandToggle, Row, RowError, SubList, buttonClass, type Tone } from '@/components/shared/ui'
+import { fileUrl } from '@/utils/files'
 import { formatBytes } from '@/utils/format'
 import { formatUserDateTime } from '@/utils/timezones'
 
@@ -24,8 +24,6 @@ export const itemTitle = (item: IngestedItem) => {
   const text = (item.title || item.filename || `Item ${item.id}`).replace(/\s+/g, ' ').trim()
   return text.length > MAX_TITLE ? `${text.slice(0, MAX_TITLE - 1)}…` : text
 }
-
-const fileUrl = (filename: string) => `${SERVER_URL}/files/${filename.split('/').map(encodeURIComponent).join('/')}`
 
 /** A stored item: title, type and indexing status, when it was stored, its size and id; the preview toggles open. */
 export const ItemRow = ({ item, showType }: { item: IngestedItem; showType?: boolean }) => {

@@ -1,6 +1,6 @@
 import ReactMarkdown from 'react-markdown'
-import { SERVER_URL } from '@/hooks/useAuth'
 import { Badge, DetailList, Disclosure, Row } from '@/components/shared/ui'
+import { fileUrl } from '@/utils/files'
 
 export type SearchItem = {
     filename: string
@@ -10,8 +10,6 @@ export type SearchItem = {
     mime_type: string
     metadata: any
 }
-
-const fileUrl = (filename: string) => `${SERVER_URL}/files/${filename}`
 
 const isHttpUrl = (value: unknown) => typeof value === 'string' && /^https?:\/\//i.test(value)
 

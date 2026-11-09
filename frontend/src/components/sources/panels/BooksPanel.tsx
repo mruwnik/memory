@@ -3,6 +3,7 @@ import { useBooks, Book } from '@/hooks/useBooks'
 import { Badge, EmptyState, ErrorState, List, LoadingState, Notice, Row, Section } from '@/components/shared/ui'
 import { useSourcesContext } from '../context'
 import { FileButton } from '../shared'
+import { fileUrl } from '@/utils/files'
 
 export const BooksPanel = () => {
   const { listBooks, uploadBook } = useBooks()
@@ -77,7 +78,7 @@ export const BooksPanel = () => {
             <Row
               key={book.id}
               title={book.file_path
-                ? <a href={`/files/${book.file_path}?download=true`} title="Download book" className="text-primary hover:underline">{book.title}</a>
+                ? <a href={`${fileUrl(book.file_path)}?download=true`} title="Download book" className="text-primary hover:underline">{book.title}</a>
                 : book.title}
               badges={book.tags?.map(tag => <Badge key={tag}>{tag}</Badge>)}
               meta={[
