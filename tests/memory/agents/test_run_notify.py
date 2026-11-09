@@ -12,7 +12,7 @@ from memory.agents import run_notify
 from memory.agents.run_notify import PREVIEW_CHARS, notify_finished_runs, outcome_preview, run_label
 from memory.common import settings
 from memory.common.celery_app import NOTIFY_FINISHED_RUNS, SEND_NOTIFICATION, app, build_beat_schedule
-from memory.common.db.models import AgentDefinition, AgentRun, EmailAccount
+from memory.common.db.models import AgentDefinition, AgentRun
 from memory.workers.tasks import maintenance
 
 SPEC = {"system_prompt": "x", "model": "anthropic/m"}
@@ -20,14 +20,9 @@ OWNER_ADDRESS = "owner@example.com"
 
 
 @pytest.fixture
-def owner(db_session, regular_user):
+def owner(regular_user, add_sending_email):
     """A user with an email account notifications can be sent from."""
-    db_session.add(
-        EmailAccount(
-            user_id=regular_user.id, name="Mail", email_address=OWNER_ADDRESS, account_type="imap"
-        )
-    )
-    db_session.commit()
+    add_sending_email(regular_user, OWNER_ADDRESS)
     return regular_user
 
 
@@ -107,8 +102,6 @@ def test_the_notification_names_the_run_and_how_to_fetch_it(
 
 
 def test_an_owner_with_no_channel_counts_as_unsent(db_session, regular_user, no_celery_dispatch):
-    # No linked accounts and no address of their own to fall back on.
-    regular_user.email = ""
     run = add_run(db_session, regular_user)
 
     assert notify_finished_runs() == {"notified": 0, "unsent": 1}
