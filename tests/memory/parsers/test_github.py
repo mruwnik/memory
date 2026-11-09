@@ -934,13 +934,45 @@ def test_a_withheld_item_list_raises_what_to_grant():
 
 
 @pytest.mark.parametrize(
+    "auth_type, message",
+    [
+        (
+            "app",
+            "GitHub returns not-found for owner/repo: the GitHub App isn't installed on it, or it was renamed or "
+            "deleted. Add it to the installation and press Sync on the repo, or remove it here if it's gone.",
+        ),
+        (
+            "pat",
+            "GitHub returns not-found for owner/repo: the access token can't see it, or it was renamed or deleted. "
+            "A fine-grained token must list the repository and may need the organization's approval; a classic "
+            "token needs the repo scope and, for organizations with SSO, authorizing for it. Then press Sync on "
+            "the repo, or remove it here if it's gone.",
+        ),
+    ],
+)
+def test_a_repo_github_does_not_show_says_it_may_be_hidden_or_gone(auth_type, message):
+    client = GithubClient(GithubCredentials(auth_type="pat", access_token="token"))
+    client.credentials.auth_type = auth_type
+    response = mock_graphql_response(
+        {"repository": None},
+        [{"type": "NOT_FOUND", "path": ["repository"], "message": "Could not resolve to a Repository"}],
+    )
+
+    with patch.object(requests.Session, "post", return_value=response):
+        with pytest.raises(GithubQueryError) as raised:
+            list(client.fetch_prs("owner", "repo"))
+
+    assert str(raised.value) == message
+
+
+@pytest.mark.parametrize(
     "auth_type, paths, message",
     [
         (
             "app",
             [["repository", "pullRequests", "nodes", 0, "commits", "nodes", 0]],
             "The GitHub App can't read commits on acme/api: grant it Contents (read), Checks (read) and "
-            "Commit statuses (read), accept the new permissions on the installation, then Sync now.",
+            "Commit statuses (read), accept the new permissions on the installation, then press Sync on the repo.",
         ),
         (
             "app",
@@ -949,46 +981,54 @@ def test_a_withheld_item_list_raises_what_to_grant():
                 ["repository", "issues"],
             ],
             "The GitHub App can't read check results and issues on acme/api: grant it Checks (read), "
-            "Commit statuses (read) and Issues (read), accept the new permissions on the installation, then Sync now.",
+            "Commit statuses (read) and Issues (read), accept the new permissions on the installation, then press Sync on the repo.",
+        ),
+        (
+            "pat",
+            [["repository", "pullRequest", "commits", "nodes", 0, "commit", "statusCheckRollup"]],
+            "The access token can't read check results on acme/api: give it Contents (read) and Commit statuses "
+            "(read) on this repository, then press Sync on the repo. A fine-grained token must list the "
+            "repository and may need the organization's approval; a classic token needs the repo scope and, "
+            "for organizations with SSO, authorizing for it.",
         ),
         (
             "app",
             [["repository", "labels"]],
             "The GitHub App can't read labels on acme/api: check the permissions of its installation, "
-            "then Sync now.",
+            "then press Sync on the repo.",
         ),
         (
             "app",
             [["repository"]],
             "The GitHub App isn't installed on acme/api or can't see it: add acme/api to the installation, "
-            "then Sync now.",
+            "then press Sync on the repo.",
         ),
         (
             "pat",
             [["repository"]],
             "The access token can't see acme/api. A fine-grained token must list the repository and may need "
             "the organization's approval; a classic token needs the repo scope and, for organizations with SSO, "
-            "authorizing for it. Then Sync now.",
+            "authorizing for it. Then press Sync on the repo.",
         ),
         (
             "app",
             [["organization", "projectsV2"]],
             "The GitHub App can't read projects on acme/api: grant it organization Projects (read), "
-            "accept the new permissions on the installation, then Sync now.",
+            "accept the new permissions on the installation, then press Sync on the repo.",
         ),
         (
             "pat",
             [["organization", "projectsV2"]],
-            "The access token can't read projects on acme/api: give it organization Projects (read), then Sync "
-            "now. A fine-grained token must list the repository and may need the organization's approval; a "
+            "The access token can't read projects on acme/api: give it organization Projects (read), then press "
+            "Sync on the repo. A fine-grained token must list the repository and may need the organization's approval; a "
             "classic token needs the repo and read:project scopes and, for organizations with SSO, authorizing "
             "for it.",
         ),
         (
             "pat",
             [["repository", "pullRequest", "commits", "nodes", 0], ["repository", "pullRequest", "commits", "nodes", 1]],
-            "The access token can't read commits on acme/api: give it Contents (read), Checks (read) and "
-            "Commit statuses (read) on this repository, then Sync now. A fine-grained token must list the "
+            "The access token can't read commits on acme/api: give it Contents (read) and "
+            "Commit statuses (read) on this repository, then press Sync on the repo. A fine-grained token must list the "
             "repository and may need the organization's approval; a classic token needs the repo scope and, "
             "for organizations with SSO, authorizing for it.",
         ),

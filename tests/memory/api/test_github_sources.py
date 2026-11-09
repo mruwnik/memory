@@ -43,9 +43,10 @@ def test_list_accounts_returns_user_accounts(client, db_session, user):
         access_token="test_token",
     )
     since = datetime(2026, 10, 20, tzinfo=timezone.utc)
-    account.repos.append(
-        GithubRepo(owner="org", name="repo", sync_error="401 Bad credentials", sync_failing_since=since)
-    )
+    account.repos.extend([
+        GithubRepo(owner="org", name="repo", sync_error="401 Bad credentials", sync_failing_since=since),
+        GithubRepo(owner="org", name="partial", sync_error="Can't read commits", incomplete_since=since),
+    ])
     db_session.add(account)
     db_session.commit()
 
@@ -56,8 +57,10 @@ def test_list_accounts_returns_user_accounts(client, db_session, user):
     assert len(data) == 1
     assert data[0]["name"] == "Test GitHub Account"
     assert data[0]["auth_type"] == "pat"
-    repo = data[0]["repos"][0]
+    repo, partial = sorted(data[0]["repos"], key=lambda r: r["name"], reverse=True)
     assert (repo["sync_error"], repo["sync_failing_since"]) == ("401 Bad credentials", since.isoformat())
+    # Stored without some fields, rather than failing.
+    assert (repo["sync_incomplete"], partial["sync_incomplete"]) == (False, True)
 
 
 def test_list_accounts_empty_when_no_accounts(client, db_session, user):

@@ -915,6 +915,20 @@ def test_syncs_missing_fields_move_the_cursor_on_and_the_first_complete_one_catc
     assert (repo.sync_error, repo.incomplete_since) == (None, None)
 
 
+def test_an_open_only_sweep_missing_fields_catches_up_only_what_incremental_syncs_would_have(
+    mock_github_client, github_repo_with_project_fields, db_session
+):
+    """The next sweep re-fetches every open item anyway; closed ones the sweep never touched."""
+    cursor = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    github_repo_with_project_fields.last_sync_at = cursor
+    db_session.commit()
+    mock_github_client.unreadable_message.return_value = WITHHELD
+
+    synced(github_repo_with_project_fields, db_session)
+
+    assert github_repo_with_project_fields.incomplete_since == cursor
+
+
 def test_a_forced_full_sync_catches_up_without_a_second_fetch(mock_github_client, github_repo, db_session):
     github_repo.incomplete_since = datetime(2026, 1, 1, tzinfo=timezone.utc)
     db_session.commit()
@@ -1732,13 +1746,14 @@ def test_sync_github_repo_archived_deactivates_and_closes_children(db_session):
     assert closed_project.state == "closed"
 
 
-def test_sync_github_repo_missing_deactivates_and_closes_children(db_session):
-    """When repo returns 404, behave the same as archived."""
+@pytest.mark.parametrize("auth_type, hidden_by", [("app", "the GitHub App isn't installed on it"), ("pat", "the access token can't see it")])
+def test_a_repo_github_does_not_find_stays_tracked_and_says_it_may_be_hidden(db_session, auth_type, hidden_by):
+    """GitHub answers 404 for a private repo the App or token lost access to, as for a deleted one."""
     from memory.workers.tasks.github import sync_github_repo
     from memory.common.db.models.sources import Project
 
     repo = make_archive_test_repo(db_session)
-
+    repo.account.auth_type = auth_type
     open_project = Project(
         repo_id=repo.id, github_id=10, number=1, title="ms", state="open"
     )
@@ -1750,14 +1765,12 @@ def test_sync_github_repo_missing_deactivates_and_closes_children(db_session):
 
     with patch(
         "memory.common.project.client.GithubClient", return_value=mock_client
-    ):
-        result = sync_github_repo(repo.id)
-
-    assert result["status"] == "skipped_repo_missing"
+    ), pytest.raises(GithubQueryError):
+        sync_github_repo(repo.id)
 
     db_session.refresh(repo)
-    assert repo.active is False
-    assert repo.sync_error == "Repository no longer exists on GitHub"
-
     db_session.refresh(open_project)
-    assert open_project.state == "closed"
+    assert (repo.active, open_project.state) == (True, "open")
+    assert (repo.sync_error or "").startswith(
+        f"GitHub returns not-found for {repo.repo_path}: {hidden_by}, or it was renamed or deleted."
+    )

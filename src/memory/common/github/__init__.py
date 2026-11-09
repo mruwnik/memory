@@ -15,7 +15,7 @@ Example:
         print(issue["title"])
 """
 
-from .core import GithubClientCore, GithubQueryError, access_message
+from .core import GithubClientCore, GithubQueryError, access_message, not_found_message
 from .hooks import HOOK_EVENTS, HooksMixin, hook_config, org_hooks, repo_hooks, webhook_url
 from .issues import IssuesMixin
 from .projects import ProjectsMixin, extract_status_priority
@@ -70,6 +70,7 @@ __all__ = [
     "parse_github_date",
     "compute_content_hash",
     "access_message",
+    "not_found_message",
     "serialize_issue_data",
     "extract_status_priority",
     "hook_config",

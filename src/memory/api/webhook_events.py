@@ -1,3 +1,4 @@
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, cast
 
@@ -26,6 +27,7 @@ from memory.common.db.models import (
 )
 from memory.common.db.models.discord import DiscordBot
 from memory.common.db.models.events import LINKS_ITEMS, NOT_COLLECTED, RAW
+from memory.common.db.models.sync_status import redact_secrets
 from memory.common.discord_data import visible_channels
 from memory.common.db.models.slack import SlackApp
 
@@ -62,6 +64,8 @@ class WebhookAccount(BaseModel):
     last_event_at: datetime | None
     # The caller's own: only these can carry the caller's raw subscriptions.
     own: bool
+    # Its tracked repos' sync errors: refetches fail the same way, so deliveries store less.
+    sync_errors: list[str] = []
 
 
 class Triggered(BaseModel):
@@ -81,8 +85,6 @@ class RawEventView(BaseModel):
     container: str | None
     # The repo's full name or the channel's name, where the viewer may see it.
     container_name: str | None = None
-    # Why syncing the repo fails, on a delivery that stored nothing since it began.
-    container_error: str | None = None
     # Whether its ingest links the items it writes; others (GitHub refetches,
     # Discord reactions) change items without linking them here.
     links_items: bool = False
@@ -118,6 +120,7 @@ def webhook_accounts(
         accounts += [(source, id, name, last, bool(own)) for id, name, last, own in db.execute(query)]
     latest_ids = [last for *_, last, _ in accounts if last is not None]
     times = dict(db.execute(select(Event.id, Event.created_at).where(Event.id.in_(latest_ids))).tuples().all())
+    errors = repo_sync_errors(db, [id for source, id, *_ in accounts if source == "github"])
     return [
         WebhookAccount(
             source=source,
@@ -126,9 +129,23 @@ def webhook_accounts(
             last_event_id=last,
             last_event_at=times.get(last) if last else None,
             own=own,
+            sync_errors=errors.get(id, []) if source == "github" else [],
         )
         for source, id, name, last, own in accounts
     ]
+
+
+def repo_sync_errors(db: Session, account_ids: list[int]) -> dict[int, list[str]]:
+    path = GithubRepo.owner + "/" + GithubRepo.name
+    rows = db.execute(
+        select(GithubRepo.account_id, path, GithubRepo.sync_error)
+        .where(GithubRepo.account_id.in_(account_ids), GithubRepo.active, GithubRepo.sync_error.is_not(None))
+        .order_by(path)
+    )
+    errors: dict[int, list[str]] = defaultdict(list)
+    for account_id, repo, error in rows:
+        errors[account_id].append(f"{repo}: {redact_secrets(error)}")
+    return errors
 
 
 # As agent_runs_raw_event_idx indexes it.
@@ -189,34 +206,9 @@ def triggered_by(db: Session, user: UserProxy, raw_ids: list[int]) -> dict[int, 
     return found
 
 
-def numeric(containers: set[str]) -> list[int]:
-    return [int(c) for c in containers if c.isascii() and c.isdigit()]
-
-
-def failing_syncs(db: Session, source: str, account_id: int, containers: set[str]) -> dict[str, tuple[str, datetime]]:
-    """The sync error of each of this GitHub account's failing repos, and since when."""
-    if source != "github":
-        return {}
-    rows = db.execute(
-        select(GithubRepo.github_id, GithubRepo.sync_error, GithubRepo.sync_failing_since).where(
-            GithubRepo.account_id == account_id,
-            GithubRepo.github_id.in_(numeric(containers)),
-            GithubRepo.sync_error.is_not(None),
-            GithubRepo.sync_failing_since.is_not(None),
-        )
-    )
-    return {str(id): (error, since) for id, error, since in rows}
-
-
-def sync_error(e: Event, failing: dict[str, tuple[str, datetime]], stored: set[int]) -> str | None:
-    """Why the delivery's repo fails to sync, if that may be why it stored nothing."""
-    error, since = failing.get(e.container or "") or (None, None)
-    return error if since and e.created_at >= since and e.id not in stored else None
-
-
 def container_names(db: Session, user: UserProxy, source: str, account_id: int, containers: set[str]) -> dict[str, str]:
     """Names for the repos of this GitHub account, or the Discord channels the viewer can see."""
-    ids = numeric(containers)
+    ids = [int(c) for c in containers if c.isascii() and c.isdigit()]
     if source == "github":
         rows = db.execute(
             select(GithubRepo.github_id, GithubRepo.owner + "/" + GithubRepo.name).where(
@@ -233,13 +225,7 @@ def container_names(db: Session, user: UserProxy, source: str, account_id: int, 
 
 
 def event_view(
-    e: Event,
-    items: list[int],
-    triggered: list[Triggered],
-    payload: bool,
-    withheld: bool,
-    names: dict[str, str],
-    error: str | None,
+    e: Event, items: list[int], triggered: list[Triggered], payload: bool, withheld: bool, names: dict[str, str]
 ) -> RawEventView:
     # An untracked channel is untracked: its stub says only that something arrived.
     if e.outcome == NOT_COLLECTED:
@@ -253,7 +239,6 @@ def event_view(
         type=e.type,
         container=e.container,
         container_name=names.get(e.container) if e.container else None,
-        container_error=error,
         links_items=bool((e.data or {}).get(LINKS_ITEMS)),
         item_ids=items,
         triggered=triggered,
@@ -324,20 +309,7 @@ def webhook_log(
             for e in events
             if e.payload is not None and not ((c := container_of(db, e)) is not None and reads(c))
         }
-    containers = {e.container for e in events if e.container}
-    names = container_names(db, viewer, source, account_id, containers)
-    failing = failing_syncs(db, source, account_id, containers)
-    # Any item, readable or not: the delivery stored something.
-    stored = {raw_id for raw_id, item_id in caused if item_id is not None}
+    names = container_names(db, viewer, source, account_id, {e.container for e in events if e.container})
     return [
-        event_view(
-            e,
-            items.get(e.id, []),
-            triggered.get(e.id, []),
-            payload,
-            e.id in withheld,
-            names,
-            sync_error(e, failing, stored),
-        )
-        for e in events
+        event_view(e, items.get(e.id, []), triggered.get(e.id, []), payload, e.id in withheld, names) for e in events
     ]

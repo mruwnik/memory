@@ -597,6 +597,22 @@ def test_a_sync_without_commit_access_stores_the_prs_and_catches_up_once_granted
     assert (repo.sync_error, repo.incomplete_since) == (None, None)
 
 
+def test_a_quiet_sync_while_commits_are_still_withheld_does_not_catch_up(db_session, repo):
+    partial = github_repo_answers(
+        pr_page(without_commit(pr_node("a" * 40))), [withheld("repository", "pullRequests", "nodes", 0, "commits", "nodes", 0)]
+    )
+    with partial, patch.object(github, "sync_github_item"):
+        github.sync_github_repo(repo.id)
+        db_session.refresh(repo)
+        marked = repo.incomplete_since
+        # Nothing changed since: the PR is older than the cursor, but GitHub still sends the latest page.
+        quiet = github.sync_github_repo(repo.id)
+    db_session.refresh(repo)
+
+    assert (quiet["status"], quiet["prs_synced"]) == ("incomplete", 0)
+    assert ((repo.sync_error or "").startswith(NO_COMMITS), repo.incomplete_since) == (True, marked)
+
+
 def test_a_sync_github_refuses_fails_its_job_and_keeps_its_cursor(db_session, repo):
     with github_repo_answers(None, [withheld("repository", "pullRequests")]), patch.object(github, "sync_github_item"):
         with pytest.raises(GithubQueryError):

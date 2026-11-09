@@ -31,8 +31,7 @@ export const eventMeta = (e: WebhookEvent) => [
   `${formatUserDateTime(new Date(e.created_at))} (${ago(e.created_at)})`,
   e.container && `in ${e.container_name ?? e.container}`,
   e.item_ids.length > 0 && `stored as item${e.item_ids.length > 1 ? 's' : ''} ${e.item_ids.join(', ')}`,
-  // A failing sync explains the missing items instead; the row shows it.
-  e.outcome === 'stored' && e.item_ids.length === 0 && !e.container_error && (e.links_items
+  e.outcome === 'stored' && e.item_ids.length === 0 && (e.links_items
     ? 'no item linked: still queued, nothing new, or one you can\'t read'
     : 'the items it updates aren\'t linked to deliveries'),
 ]
@@ -77,9 +76,6 @@ const EventRow = ({ e, loadPayload }: { e: WebhookEvent; loadPayload: (id: numbe
     badges={<Badge tone={OUTCOMES[e.outcome]?.tone ?? 'neutral'}>{OUTCOMES[e.outcome]?.label ?? e.outcome}</Badge>}
     meta={eventMeta(e)}
   >
-    {e.container_error && (
-      <RowError>Syncing {e.container_name ?? e.container} is failing, so this delivery may have stored nothing: {e.container_error}</RowError>
-    )}
     {/* Only deliveries that store nothing keep their payload. */}
     {e.outcome === 'no_item_type' && <PayloadView load={() => loadPayload(e.id)} />}
     {e.triggered.length > 0 && (
@@ -194,6 +190,12 @@ export default function WebhookLog() {
       )}
       {requested && accounts && !found && selected && (
         <Notice tone="warning">The source in this link isn't one you can see, so {SOURCE_NAMES[selected.source]} · {selected.name} is shown.</Notice>
+      )}
+      {!!selected?.sync_errors.length && (
+        <Notice tone="warning">
+          Syncing these repos is failing or incomplete, and webhook refetches hit the same problem:
+          <ul className="mt-1 list-disc pl-5">{selected.sync_errors.map(e => <li key={e}>{e}</li>)}</ul>
+        </Notice>
       )}
       {eventsError && <Notice tone="error" onRetry={loadEvents}>{eventsError}</Notice>}
       {selected && events === null && !eventsError && <LoadingState message="Loading deliveries..." />}

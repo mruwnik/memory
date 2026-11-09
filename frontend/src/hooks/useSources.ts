@@ -177,6 +177,8 @@ export interface ArticleFeedUpdate {
 // Types for GitHub
 export interface GithubRepo extends SyncStatus, PushHealth {
   id: number
+  // GitHub withheld some fields: items are stored without them, rather than not at all.
+  sync_incomplete: boolean
   account_id: number
   owner: string
   name: string

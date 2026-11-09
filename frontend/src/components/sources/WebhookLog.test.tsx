@@ -13,7 +13,7 @@ vi.mock('@/hooks/useWebhookLog', async (orig) => ({
 }))
 
 const event = (fields: Partial<WebhookEvent>): WebhookEvent => ({
-  id: 1, created_at: '2026-11-07T09:00:00Z', outcome: 'stored', type: 'message', container: null, container_name: null, container_error: null,
+  id: 1, created_at: '2026-11-07T09:00:00Z', outcome: 'stored', type: 'message', container: null, container_name: null,
   links_items: true, item_ids: [], triggered: [], payload: null, payload_withheld: false, ...fields,
 })
 const stored = event({
@@ -25,8 +25,8 @@ const labeled = event({ id: 3, outcome: 'no_item_type', type: 'label.created', l
 
 beforeEach(() => {
   listAccounts.mockResolvedValue([
-    { source: 'slack', account_id: 3, name: 'Team', last_event_id: null, last_event_at: null },
-    { source: 'github', account_id: 5, name: 'acme', last_event_id: 2, last_event_at: '2026-11-07T10:00:00Z' },
+    { source: 'slack', account_id: 3, name: 'Team', last_event_id: null, last_event_at: null, sync_errors: [] },
+    { source: 'github', account_id: 5, name: 'acme', last_event_id: 2, last_event_at: '2026-11-07T10:00:00Z', sync_errors: [] },
   ])
   listEvents.mockResolvedValue([stored, untracked])
 })
@@ -62,13 +62,14 @@ describe('WebhookLog', () => {
     expect(within(row).queryByText('Payload')).not.toBeInTheDocument()
   })
 
-  it("says when a delivery's repo is failing to sync", async () => {
-    listEvents.mockResolvedValue([{ ...stored, item_ids: [], links_items: false, container_error: 'The GitHub App can\'t read commits' }])
+  it("shows the account's repo sync errors once, above its deliveries", async () => {
+    listAccounts.mockResolvedValue([
+      { source: 'github', account_id: 5, name: 'acme', last_event_id: 2, last_event_at: '2026-11-07T10:00:00Z', sync_errors: ["acme/api: The GitHub App can't read commits"] },
+    ])
     renderWithRouter(<WebhookLog />)
 
-    const row = (await screen.findByText('pull_request.synchronize')).closest('li')!
-    expect(within(row).getByText(/Syncing acme\/api is failing, so this delivery may have stored nothing: The GitHub App can't read commits/)).toBeInTheDocument()
-    expect(within(row).queryByText(/aren't linked to deliveries/)).not.toBeInTheDocument()
+    await screen.findByText('pull_request.synchronize')
+    expect(screen.getAllByText("acme/api: The GitHub App can't read commits")).toHaveLength(1)
   })
 
   it('drops a response for an account no longer shown', async () => {

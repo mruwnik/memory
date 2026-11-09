@@ -297,29 +297,21 @@ def test_a_github_delivery_names_its_repo(member_client, db_session, user):
     assert [(e["container"], e["container_name"]) for e in listed] == [("556", None), ("555", "acme/api")]
 
 
-def test_a_github_delivery_that_stored_nothing_while_its_repo_fails_to_sync_says_why(
-    member_client, db_session, user
-):
+def test_a_github_account_lists_its_active_repos_sync_errors(member_client, db_session, user):
     account = GithubAccount(user_id=user.id, name="acct", auth_type="pat", access_token="ghp_x", active=True)
     db_session.add(account)
     db_session.flush()
-    failing_since = datetime(2026, 6, 1, tzinfo=timezone.utc)
-    db_session.add(GithubRepo(
-        account_id=account.id, github_id=555, owner="acme", name="api", sync_error="No access",
-        sync_failing_since=failing_since,
-    ))
-    earlier = raw(db_session, user.id, "d1", account_id=account.id)
-    stored = raw(db_session, user.id, "d2", account_id=account.id)
-    empty = raw(db_session, user.id, "d3", account_id=account.id)
-    stored_item(db_session, stored, user.id)
-    db_session.execute(
-        text("UPDATE events SET created_at = :at WHERE id = :id"), {"at": datetime(2026, 1, 1, tzinfo=timezone.utc), "id": earlier}
-    )
+    db_session.add_all([
+        GithubRepo(account_id=account.id, github_id=1, owner="acme", name="web", sync_error="No access"),
+        GithubRepo(account_id=account.id, github_id=2, owner="acme", name="api", sync_error="No commits"),
+        GithubRepo(account_id=account.id, github_id=3, owner="acme", name="ok"),
+        GithubRepo(account_id=account.id, github_id=4, owner="acme", name="paused", sync_error="Old", active=False),
+    ])
     db_session.commit()
 
-    listed = member_client.get(f"/webhook-events/github/{account.id}").json()
+    listed = member_client.get("/webhook-events").json()
 
-    assert [(e["id"], e["container_error"]) for e in listed] == [(empty, "No access"), (stored, None), (earlier, None)]
+    assert [a["sync_errors"] for a in listed] == [["acme/api: No commits", "acme/web: No access"]]
 
 
 def test_a_discord_delivery_names_only_channels_the_viewer_can_see(member_client, db_session, user):

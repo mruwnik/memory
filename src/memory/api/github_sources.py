@@ -108,6 +108,8 @@ class GithubRepoResponse(SyncStatusResponse, PushHealthResponse):
     webhook_status: str | None
     webhook_checked_at: str | None
     last_event_at: str | None
+    # GitHub withheld some fields: items are stored without them, rather than not at all.
+    sync_incomplete: bool
     push_stale: bool
 
 
@@ -202,6 +204,7 @@ def repo_to_response(repo: GithubRepo) -> GithubRepoResponse:
         webhook_checked_at=repo.webhook_checked_at.isoformat() if repo.webhook_checked_at else None,
         last_event_at=repo.last_event_at.isoformat() if repo.last_event_at else None,
         push_stale=repo.webhook_status in GITHUB_PUSH_STATUSES and push_stale(repo.last_event_at),
+        sync_incomplete=repo.incomplete_since is not None,
         **sync_status_fields(repo),
         **push_health_fields(repo),
     )

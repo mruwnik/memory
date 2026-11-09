@@ -46,6 +46,7 @@ from memory.common.github import (
     GithubQueryError,
     extract_status_priority,
     hook_config,
+    not_found_message,
     org_hooks,
     parse_github_date,
     repo_hooks,
@@ -963,16 +964,8 @@ def sync_repo(repo_id: int, force_full: bool) -> dict[str, Any]:
         # Check if repo is archived or missing on GitHub before doing any sync work
         repo_data = client.get_repo(owner, name)
         if repo_data is None:
-            logger.warning(f"Repo {repo.repo_path} no longer exists on GitHub")
-            repo.record_sync("Repository no longer exists on GitHub")
-            repo.active = False  # type: ignore
-            close_open_repo_projects(session, repo)
-            session.commit()
-            return {
-                "status": "skipped_repo_missing",
-                "repo_id": repo_id,
-                "repo_path": repo.repo_path,
-            }
+            # Not deactivated: a repo the App or token lost access to looks just like a deleted one.
+            raise GithubQueryError(not_found_message(cast(str, account.auth_type), repo.repo_path))
         if repo_data.get("archived", False):
             logger.warning(f"Repo {repo.repo_path} is archived on GitHub")
             repo.active = False  # type: ignore
@@ -1008,7 +1001,8 @@ def sync_repo(repo_id: int, force_full: bool) -> dict[str, Any]:
 
         # For full syncs triggered by full_sync_interval, only sync open issues
         # (closed issues rarely have project field changes that matter)
-        if needs_full_sync and not force_full:
+        open_sweep = needs_full_sync and not force_full
+        if open_sweep:
             since = None
             state = "open"
             logger.info(f"Performing full sync of open issues for {repo.repo_path}")
@@ -1056,7 +1050,10 @@ def sync_repo(repo_id: int, force_full: bool) -> dict[str, Any]:
         repo.last_sync_at = now  # type: ignore
         if needs_full_sync or force_full:
             repo.last_full_sync_at = now  # type: ignore
-        repo.incomplete_since = earliest(catch_up, since or EPOCH) if unreadable else None
+        # The next open-only sweep re-fetches what this one did; only what an
+        # incremental or forced sync fetched needs catching up.
+        fetched_from = since or ((last_sync or now) if open_sweep else EPOCH)
+        repo.incomplete_since = earliest(catch_up, fetched_from) if unreadable else None
         error = "; ".join(filter(None, [milestones_error, unreadable])) or None
         repo.record_sync(error)
         session.commit()
