@@ -621,8 +621,8 @@ async def wait(
     run finishes; call again with the last seq you saw to follow a live run. With
     `result_only`, returns the run (its status, result and error) without its spec or
     transcript, and with wait > 0 blocks until it finishes. Handing you an ended run of
-    yours marks it seen (agent_list_runs unseen). Called by a run, it reaches only that
-    run's children.
+    yours marks it seen (agent_list_runs unseen), which is the only thing it writes.
+    Called by a run, it reaches only that run's children.
     """
     user_id, is_admin = caller()
     by_run = calling_run(get_access_token()) is not None
@@ -673,8 +673,9 @@ async def list_runs(
 
     With `unseen`, only the runs you started with agent_run that have ended and that
     neither agent_wait nor an unseen listing has handed you yet. It marks the runs it
-    returns seen; runs past `limit` or left out by other filters stay unseen. Called by
-    a run, it marks nothing seen.
+    returns seen, which is the only thing it writes, and returns them with their new
+    seen_at; runs past `limit` or left out by other filters stay unseen. Called by a
+    run, it marks nothing seen.
     """
     user_id, _ = caller()
     by_run = calling_run(get_access_token()) is not None
@@ -707,11 +708,10 @@ async def list_runs(
             .limit(min(max(limit, 1), 200))
             .all()
         )
-        payload = {"runs": [r.serialize() for r in runs]}
         if unseen and not by_run:
             for r in runs:
                 mark_seen(r)
-        return payload
+        return {"runs": [r.serialize() for r in runs]}
 
 
 @agent_mcp.tool()

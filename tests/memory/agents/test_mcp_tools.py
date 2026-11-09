@@ -797,6 +797,7 @@ async def test_an_unseen_listing_marks_its_runs_seen(db_session, regular_user, u
         second = await agent.list_runs.fn(unseen=True)
 
     assert len(first["runs"]) == 2
+    assert all(r["seen_at"] is not None for r in first["runs"])
     assert second["runs"] == []
     assert all(seen_at(db_session, r.id) is not None for r in runs)
 
