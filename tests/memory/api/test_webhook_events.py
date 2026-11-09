@@ -283,21 +283,43 @@ def test_deliveries_filter_by_outcome_and_type_prefix(member_client, db_session,
     assert [ids[e["id"]] for e in listed] == shown
 
 
-def test_a_github_delivery_names_its_repo_and_why_its_sync_fails(member_client, db_session, user):
+def test_a_github_delivery_names_its_repo(member_client, db_session, user):
     account = GithubAccount(user_id=user.id, name="acct", auth_type="pat", access_token="ghp_x", active=True)
     db_session.add(account)
     db_session.flush()
-    db_session.add(GithubRepo(account_id=account.id, github_id=555, owner="acme", name="api", sync_error="No access"))
+    db_session.add(GithubRepo(account_id=account.id, github_id=555, owner="acme", name="api"))
     raw(db_session, user.id, "d1", account_id=account.id)
     raw(db_session, user.id, "d2", account_id=account.id, container="556")
     db_session.commit()
 
     listed = member_client.get(f"/webhook-events/github/{account.id}").json()
 
-    assert [(e["container"], e["container_name"], e["container_error"]) for e in listed] == [
-        ("556", None, None),
-        ("555", "acme/api", "No access"),
-    ]
+    assert [(e["container"], e["container_name"]) for e in listed] == [("556", None), ("555", "acme/api")]
+
+
+def test_a_github_delivery_that_stored_nothing_while_its_repo_fails_to_sync_says_why(
+    member_client, db_session, user
+):
+    account = GithubAccount(user_id=user.id, name="acct", auth_type="pat", access_token="ghp_x", active=True)
+    db_session.add(account)
+    db_session.flush()
+    failing_since = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    db_session.add(GithubRepo(
+        account_id=account.id, github_id=555, owner="acme", name="api", sync_error="No access",
+        sync_failing_since=failing_since,
+    ))
+    earlier = raw(db_session, user.id, "d1", account_id=account.id)
+    stored = raw(db_session, user.id, "d2", account_id=account.id)
+    empty = raw(db_session, user.id, "d3", account_id=account.id)
+    stored_item(db_session, stored, user.id)
+    db_session.execute(
+        text("UPDATE events SET created_at = :at WHERE id = :id"), {"at": datetime(2026, 1, 1, tzinfo=timezone.utc), "id": earlier}
+    )
+    db_session.commit()
+
+    listed = member_client.get(f"/webhook-events/github/{account.id}").json()
+
+    assert [(e["id"], e["container_error"]) for e in listed] == [(empty, "No access"), (stored, None), (earlier, None)]
 
 
 def test_a_discord_delivery_names_only_channels_the_viewer_can_see(member_client, db_session, user):

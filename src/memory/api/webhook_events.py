@@ -81,7 +81,7 @@ class RawEventView(BaseModel):
     container: str | None
     # The repo's full name or the channel's name, where the viewer may see it.
     container_name: str | None = None
-    # Why syncing the repo fails: events arriving don't mean its items are stored.
+    # Why syncing the repo fails, on a delivery that stored nothing since it began.
     container_error: str | None = None
     # Whether its ingest links the items it writes; others (GitHub refetches,
     # Discord reactions) change items without linking them here.
@@ -193,18 +193,25 @@ def numeric(containers: set[str]) -> list[int]:
     return [int(c) for c in containers if c.isascii() and c.isdigit()]
 
 
-def container_errors(db: Session, source: str, account_id: int, containers: set[str]) -> dict[str, str]:
-    """The sync errors of this GitHub account's failing repos."""
+def failing_syncs(db: Session, source: str, account_id: int, containers: set[str]) -> dict[str, tuple[str, datetime]]:
+    """The sync error of each of this GitHub account's failing repos, and since when."""
     if source != "github":
         return {}
     rows = db.execute(
-        select(GithubRepo.github_id, GithubRepo.sync_error).where(
+        select(GithubRepo.github_id, GithubRepo.sync_error, GithubRepo.sync_failing_since).where(
             GithubRepo.account_id == account_id,
             GithubRepo.github_id.in_(numeric(containers)),
             GithubRepo.sync_error.is_not(None),
+            GithubRepo.sync_failing_since.is_not(None),
         )
     )
-    return {str(id): error for id, error in rows}
+    return {str(id): (error, since) for id, error, since in rows}
+
+
+def sync_error(e: Event, failing: dict[str, tuple[str, datetime]], stored: set[int]) -> str | None:
+    """Why the delivery's repo fails to sync, if that may be why it stored nothing."""
+    error, since = failing.get(e.container or "") or (None, None)
+    return error if since and e.created_at >= since and e.id not in stored else None
 
 
 def container_names(db: Session, user: UserProxy, source: str, account_id: int, containers: set[str]) -> dict[str, str]:
@@ -232,7 +239,7 @@ def event_view(
     payload: bool,
     withheld: bool,
     names: dict[str, str],
-    errors: dict[str, str],
+    error: str | None,
 ) -> RawEventView:
     # An untracked channel is untracked: its stub says only that something arrived.
     if e.outcome == NOT_COLLECTED:
@@ -246,7 +253,7 @@ def event_view(
         type=e.type,
         container=e.container,
         container_name=names.get(e.container) if e.container else None,
-        container_error=errors.get(e.container) if e.container else None,
+        container_error=error,
         links_items=bool((e.data or {}).get(LINKS_ITEMS)),
         item_ids=items,
         triggered=triggered,
@@ -319,8 +326,18 @@ def webhook_log(
         }
     containers = {e.container for e in events if e.container}
     names = container_names(db, viewer, source, account_id, containers)
-    errors = container_errors(db, source, account_id, containers)
+    failing = failing_syncs(db, source, account_id, containers)
+    # Any item, readable or not: the delivery stored something.
+    stored = {raw_id for raw_id, item_id in caused if item_id is not None}
     return [
-        event_view(e, items.get(e.id, []), triggered.get(e.id, []), payload, e.id in withheld, names, errors)
+        event_view(
+            e,
+            items.get(e.id, []),
+            triggered.get(e.id, []),
+            payload,
+            e.id in withheld,
+            names,
+            sync_error(e, failing, stored),
+        )
         for e in events
     ]

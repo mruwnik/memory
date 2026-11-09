@@ -536,6 +536,11 @@ class GithubRepo(PolledSource, SyncStatusMixin, PushHealthMixin, Base):
     last_full_sync_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Items GitHub updated since then may be stored without fields it withheld;
+    # the first sync that gets every field re-fetches them and clears it.
+    incomplete_since: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     # When a signed webhook delivery for this repo last arrived.
     last_event_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

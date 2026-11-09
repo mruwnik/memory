@@ -20,6 +20,8 @@ logger = logging.getLogger(__name__)
 # The key an item node gets listing the paths, below it, of fields GitHub withheld.
 UNREADABLE = "__unreadable"
 
+PROJECTS = "organization Projects"
+
 # What a GraphQL field holds, and the permissions that read it. The commit
 # block also asks for the check rollup, so reading commits takes all three.
 FIELD_ACCESS: dict[str, tuple[str, tuple[str, ...]]] = {
@@ -32,7 +34,11 @@ FIELD_ACCESS: dict[str, tuple[str, tuple[str, ...]]] = {
     "issue": ("issues", ("Issues",)),
     "milestones": ("milestones", ("Issues",)),
     "milestone": ("milestones", ("Issues",)),
+    "projectsV2": ("projects", (PROJECTS,)),
 }
+
+# A FORBIDDEN on the query's root: the repo or owner itself can't be seen.
+ROOTS = {"repository", "organization", "user"}
 
 
 class GithubQueryError(Exception):
@@ -43,31 +49,48 @@ def join_words(words: list[str]) -> str:
     return " and ".join(filter(None, [", ".join(words[:-1]), *words[-1:]]))
 
 
+def fields_of(path: list[str | int]) -> list[str]:
+    return [f for f in path if isinstance(f, str)]
+
+
 def field_access(path: list[str | int]) -> tuple[str, tuple[str, ...]]:
     """The deepest field of the path that says what was withheld, else its last field."""
-    fields = [f for f in path if isinstance(f, str)]
+    fields = fields_of(path)
     known = [FIELD_ACCESS[f] for f in fields if f in FIELD_ACCESS]
-    return known[-1] if known else (fields[-1] if fields else "the repository", ())
+    return known[-1] if known else (fields[-1], ())
+
+
+def token_needs(projects: bool) -> str:
+    scopes = "the repo and read:project scopes" if projects else "the repo scope"
+    return (
+        "A fine-grained token must list the repository and may need the organization's approval; "
+        f"a classic token needs {scopes} and, for organizations with SSO, authorizing for it."
+    )
 
 
 def access_message(auth_type: str, repo: str, paths: list[list[str | int]]) -> str:
     """What the account can't read on the repo, and what to grant it to."""
+    if any(len(fields_of(p)) <= 1 and set(fields_of(p)) <= ROOTS for p in paths):
+        if auth_type == "app":
+            return f"The GitHub App isn't installed on {repo} or can't see it: add {repo} to the installation, then Sync now."
+        return f"The access token can't see {repo}. {token_needs(False)} Then Sync now."
     found = [field_access(p) for p in paths]
     what = join_words(list(dict.fromkeys(w for w, _ in found)))
     perms = list(dict.fromkeys(p for _, ps in found for p in ps))
     reads = join_words([f"{p} (read)" for p in perms])
     if auth_type == "app":
-        grant = f"grant it {reads}" if perms else "grant it read access to them"
+        if not perms:
+            return f"The GitHub App can't read {what} on {repo}: check the permissions of its installation, then Sync now."
         return (
-            f"The GitHub App can't read {what} on {repo}: {grant}, "
+            f"The GitHub App can't read {what} on {repo}: grant it {reads}, "
             "accept the new permissions on the installation, then Sync now."
         )
-    grant = f"give it {reads} on this repository" if perms else "give it read access to them"
-    return (
-        f"The access token can't read {what} on {repo}: {grant}, then Sync now. "
-        "A fine-grained token must list the repository and may need the organization's approval; "
-        "a classic token needs the repo scope and, for organizations with SSO, authorizing for it."
-    )
+    projects = PROJECTS in perms
+    if not perms:
+        grant = "check its permissions on this repository"
+    else:
+        grant = f"give it {reads}" + ("" if projects else " on this repository")
+    return f"The access token can't read {what} on {repo}: {grant}, then Sync now. {token_needs(projects)}"
 
 
 def node_at(data: Any, path: list[str | int]) -> Any:
@@ -83,6 +106,12 @@ def withheld_below(error: dict[str, Any], depth: int | None) -> bool:
     """Whether GitHub withheld a field inside an item rather than the item itself."""
     path = error.get("path") or []
     return depth is not None and error.get("type") == "FORBIDDEN" and len(path) > depth
+
+
+def grantable(path: list[str | int]) -> bool:
+    """Whether a permission on the repo would let GitHub answer for the field.
+    Others (a head repository on a fork the App isn't installed on) can't be fixed here."""
+    return any(f in FIELD_ACCESS for f in fields_of(path))
 
 
 class GithubClientCore:
@@ -128,7 +157,10 @@ class GithubClientCore:
             node = node_at(data, path[:item_depth])
             if isinstance(node, dict):
                 node.setdefault(UNREADABLE, []).append(path[item_depth:])
-            self.unreadable.append(path)
+            if grantable(path[item_depth:]):
+                self.unreadable.append(path)
+            else:
+                logger.info("GitHub withheld %s on %s", ".".join(map(str, path)), repo)
         return cast(dict[str, Any], data)
 
     @staticmethod

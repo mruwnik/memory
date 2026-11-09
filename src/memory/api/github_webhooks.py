@@ -97,6 +97,9 @@ def event_targets(db: Session, repo: GithubRepo, event: str, payload: Payload) -
     pr, issue = payload.pull_request, payload.issue
     if event in ("pull_request", "pull_request_review", "pull_request_review_comment") and pr:
         return [(pr.number, "pr")]
+    # A deleted or transferred issue is no longer in the repo to fetch.
+    if event == "issues" and payload.action in ("deleted", "transferred"):
+        return []
     if event in ("issues", "issue_comment") and issue:
         return [(issue.number, "pr" if issue.pull_request is not None else "issue")]
     check = {"check_run": payload.check_run, "check_suite": payload.check_suite}.get(event)

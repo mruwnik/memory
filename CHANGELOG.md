@@ -23,9 +23,10 @@ a new, empty `## Unreleased` above it.
 ## Unreleased
 
 ### Changes
-- GitHub syncs and webhook refetches no longer report success when GitHub refuses a query. The repo row shows what the GitHub App or token can't read and which permissions to grant (e.g. Contents, Checks and Commit statuses for commits), and the job fails with the same message. A refetch of an item GitHub no longer has fails its job too.
-- When GitHub withholds only some fields (check results, the head commit), issues and PRs are still stored without them, and the repo row says what to grant. The sync cursor stays put until a sync gets everything, so the first sync after access is granted fetches what the earlier ones missed. Until then each sync re-fetches everything since the last complete one.
-- The webhook log shows a delivery's repo sync error, so deliveries arriving for a repo whose sync is failing no longer look healthy.
+- GitHub syncs and webhook refetches no longer report success when GitHub refuses a query. The repo row shows what the GitHub App or token can't read and which permissions to grant (e.g. Contents, Checks and Commit statuses for commits; organization Projects for projects; adding the repo to the App's installation when it can't see the repo at all), and the job fails with the same message. A refused milestone fetch is shown on the repo without stopping issues and PRs from syncing. Listing a GitHub account's available projects answers 502 with that message.
+- When GitHub withholds only some fields (check results, the head commit), issues and PRs are still stored without them and the repo row says what to grant. Syncs keep moving their cursor; the first sync that gets every field re-fetches everything updated since the first incomplete one, then clears the repo's error. Fields no permission on the repo can grant (e.g. a PR's head repository on a private fork) are left out without flagging the repo.
+- Webhook deliveries of deleted or transferred issues no longer queue a refetch, and a refetch of an item GitHub no longer has finishes as `not_found`.
+- The webhook log shows a repo's sync error on deliveries that arrived after its syncs began failing and stored nothing.
 
 ### Required env vars
 None
@@ -34,10 +35,10 @@ None
 None
 
 ### Other changes for operators
-- A repo synced while GitHub refused queries may have had its `last_sync_at` moved past items it never stored. After granting the missing permissions, run Sync on the repo with `force_full=true` (`POST /github/accounts/{account_id}/repos/{repo_id}/sync?force_full=true`), or clear `last_sync_at` for it.
+- A repo synced before this release while GitHub refused queries may have had its `last_sync_at` moved past items it never stored. After granting the missing permissions, run Sync on the repo with `force_full=true` (`POST /github/accounts/{account_id}/repos/{repo_id}/sync?force_full=true`), or clear `last_sync_at` for it. Later incidents catch up by themselves.
 
 ### Migrations
-None
+- `20261220_github_incomplete_since` adds a nullable `github_repos.incomplete_since` column (instant).
 
 ### Post-deploy commands
 None

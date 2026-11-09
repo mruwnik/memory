@@ -529,28 +529,31 @@ def test_refetch_keeps_a_pr_whose_head_commit_is_withheld_and_flags_the_repo(
     assert result["status"] == "processed"
     assert (stored(db_session).head_sha, stored(db_session).checks) == ("a" * 40, None)
     assert (repo.sync_error or "").startswith(NO_COMMITS)
+    # The next complete sync re-fetches it from there.
+    assert repo.incomplete_since == datetime(2024, 1, 6, tzinfo=timezone.utc)
 
 
-@pytest.mark.parametrize(
-    "errors, raised, message, repo_flagged",
-    [
-        ([withheld("repository", "pullRequest")], GithubQueryError, NO_PRS, True),
-        # A deleted issue is no fault of the repo's.
-        (None, LookupError, "GitHub has no pr #7 in testorg/testrepo", False),
-    ],
-)
-def test_a_refetch_that_gets_nothing_fails_its_job(
-    db_session, repo, github_serves, errors, raised, message, repo_flagged
-):
-    github_serves(None, errors)
+def test_a_refetch_github_refuses_fails_its_job_and_flags_the_repo(db_session, repo, github_serves):
+    github_serves(None, [withheld("repository", "pullRequest")])
 
-    with pytest.raises(raised):
+    with pytest.raises(GithubQueryError):
         github.refetch_github_item(repo.id, 7, "pr")
 
     db_session.refresh(repo)
     status, error = job(db_session, "refetch_github_item")
-    assert (status, (error or "").startswith(message)) == ("failed", True)
-    assert (repo.sync_error or "").startswith(NO_PRS) == repo_flagged
+    assert (status, (error or "").startswith(NO_PRS)) == ("failed", True)
+    assert (repo.sync_error or "").startswith(NO_PRS)
+
+
+def test_a_refetch_of_an_item_github_no_longer_has_is_not_a_failure(db_session, repo, github_serves):
+    github_serves(None)
+
+    result = github.refetch_github_item(repo.id, 7, "pr")
+
+    db_session.refresh(repo)
+    assert result["status"] == "not_found"
+    assert job(db_session, "refetch_github_item") == ("complete", None)
+    assert repo.sync_error is None
 
 
 def github_repo_answers(prs: dict | None, errors: list[dict] | None = None):
@@ -573,23 +576,25 @@ def pr_page(*nodes: dict) -> dict:
     return {"nodes": list(nodes), "pageInfo": {"hasNextPage": False}}
 
 
-def test_a_sync_without_commit_access_stores_the_prs_and_refetches_them_once_granted(db_session, repo):
+def test_a_sync_without_commit_access_stores_the_prs_and_catches_up_once_granted(db_session, repo):
     partial = github_repo_answers(
         pr_page(without_commit(pr_node("a" * 40))), [withheld("repository", "pullRequests", "nodes", 0, "commits", "nodes", 0)]
     )
-    with partial, patch.object(github, "sync_github_item") as sync_item:
+    with partial, patch.object(github, "sync_github_item"):
         degraded = github.sync_github_repo(repo.id)
     db_session.refresh(repo)
-    flagged = (repo.sync_error or "").startswith(NO_COMMITS), repo.last_sync_at
+    flagged = (repo.sync_error or "").startswith(NO_COMMITS), repo.last_sync_at is not None
 
+    # The PR was last updated before the cursor: only the catch-up fetches it, and only once.
     with github_repo_answers(pr_page(pr_node("a" * 40))), patch.object(github, "sync_github_item"):
         recovered = github.sync_github_repo(repo.id)
+        after = github.sync_github_repo(repo.id)
     db_session.refresh(repo)
 
-    assert (degraded["prs_synced"], sync_item.delay.call_count) == (1, 1)
-    assert flagged == (True, None)
-    assert recovered["prs_synced"] == 1
-    assert (repo.sync_error, repo.last_sync_at is not None) == (None, True)
+    assert (degraded["status"], degraded["prs_synced"]) == ("incomplete", 1)
+    assert flagged == (True, True)
+    assert (recovered["status"], recovered["prs_synced"], after["prs_synced"]) == ("completed", 1, 0)
+    assert (repo.sync_error, repo.incomplete_since) == (None, None)
 
 
 def test_a_sync_github_refuses_fails_its_job_and_keeps_its_cursor(db_session, repo):

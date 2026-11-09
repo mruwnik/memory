@@ -901,6 +901,22 @@ def test_a_withheld_head_commit_keeps_the_pr_with_unknown_checks(response, fetch
     assert (client.unreadable_message("owner/repo") or "").startswith(COMMITS_MESSAGE)
 
 
+def test_a_withheld_field_no_permission_grants_keeps_the_pr_without_flagging_the_repo():
+    """A head repository on a private fork the token can't see can't be granted from this repo."""
+    client = GithubClient(GithubCredentials(auth_type="pat", access_token="token"))
+    response = mock_graphql_response(
+        {"repository": {"pullRequest": pr_node(headRepository=None)}},
+        [{"type": "FORBIDDEN", "path": ["repository", "pullRequest", "headRepository"], "message": UNREADABLE_COMMIT}],
+    )
+
+    with patch.object(requests.Session, "post", return_value=response):
+        pr = client.fetch_pr("owner", "repo", 7, with_diff=False)
+
+    assert pr is not None
+    assert (pr["number"], pr.get("head_repo")) == (7, None)
+    assert client.unreadable_message("owner/repo") is None
+
+
 def test_a_withheld_item_list_raises_what_to_grant():
     client = GithubClient(GithubCredentials(auth_type="pat", access_token="token"))
     response = mock_graphql_response(
@@ -938,8 +954,35 @@ def test_a_withheld_item_list_raises_what_to_grant():
         (
             "app",
             [["repository", "labels"]],
-            "The GitHub App can't read labels on acme/api: grant it read access to them, "
+            "The GitHub App can't read labels on acme/api: check the permissions of its installation, "
+            "then Sync now.",
+        ),
+        (
+            "app",
+            [["repository"]],
+            "The GitHub App isn't installed on acme/api or can't see it: add acme/api to the installation, "
+            "then Sync now.",
+        ),
+        (
+            "pat",
+            [["repository"]],
+            "The access token can't see acme/api. A fine-grained token must list the repository and may need "
+            "the organization's approval; a classic token needs the repo scope and, for organizations with SSO, "
+            "authorizing for it. Then Sync now.",
+        ),
+        (
+            "app",
+            [["organization", "projectsV2"]],
+            "The GitHub App can't read projects on acme/api: grant it organization Projects (read), "
             "accept the new permissions on the installation, then Sync now.",
+        ),
+        (
+            "pat",
+            [["organization", "projectsV2"]],
+            "The access token can't read projects on acme/api: give it organization Projects (read), then Sync "
+            "now. A fine-grained token must list the repository and may need the organization's approval; a "
+            "classic token needs the repo and read:project scopes and, for organizations with SSO, authorizing "
+            "for it.",
         ),
         (
             "pat",

@@ -9,6 +9,7 @@ import pytest
 from memory.api.github_sources import ContentMode
 from memory.common.db.models import HumanUser
 from memory.common.db.models.sources import CONTENT_MODES, GithubAccount, GithubRepo
+from memory.common.github import GithubQueryError
 
 
 def test_the_api_takes_the_content_modes_the_db_allows():
@@ -421,6 +422,19 @@ def test_delete_account_not_owned(regular_client, db_session, user, other_user):
     response = regular_client.delete(f"/github/accounts/{account.id}")
 
     assert response.status_code == 404
+
+
+def test_available_projects_github_refuses_say_what_to_grant(client, db_session, user):
+    account = GithubAccount(user_id=user.id, name="Test Account", auth_type="pat", access_token="token123")
+    db_session.add(account)
+    db_session.commit()
+    github_client = Mock()
+    github_client.list_projects.side_effect = GithubQueryError("grant it organization Projects (read)")
+
+    with patch("memory.api.github_sources.GithubClient", return_value=github_client):
+        response = client.get(f"/github/accounts/{account.id}/available-projects", params={"owner": "acme"})
+
+    assert (response.status_code, response.json()["detail"]) == (502, "grant it organization Projects (read)")
 
 
 # ====== POST /github/accounts/{account_id}/validate tests ======

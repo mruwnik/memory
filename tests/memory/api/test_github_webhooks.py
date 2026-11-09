@@ -302,6 +302,9 @@ def test_events_queue_a_refetch_of_their_item(client, repo, no_celery_dispatch, 
         ("push", {"ref": "refs/heads/main"}),
         ("issues", {"action": "opened"}),
         ("pull_request", {"action": "opened"}),
+        # GitHub no longer has the issue in this repo to fetch.
+        ("issues", {"action": "deleted", "issue": {"number": 6}}),
+        ("issues", {"action": "transferred", "issue": {"number": 6}}),
     ],
 )
 def test_other_events_queue_nothing_but_count_as_events(client, db_session, repo, no_celery_dispatch, event, payload):

@@ -27,7 +27,7 @@ from memory.common.celery_app import (
 from memory.common.db.connection import get_session
 from memory.common.db.models import User, GithubProject
 from memory.common.db.models.sources import CONTENT_FULL, GithubAccount, GithubRepo
-from memory.common.github import GithubClient, GithubCredentials, webhook_url
+from memory.common.github import GithubClient, GithubCredentials, GithubQueryError, webhook_url
 from memory.common.push_health import GITHUB_PUSH_STATUSES, push_stale
 
 # The modes of GithubRepo.content_mode (memory.common.db.models.sources).
@@ -615,6 +615,9 @@ def list_available_projects(
                 )
             )
         return projects
+    except GithubQueryError as e:
+        # GitHub refused: the message says what to grant.
+        raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

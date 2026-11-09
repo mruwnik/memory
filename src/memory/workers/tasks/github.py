@@ -83,6 +83,12 @@ FINISHED_ROLLUPS = frozenset({"SUCCESS", "FAILURE", "ERROR"})
 # Items are looked up by kind, and GitHub numbers a repo's issues and PRs from
 # one sequence, so a stored item never changes class.
 CLASSES: dict[str, type[GithubItem]] = {"pr": GithubPR, "issue": GithubIssue}
+# The incomplete_since of a sync that fetched every item: a catch-up re-fetches them all.
+EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def earliest(*times: datetime | None) -> datetime | None:
+    return min((t for t in times if t is not None), default=None)
 
 
 def own_logins(account: GithubAccount, client: GithubClient) -> set[str]:
@@ -815,10 +821,11 @@ def refetch_github_item(repo_id: int, number: int, kind: str) -> dict[str, Any]:
             session.commit()
             raise
         if data is None:
-            # Not the repo's fault: an issue can be deleted after its event was sent.
-            raise LookupError(f"GitHub has no {kind} #{number} in {repo.repo_path}")
+            # Deleted or transferred after its event was sent.
+            return {"status": "not_found", "repo_id": repo_id, "number": number}
         if unreadable := client.unreadable_message(repo.repo_path):
             repo.record_sync(unreadable)
+            repo.incomplete_since = earliest(repo.incomplete_since, data["github_updated_at"])
         if not matches_repo_filters(repo, data):
             return {"status": "skipped", "repo_id": repo_id, "number": number}
         if repo.track_project_fields:
@@ -981,12 +988,17 @@ def sync_repo(repo_id: int, force_full: bool) -> dict[str, Any]:
         state = cast(str | None, repo.state_filter) or "all"
 
         milestones_synced = 0
+        milestones_error = None
         try:
             for ms_data in client.fetch_milestones(owner, name):
                 _sync_milestone(session, repo, ms_data)
                 milestones_synced += 1
             session.commit()
             logger.info(f"Synced {milestones_synced} milestones for {repo.repo_path}")
+        except GithubQueryError as e:
+            # Issues and PRs don't need milestones to sync; the repo says what to grant.
+            milestones_error = str(e)
+            session.rollback()
         except Exception as e:
             logger.warning(
                 f"Failed to sync milestones for {repo.repo_path}: "
@@ -1005,54 +1017,53 @@ def sync_repo(repo_id: int, force_full: bool) -> dict[str, Any]:
         else:
             since = last_sync
 
-        issues_synced = 0
-        prs_synced = 0
-        task_ids = []
         logins = sorted(own_logins(account, client))
+        task_ids: list[str] = []
 
-        # Sync issues
-        if cast(bool, repo.track_issues):
-            for issue_data in client.fetch_issues(owner, name, since, state, labels):
-                # Fetch project fields if enabled
-                if track_project_fields:
-                    issue_data["project_fields"] = client.fetch_project_fields(
-                        owner, name, issue_data["number"]
-                    )
+        def dispatch(since: datetime | None, state: str) -> tuple[int, int]:
+            """Queue a sync of each issue and PR updated since then; how many of each."""
+            issues = prs = 0
+            if cast(bool, repo.track_issues):
+                for issue_data in client.fetch_issues(owner, name, since, state, labels):
+                    if track_project_fields:
+                        issue_data["project_fields"] = client.fetch_project_fields(
+                            owner, name, issue_data["number"]
+                        )
+                    task_ids.append(sync_github_item.delay(repo.id, serialize_issue_data(issue_data), logins).id)  # type: ignore[attr-defined]
+                    issues += 1
+            if cast(bool, repo.track_prs):
+                for pr_data in client.fetch_prs(owner, name, since, state, with_diff=repo.stores_content):
+                    if track_project_fields:
+                        pr_data["project_fields"] = client.fetch_pr_project_fields(
+                            owner, name, pr_data["number"]
+                        )
+                    task_ids.append(sync_github_item.delay(repo.id, serialize_issue_data(pr_data), logins).id)  # type: ignore[attr-defined]
+                    prs += 1
+            return issues, prs
 
-                serialized = serialize_issue_data(issue_data)
-                task_id = sync_github_item.delay(repo.id, serialized, logins)  # type: ignore[attr-defined]
-                task_ids.append(task_id.id)
-                issues_synced += 1
-
-        # Sync PRs
-        if cast(bool, repo.track_prs):
-            for pr_data in client.fetch_prs(
-                owner, name, since, state, with_diff=repo.stores_content
-            ):
-                # Fetch project fields if enabled
-                if track_project_fields:
-                    pr_data["project_fields"] = client.fetch_pr_project_fields(
-                        owner, name, pr_data["number"]
-                    )
-
-                serialized = serialize_issue_data(pr_data)
-                task_id = sync_github_item.delay(repo.id, serialized, logins)  # type: ignore[attr-defined]
-                task_ids.append(task_id.id)
-                prs_synced += 1
-
-        # Advancing the cursor past items fetched without some of their fields
-        # would leave them that way once access is granted.
+        issues_synced, prs_synced = dispatch(since, state)
         unreadable = client.unreadable_message(repo.repo_path)
-        if not unreadable:
-            repo.last_sync_at = now  # type: ignore
-            if needs_full_sync or force_full:
-                repo.last_full_sync_at = now  # type: ignore
-        repo.record_sync(unreadable)
+        catch_up = cast(datetime | None, repo.incomplete_since)
+        # Items stored while fields were withheld; a forced full sync already re-fetched them.
+        if catch_up and not unreadable and not force_full:
+            logger.info(f"Re-fetching {repo.repo_path} since {catch_up.isoformat()}: earlier syncs missed fields")
+            issues, prs = dispatch(catch_up, cast(str | None, repo.state_filter) or "all")
+            issues_synced, prs_synced = issues_synced + issues, prs_synced + prs
+            unreadable = client.unreadable_message(repo.repo_path)
+
+        # The cursors move on regardless: holding them back would re-fetch
+        # everything every sync until access is granted.
+        repo.last_sync_at = now  # type: ignore
+        if needs_full_sync or force_full:
+            repo.last_full_sync_at = now  # type: ignore
+        repo.incomplete_since = earliest(catch_up, since or EPOCH) if unreadable else None
+        error = "; ".join(filter(None, [milestones_error, unreadable])) or None
+        repo.record_sync(error)
         session.commit()
 
         return {
-            "status": "incomplete" if unreadable else "completed",
-            "error": unreadable,
+            "status": "incomplete" if error else "completed",
+            "error": error,
             "sync_type": "full" if (needs_full_sync or force_full) else "incremental",
             "repo_id": repo_id,
             "repo_path": repo.repo_path,
