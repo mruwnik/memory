@@ -59,6 +59,12 @@ export default function IngestedItems() {
     lastTyped.current = typed
     update({ q: typed.trim() })
   }, [typed, update])
+  // A search that changes from outside the box (Back, Forward, a link) replaces what the box shows.
+  useEffect(() => {
+    if (query === lastTyped.current.trim()) return
+    lastTyped.current = query
+    setText(query)
+  }, [query])
 
   const load = useCallback(async () => {
     const request = ++latest.current

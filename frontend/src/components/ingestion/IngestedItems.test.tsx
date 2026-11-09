@@ -1,3 +1,4 @@
+import { useNavigate } from 'react-router-dom'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { renderWithRouter, screen, waitFor, within } from '@/test/utils'
 import IngestedItems from './IngestedItems'
@@ -59,6 +60,42 @@ it('searches as you type, from the first page', async () => {
     { itemTypes: ['mail_message'], statuses: undefined, contains: 'invoice', connectionId: '' },
     { limit: 50, offset: 0 },
   ]))
+})
+
+const BackButton = () => {
+  const navigate = useNavigate()
+  return <button onClick={() => navigate(-1)}>Back</button>
+}
+
+it('shows the search of the page that history returns to', async () => {
+  const { user } = renderWithRouter(<><IngestedItems /><BackButton /></>, { initialEntries: ['/ingestion/items?type=mail_message'] })
+  await screen.findByText('Invoice')
+  const box = screen.getByRole('searchbox', { name: 'Search items' })
+  await user.type(box, 'a')
+  await waitFor(() => expect(lastQuery()?.[0]).toMatchObject({ contains: 'a' }))
+  await user.click(screen.getByRole('button', { name: 'Next' }))
+  await user.clear(box)
+  await user.type(box, 'b')
+  await waitFor(() => expect(lastQuery()?.[0]).toMatchObject({ contains: 'b' }))
+
+  await user.click(screen.getByRole('button', { name: 'Back' }))
+
+  await waitFor(() => expect(lastQuery()).toEqual([
+    { itemTypes: ['mail_message'], statuses: undefined, contains: 'a', connectionId: '' },
+    { limit: 50, offset: 0 },
+  ]))
+  expect(box).toHaveValue('a')
+})
+
+it('keeps what you type once the search runs', async () => {
+  const { user } = renderWithRouter(<IngestedItems />, { initialEntries: ['/ingestion/items'] })
+  await screen.findByText('Invoice')
+  const box = screen.getByRole('searchbox', { name: 'Search items' })
+
+  await user.type(box, 'lunch ')
+
+  await waitFor(() => expect(lastQuery()?.[0]).toMatchObject({ contains: 'lunch' }))
+  expect(box).toHaveValue('lunch ')
 })
 
 it('narrows to one connection of the type', async () => {
