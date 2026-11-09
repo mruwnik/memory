@@ -19,11 +19,15 @@ const connections = [
 
 beforeEach(() => {
   vi.clearAllMocks()
-  listItems.mockResolvedValue({ items: [mail(1, 'Invoice'), mail(2, 'Lunch', { embed_status: 'FAILED' })], hasMore: true })
+  // Like the backend: a connection needs a type that has connections.
+  listItems.mockImplementation(async ({ itemTypes, connectionId }) => {
+    if (connectionId && !itemTypes.includes('mail_message')) throw new Error('connection_id needs item_types')
+    return { items: [mail(1, 'Invoice'), mail(2, 'Lunch', { embed_status: 'FAILED' })], hasMore: true }
+  })
   countItems.mockImplementation(async ({ itemTypes = [] } = {}) => ({
     total: 34,
     byType: { mail_message: 34, misc_doc: 2 },
-    byConnection: itemTypes.length ? connections : null,
+    byConnection: itemTypes.includes('mail_message') ? connections : null,
   }))
 })
 
@@ -107,6 +111,32 @@ it('narrows to one connection of the type', async () => {
 
   await waitFor(() => expect(lastQuery()?.[0]).toMatchObject({ connectionId: '12' }))
   expect(screen.getByText(/From home@example.com\./)).toBeInTheDocument()
+})
+
+it.each([
+  ['no type', '/ingestion/items?connection=11', []],
+  ['a type without connections', '/ingestion/items?type=misc_doc&connection=11', ['misc_doc']],
+])('drops a connection left in the URL with %s', async (_, entry, itemTypes) => {
+  renderWithRouter(<IngestedItems />, { initialEntries: [entry] })
+
+  await waitFor(() => expect(lastQuery()?.[0]).toMatchObject({ itemTypes, connectionId: '' }))
+  expect(await screen.findByText('Invoice')).toBeInTheDocument()
+  expect(screen.queryByText(/connection_id/)).not.toBeInTheDocument()
+})
+
+it('never sends a connection without a type', async () => {
+  renderWithRouter(<IngestedItems />, { initialEntries: ['/ingestion/items?connection=11'] })
+
+  expect(await screen.findByText('Invoice')).toBeInTheDocument()
+  expect(listItems.mock.calls.map(([filters]) => filters.connectionId)).not.toContain('11')
+})
+
+it('keeps the connection when its type cannot be counted', async () => {
+  countItems.mockRejectedValue(new Error('slow'))
+  renderWithRouter(<IngestedItems />, { initialEntries: ['/ingestion/items?type=mail_message&connection=12'] })
+
+  expect(await screen.findByText('Invoice')).toBeInTheDocument()
+  expect(lastQuery()?.[0]).toMatchObject({ connectionId: '12' })
 })
 
 it('offers no connection filter for all types', async () => {

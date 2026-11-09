@@ -27,7 +27,8 @@ export default function IngestedItems() {
   const { listItems, countItems } = useIngestedItems()
   const [params, setParams] = useSearchParams()
   const itemType = params.get('type') ?? ''
-  const connectionId = params.get('connection') ?? ''
+  // A connection only narrows within a type: without one the backend refuses it.
+  const connectionId = itemType ? params.get('connection') ?? '' : ''
   const query = params.get('q') ?? ''
   const status = (STATUS_FILTERS.find(f => f.value === params.get('status'))?.value ?? 'all')
   const page = Math.max(0, Number(params.get('page')) || 0)
@@ -39,7 +40,8 @@ export default function IngestedItems() {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [types, setTypes] = useState<Record<string, number>>({})
-  const [connections, setConnections] = useState<ItemConnection[] | null>(null)
+  // undefined while unknown (loading, or counting failed); null when the type has no connections.
+  const [connections, setConnections] = useState<ItemConnection[] | null | undefined>(undefined)
   const latest = useRef(0)
 
   /** Change filters; any change but paging starts again from the first page. */
@@ -92,15 +94,20 @@ export default function IngestedItems() {
     countItems().then(counts => setTypes(counts.byType), () => setTypes({}))
   }, [countItems])
   useEffect(() => {
-    setConnections(null)
+    setConnections(undefined)
     if (!itemType) return
     let current = true
     countItems({ itemTypes: [itemType] }).then(
       counts => { if (current) setConnections(counts.byConnection) },
-      () => { if (current) setConnections(null) },
+      () => { if (current) setConnections(undefined) },
     )
     return () => { current = false }
   }, [countItems, itemType])
+  // A connection left in the URL that the type cannot have (none chosen, or none for this type) is dropped.
+  const staleConnection = params.has('connection') && (!itemType || connections === null || connections?.length === 0)
+  useEffect(() => {
+    if (staleConnection) update({ connection: '' })
+  }, [staleConnection, update])
 
   const typeOptions = Object.keys({ ...types, ...(itemType ? { [itemType]: 0 } : {}) }).sort()
   const filtered = !!(query || connectionId || status !== 'all')
