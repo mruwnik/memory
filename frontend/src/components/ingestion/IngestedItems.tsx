@@ -16,6 +16,9 @@ const STATUS_FILTERS: { value: StatusFilter; label: string; statuses?: EmbedStat
   { value: 'skipped', label: 'Not indexed', statuses: ['SKIPPED'] },
 ]
 
+/** The connections of one type, as far as counting it has got. */
+type ConnectionCounts = { type: string } & ({ state: 'loading' } | { state: 'loaded'; list: ItemConnection[] } | { state: 'failed' })
+
 const message = (e: unknown, fallback: string) => e instanceof Error ? e.message : fallback
 
 /**
@@ -40,8 +43,10 @@ export default function IngestedItems() {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [types, setTypes] = useState<Record<string, number>>({})
-  // undefined while unknown (loading, or counting failed); null when the type has no connections.
-  const [connections, setConnections] = useState<ItemConnection[] | null | undefined>(undefined)
+  const [counts, setCounts] = useState<ConnectionCounts>({ type: '', state: 'loading' })
+  // Counts of another type are not yet counts of this one.
+  const counted: ConnectionCounts = counts.type === itemType ? counts : { type: itemType, state: 'loading' }
+  const connections = counted.state === 'loaded' ? counted.list : undefined
   const latest = useRef(0)
 
   /** Change filters; any change but paging starts again from the first page. */
@@ -87,24 +92,26 @@ export default function IngestedItems() {
       if (request === latest.current) setBusy(false)
     }
   }, [listItems, itemType, status, query, connectionId, page])
-  useEffect(() => { void load() }, [load])
+  // A connection the type cannot have (none chosen, or not among its connections) is dropped from the URL.
+  const staleConnection = params.has('connection')
+    && (!itemType || (connections !== undefined && !connections.some(c => c.id === params.get('connection'))))
+  // Until the type is counted, a connection may be one the backend refuses: list once it is known to be kept.
+  const holdList = !!connectionId && (counted.state === 'loading' || staleConnection)
+  useEffect(() => { if (!holdList) void load() }, [load, holdList])
 
   // Filter choices are a convenience: if counting fails the list still works, with fewer options.
   useEffect(() => {
     countItems().then(counts => setTypes(counts.byType), () => setTypes({}))
   }, [countItems])
   useEffect(() => {
-    setConnections(undefined)
     if (!itemType) return
     let current = true
     countItems({ itemTypes: [itemType] }).then(
-      counts => { if (current) setConnections(counts.byConnection) },
-      () => { if (current) setConnections(undefined) },
+      result => { if (current) setCounts({ type: itemType, state: 'loaded', list: result.byConnection ?? [] }) },
+      () => { if (current) setCounts({ type: itemType, state: 'failed' }) },
     )
     return () => { current = false }
   }, [countItems, itemType])
-  // A connection left in the URL that the type cannot have (none chosen, or none for this type) is dropped.
-  const staleConnection = params.has('connection') && (!itemType || connections === null || connections?.length === 0)
   useEffect(() => {
     if (staleConnection) update({ connection: '' })
   }, [staleConnection, update])

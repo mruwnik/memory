@@ -131,6 +131,39 @@ it('never sends a connection without a type', async () => {
   expect(listItems.mock.calls.map(([filters]) => filters.connectionId)).not.toContain('11')
 })
 
+it.each([
+  ['a type without connections', '/ingestion/items?type=misc_doc&connection=11'],
+  ['a connection the type does not have', '/ingestion/items?type=mail_message&connection=99'],
+])('never lists with a stale connection for %s', async (_, entry) => {
+  renderWithRouter(<IngestedItems />, { initialEntries: [entry] })
+
+  expect(await screen.findByText('Invoice')).toBeInTheDocument()
+  expect(listItems.mock.calls.map(([filters]) => filters.connectionId)).toEqual([''])
+})
+
+it('lists with a connection the type has once it is counted', async () => {
+  renderWithRouter(<IngestedItems />, { initialEntries: ['/ingestion/items?type=mail_message&connection=12'] })
+
+  expect(await screen.findByText('Invoice')).toBeInTheDocument()
+  expect(listItems.mock.calls.map(([filters]) => filters.connectionId)).toEqual(['12'])
+})
+
+it('lists without waiting for counts when no connection is chosen', async () => {
+  countItems.mockReturnValue(new Promise(() => {}))
+  renderWithRouter(<IngestedItems />, { initialEntries: ['/ingestion/items?type=mail_message'] })
+
+  expect(await screen.findByText('Invoice')).toBeInTheDocument()
+  expect(listItems).toHaveBeenCalledTimes(1)
+})
+
+it('holds the list while a chosen connection is being counted', async () => {
+  countItems.mockReturnValue(new Promise(() => {}))
+  renderWithRouter(<IngestedItems />, { initialEntries: ['/ingestion/items?type=mail_message&connection=12'] })
+
+  expect(await screen.findByText('Loading items...')).toBeInTheDocument()
+  expect(listItems).not.toHaveBeenCalled()
+})
+
 it('keeps the connection when its type cannot be counted', async () => {
   countItems.mockRejectedValue(new Error('slow'))
   renderWithRouter(<IngestedItems />, { initialEntries: ['/ingestion/items?type=mail_message&connection=12'] })
