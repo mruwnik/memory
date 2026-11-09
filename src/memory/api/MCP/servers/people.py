@@ -575,23 +575,14 @@ def visible_discord_users(caller: UserLike | None) -> ColumnElement[bool]:
     return discord_user_seen_by(caller.id, DiscordUser.id)
 
 
-def linked_account_match(pattern: str, caller: UserLike | None) -> ColumnElement[bool]:
-    """A Person whose linked GitHub account handle, or a linked Discord account
-    handle ``caller`` may see, matches ``pattern``."""
-    discord = exists().where(
+def linked_discord_match(pattern: str, caller: UserLike | None) -> ColumnElement[bool]:
+    """A Person with a linked Discord account ``caller`` may see whose username or
+    display name matches ``pattern``."""
+    return exists().where(
         DiscordUser.person_id == Person.id,
         or_(DiscordUser.username.ilike(pattern), DiscordUser.display_name.ilike(pattern)),
         visible_discord_users(caller),
     )
-    github = exists().where(
-        GithubUser.person_id == Person.id,
-        or_(
-            GithubUser.username.ilike(pattern),
-            GithubUser.display_name.ilike(pattern),
-            GithubUser.email.ilike(pattern),
-        ),
-    )
-    return or_(discord, github)
 
 
 def person_search_clause(
@@ -614,7 +605,7 @@ def person_search_clause(
         Person.identifier.ilike(pattern),
         ALIAS_MATCH.bindparams(alias_pattern=pattern),
         CONTACT_INFO_MATCH.bindparams(contact_pattern=pattern),
-        linked_account_match(pattern, caller),
+        linked_discord_match(pattern, caller),
         Person.id.in_(tidbit_match),
     )
 
@@ -637,11 +628,11 @@ async def list_all(
         tags: Filter to people with at least one of these tags on a tidbit you can read
         search: Case-insensitive substring matched against the display name,
             identifier, aliases, every contact_info value (emails, phone numbers,
-            Slack user id/username/display name, Discord id, ...), the username
-            and display name of linked Discord accounts you can see (admins see
-            all; others, those who wrote to one of their bots), linked GitHub accounts (login,
-            name, email) and the content of tidbits you can read. Use it to map an
-            email address or chat handle to a person.
+            GitHub login, Slack user id/username/display name, Discord id, ...),
+            the username and display name of linked Discord accounts you can see
+            (admins see all; others, those who wrote to one of their Discord bots)
+            and the content of tidbits you can read. Use it to map an email
+            address or chat handle to a person.
         limit: Maximum number of results (default 50, max 200)
         offset: Number of results to skip for pagination (default 0, max 10000)
 

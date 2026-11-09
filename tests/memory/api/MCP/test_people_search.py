@@ -24,6 +24,7 @@ def linked_person(db_session):
             "email": ["alex.personal@gmail.com", "abright@work.example"],
             "phone": "+1-555-0100",
             "discord": 424242424242,
+            "github": "lunarcoder",
             "slack": {
                 "T01": {"user_id": "U0SLACK99", "username": "slackhandle", "display_name": "Sash Slacks"}
             },
@@ -69,9 +70,7 @@ async def search_people(session_token: str, **kwargs) -> list[str]:
         "U0SLACK99",  # Slack user id
         "slackhandle",  # Slack username
         "sash slacks",  # Slack display name
-        "lunarcoder",  # GitHub login
-        "Sasha Bright",  # GitHub display name
-        "gh-mail@noreply",  # GitHub email
+        "lunarcoder",  # GitHub login, in contact_info
         "Brightwater",  # Person display name
         "alexb",  # Person identifier
     ],
@@ -163,9 +162,11 @@ async def test_list_all_user_does_not_match_discord_handle_their_bots_never_hear
         "T01",  # a Slack workspace id, also a key
         "orphanhandle",  # a Discord account linked to no Person
         "Nobody Linked",
+        "Sasha Bright",  # a linked GitHub account's display name
+        "gh-mail@noreply",  # a linked GitHub account's email
     ],
 )
-async def test_list_all_search_ignores_keys_and_unlinked_accounts(
+async def test_list_all_search_ignores_keys_unlinked_accounts_and_github_fields(
     db_session, admin_session, linked_person, search
 ):
     assert await search_people(admin_session.token, search=search) == []
@@ -177,7 +178,7 @@ async def test_list_all_search_returns_each_person_once(db_session, admin_sessio
         identifier="dup",
         display_name="Dupe Person",
         aliases=["dupe-alias"],
-        contact_info={"email": ["dupe@a.example", "dupe@b.example"]},
+        contact_info={"email": ["dupe@a.example", "dupe@b.example"], "github": "dupe-gh"},
     )
     db_session.add(person)
     db_session.flush()
@@ -185,7 +186,6 @@ async def test_list_all_search_returns_each_person_once(db_session, admin_sessio
         [
             DiscordUser(id=1001, username="dupe1", display_name="Dupe One", person_id=person.id),
             DiscordUser(id=1002, username="dupe2", display_name="Dupe Two", person_id=person.id),
-            GithubUser(id=1003, username="dupe-gh", person_id=person.id),
         ]
     )
     db_session.commit()
