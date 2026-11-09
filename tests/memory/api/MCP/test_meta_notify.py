@@ -12,7 +12,7 @@ from memory.api.MCP.servers.meta import (
     format_notification_message,
     get_notification_channel,
 )
-from memory.common.db.models import Event
+from memory.common.db.models import DiscordBot, DiscordUser, EmailAccount, Event, HumanUser, Person
 from tests.conftest import mcp_auth_context
 
 
@@ -122,3 +122,155 @@ async def test_a_run_cannot_set_a_timer(mock_channel, db_session, regular_user, 
         auth_context_var.reset(context)
 
     assert db_session.query(Event).count() == 0
+
+
+@pytest.fixture
+def notify_person(db_session, regular_user):
+    person = Person(identifier="regular", display_name="Regular User", user_id=regular_user.id)
+    db_session.add(person)
+    db_session.commit()
+    return person
+
+
+@pytest.fixture
+def sending_email(regular_user, add_sending_email):
+    return add_sending_email(regular_user)
+
+
+@pytest.fixture
+def someone_elses_bot(db_session):
+    other = HumanUser(name="Other", email="other@example.com", password_hash="x", scopes=[])
+    db_session.add(other)
+    db_session.flush()
+    bot = DiscordBot(application_id=2, name="their bot", created_by_user_id=other.id)
+    db_session.add(bot)
+    db_session.commit()
+    return bot
+
+
+@pytest.mark.asyncio
+async def test_forced_discord_without_linked_account_says_so(db_session, user_session, notify_person):
+    with mcp_auth_context(user_session.token):
+        with pytest.raises(ValueError, match="^Can't notify over discord: no Discord account is linked to your Person"):
+            await meta.notify_user.fn(subject="Hi", message="body", channel="discord")
+
+
+@pytest.mark.parametrize(
+    "contact_info, discord_user_ids",
+    [({"discord": "123456789"}, []), ({}, [987654321])],
+)
+@pytest.mark.asyncio
+async def test_forced_discord_without_own_bot_says_so(
+    db_session, user_session, notify_person, someone_elses_bot, contact_info, discord_user_ids
+):
+    notify_person.contact_info = contact_info
+    db_session.add_all(DiscordUser(id=i, username="me", person_id=notify_person.id) for i in discord_user_ids)
+    db_session.commit()
+
+    with mcp_auth_context(user_session.token):
+        with pytest.raises(ValueError, match="^Can't notify over discord: you have no Discord bot of your own"):
+            await meta.notify_user.fn(subject="Hi", message="body", channel="discord")
+
+
+@pytest.mark.parametrize(
+    "contact_info, channel_type, skipped",
+    [
+        ({"slack": {"T1": {"user_id": "U1"}}}, "slack", {"discord"}),
+        ({}, "email", {"discord", "slack"}),
+        ({"discord": "123456789"}, "email", {"discord", "slack"}),
+    ],
+)
+@patch("memory.api.MCP.servers.meta.celery_app.send_task")
+@pytest.mark.asyncio
+async def test_notify_user_reports_skipped_channels(
+    mock_send, db_session, user_session, notify_person, someone_elses_bot, sending_email,
+    contact_info, channel_type, skipped
+):
+    notify_person.contact_info = contact_info
+    db_session.commit()
+
+    with mcp_auth_context(user_session.token):
+        result = await meta.notify_user.fn(subject="Hi", message="body")
+
+    assert result["channel_type"] == channel_type
+    assert result["skipped_channels"].keys() == skipped
+    assert mock_send.call_args.kwargs["args"][0] == channel_type
+
+
+@patch("memory.api.MCP.servers.meta.celery_app.send_task")
+@pytest.mark.asyncio
+async def test_notify_user_skipped_channels_name_the_discord_cause(
+    mock_send, db_session, user_session, notify_person, someone_elses_bot
+):
+    notify_person.contact_info = {"discord": "123456789", "slack": {"T1": {"user_id": "U1"}}}
+    db_session.commit()
+
+    with mcp_auth_context(user_session.token):
+        result = await meta.notify_user.fn(subject="Hi", message="body")
+
+    assert result["channel_type"] == "slack"
+    assert "no Discord bot of your own" in result["skipped_channels"]["discord"]
+
+
+@pytest.mark.parametrize("scheduled_time", [None, "2999-01-01T09:00:00Z"])
+@patch("memory.api.MCP.servers.meta.celery_app.send_task")
+@pytest.mark.asyncio
+async def test_forced_channel_reports_no_skipped_channels(
+    mock_send, db_session, user_session, notify_person, sending_email, scheduled_time
+):
+    notify_person.contact_info = {"slack": {"T1": {"user_id": "U1"}}}
+    db_session.commit()
+
+    with mcp_auth_context(user_session.token):
+        result = await meta.notify_user.fn(
+            subject="Hi", message="body", channel="email", scheduled_time=scheduled_time
+        )
+
+    assert (result["channel_type"], result["skipped_channels"]) == ("email", {})
+
+
+@patch("memory.api.MCP.servers.meta.celery_app.send_task")
+@pytest.mark.asyncio
+async def test_own_bot_with_contact_info_id_notifies_over_discord(
+    mock_send, db_session, regular_user, user_session, notify_person
+):
+    notify_person.contact_info = {"discord": "123456789"}
+    bot = DiscordBot(application_id=3, name="my bot", created_by_user_id=regular_user.id)
+    db_session.add(bot)
+    db_session.commit()
+
+    with mcp_auth_context(user_session.token):
+        result = await meta.notify_user.fn(subject="Hi", message="body")
+
+    assert (result["channel_type"], result["skipped_channels"]) == ("discord", {})
+    assert mock_send.call_args.kwargs["args"][:2] == ["discord", "123456789"]
+
+
+@pytest.mark.parametrize(
+    "accounts",
+    [[], [{"send_enabled": False}], [{"send_enabled": True, "active": False}]],
+)
+@pytest.mark.asyncio
+async def test_forced_email_without_an_account_that_can_send_says_so(
+    db_session, regular_user, user_session, notify_person, accounts
+):
+    db_session.add_all(
+        EmailAccount(user_id=regular_user.id, name="Mail", email_address="mail@example.com", account_type="imap", **a)
+        for a in accounts
+    )
+    db_session.commit()
+
+    with mcp_auth_context(user_session.token):
+        with pytest.raises(ValueError, match="^Can't notify over email: no email account you can send from"):
+            await meta.notify_user.fn(subject="Hi", message="body", channel="email")
+
+
+@pytest.mark.asyncio
+async def test_forced_channel_without_a_stated_reason_gets_a_generic_one(
+    db_session, user_session, notify_person, monkeypatch
+):
+    monkeypatch.setattr(meta, "channel_problems", lambda user_info: {})
+
+    with mcp_auth_context(user_session.token):
+        with pytest.raises(ValueError, match="^Can't notify over slack: it is not available$"):
+            await meta.notify_user.fn(subject="Hi", message="body", channel="slack")

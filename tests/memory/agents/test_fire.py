@@ -318,8 +318,9 @@ def test_a_deleted_pinned_provider_key_trips_the_breaker(
 
 
 def test_an_invalid_spec_trips_the_breaker_and_tells_the_owner(
-    db_session, admin_user, fake_providers, admin_keys, no_celery_dispatch
+    db_session, admin_user, fake_providers, admin_keys, no_celery_dispatch, add_sending_email
 ):
+    add_sending_email(admin_user)
     subscription = setup(db_session, admin_user, SPEC | {"model": "openai/m", "reasoning": "medium"})
 
     assert fire_subscription(subscription.id, claimed(db_session, subscription, post(db_session))) is None
@@ -344,8 +345,9 @@ def test_a_deleted_key_trips_rather_than_widening(db_session, admin_user, fake_p
 
 
 def test_only_the_first_trip_disables_and_notifies(
-    db_session, admin_user, no_celery_dispatch
+    db_session, admin_user, no_celery_dispatch, add_sending_email
 ):
+    add_sending_email(admin_user)
     subscription = setup(db_session, admin_user)
 
     tripped = [trip(db_session, subscription.id, admin_user, "rate") for _ in range(2)]
