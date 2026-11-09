@@ -28,6 +28,8 @@ a new, empty `## Unreleased` above it.
 - The daily open-items sweep of project-tracking repos also fetches what changed since the last sync, so issues and PRs closed in between are no longer missed.
 - Webhook deliveries of deleted or transferred issues no longer queue a refetch, and a refetch of an item GitHub no longer has finishes as `not_found`.
 - The webhook log lists a GitHub account's repo sync errors above its deliveries, since refetches fail the same way.
+- Browse what has been ingested: each content type on the Ingestion overview opens its items, newest first, a page at a time, and the overview page can show each type's latest five items inline. The list can be narrowed to one connection (email account, Discord or Slack channel, Beeper chat, feed, GitHub repo, Google Drive folder, calendar or transcript account, book), filtered by indexing status, and searched by title, subject, sender, author or filename (not the item text). Only items you can access are listed.
+- MCP `core_list_items` and `core_count_items` take `item_types`, `embed_statuses` (default still indexed items only), `contains` and `connection_id`. List rows carry `type` and `embed_status`; `include_total=false` skips the total count; pages sort by id within equal timestamps so they never overlap. `core_count_items` adds `by_type` and, for types that share a kind of connection, `by_connection`.
 
 ### Required env vars
 None
@@ -40,6 +42,7 @@ None
 
 ### Migrations
 - `20261220_github_incomplete_since` adds a nullable `github_repos.incomplete_since` column and a `github_repos.sync_incomplete` boolean defaulting to false (instant).
+- `20261221_item_inserted_idx` builds two indexes on `source_item`, `(inserted_at, id)` and `(type, inserted_at, id)`, with `CREATE INDEX CONCURRENTLY`: writes continue while they build, but the upgrade's time grows with the number of stored items. If it is interrupted, drop any invalid `source_inserted_at_idx` or `source_type_inserted_at_idx` before re-running it: Postgres keeps a half-built concurrent index, and `IF NOT EXISTS` would skip it.
 
 ### Post-deploy commands
 None

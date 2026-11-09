@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useAuth } from '@/hooks/useAuth'
 import { apiError } from '@/hooks/apiError'
-import { ButtonLink, Card, EmptyState, ErrorState, LoadingState, Page, RefreshButton, Section, Stat, StatGrid } from '@/components/shared/ui'
+import { ButtonLink, Card, EmptyState, ErrorState, List, LoadingState, Page, RefreshButton, Row, Section, Stat, StatGrid } from '@/components/shared/ui'
+import { LatestItems, itemsUrl, typeLabel } from '@/components/ingestion/ItemRow'
 import { formatUserDateTime } from '@/utils/timezones'
 
 interface Counts {
@@ -16,7 +17,9 @@ interface Overview extends Counts {
   by_type: (Counts & { item_type: string })[]
   last_ingested_at: string | null
 }
-const typeLabel = (name: string) => name.replaceAll('_', ' ').replace(/^./, char => char.toUpperCase())
+
+// Claude session transcripts are private to their owner and never listed with other items.
+const UNLISTED_TYPES = new Set(['session_segment'])
 
 export default function IngestionOverview({ standalone = false }: { standalone?: boolean }) {
   const { apiCall } = useAuth()
@@ -50,12 +53,21 @@ export default function IngestionOverview({ standalone = false }: { standalone?:
       </StatGrid>
       {data.last_ingested_at && <p className="text-sm text-slate-600">Last item added: {formatUserDateTime(new Date(data.last_ingested_at))}</p>}
       {data.total === 0 ? <EmptyState message="No items ingested yet" action={<ButtonLink to="/sources">Connect a source</ButtonLink>} /> :
-        <Card title="Items by content type">
-          <dl className="grid gap-x-8 gap-y-3 sm:grid-cols-2 lg:grid-cols-3">
-            {data.by_type.map(group => <div key={group.item_type} className="flex justify-between gap-4">
-              <dt>{typeLabel(group.item_type)}</dt><dd className="font-semibold tabular-nums">{group.total.toLocaleString()}</dd>
-            </div>)}
-          </dl>
+        <Card title="Items by content type" flush actions={<ButtonLink to={itemsUrl()} size="sm">Browse all items</ButtonLink>}>
+          <List flush>
+            {data.by_type.map(group => {
+              const listed = !UNLISTED_TYPES.has(group.item_type)
+              return <Row key={group.item_type} title={typeLabel(group.item_type)} to={listed ? itemsUrl(group.item_type) : undefined}
+                meta={[
+                  `${group.total.toLocaleString()} items`,
+                  group.added_last_24h > 0 && `${group.added_last_24h.toLocaleString()} in last 24 hours`,
+                  group.pending > 0 && `${group.pending.toLocaleString()} awaiting indexing`,
+                  group.failed > 0 && `${group.failed.toLocaleString()} failed`,
+                ]}>
+                {standalone && listed && <LatestItems itemType={group.item_type} />}
+              </Row>
+            })}
+          </List>
         </Card>}
     </>}
   </Container>
