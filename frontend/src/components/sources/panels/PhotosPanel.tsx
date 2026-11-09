@@ -4,6 +4,7 @@ import { useSources } from '@/hooks/useSources'
 import { Button, ConfirmDialog, EmptyState, ErrorState, LoadingState, Notice, Section, useActionNotice } from '@/components/shared/ui'
 import { useSourcesContext } from '../context'
 import { FileButton } from '../shared'
+import { fileUrl } from '@/utils/files'
 import { formatUserDate } from '@/utils/timezones'
 
 interface Photo {
@@ -123,7 +124,7 @@ export const PhotosPanel = () => {
               {photo.file_path && (
                 <div className="aspect-square bg-slate-100">
                   <img
-                    src={`/files/${photo.file_path}`}
+                    src={fileUrl(photo.file_path)}
                     alt={photo.filename}
                     loading="lazy"
                     className="w-full h-full object-cover"

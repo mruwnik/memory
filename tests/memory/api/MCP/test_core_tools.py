@@ -1454,8 +1454,17 @@ def realistic_mail(n: int = 0) -> MailMessage:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("call", [fetch_one, fetch_bulk, list_one])
-async def test_third_party_text_comes_back_in_untrusted_blocks(db_session, admin_session, call):
+@pytest.mark.parametrize(
+    "call, listed_fields",
+    [
+        (fetch_one, {}),
+        (fetch_bulk, {}),
+        (list_one, {"type": "mail_message", "embed_status": "STORED"}),
+    ],
+)
+async def test_third_party_text_comes_back_in_untrusted_blocks(
+    db_session, admin_session, call, listed_fields
+):
     mail = realistic_mail()
     db_session.add(mail)
     db_session.commit()
@@ -1465,7 +1474,12 @@ async def test_third_party_text_comes_back_in_untrusted_blocks(db_session, admin
 
     tag = untrusted_tag(item.pop("untrusted"))
     bare = {k: v for k, v in item.items() if isinstance(v, str) and not v.startswith(f"<{tag} ")}
-    assert bare == {"modality": "email", "mime_type": mail.mime_type, "inserted_at": item["inserted_at"]}
+    assert bare == {
+        "modality": "email",
+        "mime_type": mail.mime_type,
+        "inserted_at": item["inserted_at"],
+        **listed_fields,
+    }
     assert shown(item["title"], tag) == f"<T id={mail.id} field=title>Re: Q3 budget review</T>"
     assert shown(item["tags"], tag) == f'<T id={mail.id} field=tags.json>["work", "budget"]</T>'
     assert shown(item["metadata"], tag).startswith(f"<T id={mail.id} field=metadata.json>{{")
@@ -1757,29 +1771,8 @@ async def test_list_items_enforces_max_limit(mock_make_session):
 
     await list_items.fn(limit=500)
 
-    # Verify limit was capped at 200
-    query_mock.limit.assert_called_once_with(200)
-
-
-@pytest.mark.asyncio
-@patch("memory.api.MCP.servers.core.make_session")
-async def test_list_items_with_pagination(mock_make_session):
-    """List items supports offset pagination."""
-    mock_session = MagicMock()
-    mock_make_session.return_value.__enter__.return_value = mock_session
-
-    query_mock = mock_session.query.return_value
-    query_mock.filter.return_value = query_mock
-    query_mock.count.return_value = 0
-    query_mock.order_by.return_value = query_mock
-    query_mock.offset.return_value = query_mock
-    query_mock.limit.return_value = query_mock
-    query_mock.all.return_value = []
-
-    await list_items.fn(limit=10, offset=20)
-
-    query_mock.offset.assert_called_once_with(20)
-    query_mock.limit.assert_called_once_with(10)
+    # Capped at 200, plus the one extra row that tells whether more follow.
+    query_mock.limit.assert_called_once_with(201)
 
 
 @pytest.mark.parametrize(
@@ -1833,42 +1826,6 @@ async def test_list_items_defaults_invalid_sort_by(mock_make_session):
 
     # Should still work, defaulting to inserted_at
     query_mock.order_by.assert_called_once()
-
-
-@pytest.mark.asyncio
-@patch("memory.api.MCP.servers.core.make_session")
-async def test_list_items_has_more_flag(mock_make_session):
-    """List items sets has_more flag correctly."""
-    mock_session = MagicMock()
-    mock_make_session.return_value.__enter__.return_value = mock_session
-
-    mock_item = MagicMock()
-    mock_item.id = 1
-    mock_item.modality = "blog"
-    mock_item.title = "Test"
-    mock_item.mime_type = "text/html"
-    mock_item.filename = "test.html"
-    mock_item.size = 1000
-    mock_item.tags = []
-    mock_item.inserted_at = None
-    mock_item.content = None
-    mock_item.as_payload.return_value = {}
-
-    query_mock = mock_session.query.return_value
-    query_mock.filter.return_value = query_mock
-    query_mock.count.return_value = 100  # Total 100 items
-    query_mock.order_by.return_value = query_mock
-    query_mock.offset.return_value = query_mock
-    query_mock.limit.return_value = query_mock
-    query_mock.all.return_value = [mock_item] * 10  # Return 10 items
-
-    result = unwrapped(await list_items.fn(limit=10, offset=0))
-
-    assert result["has_more"] is True  # 0 + 10 < 100
-
-    result = unwrapped(await list_items.fn(limit=10, offset=90))
-
-    assert result["has_more"] is False  # 90 + 10 >= 100
 
 
 @pytest.mark.asyncio

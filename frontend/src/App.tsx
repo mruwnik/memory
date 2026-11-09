@@ -15,6 +15,7 @@ import { PeopleManagement } from '@/components/people'
 import { SetupWizard } from '@/components/setup/SetupWizard'
 import { SSHKeysPage } from '@/components/SSHKeysPage'
 import IngestionOverview from '@/components/IngestionOverview'
+import IngestedItems from '@/components/ingestion/IngestedItems'
 import Projects from '@/components/projects/Projects'
 import Teams from '@/components/teams/Teams'
 import { AppShell } from '@/components/shared/AppShell'
@@ -111,6 +112,7 @@ const AuthWrapper = () => {
     { path: '/sources', element: <Sources /> },
     { path: '/sources/webhook-log', element: <WebhookLog /> },
     { path: '/ingestion', element: <IngestionOverview standalone /> },
+    { path: '/ingestion/items', element: <IngestedItems /> },
     { path: '/ssh-keys', element: <SSHKeysPage /> },
     { path: '/calendar', element: <Calendar /> },
     { path: '/tasks', element: <Tasks /> },

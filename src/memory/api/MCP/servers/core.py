@@ -42,6 +42,15 @@ from memory.api.search.filters import (
     apply_registry_filters_sql,
     reject_unknown_filter_keys,
 )
+from memory.api.search.item_browse import (
+    CONNECTIONS,
+    EMBED_STATUSES,
+    check_embed_statuses,
+    connection_clause,
+    connection_counts,
+    connection_for,
+    text_match_clause,
+)
 from memory.api.search.scope_filters import apply_scope_filters
 from memory.api.search.search import search as search_base
 from memory.api.search.types import MCPSearchFilters, SearchConfig, SearchFilters
@@ -188,6 +197,24 @@ SCOPE_SECTION = "\n".join(
     )
 )
 
+# Substituted after dedent, like SCOPE_SECTION.
+BROWSE_SECTION = "\n".join(
+    " " * 4 * (i > 0) + line
+    for i, line in enumerate(
+        [
+            "item_types: Filter by item type, e.g. mail_message, discord_message, github_pr (empty = all)",
+            "embed_statuses: Indexing statuses to include, from "
+            + ", ".join(sorted(EMBED_STATUSES)),
+            "    (default STORED: indexed items only; empty = every status)",
+            "contains: Case-insensitive text matched against the filename and each type's",
+            "    title, subject and author or sender name (not the body text)",
+            "connection_id: Only items from this connection (as count_items by_connection",
+            "    lists it); item_types must all come from one kind of connection:",
+            "    " + ", ".join(sorted(CONNECTIONS)),
+        ]
+    )
+)
+
 
 def _build_list_items_description() -> str:
     """Build dynamic description for the list_items tool.
@@ -204,6 +231,7 @@ def _build_list_items_description() -> str:
 
         Args:
             modalities: Filter by type: mail, blog, book, forum, photo, comic, etc. (empty = all)
+            {browse_section}
             {filters_section}
             Observation-only filters (observation_types, min_confidences) are
             rejected here - use core_search_observations for those.
@@ -213,13 +241,19 @@ def _build_list_items_description() -> str:
             sort_by: Sort field - "inserted_at", "size", or "id" (default: inserted_at)
             sort_order: "asc" or "desc" (default: desc)
             include_metadata: Include each item's full metadata (default True)
+            include_total: Count every match for total (default True); false skips
+                that count, which is slow on large collections, and total is null
 
-        Returns: {{untrusted, items: [...], total: int, has_more: bool}}. Each item has
-            id, modality, title, mime_type, filename, size, tags, inserted_at,
-            preview and metadata. untrusted names the tag of the blocks that hold
-            text people wrote; tags and metadata are JSON in a block whose field
-            ends in .json."""
-    ).format(filters_section=_build_filters_section(), scope_section=SCOPE_SECTION)
+        Returns: {{untrusted, items: [...], total: int | null, has_more: bool}}. Each item has
+            id, modality, type, embed_status, title, mime_type, filename, size, tags,
+            inserted_at, preview and metadata. untrusted names the tag of the blocks
+            that hold text people wrote; tags and metadata are JSON in a block whose
+            field ends in .json."""
+    ).format(
+        browse_section=BROWSE_SECTION,
+        filters_section=_build_filters_section(),
+        scope_section=SCOPE_SECTION,
+    )
 
 
 def _build_count_items_description() -> str:
@@ -235,14 +269,22 @@ def _build_count_items_description() -> str:
 
         Args:
             modalities: Filter by type (empty = all)
+            {browse_section}
             {filters_section}
             Observation-only filters (observation_types, min_confidences) are
             rejected here - use core_search_observations for those. count_items and
             list_items apply the identical filter set, so their totals always agree.
             {scope_section}
 
-        Returns: {{total: int, by_modality: {{mail: 100, blog: 50, ...}}}}"""
-    ).format(filters_section=_build_filters_section(), scope_section=SCOPE_SECTION)
+        Returns: {{total: int, by_modality: {{mail: 100, ...}}, by_type: {{mail_message: 100, ...}},
+            by_connection}}. by_connection is null unless item_types all come from one
+            kind of connection; then it lists {{id, name, count}} per connection, largest
+            first, and an id from it is a valid connection_id."""
+    ).format(
+        browse_section=BROWSE_SECTION,
+        filters_section=_build_filters_section(),
+        scope_section=SCOPE_SECTION,
+    )
 
 
 def _build_search_description() -> str:
@@ -287,7 +329,9 @@ core_mcp = FastMCP("memory-core")
 
 # Item fields memory sets itself. Every other field may hold text whoever sent,
 # authored or named the item wrote, metadata included.
-SYSTEM_FIELDS = frozenset({"id", "modality", "mime_type", "size", "inserted_at", "created_at", "search_score"})
+SYSTEM_FIELDS = frozenset(
+    {"id", "modality", "type", "embed_status", "mime_type", "size", "inserted_at", "created_at", "search_score"}
+)
 
 
 def wrapped_item(tag: str, item: dict) -> dict:
@@ -943,6 +987,30 @@ def apply_item_filters(query, modalities: set[str], filters: MCPSearchFilters):
     return query
 
 
+def apply_browse_filters(
+    query,
+    item_types: set[str],
+    embed_statuses: set[str],
+    contains: str | None,
+    connection_id: str | None,
+):
+    """Apply item type, indexing status, text match and connection constraints.
+
+    Shared by list_items and count_items. Raises ValueError for an unknown
+    status, or a connection_id the item types can't be narrowed by.
+    """
+    check_embed_statuses(embed_statuses)
+    if embed_statuses:
+        query = query.filter(SourceItem.embed_status.in_(embed_statuses))
+    if item_types:
+        query = query.filter(SourceItem.type.in_(item_types))
+    if contains and contains.strip():
+        query = query.filter(text_match_clause(contains.strip(), item_types))
+    if connection_id:
+        query = query.filter(connection_clause(item_types, connection_id))
+    return query
+
+
 @core_mcp.tool(description=_build_list_items_description(), annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_READ))
 async def list_items(
@@ -953,14 +1021,20 @@ async def list_items(
     channel: str | None = None,
     author: str | None = None,
     repo: str | None = None,
+    item_types: set[str] = set(),
+    embed_statuses: set[str] = {"STORED"},
+    contains: str | None = None,
+    connection_id: str | None = None,
     limit: int = 50,
     offset: int = 0,
     sort_by: str = "inserted_at",
     sort_order: str = "desc",
     include_metadata: bool = True,
+    include_total: bool = True,
 ) -> dict:
     """List items without semantic search. See tool description for full parameter docs."""
-    limit = min(limit, 200)
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
     if sort_by not in ("inserted_at", "size", "id"):
         sort_by = "inserted_at"
     if sort_order not in ("asc", "desc"):
@@ -970,32 +1044,36 @@ async def list_items(
     access_filter = get_current_user_access_filter()
 
     with make_session() as session:
-        query = session.query(SourceItem).filter(SourceItem.embed_status == "STORED")
+        query = session.query(SourceItem)
         query = apply_access_control_to_query(query, access_filter, session)
+        query = apply_browse_filters(
+            query, item_types, embed_statuses, contains, connection_id
+        )
         query = apply_item_filters(query, modalities, filters)
         query = apply_scope_filters(
             query, since=since, until=until, channel=channel, author=author, repo=repo
         )
 
-        # Get total count
-        total = query.count()
+        total = query.count() if include_total else None
 
-        # Apply sorting
-        sort_column = getattr(SourceItem, sort_by)
+        # id breaks ties so pages never overlap or skip rows.
+        sort_columns = [getattr(SourceItem, sort_by), SourceItem.id]
         if sort_order == "desc":
-            sort_column = sort_column.desc()
-        query = query.order_by(sort_column)
+            sort_columns = [column.desc() for column in sort_columns]
+        query = query.order_by(*sort_columns)
 
-        # Apply pagination
-        query = query.offset(offset).limit(limit)
+        # One extra row tells whether another page follows without counting.
+        rows = query.offset(offset).limit(limit + 1).all()
 
         items = []
-        for item in query.all():
+        for item in rows[:limit]:
             preview = item.preview_text
 
             item_dict = {
                 "id": item.id,
                 "modality": item.modality,
+                "type": item.type,
+                "embed_status": item.embed_status,
                 "title": item.title,
                 "mime_type": item.mime_type,
                 "filename": item.filename,
@@ -1019,7 +1097,7 @@ async def list_items(
             "untrusted": preamble(tag),
             "items": [wrapped_item(tag, item) for item in items],
             "total": total,
-            "has_more": offset + len(items) < total,
+            "has_more": len(rows) > limit,
         }
 
 
@@ -1033,16 +1111,21 @@ async def count_items(
     channel: str | None = None,
     author: str | None = None,
     repo: str | None = None,
+    item_types: set[str] = set(),
+    embed_statuses: set[str] = {"STORED"},
+    contains: str | None = None,
+    connection_id: str | None = None,
 ) -> dict:
     """Count items matching criteria. See tool description for full parameter docs."""
     # Get access filter for current user
     access_filter = get_current_user_access_filter()
 
     with make_session() as session:
-        base_query = session.query(SourceItem).filter(
-            SourceItem.embed_status == "STORED"
-        )
+        base_query = session.query(SourceItem)
         base_query = apply_access_control_to_query(base_query, access_filter, session)
+        base_query = apply_browse_filters(
+            base_query, item_types, embed_statuses, contains, connection_id
+        )
         base_query = apply_item_filters(base_query, modalities, filters)
         base_query = apply_scope_filters(
             base_query, since=since, until=until, channel=channel, author=author, repo=repo
@@ -1058,7 +1141,20 @@ async def count_items(
 
         by_modality = {row[0]: row[1] for row in by_modality_query.all()}
 
+        by_type_query = base_query.with_entities(
+            SourceItem.type, func.count(SourceItem.id)
+        ).group_by(SourceItem.type)
+        by_type = {row[0] or "unknown": row[1] for row in by_type_query.all()}
+
+        connection = connection_for(item_types)
+        item_ids = base_query.with_entities(SourceItem.id).scalar_subquery()
+        by_connection = (
+            connection_counts(session, connection, item_ids) if connection else None
+        )
+
         return {
             "total": total,
             "by_modality": by_modality,
+            "by_type": by_type,
+            "by_connection": by_connection,
         }

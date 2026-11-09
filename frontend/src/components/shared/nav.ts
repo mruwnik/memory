@@ -9,7 +9,7 @@ export const NAV_SECTIONS: NavSection[] = [
     title: 'Knowledge & content',
     items: [
       { to: '/search', title: 'Search', description: 'Search through your knowledge base' },
-      { to: '/ingestion', title: 'Ingestion overview', description: 'Item totals, recent additions, indexing status and content types' },
+      { to: '/ingestion', title: 'Ingestion overview', description: 'Item totals, indexing status and content types; browse and search the items themselves' },
       { to: '/sources', title: 'Sources', description: 'Connect email, chat, code, feeds, files and other sources' },
       { to: '/sources/webhook-log', title: 'Webhook log', description: 'Every webhook delivery to your sources, what it stored and what it triggered' },
       { to: '/notes', title: 'Notes', description: 'Browse and view your notes' },

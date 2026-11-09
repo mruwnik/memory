@@ -30,6 +30,7 @@ describe('Metadata', () => {
   it.each([
     ['url', 'https://example.com', 'https://example.com'],
     ['filename', 'a.pdf', '/files/a.pdf'],
+    ['filename', 'mail/re #1?.eml', '/files/mail/re%20%231%3F.eml'],
   ])('renders a %s value as a link', (key, value, href) => {
     renderWithUser(<Metadata metadata={{ [key]: value }} />)
     expect(screen.getByRole('link', { name: value })).toHaveAttribute('href', href)
@@ -73,6 +74,14 @@ describe('SearchResult titles', () => {
     expect(screen.getByText('some preview')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Open file' })).toHaveAttribute('href', `/files/${overrides.filename}`)
   })
+})
+
+it.each([
+  ['application/pdf', 'View PDF'],
+  [null, 'Open file'],
+])('links a %s result to its file with the name encoded', (mime_type, link) => {
+  render({ mime_type: mime_type as string, filename: 'reports/100% #2?.pdf' })
+  expect(screen.getByRole('link', { name: link })).toHaveAttribute('href', '/files/reports/100%25%20%232%3F.pdf')
 })
 
 describe('SearchResult bodies', () => {

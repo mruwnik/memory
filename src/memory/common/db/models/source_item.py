@@ -630,6 +630,10 @@ class SourceItem(AccessControlMixin, Base):
         # Drives the recent-tier access-control reconciliation sweep
         # (reconcile_access_control filters on updated_at >= cutoff).
         Index("source_updated_at_idx", "updated_at"),
+        # Newest-first item browsing, overall and per item type; id breaks ties
+        # so offset pages are stable. Scanned backwards for DESC.
+        Index("source_inserted_at_idx", "inserted_at", "id"),
+        Index("source_type_inserted_at_idx", "type", "inserted_at", "id"),
     )
 
     @property
