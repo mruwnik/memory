@@ -1,6 +1,7 @@
 """Tests for GitHub issue/PR syncing tasks."""
 
 import pytest
+from sqlalchemy import update
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, Mock, patch
 
@@ -12,7 +13,7 @@ from memory.workers.tasks.github import (
     _needs_reindex,
     _deserialize_issue_data,
 )
-from memory.common.github import GithubIssueData, GithubComment, serialize_issue_data
+from memory.common.github import GithubClient, GithubIssueData, GithubQueryError, GithubComment, serialize_issue_data
 from memory.common.db import connection as db_connection
 
 
@@ -234,13 +235,17 @@ def github_repo_with_project_fields(db_session, github_account) -> GithubRepo:
 
 @pytest.fixture
 def mock_github_client():
-    """Mock GitHub client for testing."""
-    client = Mock()
-    client.fetch_issues.return_value = iter([])
-    client.fetch_prs.return_value = iter([])
+    """The client sync_github_repo gets: a live repo with nothing to sync and nothing withheld."""
+    client = Mock(spec=GithubClient)
+    client.get_repo.return_value = {"archived": False}
+    client.fetch_milestones.return_value = []
+    client.fetch_issues.return_value = []
+    client.fetch_prs.return_value = []
     client.fetch_project_fields.return_value = None
     client.fetch_pr_project_fields.return_value = None
-    return client
+    client.unreadable_message.return_value = None
+    with patch("memory.common.project.client.GithubClient", return_value=client):
+        yield client
 
 
 # =============================================================================
@@ -662,16 +667,11 @@ def test_sync_github_item_existing_updated(github_repo, db_session, qdrant):
 # =============================================================================
 
 
-@patch("memory.common.project.client.GithubClient")
 def test_sync_github_repo_success(
-    mock_client_class, mock_issue_data, github_repo, db_session
+    mock_github_client, mock_issue_data, github_repo, db_session
 ):
     """Test successful repo sync."""
-    mock_client = Mock()
-    mock_client.get_repo.return_value = {"archived": False}
-    mock_client.fetch_issues.return_value = iter([mock_issue_data])
-    mock_client.fetch_prs.return_value = iter([])
-    mock_client_class.return_value = mock_client
+    mock_github_client.fetch_issues.return_value = [mock_issue_data]
 
     with patch("memory.workers.tasks.github.sync_github_item") as mock_sync_item:
         mock_sync_item.delay.return_value = Mock(id="task-123")
@@ -689,16 +689,12 @@ def test_sync_github_repo_success(
         mock_sync_item.delay.assert_called_once()
 
 
-@patch("memory.common.project.client.GithubClient")
 def test_sync_github_repo_with_prs(
-    mock_client_class, mock_issue_data, mock_pr_data, github_repo, db_session
+    mock_github_client, mock_issue_data, mock_pr_data, github_repo, db_session
 ):
     """Test repo sync with both issues and PRs."""
-    mock_client = Mock()
-    mock_client.get_repo.return_value = {"archived": False}
-    mock_client.fetch_issues.return_value = iter([mock_issue_data])
-    mock_client.fetch_prs.return_value = iter([mock_pr_data])
-    mock_client_class.return_value = mock_client
+    mock_github_client.fetch_issues.return_value = [mock_issue_data]
+    mock_github_client.fetch_prs.return_value = [mock_pr_data]
 
     with patch("memory.workers.tasks.github.sync_github_item") as mock_sync_item:
         mock_sync_item.delay.side_effect = [Mock(id="task-1"), Mock(id="task-2")]
@@ -743,16 +739,10 @@ def test_sync_github_repo_inactive_account(db_session, inactive_github_account):
     assert "Account not found or inactive" in result["error"]
 
 
-@patch("memory.common.project.client.GithubClient")
-def test_sync_github_repo_force_full(mock_client_class, github_repo, db_session):
+def test_sync_github_repo_force_full(mock_github_client, github_repo, db_session):
     """Test force_full bypasses check interval."""
     from sqlalchemy import text
 
-    mock_client = Mock()
-    mock_client.get_repo.return_value = {"archived": False}
-    mock_client.fetch_issues.return_value = iter([])
-    mock_client.fetch_prs.return_value = iter([])
-    mock_client_class.return_value = mock_client
 
     # Set recent last_sync_at
     last_sync_time = datetime.now(timezone.utc) - timedelta(seconds=30)
@@ -769,12 +759,9 @@ def test_sync_github_repo_force_full(mock_client_class, github_repo, db_session)
 
 
 @pytest.mark.parametrize("mode, with_diff", [(CONTENT_FULL, True), (CONTENT_METADATA, False)])
-@patch("memory.common.project.client.GithubClient")
 def test_sync_github_repo_fetches_diffs_only_for_repos_that_store_content(
-    mock_client_class, mock_github_client, github_repo, db_session, mode, with_diff
+    mock_github_client, github_repo, db_session, mode, with_diff
 ):
-    mock_github_client.get_repo.return_value = {"archived": False}
-    mock_client_class.return_value = mock_github_client
     github_repo.content_mode = mode
     db_session.commit()
 
@@ -784,18 +771,10 @@ def test_sync_github_repo_fetches_diffs_only_for_repos_that_store_content(
     assert mock_github_client.fetch_prs.call_args.kwargs == {"with_diff": with_diff}
 
 
-@patch("memory.common.project.client.GithubClient")
 def test_sync_github_repo_full_sync_for_project_fields(
-    mock_client_class, github_repo_with_project_fields, db_session
+    mock_github_client, github_repo_with_project_fields, db_session
 ):
     """Test full sync triggered for project fields when never synced before."""
-    mock_client = Mock()
-    mock_client.get_repo.return_value = {"archived": False}
-    mock_client.fetch_issues.return_value = iter([])
-    mock_client.fetch_prs.return_value = iter([])
-    mock_client.fetch_project_fields.return_value = None
-    mock_client.fetch_pr_project_fields.return_value = None
-    mock_client_class.return_value = mock_client
 
     result = github.sync_github_repo(github_repo_with_project_fields.id)
 
@@ -803,19 +782,13 @@ def test_sync_github_repo_full_sync_for_project_fields(
     assert result["sync_type"] == "full"
 
     # Verify fetch_issues was called with state="open" for full sync
-    mock_client.fetch_issues.assert_called_once()
-    call_args = mock_client.fetch_issues.call_args
+    mock_github_client.fetch_issues.assert_called_once()
+    call_args = mock_github_client.fetch_issues.call_args
     assert call_args[0][3] == "open"  # state argument
 
 
-@patch("memory.common.project.client.GithubClient")
-def test_sync_github_repo_updates_timestamps(mock_client_class, github_repo, db_session):
+def test_sync_github_repo_updates_timestamps(mock_github_client, github_repo, db_session):
     """Test that sync updates last_sync_at timestamp."""
-    mock_client = Mock()
-    mock_client.get_repo.return_value = {"archived": False}
-    mock_client.fetch_issues.return_value = iter([])
-    mock_client.fetch_prs.return_value = iter([])
-    mock_client_class.return_value = mock_client
 
     assert github_repo.last_sync_at is None
 
@@ -825,15 +798,10 @@ def test_sync_github_repo_updates_timestamps(mock_client_class, github_repo, db_
     assert github_repo.last_sync_at is not None
 
 
-@patch("memory.common.project.client.GithubClient")
 def test_sync_github_repo_records_failure_until_next_success(
-    mock_client_class, github_repo, db_session
+    mock_github_client, github_repo, db_session
 ):
-    mock_client = Mock()
-    mock_client.get_repo.return_value = {"archived": False}
-    mock_client.fetch_issues.side_effect = [RuntimeError("401 Bad credentials"), iter([])]
-    mock_client.fetch_prs.return_value = iter([])
-    mock_client_class.return_value = mock_client
+    mock_github_client.fetch_issues.side_effect = [RuntimeError("401 Bad credentials"), iter([])]
 
     with pytest.raises(RuntimeError):
         github.sync_github_repo(github_repo.id)
@@ -841,6 +809,7 @@ def test_sync_github_repo_records_failure_until_next_success(
 
     assert github_repo.sync_error == "401 Bad credentials"
     assert github_repo.sync_failing_since is not None
+    assert github_repo.last_sync_at is None
 
     github.sync_github_repo(github_repo.id)
     db_session.refresh(github_repo)
@@ -848,16 +817,10 @@ def test_sync_github_repo_records_failure_until_next_success(
     assert (github_repo.sync_error, github_repo.sync_failing_since) == (None, None)
 
 
-@patch("memory.common.project.client.GithubClient")
 def test_sync_github_repo_with_labels_filter(
-    mock_client_class, github_account, db_session
+    mock_github_client, github_account, db_session
 ):
     """Test sync passes labels filter to client."""
-    mock_client = Mock()
-    mock_client.get_repo.return_value = {"archived": False}
-    mock_client.fetch_issues.return_value = iter([])
-    mock_client.fetch_prs.return_value = iter([])
-    mock_client_class.return_value = mock_client
 
     repo = GithubRepo(
         account_id=github_account.id,
@@ -874,19 +837,13 @@ def test_sync_github_repo_with_labels_filter(
     github.sync_github_repo(repo.id)
 
     # Verify labels filter was passed
-    mock_client.fetch_issues.assert_called_once()
-    call_args = mock_client.fetch_issues.call_args
+    mock_github_client.fetch_issues.assert_called_once()
+    call_args = mock_github_client.fetch_issues.call_args
     assert call_args[0][4] == ["bug", "critical"]  # labels argument
 
 
-@patch("memory.common.project.client.GithubClient")
-def test_sync_github_repo_issues_only(mock_client_class, github_account, db_session):
+def test_sync_github_repo_issues_only(mock_github_client, github_account, db_session):
     """Test sync with only issues tracking enabled."""
-    mock_client = Mock()
-    mock_client.get_repo.return_value = {"archived": False}
-    mock_client.fetch_issues.return_value = iter([])
-    mock_client.fetch_prs.return_value = iter([])
-    mock_client_class.return_value = mock_client
 
     repo = GithubRepo(
         account_id=github_account.id,
@@ -901,18 +858,12 @@ def test_sync_github_repo_issues_only(mock_client_class, github_account, db_sess
 
     github.sync_github_repo(repo.id)
 
-    mock_client.fetch_issues.assert_called_once()
-    mock_client.fetch_prs.assert_not_called()
+    mock_github_client.fetch_issues.assert_called_once()
+    mock_github_client.fetch_prs.assert_not_called()
 
 
-@patch("memory.common.project.client.GithubClient")
-def test_sync_github_repo_prs_only(mock_client_class, github_account, db_session):
+def test_sync_github_repo_prs_only(mock_github_client, github_account, db_session):
     """Test sync with only PRs tracking enabled."""
-    mock_client = Mock()
-    mock_client.get_repo.return_value = {"archived": False}
-    mock_client.fetch_issues.return_value = iter([])
-    mock_client.fetch_prs.return_value = iter([])
-    mock_client_class.return_value = mock_client
 
     repo = GithubRepo(
         account_id=github_account.id,
@@ -927,8 +878,132 @@ def test_sync_github_repo_prs_only(mock_client_class, github_account, db_session
 
     github.sync_github_repo(repo.id)
 
-    mock_client.fetch_issues.assert_not_called()
-    mock_client.fetch_prs.assert_called_once()
+    mock_github_client.fetch_issues.assert_not_called()
+    mock_github_client.fetch_prs.assert_called_once()
+
+
+WITHHELD = "The GitHub App can't read commits on testorg/testrepo: grant it Contents (read)"
+
+
+def synced(repo: GithubRepo, db_session) -> tuple[str, datetime | None]:
+    result = github.sync_github_repo(repo.id)
+    db_session.refresh(repo)
+    return result["status"], repo.last_sync_at
+
+
+@pytest.mark.parametrize("repo_fixture", ["github_repo", "github_repo_with_project_fields"])
+def test_syncs_missing_fields_move_the_cursor_on_and_the_first_complete_one_catches_up(
+    mock_github_client, db_session, request, repo_fixture
+):
+    repo = request.getfixturevalue(repo_fixture)
+    cursor = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    repo.last_sync_at, repo.last_full_sync_at = cursor, datetime.now(timezone.utc)
+    db_session.commit()
+
+    mock_github_client.unreadable_message.return_value = WITHHELD
+    first, t1 = synced(repo, db_session)
+    second, t2 = synced(repo, db_session)
+    degraded = (repo.sync_error, repo.incomplete_since)
+    mock_github_client.unreadable_message.return_value = None
+    third, t3 = synced(repo, db_session)
+    fourth, _ = synced(repo, db_session)
+
+    fetched = [c.args[2:4] for c in mock_github_client.fetch_issues.call_args_list]
+    assert [first, second, third, fourth] == ["incomplete", "incomplete", "completed", "completed"]
+    assert degraded == (WITHHELD, cursor)
+    # Project-tracking repos keep polling closed items while incomplete.
+    assert fetched == [(cursor, "all"), (t1, "all"), (t2, "all"), (cursor, "all"), (t3, "all")]
+    assert (repo.sync_error, repo.incomplete_since) == (None, None)
+
+
+def test_an_open_only_sweep_missing_fields_catches_up_only_what_incremental_syncs_would_have(
+    mock_github_client, github_repo_with_project_fields, db_session
+):
+    """The next sweep re-fetches every open item anyway; closed ones the sweep never touched."""
+    cursor = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    github_repo_with_project_fields.last_sync_at = cursor
+    db_session.commit()
+    mock_github_client.unreadable_message.return_value = WITHHELD
+
+    synced(github_repo_with_project_fields, db_session)
+
+    assert github_repo_with_project_fields.incomplete_since == cursor
+
+
+def test_an_open_only_sweep_also_fetches_what_closed_since_the_last_sync(
+    mock_github_client, github_repo_with_project_fields, db_session
+):
+    cursor = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    github_repo_with_project_fields.last_sync_at = cursor
+    db_session.commit()
+
+    github.sync_github_repo(github_repo_with_project_fields.id)
+
+    assert [c.args[2:4] for c in mock_github_client.fetch_issues.call_args_list] == [(None, "open"), (cursor, "all")]
+
+
+def test_a_sync_that_fails_after_an_incomplete_one_reads_as_failing_and_still_catches_up(
+    mock_github_client, github_repo, db_session
+):
+    cursor = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    github_repo.last_sync_at = cursor
+    db_session.commit()
+    mock_github_client.unreadable_message.return_value = WITHHELD
+    synced(github_repo, db_session)
+    partial = github_repo.sync_incomplete
+
+    mock_github_client.get_repo.return_value = None
+    with pytest.raises(GithubQueryError):
+        github.sync_github_repo(github_repo.id)
+
+    db_session.refresh(github_repo)
+    assert (partial, github_repo.sync_incomplete, github_repo.incomplete_since) == (True, False, cursor)
+
+
+def test_a_refetch_missing_fields_during_a_complete_sync_still_gets_caught_up(
+    mock_github_client, github_repo, db_session
+):
+    github_repo.incomplete_since = datetime(2026, 2, 1, tzinfo=timezone.utc)
+    db_session.commit()
+    marked = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    def refetch_meanwhile(*args):
+        db_session.execute(update(GithubRepo).where(GithubRepo.id == github_repo.id).values(incomplete_since=marked))
+        return []
+
+    mock_github_client.fetch_issues.side_effect = refetch_meanwhile
+
+    synced(github_repo, db_session)
+
+    assert github_repo.incomplete_since == marked
+
+
+def test_a_forced_full_sync_catches_up_without_a_second_fetch(mock_github_client, github_repo, db_session):
+    github_repo.incomplete_since = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    db_session.commit()
+
+    github.sync_github_repo(github_repo.id, force_full=True)
+
+    db_session.refresh(github_repo)
+    assert [c.args[2:4] for c in mock_github_client.fetch_issues.call_args_list] == [(None, "all")]
+    assert github_repo.incomplete_since is None
+
+
+def test_a_sync_github_refuses_milestones_to_still_syncs_issues_and_says_why(
+    mock_github_client, mock_issue_data, github_repo, db_session
+):
+    mock_github_client.fetch_milestones.side_effect = GithubQueryError("grant it Issues (read)")
+    mock_github_client.fetch_issues.return_value = [mock_issue_data]
+
+    with patch.object(github, "sync_github_item"):
+        result = github.sync_github_repo(github_repo.id)
+
+    db_session.refresh(github_repo)
+    assert (result["status"], result["issues_synced"]) == ("incomplete", 1)
+    assert (github_repo.sync_error, github_repo.last_sync_at is not None) == ("grant it Issues (read)", True)
+    assert github_repo.sync_incomplete is True
+    # Every sync fetches all milestones, so there's nothing to catch up on.
+    assert github_repo.incomplete_since is None
 
 
 # =============================================================================
@@ -1721,13 +1796,14 @@ def test_sync_github_repo_archived_deactivates_and_closes_children(db_session):
     assert closed_project.state == "closed"
 
 
-def test_sync_github_repo_missing_deactivates_and_closes_children(db_session):
-    """When repo returns 404, behave the same as archived."""
+@pytest.mark.parametrize("auth_type, hidden_by", [("app", "the GitHub App isn't installed on it"), ("pat", "the access token can't see it")])
+def test_a_repo_github_does_not_find_stays_tracked_and_says_it_may_be_hidden(db_session, auth_type, hidden_by):
+    """GitHub answers 404 for a private repo the App or token lost access to, as for a deleted one."""
     from memory.workers.tasks.github import sync_github_repo
     from memory.common.db.models.sources import Project
 
     repo = make_archive_test_repo(db_session)
-
+    repo.account.auth_type = auth_type
     open_project = Project(
         repo_id=repo.id, github_id=10, number=1, title="ms", state="open"
     )
@@ -1739,14 +1815,12 @@ def test_sync_github_repo_missing_deactivates_and_closes_children(db_session):
 
     with patch(
         "memory.common.project.client.GithubClient", return_value=mock_client
-    ):
-        result = sync_github_repo(repo.id)
-
-    assert result["status"] == "skipped_repo_missing"
+    ), pytest.raises(GithubQueryError):
+        sync_github_repo(repo.id)
 
     db_session.refresh(repo)
-    assert repo.active is False
-    assert repo.sync_error == "Repository no longer exists on GitHub"
-
     db_session.refresh(open_project)
-    assert open_project.state == "closed"
+    assert (repo.active, open_project.state) == (True, "open")
+    assert (repo.sync_error or "").startswith(
+        f"GitHub returns not-found for {repo.repo_path}: {hidden_by}, or it was renamed or deleted."
+    )

@@ -25,8 +25,8 @@ const labeled = event({ id: 3, outcome: 'no_item_type', type: 'label.created', l
 
 beforeEach(() => {
   listAccounts.mockResolvedValue([
-    { source: 'slack', account_id: 3, name: 'Team', last_event_id: null, last_event_at: null },
-    { source: 'github', account_id: 5, name: 'acme', last_event_id: 2, last_event_at: '2026-11-07T10:00:00Z' },
+    { source: 'slack', account_id: 3, name: 'Team', last_event_id: null, last_event_at: null, sync_errors: [] },
+    { source: 'github', account_id: 5, name: 'acme', last_event_id: 2, last_event_at: '2026-11-07T10:00:00Z', sync_errors: [] },
   ])
   listEvents.mockResolvedValue([stored, untracked])
 })
@@ -60,6 +60,16 @@ describe('WebhookLog', () => {
     expect(meta).toHaveLength(1)
     expect(within(row).queryByText('Triggered')).not.toBeInTheDocument()
     expect(within(row).queryByText('Payload')).not.toBeInTheDocument()
+  })
+
+  it("shows the account's repo sync errors once, above its deliveries", async () => {
+    listAccounts.mockResolvedValue([
+      { source: 'github', account_id: 5, name: 'acme', last_event_id: 2, last_event_at: '2026-11-07T10:00:00Z', sync_errors: ["acme/api: The GitHub App can't read commits"] },
+    ])
+    renderWithRouter(<WebhookLog />)
+
+    await screen.findByText('pull_request.synchronize')
+    expect(screen.getAllByText("acme/api: The GitHub App can't read commits")).toHaveLength(1)
   })
 
   it('drops a response for an account no longer shown', async () => {

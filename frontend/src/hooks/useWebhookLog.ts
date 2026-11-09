@@ -16,6 +16,8 @@ export interface WebhookAccount {
   last_event_at: string | null
   // The caller's own; an admin also sees everyone else's.
   own: boolean
+  // Its tracked repos' sync errors ("owner/name: error"): refetches fail the same way.
+  sync_errors: string[]
 }
 
 export interface TriggeredDelivery {

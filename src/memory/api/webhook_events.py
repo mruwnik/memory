@@ -1,3 +1,4 @@
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, cast
 
@@ -26,6 +27,7 @@ from memory.common.db.models import (
 )
 from memory.common.db.models.discord import DiscordBot
 from memory.common.db.models.events import LINKS_ITEMS, NOT_COLLECTED, RAW
+from memory.common.db.models.sync_status import redact_secrets
 from memory.common.discord_data import visible_channels
 from memory.common.db.models.slack import SlackApp
 
@@ -62,6 +64,8 @@ class WebhookAccount(BaseModel):
     last_event_at: datetime | None
     # The caller's own: only these can carry the caller's raw subscriptions.
     own: bool
+    # Its tracked repos' sync errors: refetches fail the same way, so deliveries store less.
+    sync_errors: list[str] = []
 
 
 class Triggered(BaseModel):
@@ -116,6 +120,7 @@ def webhook_accounts(
         accounts += [(source, id, name, last, bool(own)) for id, name, last, own in db.execute(query)]
     latest_ids = [last for *_, last, _ in accounts if last is not None]
     times = dict(db.execute(select(Event.id, Event.created_at).where(Event.id.in_(latest_ids))).tuples().all())
+    errors = repo_sync_errors(db, [id for source, id, *_ in accounts if source == "github"])
     return [
         WebhookAccount(
             source=source,
@@ -124,9 +129,23 @@ def webhook_accounts(
             last_event_id=last,
             last_event_at=times.get(last) if last else None,
             own=own,
+            sync_errors=errors.get(id, []) if source == "github" else [],
         )
         for source, id, name, last, own in accounts
     ]
+
+
+def repo_sync_errors(db: Session, account_ids: list[int]) -> dict[int, list[str]]:
+    path = GithubRepo.owner + "/" + GithubRepo.name
+    rows = db.execute(
+        select(GithubRepo.account_id, path, GithubRepo.sync_error)
+        .where(GithubRepo.account_id.in_(account_ids), GithubRepo.active, GithubRepo.sync_error.is_not(None))
+        .order_by(path)
+    )
+    errors: dict[int, list[str]] = defaultdict(list)
+    for account_id, repo, error in rows:
+        errors[account_id].append(f"{repo}: {redact_secrets(error)}")
+    return errors
 
 
 # As agent_runs_raw_event_idx indexes it.

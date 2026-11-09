@@ -9,6 +9,7 @@ import pytest
 from memory.api.github_sources import ContentMode
 from memory.common.db.models import HumanUser
 from memory.common.db.models.sources import CONTENT_MODES, GithubAccount, GithubRepo
+from memory.common.github import GithubQueryError
 
 
 def test_the_api_takes_the_content_modes_the_db_allows():
@@ -42,9 +43,10 @@ def test_list_accounts_returns_user_accounts(client, db_session, user):
         access_token="test_token",
     )
     since = datetime(2026, 10, 20, tzinfo=timezone.utc)
-    account.repos.append(
-        GithubRepo(owner="org", name="repo", sync_error="401 Bad credentials", sync_failing_since=since)
-    )
+    account.repos.extend([
+        GithubRepo(owner="org", name="repo", sync_error="401 Bad credentials", sync_failing_since=since),
+        GithubRepo(owner="org", name="partial", sync_error="Can't read commits", sync_incomplete=True),
+    ])
     db_session.add(account)
     db_session.commit()
 
@@ -55,8 +57,10 @@ def test_list_accounts_returns_user_accounts(client, db_session, user):
     assert len(data) == 1
     assert data[0]["name"] == "Test GitHub Account"
     assert data[0]["auth_type"] == "pat"
-    repo = data[0]["repos"][0]
+    repo, partial = sorted(data[0]["repos"], key=lambda r: r["name"], reverse=True)
     assert (repo["sync_error"], repo["sync_failing_since"]) == ("401 Bad credentials", since.isoformat())
+    # Stored without some fields, rather than failing.
+    assert (repo["sync_incomplete"], partial["sync_incomplete"]) == (False, True)
 
 
 def test_list_accounts_empty_when_no_accounts(client, db_session, user):
@@ -421,6 +425,19 @@ def test_delete_account_not_owned(regular_client, db_session, user, other_user):
     response = regular_client.delete(f"/github/accounts/{account.id}")
 
     assert response.status_code == 404
+
+
+def test_available_projects_github_refuses_say_what_to_grant(client, db_session, user):
+    account = GithubAccount(user_id=user.id, name="Test Account", auth_type="pat", access_token="token123")
+    db_session.add(account)
+    db_session.commit()
+    github_client = Mock()
+    github_client.list_projects.side_effect = GithubQueryError("grant it organization Projects (read)")
+
+    with patch("memory.api.github_sources.GithubClient", return_value=github_client):
+        response = client.get(f"/github/accounts/{account.id}/available-projects", params={"owner": "acme"})
+
+    assert (response.status_code, response.json()["detail"]) == (502, "grant it organization Projects (read)")
 
 
 # ====== POST /github/accounts/{account_id}/validate tests ======

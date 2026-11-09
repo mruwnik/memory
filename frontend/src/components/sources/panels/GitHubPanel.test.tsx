@@ -663,6 +663,19 @@ describe('GitHubPanel account push badge', () => {
   })
 })
 
+describe('GitHubPanel sync status', () => {
+  it.each([
+    [false, 'Sync failing', /^Sync failing: No access$/],
+    [true, 'Sync incomplete', /^Sync incomplete: No access$/],
+  ])('tells a repo stored without some fields (%s) from a failing one', async (sync_incomplete, badge, error) => {
+    mockFetchRoutes(routes([account({ repos: [{ ...repo, sync_error: 'No access', sync_failing_since: null, sync_incomplete }] })]))
+    renderWithUser(<GitHubPanel />)
+    const row = (await screen.findByText('octocat/hello')).closest('li')!
+    expect(within(row).getByText(badge)).toBeInTheDocument()
+    expect(within(row).getByText(error)).toBeInTheDocument()
+  })
+})
+
 describe('GitHubPanel push health', () => {
   const missed = { ...repo, webhook_status: 'installed', push_missing_since: '2026-11-04T12:00:00Z', push_last_miss_at: '2026-11-05T09:00:00Z' }
   const healthy = { ...repo, id: 51, repo_path: 'octocat/other', webhook_status: 'installed', push_missing_since: null, push_stale: false }

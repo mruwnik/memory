@@ -22,6 +22,28 @@ a new, empty `## Unreleased` above it.
 
 ## Unreleased
 
+### Changes
+- GitHub syncs and webhook refetches no longer report success when GitHub refuses a query. The repo row shows what the GitHub App or token can't read and which permissions to grant (e.g. Contents, Checks and Commit statuses for commits; organization Projects for projects; adding the repo to the App's installation when it can't see the repo at all), and the job fails with the same message. A repo GitHub answers not-found for is no longer deactivated as deleted: GitHub hides a private repo the App or token lost access to the same way, so the row says the App isn't installed on it (or the token can't see it), or it was renamed or deleted, and syncs keep trying. Refreshing, attaching or promoting a project through MCP no longer deactivates such a repo either. A refused milestone fetch is shown on the repo without stopping issues and PRs from syncing. Listing a GitHub account's available projects answers 502 with that message.
+- When GitHub withholds only some fields (check results, the head commit), issues and PRs are still stored without them and the repo row shows "Sync incomplete" (a warning, not "Sync failing") with what to grant. Syncs keep moving their cursor; the first sync that gets every field re-fetches everything updated since the first incomplete one, then clears the repo's error. Fields no permission on the repo can grant (e.g. a PR's head repository on a private fork) are left out without flagging the repo.
+- The daily open-items sweep of project-tracking repos also fetches what changed since the last sync, so issues and PRs closed in between are no longer missed.
+- Webhook deliveries of deleted or transferred issues no longer queue a refetch, and a refetch of an item GitHub no longer has finishes as `not_found`.
+- The webhook log lists a GitHub account's repo sync errors above its deliveries, since refetches fail the same way.
+
+### Required env vars
+None
+
+### Manual steps
+None
+
+### Other changes for operators
+- A repo synced before this release while GitHub refused queries may have had its `last_sync_at` moved past items it never stored. After granting the missing permissions, run Sync on the repo with `force_full=true` (`POST /github/accounts/{account_id}/repos/{repo_id}/sync?force_full=true`), or clear `last_sync_at` for it. Later incidents catch up by themselves.
+
+### Migrations
+- `20261220_github_incomplete_since` adds a nullable `github_repos.incomplete_since` column and a `github_repos.sync_incomplete` boolean defaulting to false (instant).
+
+### Post-deploy commands
+None
+
 ## v0.5.2 (2026-11-08)
 
 ### Changes

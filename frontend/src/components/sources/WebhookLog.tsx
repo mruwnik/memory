@@ -191,6 +191,12 @@ export default function WebhookLog() {
       {requested && accounts && !found && selected && (
         <Notice tone="warning">The source in this link isn't one you can see, so {SOURCE_NAMES[selected.source]} · {selected.name} is shown.</Notice>
       )}
+      {!!selected?.sync_errors.length && (
+        <Notice tone="warning">
+          Syncing these repos is failing or incomplete, and webhook refetches hit the same problem:
+          <ul className="mt-1 list-disc pl-5">{selected.sync_errors.map(e => <li key={e}>{e}</li>)}</ul>
+        </Notice>
+      )}
       {eventsError && <Notice tone="error" onRetry={loadEvents}>{eventsError}</Notice>}
       {selected && events === null && !eventsError && <LoadingState message="Loading deliveries..." />}
       {events?.length === 0 && <EmptyState message={filtered ? 'No deliveries match these filters.' : 'No webhook deliveries to this account yet.'} />}

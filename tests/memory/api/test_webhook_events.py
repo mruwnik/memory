@@ -297,6 +297,23 @@ def test_a_github_delivery_names_its_repo(member_client, db_session, user):
     assert [(e["container"], e["container_name"]) for e in listed] == [("556", None), ("555", "acme/api")]
 
 
+def test_a_github_account_lists_its_active_repos_sync_errors(member_client, db_session, user):
+    account = GithubAccount(user_id=user.id, name="acct", auth_type="pat", access_token="ghp_x", active=True)
+    db_session.add(account)
+    db_session.flush()
+    db_session.add_all([
+        GithubRepo(account_id=account.id, github_id=1, owner="acme", name="web", sync_error="No access"),
+        GithubRepo(account_id=account.id, github_id=2, owner="acme", name="api", sync_error="No commits"),
+        GithubRepo(account_id=account.id, github_id=3, owner="acme", name="ok"),
+        GithubRepo(account_id=account.id, github_id=4, owner="acme", name="paused", sync_error="Old", active=False),
+    ])
+    db_session.commit()
+
+    listed = member_client.get("/webhook-events").json()
+
+    assert [a["sync_errors"] for a in listed] == [["acme/api: No commits", "acme/web: No access"]]
+
+
 def test_a_discord_delivery_names_only_channels_the_viewer_can_see(member_client, db_session, user):
     mine = DiscordBot(application_id=1, name="Mine", created_by_user_id=user.id)
     theirs = DiscordBot(application_id=2, name="Theirs", created_by_user_id=other_user(db_session).id)

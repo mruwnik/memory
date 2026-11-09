@@ -30,18 +30,24 @@ export const StatusBadge = ({ active }: { active: boolean }) => (
 
 const SHORT_ERROR = 200
 
-const failingSince = (since: string | null) => {
-  if (!since) return 'Sync failing'
+/** A source whose sync stores items without some fields says so, rather than failing. */
+type SyncState = SyncStatus & { sync_incomplete?: boolean }
+
+const syncLabel = (status: SyncState) => status.sync_incomplete ? 'Sync incomplete' : 'Sync failing'
+
+const failingSince = (status: SyncState) => {
+  const since = status.sync_failing_since
+  if (!since) return syncLabel(status)
   const at = new Date(since)
   const ago = formatRelativeTime(since)
   // Beyond a week formatRelativeTime gives the bare date, which `at` already shows.
   const suffix = ago === formatUserDate(at) ? '' : ` (${ago})`
-  return `Sync failing since ${formatUserDateTime(at)}${suffix}`
+  return `${syncLabel(status)} since ${formatUserDateTime(at)}${suffix}`
 }
 
-/** Flags a source whose latest sync failed, for a Row's badges. */
-export const SyncFailingBadge = ({ status }: { status: SyncStatus }) =>
-  status.sync_error ? <Badge tone="danger">Sync failing</Badge> : null
+/** Flags a source whose latest sync failed or was incomplete, for a Row's badges. */
+export const SyncFailingBadge = ({ status }: { status: SyncState }) =>
+  status.sync_error ? <Badge tone={status.sync_incomplete ? 'warning' : 'danger'}>{syncLabel(status)}</Badge> : null
 
 /** Why a source's push channel stops delivering, for a PushMissedBadge. */
 export const PUSH_CAUSES = {
@@ -83,7 +89,7 @@ export const PushBadge = ({ setup, deliveries, causes, detail }: {
 }
 
 /** The latest sync error and when the failing streak began, for a Row's body. */
-export const SyncFailure = ({ status }: { status: SyncStatus }) => {
+export const SyncFailure = ({ status }: { status: SyncState }) => {
   const [full, setFull] = useState(false)
   const error = status.sync_error
   if (!error) return null
@@ -91,7 +97,7 @@ export const SyncFailure = ({ status }: { status: SyncStatus }) => {
   const long = error.length > SHORT_ERROR
   return (
     <RowError>
-      {failingSince(status.sync_failing_since)}: {long && !full ? `${error.slice(0, SHORT_ERROR)}…` : error}
+      {failingSince(status)}: {long && !full ? `${error.slice(0, SHORT_ERROR)}…` : error}
       {long && <> <Button variant="link" size="sm" onClick={() => setFull(!full)}>{full ? 'Show less' : 'Show full error'}</Button></>}
     </RowError>
   )

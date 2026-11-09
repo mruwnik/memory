@@ -10,6 +10,8 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 
 from memory.common.github import (
     GithubCredentials,
+    GithubQueryError,
+    access_message,
     GithubClient,
     GithubComment,
     parse_github_date,
@@ -316,18 +318,44 @@ def test_fetch_issues_pagination():
     assert issues[1]["number"] == 2
 
 
-def test_fetch_issues_handles_graphql_error():
-    """Test that fetch_issues handles GraphQL errors gracefully."""
-    credentials = GithubCredentials(auth_type="pat", access_token="token")
+FETCHERS = {
+    "fetch_issues": lambda client: list(client.fetch_issues("owner", "repo")),
+    "fetch_prs": lambda client: list(client.fetch_prs("owner", "repo", with_diff=False)),
+    "fetch_pr": lambda client: client.fetch_pr("owner", "repo", 7, with_diff=False),
+    "fetch_issue": lambda client: client.fetch_issue("owner", "repo", 7),
+    "fetch_milestones": lambda client: list(client.fetch_milestones("owner", "repo")),
+    "list_projects": lambda client: list(client.list_projects("owner")),
+}
 
-    with patch.object(requests.Session, "post") as mock_post:
-        mock_post.return_value = mock_graphql_response(
-            data=None, errors=[{"message": "Not found"}]
-        )
-        client = GithubClient(credentials)
-        issues = list(client.fetch_issues("owner", "repo"))
 
-    assert len(issues) == 0
+@pytest.mark.parametrize("fetcher", FETCHERS)
+@pytest.mark.parametrize(
+    "data, errors, message",
+    [
+        (None, [{"type": "NOT_FOUND", "message": "Could not resolve to a Repository"}],
+         "Could not resolve to a Repository"),
+        ({"repository": None}, [{"type": "INTERNAL", "path": ["repository"], "message": "Something went wrong"}],
+         "Something went wrong"),
+    ],
+)
+def test_fetchers_raise_graphql_errors(fetcher, data, errors, message):
+    client = GithubClient(GithubCredentials(auth_type="pat", access_token="token"))
+
+    with patch.object(requests.Session, "post", return_value=mock_graphql_response(data, errors)):
+        with pytest.raises(GithubQueryError) as raised:
+            FETCHERS[fetcher](client)
+
+    assert str(raised.value).startswith("GitHub rejected a query for owner")
+    assert str(raised.value).endswith(f": {message}")
+
+
+@pytest.mark.parametrize("fetcher", FETCHERS)
+def test_fetchers_raise_when_github_does_not_answer(fetcher):
+    client = GithubClient(GithubCredentials(auth_type="pat", access_token="token"))
+
+    with patch.object(requests.Session, "post", side_effect=requests.ConnectionError("refused")):
+        with pytest.raises(GithubQueryError):
+            FETCHERS[fetcher](client)
 
 
 def test_fetch_issues_with_state_filter():
@@ -828,12 +856,186 @@ def test_fetch_issue_by_number():
 
 
 @pytest.mark.parametrize("method, field", [("fetch_pr", "pullRequest"), ("fetch_issue", "issue")])
-def test_fetch_single_item_missing_returns_none(method, field):
+@pytest.mark.parametrize("not_found", [False, True])
+def test_fetch_single_item_missing_returns_none(method, field, not_found):
     client = GithubClient(GithubCredentials(auth_type="pat", access_token="token"))
-    response = mock_graphql_response({"repository": {field: None}})
+    errors = [{"type": "NOT_FOUND", "path": ["repository", field], "message": "Could not resolve"}]
+    response = mock_graphql_response({"repository": {field: None}}, errors if not_found else None)
 
     with patch.object(requests.Session, "post", return_value=response):
         assert getattr(client, method)("owner", "repo", 99) is None
+
+
+UNREADABLE_COMMIT = "Resource not accessible by integration"
+COMMITS_MESSAGE = "The access token can't read commits on owner/repo: "
+
+
+def unreadable_commit_responses():
+    """fetch_pr and fetch_prs answered with the head commit withheld, as GitHub
+    answers an app without Contents permission."""
+    node = pr_node(commits={"nodes": [None]})
+    single = mock_graphql_response(
+        {"repository": {"pullRequest": node}},
+        [{"type": "FORBIDDEN", "path": ["repository", "pullRequest", "commits", "nodes", 0], "message": UNREADABLE_COMMIT}],
+    )
+    page = mock_graphql_response(
+        {"repository": {"pullRequests": {"nodes": [node], "pageInfo": {"hasNextPage": False}}}},
+        [{"type": "FORBIDDEN", "path": ["repository", "pullRequests", "nodes", 0, "commits", "nodes", 0], "message": UNREADABLE_COMMIT}],
+    )
+    return [
+        (single, lambda client: client.fetch_pr("owner", "repo", 7, with_diff=False)),
+        (page, lambda client: next(client.fetch_prs("owner", "repo", with_diff=False))),
+    ]
+
+
+@pytest.mark.parametrize("response, fetch", unreadable_commit_responses())
+def test_a_withheld_head_commit_keeps_the_pr_with_unknown_checks(response, fetch):
+    client = GithubClient(GithubCredentials(auth_type="pat", access_token="token"))
+    assert client.unreadable_message("owner/repo") is None
+
+    with patch.object(requests.Session, "post", return_value=response):
+        pr = fetch(client)
+
+    assert (pr["number"], pr["title"], pr.get("head_sha")) == (7, "Add feature", "abc123")
+    assert (pr.get("checks"), pr.get("checks_state"), pr.get("head_author")) == (None, None, None)
+    assert (client.unreadable_message("owner/repo") or "").startswith(COMMITS_MESSAGE)
+
+
+def test_a_withheld_field_no_permission_grants_keeps_the_pr_without_flagging_the_repo():
+    """A head repository on a private fork the token can't see can't be granted from this repo."""
+    client = GithubClient(GithubCredentials(auth_type="pat", access_token="token"))
+    response = mock_graphql_response(
+        {"repository": {"pullRequest": pr_node(headRepository=None)}},
+        [{"type": "FORBIDDEN", "path": ["repository", "pullRequest", "headRepository"], "message": UNREADABLE_COMMIT}],
+    )
+
+    with patch.object(requests.Session, "post", return_value=response):
+        pr = client.fetch_pr("owner", "repo", 7, with_diff=False)
+
+    assert pr is not None
+    assert (pr["number"], pr.get("head_repo")) == (7, None)
+    assert client.unreadable_message("owner/repo") is None
+
+
+def test_a_withheld_item_list_raises_what_to_grant():
+    client = GithubClient(GithubCredentials(auth_type="pat", access_token="token"))
+    response = mock_graphql_response(
+        {"repository": {"pullRequests": None}},
+        [{"type": "FORBIDDEN", "path": ["repository", "pullRequests"], "message": UNREADABLE_COMMIT}],
+    )
+
+    with patch.object(requests.Session, "post", return_value=response):
+        with pytest.raises(GithubQueryError) as raised:
+            list(client.fetch_prs("owner", "repo"))
+
+    assert str(raised.value).startswith(
+        "The access token can't read pull requests on owner/repo: give it Pull requests (read)"
+    )
+
+
+@pytest.mark.parametrize(
+    "auth_type, message",
+    [
+        (
+            "app",
+            "GitHub returns not-found for owner/repo: the GitHub App isn't installed on it, or it was renamed or "
+            "deleted. Add it to the installation and press Sync on the repo, or remove it here if it's gone.",
+        ),
+        (
+            "pat",
+            "GitHub returns not-found for owner/repo: the access token can't see it, or it was renamed or deleted. "
+            "A fine-grained token must list the repository and may need the organization's approval; a classic "
+            "token needs the repo scope and, for organizations with SSO, authorizing for it. Then press Sync on "
+            "the repo, or remove it here if it's gone.",
+        ),
+    ],
+)
+def test_a_repo_github_does_not_show_says_it_may_be_hidden_or_gone(auth_type, message):
+    client = GithubClient(GithubCredentials(auth_type="pat", access_token="token"))
+    client.credentials.auth_type = auth_type
+    response = mock_graphql_response(
+        {"repository": None},
+        [{"type": "NOT_FOUND", "path": ["repository"], "message": "Could not resolve to a Repository"}],
+    )
+
+    with patch.object(requests.Session, "post", return_value=response):
+        with pytest.raises(GithubQueryError) as raised:
+            list(client.fetch_prs("owner", "repo"))
+
+    assert str(raised.value) == message
+
+
+@pytest.mark.parametrize(
+    "auth_type, paths, message",
+    [
+        (
+            "app",
+            [["repository", "pullRequests", "nodes", 0, "commits", "nodes", 0]],
+            "The GitHub App can't read commits on acme/api: grant it Contents (read), Checks (read) and "
+            "Commit statuses (read), accept the new permissions on the installation, then press Sync on the repo.",
+        ),
+        (
+            "app",
+            [
+                ["repository", "pullRequests", "nodes", 0, "commits", "nodes", 0, "commit", "statusCheckRollup"],
+                ["repository", "issues"],
+            ],
+            "The GitHub App can't read check results and issues on acme/api: grant it Checks (read), "
+            "Commit statuses (read) and Issues (read), accept the new permissions on the installation, then press Sync on the repo.",
+        ),
+        (
+            "pat",
+            [["repository", "pullRequest", "commits", "nodes", 0, "commit", "statusCheckRollup"]],
+            "The access token can't read check results on acme/api: give it Contents (read) and Commit statuses "
+            "(read) on this repository, then press Sync on the repo. A fine-grained token must list the "
+            "repository and may need the organization's approval; a classic token needs the repo scope and, "
+            "for organizations with SSO, authorizing for it.",
+        ),
+        (
+            "app",
+            [["repository", "labels"]],
+            "The GitHub App can't read labels on acme/api: check the permissions of its installation, "
+            "then press Sync on the repo.",
+        ),
+        (
+            "app",
+            [["repository"]],
+            "The GitHub App isn't installed on acme/api or can't see it: add acme/api to the installation, "
+            "then press Sync on the repo.",
+        ),
+        (
+            "pat",
+            [["repository"]],
+            "The access token can't see acme/api. A fine-grained token must list the repository and may need "
+            "the organization's approval; a classic token needs the repo scope and, for organizations with SSO, "
+            "authorizing for it. Then press Sync on the repo.",
+        ),
+        (
+            "app",
+            [["organization", "projectsV2"]],
+            "The GitHub App can't read projects on acme/api: grant it organization Projects (read), "
+            "accept the new permissions on the installation, then press Sync on the repo.",
+        ),
+        (
+            "pat",
+            [["organization", "projectsV2"]],
+            "The access token can't read projects on acme/api: give it organization Projects (read), then press "
+            "Sync on the repo. A fine-grained token must list the repository and may need the organization's approval; a "
+            "classic token needs the repo and read:project scopes and, for organizations with SSO, authorizing "
+            "for it.",
+        ),
+        (
+            "pat",
+            [["repository", "pullRequest", "commits", "nodes", 0], ["repository", "pullRequest", "commits", "nodes", 1]],
+            "The access token can't read commits on acme/api: give it Contents (read) and "
+            "Commit statuses (read) on this repository, then press Sync on the repo. A fine-grained token must list the "
+            "repository and may need the organization's approval; a classic token needs the repo scope and, "
+            "for organizations with SSO, authorizing for it.",
+        ),
+    ],
+)
+def test_access_message_says_what_to_grant(auth_type, paths, message):
+    assert access_message(auth_type, "acme/api", paths) == message
 
 
 # =============================================================================

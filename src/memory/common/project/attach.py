@@ -139,7 +139,7 @@ def handle_attach(
         # Roll back the link assignment so the project stays standalone.
         project.repo_id = None
         project.repo = None
-        # If the refresh wanted to deactivate the repo (missing/archived), persist
+        # If the refresh wanted to deactivate the repo (archived), persist
         # that side effect explicitly so periodic sync sees the inactivation too.
         if repo_obj.active is False:
             _sync.mark_repo_inactive(session, repo_obj)

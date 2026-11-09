@@ -41,17 +41,18 @@ def refresh_from_github(
 
     Mutate-only: this function does NOT commit. The caller decides whether
     to commit the overlay (success) or roll back (error). The repo
-    deactivation side effect for missing/archived repos is also left
+    deactivation side effect for archived repos is also left
     uncommitted — callers that want it to persist across an error return
     must invoke `mark_repo_inactive` explicitly before commit.
 
     Side effects (in-memory only):
-        - Sets repo.active = False if repo is missing or archived on GitHub.
+        - Sets repo.active = False if repo is archived on GitHub. A repo GitHub
+          doesn't find stays active: lost access looks just like deletion.
         - Updates project title/description/state/due_on/timestamps for milestones.
 
     Raises:
         ProjectStateInconsistentError: project has repo_id but no repo row.
-        RepoMissingError: repo has been deleted on GitHub.
+        RepoMissingError: GitHub doesn't find the repo.
         RepoArchivedError: repo is archived on GitHub.
         MilestoneMissingError: milestone has been deleted on GitHub.
     """
@@ -61,7 +62,6 @@ def refresh_from_github(
 
     repo_data = client.get_repo(repo.owner, repo.name)
     if repo_data is None:
-        repo.active = False  # type: ignore[assignment]
         raise RepoMissingError(repo.owner, repo.name)
     if repo_data.get("archived", False):
         repo.active = False  # type: ignore[assignment]
