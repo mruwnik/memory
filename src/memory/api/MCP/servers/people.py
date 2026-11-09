@@ -10,6 +10,7 @@ from sqlalchemy import ColumnElement, Text, exists, false, or_, text, true
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.query import RowReturningQuery
 
 from memory.api.MCP.access import (
     ALLOWED_SENSITIVITIES,
@@ -551,6 +552,7 @@ async def fetch(
         return result
 
 
+# These name the `people` table, so they only apply to an unaliased Person in the query.
 CONTACT_INFO_MATCH = text(
     "EXISTS (SELECT 1 FROM jsonb_path_query(people.contact_info, '$.**') AS v"
     " WHERE jsonb_typeof(v) IN ('string', 'number')"
@@ -562,7 +564,9 @@ ALIAS_MATCH = text(
 )
 
 
-def readable_tidbits(session: DBSession, access_filter: AccessFilter | None):
+def readable_tidbits(
+    session: DBSession, access_filter: AccessFilter | None
+) -> RowReturningQuery[tuple[int]]:
     """Query of person_ids of the tidbits ``access_filter`` lets the caller read."""
     query = session.query(PersonTidbit.person_id).select_from(PersonTidbit)
     return apply_access_filter_to_query(query, access_filter)
