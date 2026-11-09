@@ -22,6 +22,26 @@ a new, empty `## Unreleased` above it.
 
 ## Unreleased
 
+### Changes
+- GitHub syncs and webhook refetches no longer report success when GitHub refuses a query. The repo row shows what the GitHub App or token can't read and which permissions to grant (e.g. Contents, Checks and Commit statuses for commits), and the job fails with the same message. A refetch of an item GitHub no longer has fails its job too.
+- When GitHub withholds only some fields (check results, the head commit), issues and PRs are still stored without them, and the repo row says what to grant. The sync cursor stays put until a sync gets everything, so the first sync after access is granted fetches what the earlier ones missed. Until then each sync re-fetches everything since the last complete one.
+- The webhook log shows a delivery's repo sync error, so deliveries arriving for a repo whose sync is failing no longer look healthy.
+
+### Required env vars
+None
+
+### Manual steps
+None
+
+### Other changes for operators
+- A repo synced while GitHub refused queries may have had its `last_sync_at` moved past items it never stored. After granting the missing permissions, run Sync on the repo with `force_full=true` (`POST /github/accounts/{account_id}/repos/{repo_id}/sync?force_full=true`), or clear `last_sync_at` for it.
+
+### Migrations
+None
+
+### Post-deploy commands
+None
+
 ## v0.5.2 (2026-11-08)
 
 ### Changes

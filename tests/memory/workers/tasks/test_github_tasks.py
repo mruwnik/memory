@@ -240,6 +240,7 @@ def mock_github_client():
     client.fetch_prs.return_value = iter([])
     client.fetch_project_fields.return_value = None
     client.fetch_pr_project_fields.return_value = None
+    client.unreadable_message.return_value = None
     return client
 
 
@@ -669,6 +670,7 @@ def test_sync_github_repo_success(
     """Test successful repo sync."""
     mock_client = Mock()
     mock_client.get_repo.return_value = {"archived": False}
+    mock_client.unreadable_message.return_value = None
     mock_client.fetch_issues.return_value = iter([mock_issue_data])
     mock_client.fetch_prs.return_value = iter([])
     mock_client_class.return_value = mock_client
@@ -696,6 +698,7 @@ def test_sync_github_repo_with_prs(
     """Test repo sync with both issues and PRs."""
     mock_client = Mock()
     mock_client.get_repo.return_value = {"archived": False}
+    mock_client.unreadable_message.return_value = None
     mock_client.fetch_issues.return_value = iter([mock_issue_data])
     mock_client.fetch_prs.return_value = iter([mock_pr_data])
     mock_client_class.return_value = mock_client
@@ -750,6 +753,7 @@ def test_sync_github_repo_force_full(mock_client_class, github_repo, db_session)
 
     mock_client = Mock()
     mock_client.get_repo.return_value = {"archived": False}
+    mock_client.unreadable_message.return_value = None
     mock_client.fetch_issues.return_value = iter([])
     mock_client.fetch_prs.return_value = iter([])
     mock_client_class.return_value = mock_client
@@ -791,6 +795,7 @@ def test_sync_github_repo_full_sync_for_project_fields(
     """Test full sync triggered for project fields when never synced before."""
     mock_client = Mock()
     mock_client.get_repo.return_value = {"archived": False}
+    mock_client.unreadable_message.return_value = None
     mock_client.fetch_issues.return_value = iter([])
     mock_client.fetch_prs.return_value = iter([])
     mock_client.fetch_project_fields.return_value = None
@@ -813,6 +818,7 @@ def test_sync_github_repo_updates_timestamps(mock_client_class, github_repo, db_
     """Test that sync updates last_sync_at timestamp."""
     mock_client = Mock()
     mock_client.get_repo.return_value = {"archived": False}
+    mock_client.unreadable_message.return_value = None
     mock_client.fetch_issues.return_value = iter([])
     mock_client.fetch_prs.return_value = iter([])
     mock_client_class.return_value = mock_client
@@ -831,6 +837,7 @@ def test_sync_github_repo_records_failure_until_next_success(
 ):
     mock_client = Mock()
     mock_client.get_repo.return_value = {"archived": False}
+    mock_client.unreadable_message.return_value = None
     mock_client.fetch_issues.side_effect = [RuntimeError("401 Bad credentials"), iter([])]
     mock_client.fetch_prs.return_value = iter([])
     mock_client_class.return_value = mock_client
@@ -841,6 +848,7 @@ def test_sync_github_repo_records_failure_until_next_success(
 
     assert github_repo.sync_error == "401 Bad credentials"
     assert github_repo.sync_failing_since is not None
+    assert github_repo.last_sync_at is None
 
     github.sync_github_repo(github_repo.id)
     db_session.refresh(github_repo)
@@ -855,6 +863,7 @@ def test_sync_github_repo_with_labels_filter(
     """Test sync passes labels filter to client."""
     mock_client = Mock()
     mock_client.get_repo.return_value = {"archived": False}
+    mock_client.unreadable_message.return_value = None
     mock_client.fetch_issues.return_value = iter([])
     mock_client.fetch_prs.return_value = iter([])
     mock_client_class.return_value = mock_client
@@ -884,6 +893,7 @@ def test_sync_github_repo_issues_only(mock_client_class, github_account, db_sess
     """Test sync with only issues tracking enabled."""
     mock_client = Mock()
     mock_client.get_repo.return_value = {"archived": False}
+    mock_client.unreadable_message.return_value = None
     mock_client.fetch_issues.return_value = iter([])
     mock_client.fetch_prs.return_value = iter([])
     mock_client_class.return_value = mock_client
@@ -910,6 +920,7 @@ def test_sync_github_repo_prs_only(mock_client_class, github_account, db_session
     """Test sync with only PRs tracking enabled."""
     mock_client = Mock()
     mock_client.get_repo.return_value = {"archived": False}
+    mock_client.unreadable_message.return_value = None
     mock_client.fetch_issues.return_value = iter([])
     mock_client.fetch_prs.return_value = iter([])
     mock_client_class.return_value = mock_client

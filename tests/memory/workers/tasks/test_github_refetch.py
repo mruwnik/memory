@@ -14,7 +14,7 @@ from memory.agents.subscriptions import IngestConfig
 from memory.common.celery_app import SEND_NOTIFICATION
 from memory.common.content_processing import create_content_hash
 from memory.common.db import connection as db_connection
-from memory.common.db.models import AgentDefinition, Delivery, Event, GithubItem, Subscription, User
+from memory.common.db.models import AgentDefinition, Delivery, Event, GithubItem, PendingJob, Subscription, User
 from memory.common.db.models.sources import CONTENT_FULL, CONTENT_METADATA, GithubAccount, GithubRepo
 from memory.common.github import (
     GithubClient,
@@ -22,6 +22,7 @@ from memory.common.github import (
     GithubFileChange,
     GithubIssueData,
     GithubPRDataDict,
+    GithubQueryError,
     GithubReview,
     GithubReviewComment,
     serialize_issue_data,
@@ -268,13 +269,12 @@ def github_serves():
     """Serve the given PR node to GraphQL; return the GraphQL POST mock."""
     patches = []
 
-    def serve(node: dict) -> Mock:
+    def serve(node: dict | None, errors: list[dict] | None = None) -> Mock:
         for p in patches:
             p.stop()
         patches.clear()
-        post = patch.object(
-            requests.Session, "post", return_value=http_response({"data": {"repository": {"pullRequest": node}}})
-        )
+        body = {"data": {"repository": {"pullRequest": node}}, "errors": errors}
+        post = patch.object(requests.Session, "post", return_value=http_response(body))
         get = patch.object(requests.Session, "get", return_value=http_response(text="diff"))
         patches.extend([post, get])
         get.start()
@@ -496,6 +496,111 @@ def test_refetch_skips_untracked_kind(db_session, repo, github_serves):
     assert result["status"] == "skipped"
     assert post.call_count == 0
     assert changes_reported(db_session) == []
+
+
+# --- GitHub refusing what was asked for ---
+
+UNREADABLE = "Resource not accessible by integration"
+NO_COMMITS = "The access token can't read commits on testorg/testrepo: "
+NO_PRS = "The access token can't read pull requests on testorg/testrepo: "
+
+
+def withheld(*path: str | int) -> dict:
+    return {"type": "FORBIDDEN", "path": list(path), "message": UNREADABLE}
+
+
+def without_commit(node: dict) -> dict:
+    return node | {"commits": {"nodes": [None]}}
+
+
+def job(db, job_type: str) -> tuple[str, str | None]:
+    found = db.query(PendingJob).filter_by(job_type=job_type).one()
+    return found.status, found.error_message
+
+
+def test_refetch_keeps_a_pr_whose_head_commit_is_withheld_and_flags_the_repo(
+    db_session, repo, qdrant, github_serves
+):
+    github_serves(without_commit(pr_node("a" * 40)), [withheld("repository", "pullRequest", "commits", "nodes", 0)])
+
+    result = github.refetch_github_item(repo.id, 7, "pr")
+
+    db_session.refresh(repo)
+    assert result["status"] == "processed"
+    assert (stored(db_session).head_sha, stored(db_session).checks) == ("a" * 40, None)
+    assert (repo.sync_error or "").startswith(NO_COMMITS)
+
+
+@pytest.mark.parametrize(
+    "errors, raised, message, repo_flagged",
+    [
+        ([withheld("repository", "pullRequest")], GithubQueryError, NO_PRS, True),
+        # A deleted issue is no fault of the repo's.
+        (None, LookupError, "GitHub has no pr #7 in testorg/testrepo", False),
+    ],
+)
+def test_a_refetch_that_gets_nothing_fails_its_job(
+    db_session, repo, github_serves, errors, raised, message, repo_flagged
+):
+    github_serves(None, errors)
+
+    with pytest.raises(raised):
+        github.refetch_github_item(repo.id, 7, "pr")
+
+    db_session.refresh(repo)
+    status, error = job(db_session, "refetch_github_item")
+    assert (status, (error or "").startswith(message)) == ("failed", True)
+    assert (repo.sync_error or "").startswith(NO_PRS) == repo_flagged
+
+
+def github_repo_answers(prs: dict | None, errors: list[dict] | None = None):
+    """Serve a repo with no milestones or issues and this pullRequests page."""
+    empty = {"nodes": [], "pageInfo": {"hasNextPage": False}}
+
+    def post(url, json, timeout):
+        query = json["query"]
+        if "pullRequests(" in query:
+            return http_response({"data": {"repository": {"pullRequests": prs}}, "errors": errors})
+        field = "issues" if "issues(" in query else "milestones"
+        return http_response({"data": {"repository": {field: empty}}})
+
+    return patch.multiple(
+        requests.Session, post=Mock(side_effect=post), get=Mock(return_value=http_response({"archived": False}))
+    )
+
+
+def pr_page(*nodes: dict) -> dict:
+    return {"nodes": list(nodes), "pageInfo": {"hasNextPage": False}}
+
+
+def test_a_sync_without_commit_access_stores_the_prs_and_refetches_them_once_granted(db_session, repo):
+    partial = github_repo_answers(
+        pr_page(without_commit(pr_node("a" * 40))), [withheld("repository", "pullRequests", "nodes", 0, "commits", "nodes", 0)]
+    )
+    with partial, patch.object(github, "sync_github_item") as sync_item:
+        degraded = github.sync_github_repo(repo.id)
+    db_session.refresh(repo)
+    flagged = (repo.sync_error or "").startswith(NO_COMMITS), repo.last_sync_at
+
+    with github_repo_answers(pr_page(pr_node("a" * 40))), patch.object(github, "sync_github_item"):
+        recovered = github.sync_github_repo(repo.id)
+    db_session.refresh(repo)
+
+    assert (degraded["prs_synced"], sync_item.delay.call_count) == (1, 1)
+    assert flagged == (True, None)
+    assert recovered["prs_synced"] == 1
+    assert (repo.sync_error, repo.last_sync_at is not None) == (None, True)
+
+
+def test_a_sync_github_refuses_fails_its_job_and_keeps_its_cursor(db_session, repo):
+    with github_repo_answers(None, [withheld("repository", "pullRequests")]), patch.object(github, "sync_github_item"):
+        with pytest.raises(GithubQueryError):
+            github.sync_github_repo(repo.id)
+
+    db_session.refresh(repo)
+    status, error = job(db_session, "sync_github_repo")
+    assert (status, (error or "").startswith(NO_PRS)) == ("failed", True)
+    assert ((repo.sync_error or "").startswith(NO_PRS), repo.last_sync_at) == (True, None)
 
 
 # --- Polls that find what the webhook should have delivered ---

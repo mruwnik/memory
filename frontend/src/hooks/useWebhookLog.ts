@@ -36,6 +36,8 @@ export interface WebhookEvent {
   container: string | null
   // The repo's full name or the channel's name, where the viewer may see it.
   container_name: string | null
+  // Why syncing the delivery's repo fails, while it does.
+  container_error: string | null
   // Whether its ingest links the items it writes to it.
   links_items: boolean
   item_ids: number[]

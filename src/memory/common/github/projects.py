@@ -321,8 +321,7 @@ class ProjectsMixin(GithubClientCore if TYPE_CHECKING else object):
                 {"owner": owner, "cursor": cursor},
                 operation_name=f"list_projects({owner})",
             )
-            if errors or data is None:
-                return
+            data = self.checked(owner, data, errors)
 
             projects_data = self._extract_nested(data, entity_type, "projectsV2")
             if projects_data is None:

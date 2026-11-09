@@ -5,6 +5,7 @@ import logging
 from datetime import datetime
 from typing import Any, Generator, TYPE_CHECKING
 
+from .core import UNREADABLE
 from .types import (
     GITHUB_API_URL,
     GithubComment,
@@ -236,10 +237,8 @@ class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
                 {"owner": owner, "repo": repo},
                 operation_name=f"fetch_issues({owner}/{repo})",
             )
-            if errors or data is None:
-                logger.warning(f"GraphQL fetch_issues failed: {errors}")
-                return
-
+            # repository.issues.nodes.<i>
+            data = self.checked(f"{owner}/{repo}", data, errors, item_depth=4)
             issues_data = self._extract_nested(data, "repository", "issues")
             if not issues_data:
                 return
@@ -309,10 +308,8 @@ class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
                 operation_name=f"fetch_prs({owner}/{repo})",
                 timeout=60,  # PRs can be larger
             )
-            if errors or data is None:
-                logger.warning(f"GraphQL fetch_prs failed: {errors}")
-                return
-
+            # repository.pullRequests.nodes.<i>
+            data = self.checked(f"{owner}/{repo}", data, errors, item_depth=4)
             prs_data = self._extract_nested(data, "repository", "pullRequests")
             if not prs_data:
                 return
@@ -461,6 +458,9 @@ class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
             if f is not None
         ]
 
+        unreadable_fields = {f for path in pr.get(UNREADABLE, []) for f in path}
+        checks_unknown = bool(unreadable_fields & {"commits", "commit", "statusCheckRollup"})
+
         # Fetch full diff via REST (requires special Accept header)
         full_diff = self.fetch_pr_diff(owner, repo, pr_number) if with_diff else None
         diff_summary = full_diff[:5000] if full_diff else None
@@ -505,7 +505,7 @@ class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
             content_hash=compute_content_hash(body, comments),
             pr_data=pr_data,
             head_sha=pr.get("headRefOid"),
-            checks=self._parse_checks(pr),
+            checks=None if checks_unknown else self._parse_checks(pr),
             base_sha=pr.get("baseRefOid"),
             head_ref=pr.get("headRefName"),
             head_repo=self._extract_nested(pr, "headRepository", "nameWithOwner"),
@@ -563,9 +563,10 @@ class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
             operation_name=f"fetch_{field}({owner}/{repo}#{number})",
             timeout=60,
         )
-        if errors or data is None:
-            logger.warning(f"GraphQL fetch {field} #{number} failed: {errors}")
+        if any(e.get("type") == "NOT_FOUND" and e.get("path") == ["repository", field] for e in errors or []):
             return None
+        # repository.<field>
+        data = self.checked(f"{owner}/{repo}", data, errors, item_depth=2)
         return self._extract_nested(data, "repository", field)
 
     def _map_change_type(self, change_type: str) -> str:
@@ -659,9 +660,7 @@ class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
                 {"owner": owner, "repo": repo},
                 operation_name=f"fetch_milestones({owner}/{repo})",
             )
-            if errors or data is None:
-                logger.warning(f"GraphQL fetch_milestones failed: {errors}")
-                return
+            data = self.checked(f"{owner}/{repo}", data, errors)
 
             milestones_data = self._extract_nested(data, "repository", "milestones")
             if not milestones_data:

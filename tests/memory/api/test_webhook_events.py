@@ -283,18 +283,21 @@ def test_deliveries_filter_by_outcome_and_type_prefix(member_client, db_session,
     assert [ids[e["id"]] for e in listed] == shown
 
 
-def test_a_github_delivery_names_its_repo(member_client, db_session, user):
+def test_a_github_delivery_names_its_repo_and_why_its_sync_fails(member_client, db_session, user):
     account = GithubAccount(user_id=user.id, name="acct", auth_type="pat", access_token="ghp_x", active=True)
     db_session.add(account)
     db_session.flush()
-    db_session.add(GithubRepo(account_id=account.id, github_id=555, owner="acme", name="api"))
+    db_session.add(GithubRepo(account_id=account.id, github_id=555, owner="acme", name="api", sync_error="No access"))
     raw(db_session, user.id, "d1", account_id=account.id)
     raw(db_session, user.id, "d2", account_id=account.id, container="556")
     db_session.commit()
 
     listed = member_client.get(f"/webhook-events/github/{account.id}").json()
 
-    assert [(e["container"], e["container_name"]) for e in listed] == [("556", None), ("555", "acme/api")]
+    assert [(e["container"], e["container_name"], e["container_error"]) for e in listed] == [
+        ("556", None, None),
+        ("555", "acme/api", "No access"),
+    ]
 
 
 def test_a_discord_delivery_names_only_channels_the_viewer_can_see(member_client, db_session, user):

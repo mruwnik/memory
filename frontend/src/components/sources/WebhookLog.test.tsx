@@ -13,7 +13,7 @@ vi.mock('@/hooks/useWebhookLog', async (orig) => ({
 }))
 
 const event = (fields: Partial<WebhookEvent>): WebhookEvent => ({
-  id: 1, created_at: '2026-11-07T09:00:00Z', outcome: 'stored', type: 'message', container: null, container_name: null,
+  id: 1, created_at: '2026-11-07T09:00:00Z', outcome: 'stored', type: 'message', container: null, container_name: null, container_error: null,
   links_items: true, item_ids: [], triggered: [], payload: null, payload_withheld: false, ...fields,
 })
 const stored = event({
@@ -60,6 +60,15 @@ describe('WebhookLog', () => {
     expect(meta).toHaveLength(1)
     expect(within(row).queryByText('Triggered')).not.toBeInTheDocument()
     expect(within(row).queryByText('Payload')).not.toBeInTheDocument()
+  })
+
+  it("says when a delivery's repo is failing to sync", async () => {
+    listEvents.mockResolvedValue([{ ...stored, item_ids: [], links_items: false, container_error: 'The GitHub App can\'t read commits' }])
+    renderWithRouter(<WebhookLog />)
+
+    const row = (await screen.findByText('pull_request.synchronize')).closest('li')!
+    expect(within(row).getByText(/Syncing acme\/api is failing, so this delivery may have stored nothing: The GitHub App can't read commits/)).toBeInTheDocument()
+    expect(within(row).queryByText(/aren't linked to deliveries/)).not.toBeInTheDocument()
   })
 
   it('drops a response for an account no longer shown', async () => {

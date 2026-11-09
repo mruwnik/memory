@@ -31,7 +31,8 @@ export const eventMeta = (e: WebhookEvent) => [
   `${formatUserDateTime(new Date(e.created_at))} (${ago(e.created_at)})`,
   e.container && `in ${e.container_name ?? e.container}`,
   e.item_ids.length > 0 && `stored as item${e.item_ids.length > 1 ? 's' : ''} ${e.item_ids.join(', ')}`,
-  e.outcome === 'stored' && e.item_ids.length === 0 && (e.links_items
+  // A failing sync explains the missing items instead; the row shows it.
+  e.outcome === 'stored' && e.item_ids.length === 0 && !e.container_error && (e.links_items
     ? 'no item linked: still queued, nothing new, or one you can\'t read'
     : 'the items it updates aren\'t linked to deliveries'),
 ]
@@ -76,6 +77,9 @@ const EventRow = ({ e, loadPayload }: { e: WebhookEvent; loadPayload: (id: numbe
     badges={<Badge tone={OUTCOMES[e.outcome]?.tone ?? 'neutral'}>{OUTCOMES[e.outcome]?.label ?? e.outcome}</Badge>}
     meta={eventMeta(e)}
   >
+    {e.container_error && (
+      <RowError>Syncing {e.container_name ?? e.container} is failing, so this delivery may have stored nothing: {e.container_error}</RowError>
+    )}
     {/* Only deliveries that store nothing keep their payload. */}
     {e.outcome === 'no_item_type' && <PayloadView load={() => loadPayload(e.id)} />}
     {e.triggered.length > 0 && (

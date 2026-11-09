@@ -43,6 +43,7 @@ from memory.common.github import (
     GithubMilestoneData,
     GithubProjectData,
     GithubPRDataDict,
+    GithubQueryError,
     extract_status_priority,
     hook_config,
     org_hooks,
@@ -802,13 +803,22 @@ def refetch_github_item(repo_id: int, number: int, kind: str) -> dict[str, Any]:
 
         client = account_client(account)
         owner, name = cast(str, repo.owner), cast(str, repo.name)
-        data = (
-            client.fetch_pr(owner, name, number, with_diff=repo.stores_content)
-            if kind == "pr"
-            else client.fetch_issue(owner, name, number)
-        )
+        try:
+            data = (
+                client.fetch_pr(owner, name, number, with_diff=repo.stores_content)
+                if kind == "pr"
+                else client.fetch_issue(owner, name, number)
+            )
+        except GithubQueryError as e:
+            # The repo is where the user looks; a later sync clears it once GitHub answers.
+            repo.record_sync(e)
+            session.commit()
+            raise
         if data is None:
-            return {"status": "not_found", "repo_id": repo_id, "number": number}
+            # Not the repo's fault: an issue can be deleted after its event was sent.
+            raise LookupError(f"GitHub has no {kind} #{number} in {repo.repo_path}")
+        if unreadable := client.unreadable_message(repo.repo_path):
+            repo.record_sync(unreadable)
         if not matches_repo_filters(repo, data):
             return {"status": "skipped", "repo_id": repo_id, "number": number}
         if repo.track_project_fields:
@@ -1030,15 +1040,19 @@ def sync_repo(repo_id: int, force_full: bool) -> dict[str, Any]:
                 task_ids.append(task_id.id)
                 prs_synced += 1
 
-        # Update sync timestamps
-        repo.last_sync_at = now  # type: ignore
-        if needs_full_sync or force_full:
-            repo.last_full_sync_at = now  # type: ignore
-        repo.record_sync(None)
+        # Advancing the cursor past items fetched without some of their fields
+        # would leave them that way once access is granted.
+        unreadable = client.unreadable_message(repo.repo_path)
+        if not unreadable:
+            repo.last_sync_at = now  # type: ignore
+            if needs_full_sync or force_full:
+                repo.last_full_sync_at = now  # type: ignore
+        repo.record_sync(unreadable)
         session.commit()
 
         return {
-            "status": "completed",
+            "status": "incomplete" if unreadable else "completed",
+            "error": unreadable,
             "sync_type": "full" if (needs_full_sync or force_full) else "incremental",
             "repo_id": repo_id,
             "repo_path": repo.repo_path,

@@ -81,6 +81,8 @@ class RawEventView(BaseModel):
     container: str | None
     # The repo's full name or the channel's name, where the viewer may see it.
     container_name: str | None = None
+    # Why syncing the repo fails: events arriving don't mean its items are stored.
+    container_error: str | None = None
     # Whether its ingest links the items it writes; others (GitHub refetches,
     # Discord reactions) change items without linking them here.
     links_items: bool = False
@@ -187,9 +189,27 @@ def triggered_by(db: Session, user: UserProxy, raw_ids: list[int]) -> dict[int, 
     return found
 
 
+def numeric(containers: set[str]) -> list[int]:
+    return [int(c) for c in containers if c.isascii() and c.isdigit()]
+
+
+def container_errors(db: Session, source: str, account_id: int, containers: set[str]) -> dict[str, str]:
+    """The sync errors of this GitHub account's failing repos."""
+    if source != "github":
+        return {}
+    rows = db.execute(
+        select(GithubRepo.github_id, GithubRepo.sync_error).where(
+            GithubRepo.account_id == account_id,
+            GithubRepo.github_id.in_(numeric(containers)),
+            GithubRepo.sync_error.is_not(None),
+        )
+    )
+    return {str(id): error for id, error in rows}
+
+
 def container_names(db: Session, user: UserProxy, source: str, account_id: int, containers: set[str]) -> dict[str, str]:
     """Names for the repos of this GitHub account, or the Discord channels the viewer can see."""
-    ids = [int(c) for c in containers if c.isascii() and c.isdigit()]
+    ids = numeric(containers)
     if source == "github":
         rows = db.execute(
             select(GithubRepo.github_id, GithubRepo.owner + "/" + GithubRepo.name).where(
@@ -206,7 +226,13 @@ def container_names(db: Session, user: UserProxy, source: str, account_id: int, 
 
 
 def event_view(
-    e: Event, items: list[int], triggered: list[Triggered], payload: bool, withheld: bool, names: dict[str, str]
+    e: Event,
+    items: list[int],
+    triggered: list[Triggered],
+    payload: bool,
+    withheld: bool,
+    names: dict[str, str],
+    errors: dict[str, str],
 ) -> RawEventView:
     # An untracked channel is untracked: its stub says only that something arrived.
     if e.outcome == NOT_COLLECTED:
@@ -220,6 +246,7 @@ def event_view(
         type=e.type,
         container=e.container,
         container_name=names.get(e.container) if e.container else None,
+        container_error=errors.get(e.container) if e.container else None,
         links_items=bool((e.data or {}).get(LINKS_ITEMS)),
         item_ids=items,
         triggered=triggered,
@@ -290,7 +317,10 @@ def webhook_log(
             for e in events
             if e.payload is not None and not ((c := container_of(db, e)) is not None and reads(c))
         }
-    names = container_names(db, viewer, source, account_id, {e.container for e in events if e.container})
+    containers = {e.container for e in events if e.container}
+    names = container_names(db, viewer, source, account_id, containers)
+    errors = container_errors(db, source, account_id, containers)
     return [
-        event_view(e, items.get(e.id, []), triggered.get(e.id, []), payload, e.id in withheld, names) for e in events
+        event_view(e, items.get(e.id, []), triggered.get(e.id, []), payload, e.id in withheld, names, errors)
+        for e in events
     ]
