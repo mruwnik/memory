@@ -286,8 +286,10 @@ def test_a_fire_that_keeps_failing_ends_the_delivery_failed(
     ],
 )
 def test_over_a_cap_deliveries_are_deferred_then_shed_with_one_notification(
-    db_session, admin_user, fake_providers, admin_keys, no_celery_dispatch, no_grace, spec, earlier_cost, shed, caplog
+    db_session, admin_user, fake_providers, admin_keys, no_celery_dispatch, no_grace, add_sending_email,
+    spec, earlier_cost, shed, caplog,
 ):
+    add_sending_email(admin_user)
     caplog.set_level("WARNING", logger="memory.agents")
     subscription = setup(db_session, admin_user, spec)
     db_session.add(
@@ -352,8 +354,9 @@ def test_a_run_ends_the_throttling_episode_only_a_window_after_the_last_hold_bac
 
 
 def test_a_sustained_overload_notifies_once(
-    db_session, admin_user, fake_providers, admin_keys, no_celery_dispatch
+    db_session, admin_user, fake_providers, admin_keys, no_celery_dispatch, add_sending_email
 ):
+    add_sending_email(admin_user)
     setup(db_session, admin_user, max_per_hour=1)
     fired, told = [], 0
     for _ in range(3):
@@ -433,8 +436,9 @@ def test_a_delivery_whose_run_already_started_is_linked_to_it(
 
 
 def test_a_backlog_over_its_max_sheds_the_oldest_and_notifies_once(
-    db_session, admin_user, no_celery_dispatch
+    db_session, admin_user, no_celery_dispatch, add_sending_email
 ):
+    add_sending_email(admin_user)
     subscription = setup(
         db_session, admin_user, delivery=BATCH | {"window_sec": 3600}, backlog_max=2
     )

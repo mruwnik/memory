@@ -5,7 +5,14 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import pytest
 from pydantic import ValidationError
 
-from memory.agents.spec import AgentSpec, Requirements, result_errors, satisfies, spec_errors
+from memory.agents.spec import (
+    AgentSpec,
+    Declared,
+    Requirements,
+    result_errors,
+    satisfies,
+    spec_errors,
+)
 from memory.common import settings
 
 BASE = {
@@ -322,7 +329,21 @@ def test_unset_max_output_tokens_fits_any_model(fake_providers):
 def test_requirements_are_satisfied_when_each_matches_a_declared_capability(
     requires, declared, expected
 ):
-    assert satisfies(Requirements(**requires), Requirements(**declared)) is expected
+    assert satisfies(Requirements(**requires), Declared(**declared)) is expected
+
+
+@pytest.mark.parametrize("kind", ["models", "tools", "flags"])
+def test_a_spec_requires_at_most_50_of_each_kind(kind):
+    assert spec(requires={kind: [f"x{i}" for i in range(50)]}).requires
+    with pytest.raises(ValidationError, match="at most 50 items"):
+        spec(requires={kind: [f"x{i}" for i in range(51)]})
+
+
+@pytest.mark.parametrize("kind", ["models", "tools", "flags"])
+def test_a_worker_declares_at_most_1000_of_each_kind(kind):
+    assert Declared(**{kind: [f"x{i}" for i in range(1000)]})
+    with pytest.raises(ValidationError, match="at most 1000 items"):
+        Declared(**{kind: [f"x{i}" for i in range(1001)]})
 
 
 @pytest.mark.parametrize(

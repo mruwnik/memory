@@ -110,6 +110,7 @@ PURGE_AGENT_RUNS = f"{MAINTENANCE_ROOT}.purge_agent_runs"
 ROUTE_EVENTS = f"{MAINTENANCE_ROOT}.route_events"
 SWEEP_DELIVERIES = f"{MAINTENANCE_ROOT}.sweep_deliveries"
 RUN_CLOCK = f"{MAINTENANCE_ROOT}.run_clock"
+NOTIFY_FINISHED_RUNS = f"{MAINTENANCE_ROOT}.notify_finished_runs"
 CLEANUP_OLD_CLAUDE_SESSIONS = f"{MAINTENANCE_ROOT}.cleanup_old_claude_sessions"
 CLEANUP_OLD_TASK_RESULTS = f"{MAINTENANCE_ROOT}.cleanup_old_task_results"
 CLEANUP_OLD_PENDING_JOBS = f"{MAINTENANCE_ROOT}.cleanup_old_pending_jobs"
@@ -364,6 +365,7 @@ app.conf.update(
         ROUTE_EVENTS: {"queue": f"{settings.CELERY_QUEUE_PREFIX}-scheduler"},
         SWEEP_DELIVERIES: {"queue": f"{settings.CELERY_QUEUE_PREFIX}-scheduler"},
         RUN_CLOCK: {"queue": f"{settings.CELERY_QUEUE_PREFIX}-scheduler"},
+        NOTIFY_FINISHED_RUNS: {"queue": f"{settings.CELERY_QUEUE_PREFIX}-scheduler"},
         f"{MAINTENANCE_ROOT}.*": {
             "queue": f"{settings.CELERY_QUEUE_PREFIX}-maintenance"
         },
@@ -516,6 +518,11 @@ def build_beat_schedule() -> dict:
         # Expiring, so runs queued behind a busy worker don't pile up: the next one routes it all.
         "route-events": {"task": ROUTE_EVENTS, "schedule": 5, "options": {"expires": 5}},
         "run-clock": {"task": RUN_CLOCK, "schedule": 10, "options": {"expires": 10}},
+        "notify-finished-runs": {
+            "task": NOTIFY_FINISHED_RUNS,
+            "schedule": 30,
+            "options": {"expires": 30},
+        },
         "purge-agent-runs": {
             "task": PURGE_AGENT_RUNS,
             "schedule": crontab(hour="4", minute="40"),
