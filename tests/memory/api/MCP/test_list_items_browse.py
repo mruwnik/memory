@@ -200,6 +200,44 @@ async def test_regular_user_sees_no_connections_of_others(
     assert counted["by_connection"] == []
 
 
+@pytest.fixture
+def user_owns_work_lunch(db_session, regular_user, corpus):
+    """The regular user can see one mail in the admin's work account, nothing in home."""
+    corpus["items"]["work_lunch"].creator_id = regular_user.id
+    db_session.commit()
+    return corpus
+
+
+@pytest.mark.asyncio
+async def test_regular_user_counts_only_visible_connection_items(
+    db_session, user_session, user_owns_work_lunch
+):
+    _, counted = await browse(
+        user_session, item_types={"mail_message"}, embed_statuses=set()
+    )
+
+    work = user_owns_work_lunch["work"]
+    assert counted["by_connection"] == [
+        {"id": str(work.id), "name": "work@example.com", "count": 1}
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("account, expected", [("work", ["work_lunch"]), ("home", [])])
+async def test_regular_user_lists_only_visible_items_of_a_connection(
+    db_session, user_session, user_owns_work_lunch, account, expected
+):
+    result, counted = await browse(
+        user_session,
+        item_types={"mail_message"},
+        embed_statuses=set(),
+        connection_id=str(user_owns_work_lunch[account].id),
+    )
+
+    assert names_of(user_owns_work_lunch, result) == expected
+    assert counted["total"] == len(expected)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "offset, expected, has_more",
