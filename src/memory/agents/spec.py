@@ -64,8 +64,14 @@ class ExternalMCP(BaseModel):
     tools: list[str] = Field(min_length=1)
 
 
-Glob = Annotated[str, Field(min_length=1, max_length=200)]
-GlobList = Annotated[list[Glob], Field(max_length=50)]
+MAX_GLOB_CHARS = 200
+MAX_REQUIRED = 50
+# A full MCP client lists hundreds of tools by name, so a worker may declare far more
+# than a spec may require.
+MAX_DECLARED = 1000
+Glob = Annotated[str, Field(min_length=1, max_length=MAX_GLOB_CHARS)]
+GlobList = Annotated[list[Glob], Field(max_length=MAX_REQUIRED)]
+DeclaredList = Annotated[list[Glob], Field(max_length=MAX_DECLARED)]
 Placement = Literal["server_only", "runner_only", "server_first", "runner_first"]
 # Well inside the 24h the daily pools look back over, so a run that falls back to the
 # server still counts against the pools its budget was taken from.
@@ -83,13 +89,24 @@ class Requirements(BaseModel):
     flags: GlobList = []
 
 
+class Declared(BaseModel):
+    """What a worker has, as globs in the shape of Requirements but with room to list
+    every tool by name."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    models: DeclaredList = []
+    tools: DeclaredList = []
+    flags: DeclaredList = []
+
+
 def covers(declared: str, required: str) -> bool:
     """Either side may be the glob: "claude-haiku-*" is met by "claude-haiku-4-5", and
     "memory:send_message" by a worker declaring "memory:*"."""
     return fnmatchcase(required, declared) or fnmatchcase(declared, required)
 
 
-def satisfies(requires: Requirements, declared: Requirements) -> bool:
+def satisfies(requires: Requirements, declared: Declared) -> bool:
     return all(
         any(covers(d, r) for d in getattr(declared, kind))
         for kind in ("models", "tools", "flags")

@@ -24,7 +24,7 @@ from testcontainers.community.qdrant import QdrantContainer
 
 from memory.agents import call, subscriptions
 from memory.common import instance_settings, metrics, module_settings, qdrant as qdrant_module, settings, summarizer
-from memory.common.db.models import Event, LLMProviderKey, SourceItem
+from memory.common.db.models import EmailAccount, Event, LLMProviderKey, SourceItem
 from memory.common.llms import registry
 from tests.memory.agents.fakes import FakeAnthropic, FakeOpenAI, ScriptedProvider
 from tests.providers.email_provider import MockEmailProvider
@@ -684,6 +684,25 @@ def regular_user(db_session):
     db_session.add(user)
     db_session.commit()
     return user
+
+
+@pytest.fixture
+def add_sending_email(db_session):
+    """Give a user an active, send-enabled email account, so notifications reach them by email."""
+
+    def add(user, address: str = "") -> EmailAccount:
+        account = EmailAccount(
+            user_id=user.id,
+            name="Mail",
+            email_address=address or user.email,
+            account_type="imap",
+            send_enabled=True,
+        )
+        db_session.add(account)
+        db_session.commit()
+        return account
+
+    return add
 
 
 @pytest.fixture

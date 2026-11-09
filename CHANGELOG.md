@@ -28,6 +28,9 @@ a new, empty `## Unreleased` above it.
 - The daily open-items sweep of project-tracking repos also fetches what changed since the last sync, so issues and PRs closed in between are no longer missed.
 - Webhook deliveries of deleted or transferred issues no longer queue a refetch, and a refetch of an item GitHub no longer has finishes as `not_found`.
 - The webhook log lists a GitHub account's repo sync errors above its deliveries, since refetches fail the same way.
+- `agent_run` and `agent_upsert` advertise the inline spec's fields in their parameter schema, and a spec with an unknown top-level field is refused with the list of accepted fields.
+- `agent_run(notify=true)` notifies you when the run ends, on the same channel `meta_notify_user` picks (Discord, Slack or email); it is refused, with why each channel can't be used, when none can reach you, and runs started by runs can't ask to. `agent_wait(result_only=true)` returns the run's status, result and error without its spec. `agent_list_runs(unseen=true)` lists the runs you started with `agent_run` that ended since `agent_wait` or an unseen listing last handed them to you.
+- `meta_notify_user` says why it can't use a channel: for Discord, whether no Discord account is linked to your Person or you have no Discord bot of your own (notifications go out through a bot you registered). Results list `skipped_channels`, why each channel ahead of the one used was passed over. A Discord user id in the Person's `contact_info.discord` counts as a linked account when no Discord account is linked.
 - Browse what has been ingested: each content type on the Ingestion overview opens its items, newest first, a page at a time, and the overview page can show each type's latest five items inline. The list can be narrowed to one connection (email account, Discord or Slack channel, Beeper chat, feed, GitHub repo, Google Drive folder, calendar or transcript account, book), filtered by indexing status, and searched by title, subject, sender, author or filename (not the item text). Only items you can access are listed.
 - MCP `core_list_items` and `core_count_items` take `item_types`, `embed_statuses` (default still indexed items only), `contains` and `connection_id`. List rows carry `type` and `embed_status`; `include_total=false` skips the total count; pages sort by id within equal timestamps so they never overlap. `core_count_items` adds `by_type` and, for types that share a kind of connection, `by_connection`.
 
@@ -38,11 +41,13 @@ None
 None
 
 ### Other changes for operators
+- New beat task `notify-finished-runs` (every 30s, `scheduler` queue) sends `agent_run(notify=true)` notifications.
 - A repo synced before this release while GitHub refused queries may have had its `last_sync_at` moved past items it never stored. After granting the missing permissions, run Sync on the repo with `force_full=true` (`POST /github/accounts/{account_id}/repos/{repo_id}/sync?force_full=true`), or clear `last_sync_at` for it. Later incidents catch up by themselves.
 
 ### Migrations
 - `20261220_github_incomplete_since` adds a nullable `github_repos.incomplete_since` column and a `github_repos.sync_incomplete` boolean defaulting to false (instant).
-- `20261221_item_inserted_idx` builds two indexes on `source_item`, `(inserted_at, id)` and `(type, inserted_at, id)`, with `CREATE INDEX CONCURRENTLY`: writes continue while they build, but the upgrade's time grows with the number of stored items. If it is interrupted, drop any invalid `source_inserted_at_idx` or `source_type_inserted_at_idx` before re-running it: Postgres keeps a half-built concurrent index, and `IF NOT EXISTS` would skip it.
+- `20261221_agent_run_notify_seen` adds `agent_runs.notify_on_finish`, `notified_at` and `seen_at` with two partial indexes, and backfills `seen_at = finished_at` for ended runs started through MCP or by hand that aren't sub-runs (an `UPDATE` scanning all of `agent_runs`: slow on a large table, and the indexes are built without `CONCURRENTLY`).
+- `20261222_item_inserted_idx` builds two indexes on `source_item`, `(inserted_at, id)` and `(type, inserted_at, id)`, with `CREATE INDEX CONCURRENTLY`: writes continue while they build, but the upgrade's time grows with the number of stored items. If it is interrupted, drop any invalid `source_inserted_at_idx` or `source_type_inserted_at_idx` before re-running it: Postgres keeps a half-built concurrent index, and `IF NOT EXISTS` would skip it.
 
 ### Post-deploy commands
 None

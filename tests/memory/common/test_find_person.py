@@ -4,6 +4,7 @@ import pytest
 
 from memory.common.db.models import Person
 from memory.common.people import (
+    discord_ids,
     find_person_by_email,
     find_person_by_name,
     find_or_create_person,
@@ -133,3 +134,28 @@ def test_slack_users_link_to_people_by_email_only(db_session, alice_person, emai
 
     db_session.refresh(alice_person)
     assert (("T1", "U1") in slack_accounts(alice_person.contact_info)) is linked
+
+
+@pytest.mark.parametrize(
+    "contact_info, expected",
+    [
+        (None, []),
+        ({}, []),
+        ({"discord": None}, []),
+        ({"discord": "123456789"}, ["123456789"]),
+        ({"discord": " 123456789 "}, ["123456789"]),
+        ({"discord": 123456789}, ["123456789"]),
+        ({"discord": "someuser"}, []),
+        ({"discord": "someuser#1234"}, []),
+        ({"discord": "-5"}, []),
+        ({"discord": "１２３"}, []),
+        ({"discord": ["111", "someuser", 222]}, ["111", "222"]),
+        ({"discord": ["someuser", "333"]}, ["333"]),
+        ({"discord": str(2**63 - 1)}, [str(2**63 - 1)]),
+        ({"discord": str(2**63)}, []),
+        ({"discord": "9" * 30}, []),
+        ({"email": "a@b.c"}, []),
+    ],
+)
+def test_discord_ids(contact_info, expected):
+    assert discord_ids(contact_info) == expected

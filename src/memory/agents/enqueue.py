@@ -201,6 +201,7 @@ def enqueue_run(
     api_key: APIKey | None = None,
     parent: AgentRun | None = None,
     deliveries: Sequence[Delivery] = (),
+    notify: bool = False,
 ) -> AgentRun:
     """Validate, cap, insert a pending run and dispatch it.
 
@@ -216,7 +217,8 @@ def enqueue_run(
     child's spec sets max_cost_usd), which it holds until it finishes.
 
     `deliveries`, the subscription's deliveries the run is for, are linked to a new run in
-    its transaction.
+    its transaction. With `notify`, the owner is told when the run ends
+    (memory.agents.run_notify).
     """
     if len(input) > MAX_TEXT_CHARS:
         raise ValueError(f"input is longer than {MAX_TEXT_CHARS} characters")
@@ -284,6 +286,7 @@ def enqueue_run(
         parent_run_id=parent.id if parent else None,
         depth=parent.depth + 1 if parent else 0,
         executor=EXECUTOR_SERVER if starts_on_server(spec) else EXECUTOR_WORKERS,
+        notify_on_finish=notify,
     )
     db.add(run)
     for d in deliveries:

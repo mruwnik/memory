@@ -4,15 +4,15 @@ newest-first item browsing, overall and per item type.
 Built CONCURRENTLY, so the upgrade doesn't lock source_item for writes; on a
 large instance it takes a while.
 
-Revision ID: 20261221_item_inserted_idx
-Revises: 20261220_github_incomplete_since
+Revision ID: 20261222_item_inserted_idx
+Revises: 20261221_agent_run_notify_seen
 Create Date: 2026-11-09
 """
 
 from alembic import op
 
-revision = "20261221_item_inserted_idx"
-down_revision = "20261220_github_incomplete_since"
+revision = "20261222_item_inserted_idx"
+down_revision = "20261221_agent_run_notify_seen"
 branch_labels = None
 depends_on = None
 

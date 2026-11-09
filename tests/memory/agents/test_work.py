@@ -204,6 +204,57 @@ async def test_claim_hands_out_only_runs_whose_requirements_are_met(
 
 
 @pytest.mark.asyncio
+async def test_a_worker_declaring_every_tool_by_name_claims_a_matching_run(
+    db_session, regular_user, worker_session
+):
+    tools = [f"server{i % 7}:tool_{i}" for i in range(210)]
+    run_id = submit_run(db_session, regular_user, requires={"tools": ["server3:tool_206"]})
+
+    with mcp_auth_context(worker_session.token):
+        claimed = (await claim(capabilities={"tools": tools, "models": ["anthropic/m"]}))["run"]
+
+    assert claimed["id"] == run_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "capabilities,problem",
+    [
+        ({"tools": [f"t{i}" for i in range(1001)]}, r"tools: List should have at most 1000"),
+        ({"flags": ["x" * 201]}, r"flags\.0: String should have at most 200"),
+        ({"models": [""]}, r"models\.0: String should have at least 1"),
+        ({"skills": ["x"]}, r"skills: Extra inputs are not permitted"),
+    ],
+)
+async def test_a_bad_declaration_says_which_field_is_wrong_and_the_limits(
+    db_session, regular_user, worker_session, capabilities, problem
+):
+    run_id = submit_run(db_session, regular_user)
+
+    with mcp_auth_context(worker_session.token):
+        with pytest.raises(ValueError, match=problem) as raised:
+            await claim(capabilities=capabilities)
+
+    assert str(raised.value).startswith("invalid capabilities: ")
+    assert "each a list of at most 1000 globs of at most 200 characters" in str(raised.value)
+    assert stored(db_session, run_id).worker_user_id is None
+
+
+@pytest.mark.asyncio
+async def test_runs_sharing_requirements_are_matched_once_per_scan(
+    db_session, regular_user, worker_session
+):
+    for _ in range(3):
+        submit_run(db_session, regular_user, requires={"flags": ["gpu"]})
+
+    with patch.object(agent, "satisfies", wraps=agent.satisfies) as matched:
+        with mcp_auth_context(worker_session.token):
+            claimed = (await claim(capabilities={"flags": ["web"]}))["run"]
+
+    assert (claimed, matched.call_count) == (None, 1)
+
+
+@pytest.mark.asyncio
 async def test_claiming_again_with_the_lease_token_renews_the_lease(
     db_session, regular_user, worker_session
 ):
