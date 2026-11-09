@@ -1,11 +1,13 @@
 """people_list_all search across names, contact info, linked accounts and tidbits."""
 
+from datetime import datetime
+
 import pytest
 
 from memory.api.MCP.servers.people import list_all
 from memory.common.content_processing import create_content_hash
-from memory.common.db.models import Person, PersonTidbit
-from memory.common.db.models.discord import DiscordUser
+from memory.common.db.models import DiscordMessage, Person, PersonTidbit
+from memory.common.db.models.discord import DiscordBot, DiscordChannel, DiscordUser
 from memory.common.db.models.sources import GithubUser
 from tests.conftest import mcp_auth_context
 
@@ -67,8 +69,6 @@ async def search_people(session_token: str, **kwargs) -> list[str]:
         "U0SLACK99",  # Slack user id
         "slackhandle",  # Slack username
         "sash slacks",  # Slack display name
-        "emptykent",  # Discord username
-        "hollow monarch",  # Discord display name
         "lunarcoder",  # GitHub login
         "Sasha Bright",  # GitHub display name
         "gh-mail@noreply",  # GitHub email
@@ -81,6 +81,77 @@ async def test_list_all_search_matches_contact_and_linked_accounts(
 ):
     token = request.getfixturevalue(session_fixture).token
     assert await search_people(token, search=search) == ["alexb"]
+
+
+@pytest.fixture
+def bot_saw_linked_discord_user(db_session, regular_user, linked_person):
+    """regular_user's bot stored a message written by linked_person's Discord account."""
+    bot = DiscordBot(id=5150, application_id=5150, name="Watcher", is_active=True)
+    regular_user.discord_bots.append(bot)
+    db_session.add_all([bot, DiscordChannel(id=6160, name="a dm", channel_type="dm")])
+    db_session.flush()
+    db_session.add(
+        DiscordMessage(
+            modality="message",
+            sha256=create_content_hash("hi from emptykent"),
+            message_id=7170,
+            channel_id=6160,
+            bot_id=bot.id,
+            author_id=424242424242,
+            sent_at=datetime(2026, 11, 1),
+            content="hi",
+        )
+    )
+    db_session.commit()
+
+
+@pytest.fixture
+def other_bot_saw_linked_discord_user(db_session, admin_user, linked_person):
+    """A bot that isn't regular_user's stored a message from linked_person's Discord account."""
+    bot = DiscordBot(id=5151, application_id=5151, name="Someone else's", is_active=True)
+    admin_user.discord_bots.append(bot)
+    db_session.add_all([bot, DiscordChannel(id=6161, name="b dm", channel_type="dm")])
+    db_session.flush()
+    db_session.add(
+        DiscordMessage(
+            modality="message",
+            sha256=create_content_hash("hi to someone else"),
+            message_id=7171,
+            channel_id=6161,
+            bot_id=bot.id,
+            author_id=424242424242,
+            sent_at=datetime(2026, 11, 1),
+            content="hi",
+        )
+    )
+    db_session.commit()
+
+
+DISCORD_HANDLES = ["emptykent", "hollow monarch"]  # username, display name
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("search", DISCORD_HANDLES)
+async def test_list_all_admin_matches_any_linked_discord_handle(
+    db_session, admin_session, linked_person, search
+):
+    assert await search_people(admin_session.token, search=search) == ["alexb"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("search", DISCORD_HANDLES)
+async def test_list_all_user_matches_discord_handle_their_bot_heard_from(
+    db_session, user_session, bot_saw_linked_discord_user, search
+):
+    assert await search_people(user_session.token, search=search) == ["alexb"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("search", DISCORD_HANDLES)
+async def test_list_all_user_does_not_match_discord_handle_their_bots_never_heard_from(
+    db_session, user_session, other_bot_saw_linked_discord_user, search
+):
+    assert await search_people(user_session.token, search=search) == []
 
 
 @pytest.mark.asyncio

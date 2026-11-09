@@ -6,7 +6,7 @@ from functools import reduce
 from typing import Any, Literal
 
 from fastmcp import FastMCP
-from sqlalchemy import ColumnElement, Text, exists, or_, text
+from sqlalchemy import ColumnElement, Text, exists, false, or_, text, true
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import selectinload
@@ -23,6 +23,7 @@ from memory.common import settings
 from memory.common.scopes import SCOPE_ADMIN, SCOPE_PEOPLE, SCOPE_PEOPLE_WRITE
 from memory.common.access_control import (
     AccessFilter,
+    UserLike,
     apply_access_filter_to_query,
     build_access_filter,
     deny_all_filter,
@@ -35,6 +36,7 @@ from memory.common.access_control import (
 from memory.common.celery_app import SYNC_PERSON_TIDBIT
 from memory.common.celery_app import app as celery_app
 from memory.common.db.connection import DBSession, make_session
+from memory.common.discord_data import discord_user_seen_by
 from memory.common.db.models import (
     Person,
     PersonTidbit,
@@ -564,11 +566,22 @@ def readable_tidbits(session: DBSession, access_filter: AccessFilter | None):
     return apply_access_filter_to_query(query, access_filter)
 
 
-def linked_account_match(pattern: str) -> ColumnElement[bool]:
-    """A Person whose linked Discord or GitHub account handle matches ``pattern``."""
+def visible_discord_users(caller: UserLike | None) -> ColumnElement[bool]:
+    """Condition on DiscordUser: rows ``caller`` may see (``caller_can_see_discord_user``)."""
+    if caller is not None and has_admin_scope(caller):
+        return true()
+    if caller is None or caller.id is None:
+        return false()
+    return discord_user_seen_by(caller.id, DiscordUser.id)
+
+
+def linked_account_match(pattern: str, caller: UserLike | None) -> ColumnElement[bool]:
+    """A Person whose linked GitHub account handle, or a linked Discord account
+    handle ``caller`` may see, matches ``pattern``."""
     discord = exists().where(
         DiscordUser.person_id == Person.id,
         or_(DiscordUser.username.ilike(pattern), DiscordUser.display_name.ilike(pattern)),
+        visible_discord_users(caller),
     )
     github = exists().where(
         GithubUser.person_id == Person.id,
@@ -582,7 +595,10 @@ def linked_account_match(pattern: str) -> ColumnElement[bool]:
 
 
 def person_search_clause(
-    session: DBSession, search: str, tidbit_filter: AccessFilter | None
+    session: DBSession,
+    search: str,
+    tidbit_filter: AccessFilter | None,
+    caller: UserLike | None,
 ) -> ColumnElement[bool]:
     """Filter for Persons matching ``search`` in any field ``list_all`` documents.
 
@@ -598,7 +614,7 @@ def person_search_clause(
         Person.identifier.ilike(pattern),
         ALIAS_MATCH.bindparams(alias_pattern=pattern),
         CONTACT_INFO_MATCH.bindparams(contact_pattern=pattern),
-        linked_account_match(pattern),
+        linked_account_match(pattern, caller),
         Person.id.in_(tidbit_match),
     )
 
@@ -621,8 +637,9 @@ async def list_all(
         tags: Filter to people with at least one of these tags on a tidbit you can read
         search: Case-insensitive substring matched against the display name,
             identifier, aliases, every contact_info value (emails, phone numbers,
-            Slack user id/username/display name, Discord id, ...), linked Discord
-            accounts (username, display name), linked GitHub accounts (login,
+            Slack user id/username/display name, Discord id, ...), the username
+            and display name of linked Discord accounts you can see (admins see
+            all; others, those who wrote to one of their bots), linked GitHub accounts (login,
             name, email) and the content of tidbits you can read. Use it to map an
             email address or chat handle to a person.
         limit: Maximum number of results (default 50, max 200)
@@ -651,7 +668,7 @@ async def list_all(
             query = query.filter(Person.id.in_(tagged))
 
         if search:
-            query = query.filter(person_search_clause(session, search, tidbit_filter))
+            query = query.filter(person_search_clause(session, search, tidbit_filter, user))
 
         query = query.order_by(Person.display_name).offset(offset).limit(limit)
         people = query.all()
