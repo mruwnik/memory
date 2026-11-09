@@ -4,7 +4,7 @@ Shared data fetching functions for Discord.
 Used by both REST API and MCP endpoints to avoid duplication.
 """
 
-from sqlalchemy import and_, or_
+from sqlalchemy import ColumnElement, SQLColumnExpression, and_, exists, or_
 from sqlalchemy.orm import Query
 
 from memory.common.access_control import UserLike, has_admin_scope
@@ -41,6 +41,22 @@ def discord_target_is_channel(session: DBSession, target: str | int) -> bool:
     return discord_channel_for_target(session, target) is not None
 
 
+def discord_user_seen_by(
+    caller_id: int, discord_user_id: int | SQLColumnExpression[int]
+) -> ColumnElement[bool]:
+    """SQL condition: one of user ``caller_id``'s bots stored a message authored by
+    ``discord_user_id`` (a value or a column, so it can correlate inside a query).
+
+    The non-admin visibility rule for DiscordUser rows, shared by
+    ``caller_can_see_discord_user`` and searches that match on Discord handles.
+    """
+    return exists().where(
+        DiscordMessage.author_id == discord_user_id,
+        DiscordMessage.bot_id == DiscordBot.id,
+        DiscordBot.created_by_user_id == caller_id,
+    )
+
+
 def caller_can_see_discord_user(
     db: DBSession, caller: UserLike, discord_user_id: int
 ) -> bool:
@@ -54,17 +70,7 @@ def caller_can_see_discord_user(
     """
     if has_admin_scope(caller):
         return True
-
-    seen = (
-        db.query(DiscordMessage.id)
-        .join(DiscordBot, DiscordMessage.bot_id == DiscordBot.id)
-        .filter(
-            DiscordMessage.author_id == discord_user_id,
-            DiscordBot.created_by_user_id == caller.id,
-        )
-        .first()
-    )
-    return seen is not None
+    return bool(db.query(discord_user_seen_by(caller.id, discord_user_id)).scalar())
 
 
 def visible_channels(db: DBSession, caller: UserLike) -> Query[DiscordChannel]:

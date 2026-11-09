@@ -6,10 +6,11 @@ from functools import reduce
 from typing import Any, Literal
 
 from fastmcp import FastMCP
-from sqlalchemy import Text, text
+from sqlalchemy import ColumnElement, Text, exists, false, or_, text, true
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.query import RowReturningQuery
 
 from memory.api.MCP.access import (
     ALLOWED_SENSITIVITIES,
@@ -19,9 +20,15 @@ from memory.api.MCP.access import (
     require_project_membership,
 )
 from memory.api.MCP.visibility import READ_ONLY, require_scopes, visible_when
+from memory.api.search.filters import escape_like
 from memory.common import settings
 from memory.common.scopes import SCOPE_ADMIN, SCOPE_PEOPLE, SCOPE_PEOPLE_WRITE
 from memory.common.access_control import (
+    AccessFilter,
+    UserLike,
+    apply_access_filter_to_query,
+    build_access_filter,
+    deny_all_filter,
     get_accessible_project_ids,
     get_accessible_team_ids,
     has_admin_scope,
@@ -31,6 +38,7 @@ from memory.common.access_control import (
 from memory.common.celery_app import SYNC_PERSON_TIDBIT
 from memory.common.celery_app import app as celery_app
 from memory.common.db.connection import DBSession, make_session
+from memory.common.discord_data import discord_user_seen_by
 from memory.common.db.models import (
     Person,
     PersonTidbit,
@@ -544,6 +552,73 @@ async def fetch(
         return result
 
 
+# These name the `people` table, so they only apply to an unaliased Person in the query.
+CONTACT_INFO_MATCH = text(
+    "EXISTS (SELECT 1 FROM jsonb_path_query(people.contact_info, '$.**') AS v"
+    " WHERE jsonb_typeof(v) IN ('string', 'number')"
+    " AND v #>> '{}' ILIKE :contact_pattern ESCAPE '\\')"
+)
+ALIAS_MATCH = text(
+    "EXISTS (SELECT 1 FROM unnest(people.aliases) AS alias"
+    " WHERE alias ILIKE :alias_pattern ESCAPE '\\')"
+)
+
+
+def readable_tidbits(
+    session: DBSession, access_filter: AccessFilter | None
+) -> RowReturningQuery[tuple[int]]:
+    """Query of person_ids of the tidbits ``access_filter`` lets the caller read."""
+    query = session.query(PersonTidbit.person_id).select_from(PersonTidbit)
+    return apply_access_filter_to_query(query, access_filter)
+
+
+def visible_discord_users(caller: UserLike | None) -> ColumnElement[bool]:
+    """Condition on DiscordUser: rows ``caller`` may see (``caller_can_see_discord_user``)."""
+    if caller is not None and has_admin_scope(caller):
+        return true()
+    if caller is None or caller.id is None:
+        return false()
+    return discord_user_seen_by(caller.id, DiscordUser.id)
+
+
+def linked_discord_match(pattern: str, caller: UserLike | None) -> ColumnElement[bool]:
+    """A Person with a linked Discord account ``caller`` may see whose username or
+    display name matches ``pattern``."""
+    return exists().where(
+        DiscordUser.person_id == Person.id,
+        or_(
+            DiscordUser.username.ilike(pattern, escape="\\"),
+            DiscordUser.display_name.ilike(pattern, escape="\\"),
+        ),
+        visible_discord_users(caller),
+    )
+
+
+def person_search_clause(
+    session: DBSession,
+    search: str,
+    tidbit_filter: AccessFilter | None,
+    caller: UserLike | None,
+) -> ColumnElement[bool]:
+    """Filter for Persons matching ``search`` in any field ``list_all`` documents.
+
+    Each match is an EXISTS/IN on Person, so a Person matching through several
+    fields or accounts is returned once.
+    """
+    pattern = f"%{escape_like(search)}%"
+    tidbit_match = readable_tidbits(session, tidbit_filter).filter(
+        PersonTidbit.content.ilike(pattern, escape="\\")  # type: ignore[union-attr]
+    )
+    return or_(
+        Person.display_name.ilike(pattern, escape="\\"),
+        Person.identifier.ilike(pattern, escape="\\"),
+        ALIAS_MATCH.bindparams(alias_pattern=pattern),
+        CONTACT_INFO_MATCH.bindparams(contact_pattern=pattern),
+        linked_discord_match(pattern, caller),
+        Person.id.in_(tidbit_match),
+    )
+
+
 @people_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_PEOPLE))
 async def list_all(
@@ -559,8 +634,14 @@ async def list_all(
     Use people_fetch to get tidbits for a specific person.
 
     Args:
-        tags: Filter to people with at least one of these tags (in their tidbits)
-        search: Search term to match against name, aliases, identifier, or tidbit content
+        tags: Filter to people with at least one of these tags on a tidbit you can read
+        search: Case-insensitive substring matched against the display name,
+            identifier, aliases, every contact_info value (emails, phone numbers,
+            GitHub login, Slack user id/username/display name, Discord id, ...),
+            the username and display name of linked Discord accounts you can see
+            (admins see all; others, those who wrote to one of their Discord bots)
+            and the content of tidbits you can read. Use it to map an email
+            address or chat handle to a person.
         limit: Maximum number of results (default 50, max 200)
         offset: Number of results to skip for pagination (default 0, max 10000)
 
@@ -572,38 +653,22 @@ async def list_all(
     limit = min(max(limit, 1), 200)
     offset = min(max(offset, 0), 10000)
 
+    user = get_mcp_current_user()
+    tidbit_filter = deny_all_filter()
+    if user and user.id is not None:
+        tidbit_filter = build_access_filter(user, get_project_roles_by_user_id(user.id))
+
     with make_session() as session:
         query = session.query(Person)
 
-        # Note: tags are now on tidbits, not Person
-        # For tag filtering, we'd need to join through tidbits
         if tags:
-            # Find people who have tidbits with matching tags
-            subquery = (
-                session.query(PersonTidbit.person_id)
-                .filter(PersonTidbit.tags.op("&&")(sql_cast(tags, ARRAY(Text))))
-                .distinct()
+            tagged = readable_tidbits(session, tidbit_filter).filter(
+                PersonTidbit.tags.op("&&")(sql_cast(tags, ARRAY(Text)))
             )
-            query = query.filter(Person.id.in_(subquery))
+            query = query.filter(Person.id.in_(tagged))
 
         if search:
-            search_term = f"%{search.lower()}%"
-            # Search in aliases array using EXISTS with unnest for ILIKE matching
-            alias_match = text(
-                "EXISTS (SELECT 1 FROM unnest(aliases) AS alias WHERE alias ILIKE :search_pattern)"
-            ).bindparams(search_pattern=search_term)
-            # Also search in tidbit content
-            tidbit_content_match = (
-                session.query(PersonTidbit.person_id)
-                .filter(PersonTidbit.content.ilike(search_term))  # type: ignore[union-attr]
-                .distinct()
-            )
-            query = query.filter(
-                (Person.display_name.ilike(search_term))  # type: ignore[union-attr]
-                | (Person.identifier.ilike(search_term))  # type: ignore[union-attr]
-                | alias_match
-                | Person.id.in_(tidbit_content_match)
-            )
+            query = query.filter(person_search_clause(session, search, tidbit_filter, user))
 
         query = query.order_by(Person.display_name).offset(offset).limit(limit)
         people = query.all()
