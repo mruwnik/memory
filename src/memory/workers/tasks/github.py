@@ -825,7 +825,7 @@ def refetch_github_item(repo_id: int, number: int, kind: str) -> dict[str, Any]:
             # Deleted or transferred after its event was sent.
             return {"status": "not_found", "repo_id": repo_id, "number": number}
         if unreadable := client.unreadable_message(repo.repo_path):
-            repo.record_sync(unreadable)
+            repo.record_sync(unreadable, partial=True)
             repo.incomplete_since = earliest(repo.incomplete_since, data["github_updated_at"])
         if not matches_repo_filters(repo, data):
             return {"status": "skipped", "repo_id": repo_id, "number": number}
@@ -1036,6 +1036,10 @@ def sync_repo(repo_id: int, force_full: bool) -> dict[str, Any]:
             return issues, prs
 
         issues_synced, prs_synced = dispatch(since, state)
+        if open_sweep and last_sync:
+            # The sweep skips what closed since the last sync, and the next sync starts from now.
+            issues, prs = dispatch(last_sync, cast(str | None, repo.state_filter) or "all")
+            issues_synced, prs_synced = issues_synced + issues, prs_synced + prs
         unreadable = client.unreadable_message(repo.repo_path)
         catch_up = cast(datetime | None, repo.incomplete_since)
         # Items stored while fields were withheld; a forced full sync already re-fetched them.
@@ -1053,9 +1057,12 @@ def sync_repo(repo_id: int, force_full: bool) -> dict[str, Any]:
         # The next open-only sweep re-fetches what this one did; only what an
         # incremental or forced sync fetched needs catching up.
         fetched_from = since or ((last_sync or now) if open_sweep else EPOCH)
-        repo.incomplete_since = earliest(catch_up, fetched_from) if unreadable else None
+        # A refetch may have marked items incomplete while this sync ran.
+        session.refresh(repo, ["incomplete_since"])
+        marked = repo.incomplete_since if repo.incomplete_since != catch_up else None
+        repo.incomplete_since = earliest(repo.incomplete_since, fetched_from) if unreadable else marked
         error = "; ".join(filter(None, [milestones_error, unreadable])) or None
-        repo.record_sync(error)
+        repo.record_sync(error, partial=True)
         session.commit()
 
         return {

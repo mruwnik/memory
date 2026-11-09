@@ -1,6 +1,7 @@
 """Tests for GitHub issue/PR syncing tasks."""
 
 import pytest
+from sqlalchemy import update
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, Mock, patch
 
@@ -929,6 +930,54 @@ def test_an_open_only_sweep_missing_fields_catches_up_only_what_incremental_sync
     assert github_repo_with_project_fields.incomplete_since == cursor
 
 
+def test_an_open_only_sweep_also_fetches_what_closed_since_the_last_sync(
+    mock_github_client, github_repo_with_project_fields, db_session
+):
+    cursor = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    github_repo_with_project_fields.last_sync_at = cursor
+    db_session.commit()
+
+    github.sync_github_repo(github_repo_with_project_fields.id)
+
+    assert [c.args[2:4] for c in mock_github_client.fetch_issues.call_args_list] == [(None, "open"), (cursor, "all")]
+
+
+def test_a_sync_that_fails_after_an_incomplete_one_reads_as_failing_and_still_catches_up(
+    mock_github_client, github_repo, db_session
+):
+    cursor = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    github_repo.last_sync_at = cursor
+    db_session.commit()
+    mock_github_client.unreadable_message.return_value = WITHHELD
+    synced(github_repo, db_session)
+    partial = github_repo.sync_incomplete
+
+    mock_github_client.get_repo.return_value = None
+    with pytest.raises(GithubQueryError):
+        github.sync_github_repo(github_repo.id)
+
+    db_session.refresh(github_repo)
+    assert (partial, github_repo.sync_incomplete, github_repo.incomplete_since) == (True, False, cursor)
+
+
+def test_a_refetch_missing_fields_during_a_complete_sync_still_gets_caught_up(
+    mock_github_client, github_repo, db_session
+):
+    github_repo.incomplete_since = datetime(2026, 2, 1, tzinfo=timezone.utc)
+    db_session.commit()
+    marked = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    def refetch_meanwhile(*args):
+        db_session.execute(update(GithubRepo).where(GithubRepo.id == github_repo.id).values(incomplete_since=marked))
+        return []
+
+    mock_github_client.fetch_issues.side_effect = refetch_meanwhile
+
+    synced(github_repo, db_session)
+
+    assert github_repo.incomplete_since == marked
+
+
 def test_a_forced_full_sync_catches_up_without_a_second_fetch(mock_github_client, github_repo, db_session):
     github_repo.incomplete_since = datetime(2026, 1, 1, tzinfo=timezone.utc)
     db_session.commit()
@@ -952,6 +1001,7 @@ def test_a_sync_github_refuses_milestones_to_still_syncs_issues_and_says_why(
     db_session.refresh(github_repo)
     assert (result["status"], result["issues_synced"]) == ("incomplete", 1)
     assert (github_repo.sync_error, github_repo.last_sync_at is not None) == ("grant it Issues (read)", True)
+    assert github_repo.sync_incomplete is True
     # Every sync fetches all milestones, so there's nothing to catch up on.
     assert github_repo.incomplete_since is None
 

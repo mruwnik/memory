@@ -1,5 +1,6 @@
 """GitHub repos remember since when items may be stored without fields GitHub
-withheld, so the first sync that gets every field re-fetches them.
+withheld, so the first sync that gets every field re-fetches them, and
+whether their sync error is only such partial data.
 
 Revision ID: 20261220_github_incomplete_since
 Revises: 20261219_github_content_mode
@@ -20,7 +21,12 @@ def upgrade() -> None:
         "github_repos",
         sa.Column("incomplete_since", sa.DateTime(timezone=True), nullable=True),
     )
+    op.add_column(
+        "github_repos",
+        sa.Column("sync_incomplete", sa.Boolean(), nullable=False, server_default="false"),
+    )
 
 
 def downgrade() -> None:
+    op.drop_column("github_repos", "sync_incomplete")
     op.drop_column("github_repos", "incomplete_since")

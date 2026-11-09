@@ -2272,7 +2272,7 @@ async def test_clear_milestone_with_linked_items_refused_without_force(
     assert "force" in result["error"].lower()
 
 
-def testrefresh_from_github_repo_archived_deactivates_repo(
+def test_refresh_from_github_repo_archived_deactivates_repo(
     db_session, github_repo
 ):
     """When GitHub reports archived=True, refresh marks repo inactive (in
@@ -2307,11 +2307,10 @@ def testrefresh_from_github_repo_archived_deactivates_repo(
     assert github_repo.active is False
 
 
-def testrefresh_from_github_repo_missing_deactivates_repo(
+def test_refresh_from_github_repo_not_found_keeps_the_repo_and_says_it_may_be_hidden(
     db_session, github_repo
 ):
-    """When repo is gone (None), refresh marks repo inactive (in memory)
-    and raises RepoMissingError."""
+    """GitHub answers 404 for a private repo the App or token lost access to, as for a deleted one."""
     from memory.common.project.sync import refresh_from_github
     from memory.common.project.errors import RepoMissingError
     from memory.common.db.models.sources import Project
@@ -2332,13 +2331,14 @@ def testrefresh_from_github_repo_missing_deactivates_repo(
     with pytest.raises(RepoMissingError) as exc_info:
         refresh_from_github(db_session, mock_client, project)
 
-    msg = str(exc_info.value).lower()
-    assert "no longer exists" in msg or "not found" in msg
-    # Mutate-only contract: deactivation is in memory until caller commits.
-    assert github_repo.active is False
+    assert str(exc_info.value).startswith(
+        f"GitHub returns not-found for {github_repo.owner}/{github_repo.name}: "
+        "memory's GitHub access can't see it, or it was renamed or deleted."
+    )
+    assert github_repo.active is True
 
 
-def testrefresh_from_github_milestone_pulls_fresh_state(
+def test_refresh_from_github_milestone_pulls_fresh_state(
     db_session, github_repo
 ):
     """When milestone state on GitHub differs, refresh applies it."""
@@ -2387,7 +2387,7 @@ def testrefresh_from_github_milestone_pulls_fresh_state(
     assert project.description == "new desc"
 
 
-def testrefresh_from_github_missing_milestone_returns_error(
+def test_refresh_from_github_missing_milestone_returns_error(
     db_session, github_repo
 ):
     """When the milestone is gone (returns None), refresh raises but does not deactivate the repo."""
@@ -2487,11 +2487,15 @@ async def test_update_github_project_refreshes_state_first(
     assert project.title == "FRESH"
 
 
+ARCHIVED = {"archived": True, "id": 12345, "owner": {"login": "testorg"}, "name": "testrepo"}
+
+
 @pytest.mark.asyncio
-async def test_update_archived_repo_returns_error_and_deactivates(
-    db_session, github_user_session, teams_and_projects, github_repo
+@pytest.mark.parametrize("repo_data, said, active", [(ARCHIVED, "archived", False), (None, "not-found", True)])
+async def test_update_against_an_unusable_repo_errors_and_deactivates_only_an_archived_one(
+    db_session, github_user_session, teams_and_projects, github_repo, repo_data, said, active
 ):
-    """Updating against an archived repo errors and marks repo inactive."""
+    """GitHub answers 404 for a private repo the App or token lost access to, as for a deleted one."""
     from memory.api.MCP.servers.projects import upsert
     from memory.common.db.models.sources import Project
 
@@ -2508,12 +2512,7 @@ async def test_update_archived_repo_returns_error_and_deactivates(
     db_session.commit()
 
     mock_client = MagicMock()
-    mock_client.get_repo.return_value = {
-        "archived": True,
-        "id": 12345,
-        "owner": {"login": "testorg"},
-        "name": "testrepo",
-    }
+    mock_client.get_repo.return_value = repo_data
 
     mock_token = make_mock_access_token(github_user_session.token)
 
@@ -2532,10 +2531,9 @@ async def test_update_archived_repo_returns_error_and_deactivates(
             clear_parent=True,
         )
 
-    assert "error" in result
-    assert "archived" in result["error"].lower()
+    assert said in result["error"]
     db_session.refresh(github_repo)
-    assert github_repo.active is False
+    assert github_repo.active is active
 
 
 @pytest.mark.asyncio
@@ -3252,7 +3250,7 @@ async def test_promote_failed_refresh_leaves_project_at_repo_level(
         )
 
     assert "error" in result
-    assert "no longer exists" in result["error"].lower() or "missing" in result["error"].lower() or "archived" in result["error"].lower()
+    assert "not-found" in result["error"]
 
     db_session.expire_all()
     refreshed = db_session.get(Project, project_id)
@@ -3261,9 +3259,7 @@ async def test_promote_failed_refresh_leaves_project_at_repo_level(
         "Project must stay at repo-level after a failed refresh during promote"
     )
     assert refreshed.github_id is None
-    # _mark_repo_inactive's commit must persist the deactivation.
+    # Not-found may only be lost access, so the repo stays tracked.
     refreshed_repo = db_session.get(GithubRepo, github_repo.id)
     assert refreshed_repo is not None
-    assert refreshed_repo.active is False, (
-        "Repo must be deactivated when a failed promote detects missing repo"
-    )
+    assert refreshed_repo.active is True

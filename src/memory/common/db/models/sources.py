@@ -541,6 +541,10 @@ class GithubRepo(PolledSource, SyncStatusMixin, PushHealthMixin, Base):
     incomplete_since: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Whether sync_error is only some data GitHub refused, with items still synced.
+    sync_incomplete: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     # When a signed webhook delivery for this repo last arrived.
     last_event_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -579,6 +583,10 @@ class GithubRepo(PolledSource, SyncStatusMixin, PushHealthMixin, Base):
     @property
     def repo_path(self) -> str:
         return f"{self.owner}/{self.name}"
+
+    def record_sync(self, error: BaseException | str | None, partial: bool = False) -> None:
+        super().record_sync(error)
+        self.sync_incomplete = partial and error is not None
 
     @property
     def stores_content(self) -> bool:

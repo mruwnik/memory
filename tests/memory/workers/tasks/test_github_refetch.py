@@ -531,9 +531,12 @@ def test_refetch_keeps_a_pr_whose_head_commit_is_withheld_and_flags_the_repo(
     assert (repo.sync_error or "").startswith(NO_COMMITS)
     # The next complete sync re-fetches it from there.
     assert repo.incomplete_since == datetime(2024, 1, 6, tzinfo=timezone.utc)
+    assert repo.sync_incomplete is True
 
 
 def test_a_refetch_github_refuses_fails_its_job_and_flags_the_repo(db_session, repo, github_serves):
+    repo.sync_incomplete = True
+    db_session.commit()
     github_serves(None, [withheld("repository", "pullRequest")])
 
     with pytest.raises(GithubQueryError):
@@ -542,7 +545,7 @@ def test_a_refetch_github_refuses_fails_its_job_and_flags_the_repo(db_session, r
     db_session.refresh(repo)
     status, error = job(db_session, "refetch_github_item")
     assert (status, (error or "").startswith(NO_PRS)) == ("failed", True)
-    assert (repo.sync_error or "").startswith(NO_PRS)
+    assert ((repo.sync_error or "").startswith(NO_PRS), repo.sync_incomplete) == (True, False)
 
 
 def test_a_refetch_of_an_item_github_no_longer_has_is_not_a_failure(db_session, repo, github_serves):

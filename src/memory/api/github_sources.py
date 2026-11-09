@@ -204,7 +204,7 @@ def repo_to_response(repo: GithubRepo) -> GithubRepoResponse:
         webhook_checked_at=repo.webhook_checked_at.isoformat() if repo.webhook_checked_at else None,
         last_event_at=repo.last_event_at.isoformat() if repo.last_event_at else None,
         push_stale=repo.webhook_status in GITHUB_PUSH_STATUSES and push_stale(repo.last_event_at),
-        sync_incomplete=repo.incomplete_since is not None,
+        sync_incomplete=repo.sync_incomplete,
         **sync_status_fields(repo),
         **push_health_fields(repo),
     )

@@ -1135,7 +1135,7 @@ async def update_project(
         try:
             refresh_from_github(session, client, project)
         except (RepoArchivedError, RepoMissingError) as e:
-            # Persist the deactivation side-effect explicitly so periodic
+            # Persist an archived repo's deactivation explicitly so periodic
             # sync sees the inactivation. Other in-memory project mutations
             # are discarded by the lack of commit on this error path.
             #

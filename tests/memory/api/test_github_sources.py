@@ -45,7 +45,7 @@ def test_list_accounts_returns_user_accounts(client, db_session, user):
     since = datetime(2026, 10, 20, tzinfo=timezone.utc)
     account.repos.extend([
         GithubRepo(owner="org", name="repo", sync_error="401 Bad credentials", sync_failing_since=since),
-        GithubRepo(owner="org", name="partial", sync_error="Can't read commits", incomplete_since=since),
+        GithubRepo(owner="org", name="partial", sync_error="Can't read commits", sync_incomplete=True),
     ])
     db_session.add(account)
     db_session.commit()

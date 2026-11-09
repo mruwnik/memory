@@ -19,12 +19,12 @@ class GithubSyncError(ProjectError):
 
 
 class RepoMissingError(GithubSyncError):
-    """The backing repo no longer exists on GitHub (404)."""
+    """GitHub answers 404 for the backing repo: deleted, renamed, or no longer visible to memory."""
 
     def __init__(self, owner: str, name: str):
         super().__init__(
-            f"Repo {owner}/{name} no longer exists on GitHub. "
-            "Detach with clear_repo=True."
+            f"GitHub returns not-found for {owner}/{name}: memory's GitHub access can't see it, "
+            "or it was renamed or deleted. Grant access to it, or detach with clear_repo=True if it's gone."
         )
         self.owner = owner
         self.name = name
