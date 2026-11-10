@@ -29,7 +29,7 @@ from enum import Enum
 from typing import Any
 
 from sqlalchemy import cast as sql_cast
-from sqlalchemy import false, func, or_, select
+from sqlalchemy import exists, false, func, or_, select
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy import Text
 from sqlalchemy.orm import Session
@@ -42,6 +42,7 @@ from memory.common.db.models import (
     Book,
     BookSection,
     Comic,
+    ConfidenceScore,
     EmailAccount,
     ForumComment,
     ForumPost,
@@ -50,6 +51,7 @@ from memory.common.db.models import (
     MailMessage,
     SourceItem,
 )
+from memory.common.db.models.source_item import source_item_people
 from memory.api.search.types import MCPSearchFilters, SearchFilters
 
 
@@ -582,3 +584,49 @@ def beeper_match_sql(filters: MCPSearchFilters | SearchFilters):
 
 def resolve_beeper_chat_ids(filters: SearchFilters, session: Session) -> list[int]:
     return list(session.scalars(beeper_chat_ids(filters.get("network"), filters.get("chat"))))
+
+
+def person_match_sql(person_id: int):
+    """SQL clause for items associated with ``person_id``, or with no one: the
+    same rule as the Qdrant ``people`` filter (build_person_filter)."""
+    associations = select(source_item_people.c.source_item_id).where(
+        source_item_people.c.source_item_id == SourceItem.id
+    )
+    return or_(~exists(associations), exists(associations.where(source_item_people.c.person_id == person_id)))
+
+
+def confidence_match_sql(confidence_type: str, min_score: float):
+    """SQL clause for items whose ``confidence_type`` score is at least ``min_score``."""
+    scored = select(ConfidenceScore.source_item_id).where(
+        ConfidenceScore.confidence_type == confidence_type,
+        ConfidenceScore.score >= min_score,
+    )
+    return SourceItem.id.in_(scored)
+
+
+def special_conditions_sql(filters: MCPSearchFilters | SearchFilters) -> list:
+    """SQL clauses for the hand-coded content filters: person, account,
+    network/chat, source ids and confidences. created_at reaches search as
+    source ids; access control is applied separately."""
+    person_id = filters.get("person_id")
+    account = filters.get("account")
+    beeper = beeper_match_sql(filters)
+    source_ids = filters.get("source_ids")
+    min_confidences = filters.get("min_confidences") or {}
+    return [
+        *([person_match_sql(person_id)] if person_id is not None else []),
+        *([account_match_sql(account)] if account else []),
+        *([beeper] if beeper is not None else []),
+        *([SourceItem.id.in_(source_ids)] if source_ids else []),
+        *(confidence_match_sql(ctype, score) for ctype, score in min_confidences.items()),
+    ]
+
+
+def apply_content_filters_sql(query, filters: MCPSearchFilters | SearchFilters):
+    """Fold every content filter in ``filters`` onto a query with ``SourceItem``
+    in its FROM: the registry plus :func:`special_conditions_sql`.
+
+    BM25, title recall and the final merge all use it, so a candidate that
+    reached the merge by any path is held to the same filters.
+    """
+    return apply_registry_filters_sql(query, filters).filter(*special_conditions_sql(filters))

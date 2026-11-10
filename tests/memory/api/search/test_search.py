@@ -20,7 +20,7 @@ from memory.api.search.query_analysis import QueryAnalysis
 from memory.api.search.types import SearchConfig
 from memory.common import settings
 from memory.common.access_control import AccessCondition, AccessFilter
-from memory.common.db.models import AgentObservation, BlogPost, Chunk, LLMProviderKey, SourceItem
+from memory.common.db.models import AgentObservation, BlogPost, Chunk, LLMProviderKey, Person, SourceItem
 from memory.common.db.models.sources import Project
 from memory.common.extract import DataChunk
 from tests.conftest import make_source_item, unique_sha256
@@ -829,6 +829,76 @@ def test_fetch_chunks_by_title_applies_the_access_filter(db_session, grants, exp
     found = fetch_chunks_by_title(["The Bottom Line"], {"blog"}, {"access_filter": access})
 
     assert found_sources(db_session, found) == {posts[name].id for name in expected}
+
+
+@pytest.fixture
+def filtered_posts(db_session):
+    """Two blog posts titled alike that differ in every content filter, plus
+    the person linked to "bob", by name. "ann" is linked to someone else: an
+    item linked to no one passes every person filter."""
+    bob = Person(identifier="bob", display_name="Bob")
+    cy = Person(identifier="cy", display_name="Cy")
+    ann_post = titled_post(
+        db_session, "The Bottom Line ann", author="Ann", size=10,
+        published=datetime(2019, 6, 1, tzinfo=timezone.utc),
+    )
+    bob_post = titled_post(
+        db_session, "The Bottom Line bob", author="Bob", size=500,
+        published=datetime(2022, 6, 1, tzinfo=timezone.utc),
+    )
+    ann_post.update_confidences({"accuracy": 0.9})
+    bob_post.update_confidences({"accuracy": 0.2})
+    bob_post.people.append(bob)
+    ann_post.people.append(cy)
+    db_session.commit()
+    return {"ann": ann_post.id, "bob": bob_post.id, "person": bob.id}
+
+
+# A filter for each kind of content filter; "everyone" matches both posts.
+CONTENT_FILTER_CASES = [
+    ({"author": "Ann"}, {"ann"}),
+    ({"authors": ["Bob"]}, {"bob"}),
+    ({"min_published": "2021-01-01"}, {"bob"}),
+    ({"min_size": 100}, {"bob"}),
+    ({"sender": "ann@example.com"}, set()),
+    ({"min_confidences": {"accuracy": 0.8}}, {"ann"}),
+    ({"person_id": "person"}, {"bob"}),
+    ({"source_ids": ["ann"]}, {"ann"}),
+    ({"tags": ["absent"]}, set()),
+    ({}, {"ann", "bob"}),
+]
+
+
+def resolve_filters(filters: dict, ids: dict[str, int]) -> dict:
+    """``filters`` with fixture names in person_id/source_ids replaced by ids."""
+    resolved = dict(filters)
+    resolved.update({k: ids[v] for k, v in filters.items() if k == "person_id"})
+    resolved.update({k: [ids[n] for n in v] for k, v in filters.items() if k == "source_ids"})
+    return resolved
+
+
+@pytest.mark.parametrize("filters, expected", CONTENT_FILTER_CASES)
+def test_fetch_chunks_by_title_applies_content_filters(db_session, filtered_posts, filters, expected):
+    found = fetch_chunks_by_title(
+        ["The Bottom Line"], {"blog"}, {"access_filter": None, **resolve_filters(filters, filtered_posts)}
+    )
+
+    assert found_sources(db_session, found) == {filtered_posts[name] for name in expected}
+
+
+@pytest.mark.parametrize("filters, expected", CONTENT_FILTER_CASES)
+def test_search_sources_applies_content_filters(db_session, filtered_posts, filters, expected):
+    """The final merge holds every candidate to the filters, whatever path
+    brought it in."""
+    chunks = [Chunk(source_id=filtered_posts[name], content="hit") for name in ("ann", "bob")]
+
+    results = asyncio.run(
+        search_module.search_sources(
+            chunks, filters={"access_filter": None, **resolve_filters(filters, filtered_posts)}
+        )
+    )
+
+    assert {r.id for r in results} == {filtered_posts[name] for name in expected}
 
 
 def subclasses(cls: type) -> list[type]:

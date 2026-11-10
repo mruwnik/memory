@@ -11,7 +11,7 @@ from typing import Any
 
 from fastmcp import FastMCP
 from pydantic import BaseModel
-from sqlalchemy import Text, exists, func, or_, select
+from sqlalchemy import Text, func, select
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import selectinload
@@ -37,9 +37,7 @@ from memory.common.scopes import (
 )
 from memory.api.search.filters import (
     FILTER_REGISTRY,
-    account_match_sql,
-    beeper_match_sql,
-    apply_registry_filters_sql,
+    apply_content_filters_sql,
     reject_unknown_filter_keys,
 )
 from memory.api.search.item_browse import (
@@ -64,7 +62,6 @@ from memory.common.collections import (
 )
 from memory.common.db.connection import make_session
 from memory.common.db.models import AgentObservation, SourceItem
-from memory.common.db.models.source_item import source_item_people
 from memory.common.db.models.journal import JournalEntry, build_journal_access_filter
 from memory.common.formatters import observation
 
@@ -940,11 +937,11 @@ ITEM_ALLOWED_FILTER_KEYS = set(FILTER_REGISTRY) | ITEM_SPECIAL_FILTER_KEYS
 def apply_item_filters(query, modalities: set[str], filters: MCPSearchFilters):
     """Apply modality + MCPSearchFilters constraints to a SourceItem query.
 
-    Shared by list_items and count_items so the two can never drift. Registry
-    filters (mail/blog/doc metadata) are folded on via
-    :func:`apply_registry_filters_sql`. A query that combines filters only
-    different item types can satisfy can never match a row (an item is exactly
-    one type); that is the correct outcome.
+    Shared by list_items and count_items so the two can never drift. Content
+    filters are folded on via :func:`apply_content_filters_sql`, the same
+    clauses search applies. A query that combines filters only different item
+    types can satisfy can never match a row (an item is exactly one type); that
+    is the correct outcome.
 
     Any provided filter key not in :data:`ITEM_ALLOWED_FILTER_KEYS` raises
     ValueError instead of being silently dropped.
@@ -961,33 +958,8 @@ def apply_item_filters(query, modalities: set[str], filters: MCPSearchFilters):
     if modalities:
         query = query.filter(SourceItem.modality.in_(modalities))
 
-    # Special keys scoped to SourceItem itself.
-    if source_ids := filters.get("source_ids"):
-        query = query.filter(SourceItem.id.in_(source_ids))
     query = query.filter(*created_at_conditions(filters))
-
-    # Declarative content-metadata filters (tags/size/mail/blog/doc).
-    query = apply_registry_filters_sql(query, filters)
-
-    if (person_id := filters.get("person_id")) is not None:
-        person_associated = exists(
-            select(source_item_people.c.source_item_id)
-            .where(source_item_people.c.source_item_id == SourceItem.id)
-            .where(source_item_people.c.person_id == person_id)
-        )
-        no_people = ~exists(
-            select(source_item_people.c.source_item_id).where(
-                source_item_people.c.source_item_id == SourceItem.id
-            )
-        )
-        query = query.filter(or_(no_people, person_associated))
-
-    if account := filters.get("account"):
-        query = query.filter(account_match_sql(account))
-    if (beeper_clause := beeper_match_sql(filters)) is not None:
-        query = query.filter(beeper_clause)
-
-    return query
+    return apply_content_filters_sql(query, filters)
 
 
 def apply_browse_filters(
