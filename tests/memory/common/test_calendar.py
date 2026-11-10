@@ -564,6 +564,34 @@ def test_expand_recurring_event_caps_occurrences_visited(
     assert [r.levelname for r in caplog.records] == ["WARNING"]
 
 
+@pytest.mark.parametrize(
+    "count, expected, warnings",
+    [
+        # A series that ends exactly at the cap was expanded in full
+        (5, 5, []),
+        (6, 5, ["WARNING"]),
+    ],
+)
+def test_expansion_cap_warns_only_when_occurrences_remain(
+    monkeypatch, caplog, count, expected, warnings
+):
+    monkeypatch.setattr(calendar, "MAX_OCCURRENCES_VISITED", 5)
+    event = CalendarEvent(
+        modality="calendar",
+        sha256=b"c" * 32,
+        event_title="Counted series",
+        start_time=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        recurrence_rule=f"FREQ=DAILY;COUNT={count}",
+    )
+    start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    end = datetime(2024, 2, 1, tzinfo=timezone.utc)
+
+    occurrences = expand_recurring_event(event, start, end)
+
+    assert len(occurrences) == expected
+    assert [r.levelname for r in caplog.records] == warnings
+
+
 def test_get_events_in_range_unexpected_error_spares_siblings(
     db_session, calendar_account, recurring_event, monkeypatch, caplog
 ):

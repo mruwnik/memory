@@ -99,15 +99,15 @@ def occurrences_within(
     """Occurrences of the rule within the range, visiting at most
     MAX_OCCURRENCES_VISITED from its start."""
     starts: list[datetime] = []
-    visited = 0
-    for occurrence in islice(rule, MAX_OCCURRENCES_VISITED):
-        visited += 1
+    # One past the cap, to tell a series that ends there from one cut short.
+    for visited, occurrence in enumerate(islice(rule, MAX_OCCURRENCES_VISITED + 1), start=1):
         if occurrence > end_range:
+            return starts
+        if visited > MAX_OCCURRENCES_VISITED:
+            logger.warning("Recurrence of calendar event %s hit the expansion cap", event_id)
             return starts
         if occurrence >= start_range:
             starts.append(occurrence)
-    if visited == MAX_OCCURRENCES_VISITED:
-        logger.warning("Recurrence of calendar event %s hit the expansion cap", event_id)
     return starts
 
 
