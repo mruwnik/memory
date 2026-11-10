@@ -60,19 +60,21 @@ def test_build_message_task_kwargs_plain_message():
     }
 
 
-def test_build_message_task_kwargs_splits_image_and_other_attachments():
-    image = MagicMock(url="http://x/i.png", content_type="image/png",
+def test_build_message_task_kwargs_downloads_images_and_records_every_attachment():
+    image = MagicMock(url="http://x/i.png?ex=1&hm=sig", content_type="image/png",
                       filename="i.png", size=10)
     doc = MagicMock(url="http://x/d.pdf", content_type="application/pdf",
                     filename="d.pdf", size=20)
     kwargs = build_message_task_kwargs(
         fake_message(attachments=[image, doc]), bot_id=42
     )
-    assert kwargs["images"] == ["http://x/i.png"]
-    assert kwargs["attachments"] == [
-        {"filename": "d.pdf", "content_type": "application/pdf",
-         "size": 20, "url": "http://x/d.pdf"}
-    ]
+    assert (kwargs["images"], kwargs["attachments"]) == (
+        ["http://x/i.png?ex=1&hm=sig"],
+        [
+            {"filename": "i.png", "content_type": "image/png", "size": 10, "url": "http://x/i.png"},
+            {"filename": "d.pdf", "content_type": "application/pdf", "size": 20, "url": "http://x/d.pdf"},
+        ],
+    )
 
 
 @pytest.mark.parametrize(

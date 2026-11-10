@@ -27,6 +27,8 @@ from memory.common.db.models.source_items import (
 from memory.common.collections import ALL_COLLECTIONS
 from memory.common.db.models.source_item import SourceItem, truncate_preview
 from memory.common.db.models import Person
+from memory.common.content_processing import embed_source_item
+from tests.conftest import discord_image_name
 from tests.data.contents import SAMPLE_MARKDOWN
 
 
@@ -1111,6 +1113,112 @@ def test_discord_message_preview_text_unknown_author():
     msg = DiscordMessage(sha256=b"dm2", modality="discord", content="Some message")
     msg.author = None
     assert msg.preview_text == "unknown: Some message"
+
+
+# ====== DiscordMessage attachments ======
+
+CAT_URL = "https://cdn.discordapp.com/attachments/5/1/cat.png"
+CAT = {"filename": "cat.png", "content_type": "image/png", "size": 5, "url": CAT_URL}
+NOTES = {"filename": "notes.pdf", "content_type": "application/pdf", "size": 7, "url": "https://cdn.discordapp.com/attachments/5/2/notes.pdf"}
+
+
+def discord_message_with(content: str, attachments: list[dict] | None, images: list[str] | None) -> DiscordMessage:
+    return DiscordMessage(
+        sha256=b"dm-attached", modality="message", message_id=801, content=content,
+        attachments=attachments, images=images,
+    )
+
+
+@pytest.fixture
+def stored_cat():
+    name = discord_image_name(CAT_URL, 801)
+    path = settings.FILE_STORAGE_DIR / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (8, 8), "orange").save(path)
+    return name
+
+
+@pytest.mark.parametrize(
+    "content, attachments, images, expected",
+    [
+        ("", None, None, False),
+        ("short", None, None, False),
+        ("long enough to be worth finding", None, None, True),
+        ("", [NOTES], None, True),
+        ("", [CAT], [discord_image_name(CAT_URL, 801)], True),
+        ("", None, [discord_image_name(CAT_URL, 801)], True),
+    ],
+)
+def test_discord_message_with_an_attachment_is_embedded_however_short(content, attachments, images, expected):
+    assert discord_message_with(content, attachments, images).should_embed is expected
+
+
+@pytest.mark.parametrize(
+    "content, attachments, images, text",
+    [
+        ("", [CAT], [discord_image_name(CAT_URL, 801)], "[image attachment: cat.png]"),
+        ("look", [CAT, NOTES], None, "look\n[image attachment: cat.png]\n[attachment: notes.pdf]"),
+        ("", None, [discord_image_name(CAT_URL, 801)], f"[image attachment: {discord_image_name(CAT_URL, 801).split('/')[-1]}]"),
+        ("plain", None, None, "plain"),
+    ],
+)
+def test_discord_message_text_names_its_attachments(content, attachments, images, text):
+    msg = discord_message_with(content, attachments, images)
+
+    assert (msg.readable_content, msg.title) == (text, f"unknown: {text}")
+
+
+@pytest.mark.parametrize(
+    "attachments, images, expected",
+    [
+        (
+            [CAT, NOTES],
+            [discord_image_name(CAT_URL, 801)],
+            [
+                {"filename": "cat.png", "content_type": "image/png", "size": 5, "file": discord_image_name(CAT_URL, 801)},
+                {"filename": "notes.pdf", "content_type": "application/pdf", "size": 7, "file": None},
+            ],
+        ),
+        # The image failed to download: nothing to fetch.
+        ([CAT], None, [{"filename": "cat.png", "content_type": "image/png", "size": 5, "file": None}]),
+        # A stored image with no attachment record.
+        (
+            None,
+            [discord_image_name(CAT_URL, 801)],
+            [
+                {
+                    "filename": discord_image_name(CAT_URL, 801).split("/")[-1],
+                    "content_type": "image/png",
+                    "size": None,
+                    "file": discord_image_name(CAT_URL, 801),
+                }
+            ],
+        ),
+    ],
+)
+def test_discord_message_payload_lists_attachments_with_their_stored_file(attachments, images, expected):
+    msg = discord_message_with("", attachments, images)
+
+    assert msg.as_payload()["attachments"] == expected
+
+
+def test_an_image_only_discord_message_is_embedded_with_its_image(stored_cat):
+    msg = discord_message_with("", [CAT], [stored_cat])
+
+    chunk_count = embed_source_item(msg)
+
+    assert (chunk_count, msg.embed_status) == (2, "QUEUED")
+    assert [(c.content, len(c.images)) for c in msg.chunks] == [
+        ("unknown: [image attachment: cat.png]", 0),
+        ("unknown: [image attachment: cat.png]", 1),
+    ]
+
+
+def test_a_discord_image_that_cannot_be_read_leaves_the_message_to_its_text(stored_cat):
+    (settings.FILE_STORAGE_DIR / stored_cat).write_bytes(b"not an image")
+    msg = discord_message_with("", [CAT], [stored_cat])
+
+    assert (embed_source_item(msg), msg.embed_status) == (1, "QUEUED")
 
 
 # ====== SlackMessage.preview_text tests ======

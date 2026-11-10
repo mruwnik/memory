@@ -850,6 +850,7 @@ def mock_file_storage(tmp_path: Path):
         patch.object(settings, "PHOTO_STORAGE_DIR", photo_storage_dir),
         patch.object(settings, "EMAIL_SPOOL_DIR", email_spool_dir),
         patch.object(settings, "BEEPER_STORAGE_DIR", beeper_storage_dir),
+        patch.object(settings, "DISCORD_STORAGE_DIR", tmp_path / "discord"),
     ):
         yield
 
@@ -1144,6 +1145,14 @@ def unique_sha256(prefix: str = "") -> bytes:
     Useful for creating SourceItem instances that require unique sha256 values.
     """
     return hashlib.sha256(f"{prefix}-{uuid.uuid4()}".encode()).digest()
+
+
+def discord_image_name(url: str, message_id: int) -> str:
+    """Where a Discord message's image attachment is stored, relative to
+    FILE_STORAGE_DIR: named by its unsigned URL, under the message id."""
+    unsigned = url.split("?")[0]
+    digest = hashlib.sha256(unsigned.encode()).hexdigest()[:32]
+    return f"discord/{message_id}/{digest}{os.path.splitext(unsigned)[1]}"
 
 
 def make_source_item(db_session, n: int, **overrides) -> SourceItem:

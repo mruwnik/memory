@@ -375,6 +375,15 @@ def apply_access_filter_to_query(
     return query.filter(or_(*conditions))
 
 
+def image_holders(source_item: type) -> list[type]:
+    """The SourceItem subtypes that keep downloaded images in an ``images`` column."""
+    return [
+        mapper.class_
+        for mapper in source_item.__mapper__.self_and_descendants
+        if "images" in mapper.columns
+    ]
+
+
 def get_accessible_source_item_by_filename(
     session: "Session | scoped_session[Session]",
     user: UserLike,
@@ -400,7 +409,13 @@ def get_accessible_source_item_by_filename(
     from memory.common.db.models.source_item import SourceItem  # avoid circular import
 
     # Several items can share a file (e.g. one user's copy of another's upload).
-    items = session.query(SourceItem).filter(SourceItem.filename == filename).all()
+    # Images downloaded from a message are its own, listed in its images column;
+    # looked for only when no item names the file, as that column isn't indexed.
+    items = session.query(SourceItem).filter(SourceItem.filename == filename).all() or [
+        item
+        for holder in image_holders(SourceItem)
+        for item in session.query(holder).filter(holder.images.any(filename))
+    ]
     if not items:
         raise FileNotFoundError(filename)
 
