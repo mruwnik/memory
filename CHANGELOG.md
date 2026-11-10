@@ -41,6 +41,9 @@ a new, empty `## Unreleased` above it.
 - `core_search_observations` filters by `subject` (exact) and `observation_types`. Before, a subject returned no observations (it was matched against mail subjects) and observation types were ignored. The generic search filters no longer accept `observation_types`.
 - The `author`, `authors`, `min_published` and `max_published` search filters match every item type that has an author or publication date (blog posts, comics, forum posts and comments, GitHub items, book sections). Before, keyword search and `core_list_items`/`core_count_items` matched them on blog posts only, and `authors` matched only forum posts in semantic search.
 - Titles recalled by query analysis no longer bring in results that the search filters exclude. Before, they honoured only access control, tags and the item-id filters, so e.g. an `author`, `sender`, `person_id` or `min_confidences` filter could still return a non-matching item.
+- Uploading a report (`POST /reports/upload`) into a project you aren't a member of is refused with 403 (admins excepted).
+- Only a report's creator or an admin can overwrite it (MCP `reports_upsert` with its filename, or re-uploading it through `POST /reports/upload`) or delete it (`reports_delete`); being able to read it is no longer enough. The report worker writes an MCP report's file only after checking it may overwrite the report stored under that filename.
+- Only a photo's creator or an admin can delete it (`DELETE /photos/{id}`); others who can see it get 403.
 
 ### Required env vars
 None

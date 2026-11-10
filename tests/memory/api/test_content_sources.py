@@ -8,8 +8,21 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
+from memory.common import paths, settings
 from memory.common.access_control import credential_scopes
-from memory.common.db.models import ForumComment, ForumPost, ForumSyncConfig, JobType
+from memory.common.db.models import (
+    ForumComment,
+    ForumPost,
+    ForumSyncConfig,
+    HumanUser,
+    JobType,
+    Person,
+    Project,
+    Report,
+    Team,
+)
+from memory.common.db.models.source_items import Photo
+from memory.common.db.models.sources import project_teams, team_members
 
 
 @pytest.fixture
@@ -214,6 +227,160 @@ def test_upload_report_admin_can_set_allowed_connect_urls(
     call_kwargs = mock_dispatch_job.call_args.kwargs
     assert call_kwargs["task_kwargs"]["allow_scripts"] is True
     assert call_kwargs["task_kwargs"]["allowed_connect_urls"] == ["https://api.example.com"]
+
+
+# ====== Reports upload — project membership ======
+
+
+@pytest.fixture
+def projects(db_session, user):
+    """Two projects: the test user's team is on "mine", not on "theirs"."""
+    mine = Project(title="Mine", state="open")
+    theirs = Project(title="Theirs", state="open")
+    team = Team(name="T", slug="t", is_active=True)
+    user.person = Person(identifier="me", display_name="Me")
+    db_session.add_all([mine, theirs, team])
+    db_session.flush()
+    db_session.execute(
+        team_members.insert().values(team_id=team.id, person_id=user.person.id, role="member")
+    )
+    db_session.execute(project_teams.insert().values(project_id=mine.id, team_id=team.id))
+    db_session.commit()
+    return {"mine": mine.id, "theirs": theirs.id}
+
+
+def upload_report_into(client: TestClient, project_id: int):
+    return client.post(
+        "/reports/upload",
+        files={"file": ("plain.html", BytesIO(b"<p>project report</p>"), "text/html")},
+        data={"project_id": str(project_id)},
+    )
+
+
+def test_upload_report_into_a_foreign_project_is_refused(
+    member_client: TestClient, mock_dispatch_job, projects
+):
+    response = upload_report_into(member_client, projects["theirs"])
+
+    assert response.status_code == 403
+    mock_dispatch_job.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "client_fixture, project",
+    [("member_client", "mine"), ("client", "mine"), ("client", "theirs")],
+)
+def test_upload_report_into_a_permitted_project(
+    request, mock_dispatch_job, projects, client_fixture, project
+):
+    response = upload_report_into(request.getfixturevalue(client_fixture), projects[project])
+
+    assert response.status_code == 200
+    assert mock_dispatch_job.call_args.kwargs["task_kwargs"]["project_id"] == projects[project]
+
+
+# ====== Reports upload — overwriting needs edit rights ======
+
+REPORT_HTML = b"<p>quarterly numbers</p>"
+
+
+def report_stored_as(db_session, creator_id: int, name: str) -> Report:
+    """A public report occupying the filename an upload of REPORT_HTML as `name` gets."""
+    content_hash = hashlib.sha256(REPORT_HTML).hexdigest()[:12]
+    report = Report(
+        modality="doc",
+        mime_type="text/html",
+        report_format="html",
+        sha256=b"stored".ljust(32, b"\0"),
+        filename=paths.to_db_filename(settings.REPORT_STORAGE_DIR / f"{content_hash}_{name}"),
+        creator_id=creator_id,
+        sensitivity="public",
+    )
+    db_session.add(report)
+    db_session.commit()
+    return report
+
+
+@pytest.fixture
+def other_user(db_session):
+    other = HumanUser(id=999, email="other@example.com", name="O", password_hash="x")
+    db_session.add(other)
+    db_session.commit()
+    return other
+
+
+def upload_report_html(client: TestClient, name: str):
+    return client.post(
+        "/reports/upload", files={"file": (name, BytesIO(REPORT_HTML), "text/html")}
+    )
+
+
+def test_upload_report_refuses_to_overwrite_a_readable_report_of_someone_else(
+    member_client: TestClient, mock_dispatch_job, db_session, other_user
+):
+    report_stored_as(db_session, other_user.id, "q3.html")
+
+    response = upload_report_html(member_client, "q3.html")
+
+    assert response.status_code == 403
+    mock_dispatch_job.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "client_fixture, owner",
+    [("member_client", "user"), ("client", "user"), ("client", "other_user")],
+)
+def test_upload_report_overwrite_names_the_checked_report(
+    request, mock_dispatch_job, db_session, client_fixture, owner
+):
+    client = request.getfixturevalue(client_fixture)
+    report = report_stored_as(db_session, request.getfixturevalue(owner).id, "q3.html")
+
+    response = upload_report_html(client, "q3.html")
+
+    assert response.status_code == 200
+    assert mock_dispatch_job.call_args.kwargs["task_kwargs"]["existing_report_id"] == report.id
+
+
+# ====== Photo delete needs delete rights ======
+
+
+def stored_photo(db_session, creator_id: int) -> int:
+    photo = Photo(
+        sha256=f"photo-{creator_id}".encode(),
+        modality="photo",
+        filename="photos/p.jpg",
+        creator_id=creator_id,
+        sensitivity="public",
+    )
+    db_session.add(photo)
+    db_session.commit()
+    return photo.id
+
+
+def test_delete_photo_refuses_a_readable_photo_of_someone_else(
+    member_client: TestClient, db_session, other_user
+):
+    photo_id = stored_photo(db_session, other_user.id)
+
+    response = member_client.delete(f"/photos/{photo_id}")
+
+    assert response.status_code == 403
+    assert db_session.get(Photo, photo_id) is not None
+
+
+@pytest.mark.parametrize(
+    "client_fixture, owner",
+    [("member_client", "user"), ("client", "user"), ("client", "other_user")],
+)
+def test_delete_photo_by_creator_or_admin(request, db_session, client_fixture, owner):
+    photo_id = stored_photo(db_session, request.getfixturevalue(owner).id)
+
+    response = request.getfixturevalue(client_fixture).delete(f"/photos/{photo_id}")
+
+    assert response.status_code == 200
+    db_session.expire_all()
+    assert db_session.get(Photo, photo_id) is None
 
 
 # ====== Forum sync — admin-gated, rate-limited, max_items capped ======
