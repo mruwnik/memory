@@ -2,6 +2,7 @@
 
 import logging
 import re
+import unicodedata
 from typing import Any
 
 from fastmcp import FastMCP
@@ -112,11 +113,19 @@ def person_summary(person: Person) -> dict[str, Any]:
 
 
 def make_slug(name: str) -> str:
-    """Create a URL-safe slug from a team name."""
-    slug = re.sub(r"\s+", "-", name.lower().strip())
+    """Create a URL-safe slug from a team name. Accented letters fold to
+    ASCII (Équipe → equipe); characters with no ASCII form are dropped, so
+    the slug can be empty."""
+    ascii_name = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
+    slug = re.sub(r"\s+", "-", ascii_name.lower().strip())
     slug = re.sub(r"[^a-z0-9-]", "", slug)
     slug = re.sub(r"-+", "-", slug).strip("-")
     return slug
+
+
+def same_team_name(a: str, b: str) -> bool:
+    """Whether two team names match, ignoring case and surrounding whitespace."""
+    return a.strip().casefold() == b.strip().casefold()
 
 
 def upsert_team_record(
@@ -186,7 +195,8 @@ async def upsert(
 
     Args:
         name: Team display name
-        slug: URL-safe identifier (auto-generated from name if not provided)
+        slug: URL-safe identifier. Derived from name when omitted; a derived slug
+              that belongs to a team with a different name is refused.
         description: Optional description of the team's purpose
         tags: Tags for categorization (e.g., ["engineering", "core"])
         owner: Person responsible for this team - can be person identifier or ID.
@@ -200,8 +210,10 @@ async def upsert(
     Returns:
         Dict with team data and membership changes
     """
+    derived_slug = not slug
+    slug = slug or make_slug(name)
     if not slug:
-        slug = make_slug(name)
+        return {"error": "Can't derive a slug from this name: pass `slug` explicitly"}
 
     logger.info(f"MCP: Upserting team: {slug}")
 
@@ -221,6 +233,12 @@ async def upsert(
         # For existing teams, require lead/admin to prevent arbitrary modification.
         # (Creating a new team is allowed for any teams:write user.)
         existing_team = session.query(Team).filter(Team.slug == slug).first()
+        if existing_team and derived_slug and not same_team_name(existing_team.name, name):
+            return {
+                "error": f"The slug '{slug}' derived from this name belongs to a team with "
+                "another name: pass `slug` explicitly to create a new team, or that "
+                "team's slug to update it"
+            }
         if existing_team:
             caller_role = get_caller_team_role(session, user, existing_team.id)
             if caller_role not in ("lead", "admin"):

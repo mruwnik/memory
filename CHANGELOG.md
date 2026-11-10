@@ -37,6 +37,8 @@ a new, empty `## Unreleased` above it.
 - MCP `core_list_items` and `core_count_items` take `item_types`, `embed_statuses` (default still indexed items only), `contains` and `connection_id`. List rows carry `type` and `embed_status`; `include_total=false` skips the total count; pages sort by id within equal timestamps so they never overlap. `core_count_items` adds `by_type` and, for types that share a kind of connection, `by_connection`.
 - Discord `send_message` to a channel now posts only with one of your own bots in that channel's server (by default the server's owning bot if it is yours, else another of yours there), and accepts any of your bots that has joined the server. It no longer falls back to another user's bot; with none of yours in the server it says so.
 - `POST /meetings` external ids are now per user: another user's identical id no longer returns their job or suppresses your meeting, and ids may start with `push:`. `GET /api/jobs/external/{id}` finds only your own jobs.
+- `people_merge` moves deadline ownership, Beeper participant links and GitHub item authorship to the kept person, and reports `deadlines_moved`, `beeper_participants_moved` and `github_items_moved`. Before, these were cleared when the merged-away person was deleted.
+- `teams_upsert` without a `slug` folds accented letters into the derived slug (Équipe → `equipe`). It refuses a name with no usable slug characters, and a derived slug that belongs to a team with a different name (e.g. "C++" and "C" both give `c`), instead of overwriting that team. Pass `slug` to choose one.
 
 ### Required env vars
 None
