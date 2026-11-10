@@ -1,4 +1,6 @@
 import hashlib
+import pathlib
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 from unittest.mock import patch, Mock, PropertyMock
 from typing import Any, cast
@@ -26,9 +28,9 @@ from memory.common.db.models.source_items import (
 )
 from memory.common.collections import ALL_COLLECTIONS
 from memory.common.db.models.source_item import SourceItem, truncate_preview
-from memory.common.db.models import Person
+from memory.common.db.models import DiscordChannel, DiscordUser, Person
 from memory.common.content_processing import embed_source_item
-from tests.conftest import discord_image_name
+from tests.conftest import discord_image_name, unique_sha256
 from tests.data.contents import SAMPLE_MARKDOWN
 
 
@@ -1219,6 +1221,54 @@ def test_a_discord_image_that_cannot_be_read_leaves_the_message_to_its_text(stor
     msg = discord_message_with("", [CAT], [stored_cat])
 
     assert (embed_source_item(msg), msg.embed_status) == (1, "QUEUED")
+
+
+CATCH_UP_SQL = (
+    "UPDATE source_item SET embed_status='RAW' WHERE embed_status='SKIPPED' AND id IN "
+    "(SELECT id FROM discord_message WHERE images IS NOT NULL OR attachments @> '[{}]');"
+)
+
+
+def test_changelog_documents_the_discord_catch_up_sql():
+    changelog = pathlib.Path(__file__).parents[5] / "CHANGELOG.md"
+
+    assert f"`{CATCH_UP_SQL}`" in changelog.read_text()
+
+
+@pytest.mark.parametrize(
+    "attachments, images, caught_up",
+    [
+        # Passed as None explicitly, as ingest does: stored as JSON null, not SQL NULL.
+        (None, None, False),
+        ([], None, False),
+        ([NOTES], None, True),
+        ([CAT], [discord_image_name(CAT_URL, 801)], True),
+        # Stored before attachments recorded images.
+        (None, [discord_image_name(CAT_URL, 801)], True),
+    ],
+)
+def test_discord_catch_up_sql_reindexes_only_messages_with_attachments(db_session, attachments, images, caught_up):
+    db_session.add_all([DiscordUser(id=8, username="ann"), DiscordChannel(id=88, name="general", channel_type="text")])
+    db_session.flush()
+    msg = DiscordMessage(
+        modality="message",
+        sha256=unique_sha256("catch-up"),
+        message_id=801,
+        channel_id=88,
+        author_id=8,
+        sent_at=datetime(2026, 11, 1),
+        content="hi",
+        attachments=attachments,
+        images=images,
+        embed_status="SKIPPED",
+    )
+    db_session.add(msg)
+    db_session.flush()
+
+    db_session.execute(text(CATCH_UP_SQL))
+    db_session.refresh(msg)
+
+    assert (msg.embed_status == "RAW") is caught_up
 
 
 # ====== SlackMessage.preview_text tests ======
