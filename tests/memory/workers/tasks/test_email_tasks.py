@@ -37,6 +37,7 @@ from memory.workers.tasks.email import (
     process_message,
     queue_message,
     spool_path,
+    store_email_message,
     spool_raw_email,
     sync_account,
     sync_gmail_messages,
@@ -86,7 +87,7 @@ def run_process_message(account_id, message_id, folder, raw_email, received_at=N
     process_message now receives a spool-file path rather than the raw body,
     so tests must put the email on disk first and pass its path.
     """
-    parsed = parse_email_message(raw_email, message_id)
+    parsed = parse_email_message(raw_email)
     spool_name = spool_raw_email(account_id, message_id, raw_email, parsed["hash"].hex())
     return process_message(
         account_id=account_id,
@@ -395,7 +396,7 @@ def test_mail_received_long_before_it_is_stored_is_backfill(
 
 def test_spool_file_removed_after_processing(db_session, test_email_account, qdrant):
     """The spool file is deleted once the message is handled."""
-    parsed = parse_email_message(SIMPLE_EMAIL_RAW, "555")
+    parsed = parse_email_message(SIMPLE_EMAIL_RAW)
     name = spool_raw_email(
         test_email_account.id, "555", SIMPLE_EMAIL_RAW, parsed["hash"].hex()
     )
@@ -522,7 +523,7 @@ def test_spool_file_kept_when_processing_raises(db_session, test_email_account):
     """On an unexpected processing error the spool file must survive so the
     PendingJob's retry (which re-dispatches the same filename) can re-read it.
     Only success and skip outcomes delete it."""
-    parsed = parse_email_message(SIMPLE_EMAIL_RAW, "666")
+    parsed = parse_email_message(SIMPLE_EMAIL_RAW)
     name = spool_raw_email(
         test_email_account.id, "666", SIMPLE_EMAIL_RAW, parsed["hash"].hex()
     )
@@ -556,7 +557,7 @@ def test_failed_email_job_can_be_reprocessed_from_captured_params(
     Covers the whole retry chain — param capture, keep-on-error, re-read — that
     the per-step tests only exercise in isolation.
     """
-    parsed = parse_email_message(SIMPLE_EMAIL_RAW, "888")
+    parsed = parse_email_message(SIMPLE_EMAIL_RAW)
     name = spool_raw_email(
         test_email_account.id, "888", SIMPLE_EMAIL_RAW, parsed["hash"].hex()
     )
@@ -1018,3 +1019,44 @@ def test_imap_sync_aborts_when_lock_is_lost(db_session, test_email_account):
 
     assert stats["aborted"] is True
     task.delay.assert_not_called()
+
+
+# -----------------------------------------------------------------------------
+# Mail without a Message-ID header
+# -----------------------------------------------------------------------------
+
+NO_MESSAGE_ID_RAW = """From: alice@example.com
+To: bob@example.com
+Subject: {subject}
+Date: Tue, 14 May 2024 10:00:00 +0000
+
+No Message-ID header here"""
+
+
+@pytest.mark.parametrize(
+    "folder, subject, queued",
+    [
+        # Another message with the same UID in another folder is new mail
+        ("Sent", "A different message", True),
+        # The same message fetched again is not
+        ("INBOX", "Stored first", False),
+    ],
+)
+def test_mail_without_message_id_is_told_apart_by_content(
+    db_session, test_email_account, folder, subject, queued
+):
+    with patch("memory.workers.tasks.email.vectorize_email"):
+        store_email_message(
+            test_email_account.id, "5", "INBOX", NO_MESSAGE_ID_RAW.format(subject="Stored first")
+        )
+
+    with patch("memory.workers.tasks.email.process_message"):
+        result = queue_message(
+            db_session,
+            test_email_account.id,
+            "5",
+            folder,
+            NO_MESSAGE_ID_RAW.format(subject=subject),
+        )
+
+    assert result is queued

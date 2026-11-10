@@ -148,7 +148,7 @@ def store_email_message(
                 logger.error(f"Account {account_id} not found")
                 return {"status": "error", "error": "Account not found"}
 
-            parsed_email = parse_email_message(raw_email, message_id)
+            parsed_email = parse_email_message(raw_email)
             if find_stored_message(db, account_id, parsed_email):
                 return {"status": "already_exists", "message_id": message_id}
 
@@ -279,7 +279,7 @@ def queue_message(
         return False
     spooled: str | None = None
     try:
-        parsed_email = parse_email_message(raw_email, message_id, with_attachments=False)
+        parsed_email = parse_email_message(raw_email, with_attachments=False)
         if find_stored_message(db, account_id, parsed_email):
             return False
         if killed_its_worker(db, "process_message", account_id=account_id, message_id=message_id):

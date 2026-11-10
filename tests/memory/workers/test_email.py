@@ -331,7 +331,7 @@ def test_create_mail_message(db_session):
         "--boundary--"
     )
     folder = "INBOX"
-    parsed_email = parse_email_message(raw_email, "321")
+    parsed_email = parse_email_message(raw_email)
 
     # Call function
     mail_message = create_mail_message(
@@ -1071,7 +1071,7 @@ def test_create_mail_message_with_account(db_session, test_user):
         "Test body content\n"
     )
     folder = "INBOX"
-    parsed_email = parse_email_message(raw_email, "test-with-account")
+    parsed_email = parse_email_message(raw_email)
 
     # Create with account_id and imap_uid
     mail_message = create_mail_message(

@@ -37,6 +37,7 @@ a new, empty `## Unreleased` above it.
 - MCP `core_list_items` and `core_count_items` take `item_types`, `embed_statuses` (default still indexed items only), `contains` and `connection_id`. List rows carry `type` and `embed_status`; `include_total=false` skips the total count; pages sort by id within equal timestamps so they never overlap. `core_count_items` adds `by_type` and, for types that share a kind of connection, `by_connection`.
 - IMAP folders whose names contain spaces, parentheses or non-ASCII characters (e.g. `AI orgs`, `Ärger`) sync. Before, the server refused to open them and their mail was never fetched.
 - An IMAP sync that can't open a folder, fetch a message or queue it no longer moves the account's last sync time past that mail: the account shows how many failed and the next sync fetches them again. A clean sync records when it started rather than when it finished, so mail arriving mid-sync isn't skipped, and each sync re-checks the day before the last one (copies already stored are skipped).
+- Emails without a Message-ID header are no longer dropped when another such email has the same IMAP UID in a different folder or account. Their generated id now comes from the message's content; such mail received within a day before upgrading may be stored a second time on the first sync.
 
 ### Required env vars
 None

@@ -194,10 +194,10 @@ class MailMessage(SourceItem):
         from memory.parsers.email import parse_email_message
 
         # A search hit reads the body several times; keyed on content so an edit reparses.
-        key = (self.content or "", self.message_id or "")
+        key = self.content or ""
         cached = getattr(self, "parsed_mail", None)
         if cached is None or cached[0] != key:
-            result = parse_email_message(*key, with_attachments=False)
+            result = parse_email_message(key, with_attachments=False)
             cached = (key, dict(result) if result else {})
             setattr(self, "parsed_mail", cached)
         return cached[1]
