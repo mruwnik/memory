@@ -689,6 +689,7 @@ def test_sync_account_routes_to_imap(db_session, test_email_account, qdrant):
                 "messages_found": 0,
                 "new_messages": 0,
                 "errors": 0,
+                "unavailable": False,
             }
 
             with patch(
