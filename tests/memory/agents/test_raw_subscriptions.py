@@ -691,6 +691,8 @@ async def test_a_claim_walks_past_only_so_many_raw_runs_the_claimer_cant_render(
     [
         (None, None, {"max_per_hour": 60, "backlog_max": 1000}),
         (500, 5, {"max_per_hour": 500, "backlog_max": 5}),
+        # Saved before AGENT_MAX_DELIVERIES_PER_HOUR was lowered below it.
+        (5000, None, {"max_per_hour": 3600, "backlog_max": 1000}),
     ],
 )
 def test_a_raw_subscription_reports_the_limits_in_effect(db_session, regular_user, max_per_hour, backlog_max, limits):

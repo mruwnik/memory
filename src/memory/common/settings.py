@@ -294,8 +294,10 @@ AGENT_DEFAULT_USER_KEY_DAILY_COST_USD = Decimal(
 )
 # Runs one definition (or a user's prebuilt agent) may start per rolling hour; a definition's
 # max_runs_per_hour may only lower it. Also the default for a subscription's max_per_hour,
-# which may set it higher.
+# which may set it higher, up to AGENT_MAX_DELIVERIES_PER_HOUR.
 AGENT_MAX_RUNS_PER_HOUR = int(os.getenv("AGENT_MAX_RUNS_PER_HOUR", "60"))
+# Most deliveries one subscription may make per rolling hour, whatever its max_per_hour says.
+AGENT_MAX_DELIVERIES_PER_HOUR = int(os.getenv("AGENT_MAX_DELIVERIES_PER_HOUR", "3600"))
 AGENT_MAX_SUBSCRIPTIONS_PER_USER = int(os.getenv("AGENT_MAX_SUBSCRIPTIONS_PER_USER", "20"))
 AGENT_MAX_TIMEOUT_SEC = int(os.getenv("AGENT_MAX_TIMEOUT_SEC", "1800"))
 AGENT_MAX_WAIT_SEC = int(os.getenv("AGENT_MAX_WAIT_SEC", "300"))

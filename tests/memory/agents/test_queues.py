@@ -463,6 +463,25 @@ async def test_a_queue_subscriptions_max_per_hour_overrides_the_default_rate(
 
 
 @pytest.mark.asyncio
+async def test_a_queue_subscription_is_held_to_the_delivery_ceiling(
+    db_session, regular_user, worker_session, monkeypatch
+):
+    subscription = subscribe(db_session, regular_user, max_per_hour=5)
+    monkeypatch.setattr(settings, "AGENT_MAX_DELIVERIES_PER_HOUR", 1)
+    for _ in range(2):
+        route_item(db_session, post(db_session, creator_id=regular_user.id).id)
+
+    claimed = [await claim(worker_session.token, queues=[QUEUE]) for _ in range(2)]
+
+    db_session.refresh(subscription)
+    assert [c is not None for c in claimed] == [True, False]
+    assert subscription.state["throttled"]["reason"] == (
+        "subscription rate: 1 runs in the last hour, limit 1 "
+        "(AGENT_MAX_DELIVERIES_PER_HOUR, the server's ceiling); try again later or raise it"
+    )
+
+
+@pytest.mark.asyncio
 async def test_a_queue_subscription_without_max_per_hour_names_the_default_it_hit(
     db_session, regular_user, worker_session, monkeypatch
 ):

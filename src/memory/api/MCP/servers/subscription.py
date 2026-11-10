@@ -268,6 +268,11 @@ def check_combination(kind: str, handler: dict[str, Any], shaping: dict[str, Any
     for field in ("max_per_hour", "backlog_max"):
         if shaping[field] is not None and shaping[field] < 0:
             raise ValueError(f"{field} must be at least 0")
+    if (shaping["max_per_hour"] or 0) > settings.AGENT_MAX_DELIVERIES_PER_HOUR:
+        raise ValueError(
+            f"max_per_hour can be at most {settings.AGENT_MAX_DELIVERIES_PER_HOUR} "
+            "(AGENT_MAX_DELIVERIES_PER_HOUR)"
+        )
 
 
 def checked_raw(db: DBSession, user_id: int, config: dict[str, Any]) -> dict[str, Any]:
@@ -313,8 +318,8 @@ def merged_source(stored: dict[str, Any], given: dict[str, Any], handler: dict[s
 
 
 def shown(subscription: Subscription) -> dict[str, Any]:
-    """The subscription as the tools return it; a filter or raw one adds `limits`, the
-    caps in effect: max_per_hour and backlog_max (null: no limit)."""
+    """The subscription as the tools return it; a filter or raw one adds `limits`, its own
+    caps in effect: max_per_hour (deliveries an hour) and backlog_max (null: no limit)."""
     listed = subscription.serialize()
     if subscription.kind not in READING_KINDS:
         return listed
@@ -449,7 +454,8 @@ async def upsert(
       subscription's key and yours could read the items filed where it came from.
       Anything that becomes an item is better taken as a filter source, which
       gap-fill polling also feeds. Takes max_per_hour (default
-      AGENT_MAX_RUNS_PER_HOUR, which 0 restores) and backlog_max (default 1000
+      AGENT_MAX_RUNS_PER_HOUR, which 0 restores, at most
+      AGENT_MAX_DELIVERIES_PER_HOUR) and backlog_max (default 1000
       waiting, which 0 restores): deliveries over either are shed at once, recorded
       as failed runs. Unclaimed ones expire after 7 days. The queue can't change.
     - {"cron": "<5 fields>", "input"}: a tick each time it is due, in your
@@ -463,8 +469,9 @@ async def upsert(
       MAX_TIMERS_PER_USER. Returns the timer (kind "timer").
 
     Filter sources also take: max_per_hour (deliveries an hour, above or below
-    AGENT_MAX_RUNS_PER_HOUR, the default, which 0 restores; an agent handler's runs
-    are still held to that agent's own hourly limit, at most AGENT_MAX_RUNS_PER_HOUR),
+    AGENT_MAX_RUNS_PER_HOUR, the default, which 0 restores, up to
+    AGENT_MAX_DELIVERIES_PER_HOUR; an agent handler's runs are still held to that
+    agent's own hourly limit, at most AGENT_MAX_RUNS_PER_HOUR),
     backlog_max (waiting deliveries beyond which the oldest are shed; default and 0:
     no limit), coalesce ("latest": a new event for an item, or its order_by
     key, replaces its waiting delivery), and for queue handlers order_by ("item",
@@ -473,7 +480,9 @@ async def upsert(
     you're notified once per episode, which ends after two hours with nothing held
     back; `state.throttled` describes the latest episode and clears at the first
     delivery after it ends. Filter and raw subscriptions are returned with `limits`:
-    the max_per_hour and backlog_max in effect (null: no limit).
+    their own max_per_hour and backlog_max in effect (null: no limit). An agent
+    handler's runs also count against that agent's hourly limit, shared with its
+    other runs, so they can be held below `limits.max_per_hour`.
 
     Subscriptions act with the credential that created them (an API key's scopes,
     if one was used), for good; an API key can change only what it created. One
@@ -604,7 +613,7 @@ async def list_all(
     """Your subscriptions and the timers still waiting to fire; with definition_id or
     queue, only those handed to that definition or queue. Each subscription has
     `api_key_name` (the key it was set up through, if any), for filter and raw ones
-    `limits` (the max_per_hour and backlog_max in effect, null: no limit), and
+    `limits` (their own max_per_hour and backlog_max in effect, null: no limit), and
     `activity`: `pending` deliveries (deferred ones too), `oldest_pending_at`, and
     `last`, its latest delivery or tick ({status, at, run_id, run_status}). include_fired adds `fired`:
     the latest FIRED_TIMERS_LISTED timers that ended, newest first, each with its

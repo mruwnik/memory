@@ -275,6 +275,10 @@ async def test_an_agent_runs_on_a_cron_with_its_input(
         ({"handler": {"agent": "echo"}, "source": FILTER, "order_by": "item"}, "order_by applies to queue handlers"),
         ({"handler": {"queue": "q"}, "source": FILTER, "max_per_hour": -1}, "max_per_hour must be at least 0"),
         ({"handler": {"queue": "q"}, "source": FILTER, "backlog_max": -1}, "backlog_max must be at least 0"),
+        (
+            {"handler": {"queue": "q"}, "source": FILTER, "max_per_hour": 3601},
+            r"max_per_hour can be at most 3600 \(AGENT_MAX_DELIVERIES_PER_HOUR\)",
+        ),
         ({"handler": {"queue": "q"}, "source": FILTER, "name": " "}, "name must not be empty"),
         ({"handler": {"queue": "q"}, "source": FILTER, "name": "subscription-12"}, "reserved for default names"),
         ({"handler": {"queue": "q"}, "source": {"filter": {}}}, "set at least one of"),
@@ -1157,7 +1161,7 @@ async def test_caps_and_a_subject_are_cleared_with_their_empty_values(db_session
     "caps,limits",
     [
         ({}, {"max_per_hour": 7, "backlog_max": None}),
-        ({"max_per_hour": 1000000, "backlog_max": 10}, {"max_per_hour": 1000000, "backlog_max": 10}),
+        ({"max_per_hour": 3600, "backlog_max": 10}, {"max_per_hour": 3600, "backlog_max": 10}),
         ({"max_per_hour": 0, "backlog_max": 0}, {"max_per_hour": 7, "backlog_max": None}),
     ],
 )

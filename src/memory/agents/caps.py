@@ -258,13 +258,20 @@ def ceilinged_limit(rate: int | None, knob: str) -> HourlyLimit:
 
 
 def subscription_limit(subscription: Subscription) -> HourlyLimit:
-    """A subscription's own max_per_hour, else the AGENT_MAX_RUNS_PER_HOUR default.
-    The agent a delivery starts is still held to its own ceilinged limit."""
-    if subscription.max_per_hour:
-        return HourlyLimit(subscription.max_per_hour, "max_per_hour")
-    return HourlyLimit(
-        settings.AGENT_MAX_RUNS_PER_HOUR, "AGENT_MAX_RUNS_PER_HOUR, the default when max_per_hour is unset"
+    """A subscription's own max_per_hour, else the AGENT_MAX_RUNS_PER_HOUR default, held to
+    the AGENT_MAX_DELIVERIES_PER_HOUR ceiling. The agent a delivery starts is still held to
+    its own ceilinged limit."""
+    wanted = (
+        HourlyLimit(subscription.max_per_hour, "max_per_hour")
+        if subscription.max_per_hour
+        else HourlyLimit(
+            settings.AGENT_MAX_RUNS_PER_HOUR, "AGENT_MAX_RUNS_PER_HOUR, the default when max_per_hour is unset"
+        )
     )
+    ceiling = settings.AGENT_MAX_DELIVERIES_PER_HOUR
+    if wanted.runs <= ceiling:
+        return wanted
+    return HourlyLimit(ceiling, "AGENT_MAX_DELIVERIES_PER_HOUR, the server's ceiling")
 
 
 def check_hourly_rate(db: DBSession, of: ColumnElement[bool], limit: HourlyLimit, what: str) -> None:
