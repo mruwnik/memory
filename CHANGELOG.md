@@ -39,6 +39,7 @@ a new, empty `## Unreleased` above it.
 - MCP `organizer_upcoming` with a date-only `start_date` or `end_date` (e.g. "2024-01-15") includes recurring events again; dates and times without an offset are read as UTC.
 - Recurring calendar events with an `INTERVAL=0`, secondly or minutely rule, or multi-line rule text, are skipped with a warning instead of expanding: an `INTERVAL=0` rule from a synced calendar hung `organizer_upcoming` forever, and sub-hourly rules on old series took minutes.
 - Recurring all-day calendar series that end on a date (a date-only `UNTIL`, as CalDAV and Google send them) show in `organizer_upcoming` again, through the end of that day; a floating `UNTIL` time is read as UTC.
+- Calendar syncs remove events deleted or cancelled in CalDAV or Google Calendar. A sync that read every calendar deletes the account's stored events starting inside the sync window (less a day at each end) that the calendar no longer returns; a sync that skipped a calendar or event, or found no calendar, deletes nothing. The sync result reports `events_deleted`.
 
 ### Required env vars
 None

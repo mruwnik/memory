@@ -9,6 +9,7 @@ from memory.common.db.models import CalendarEvent, HumanUser, Person
 from memory.common.db.models.sources import CalendarAccount, GoogleAccount
 from memory.workers.tasks import calendar
 from memory.workers.tasks.calendar import (
+    FetchedEvents,
     _create_event_hash,
     _parse_google_event,
     _create_calendar_event,
@@ -552,7 +553,7 @@ def test_sync_calendar_account_caldav_success(
     mock_sync_event, mock_fetch, caldav_account, db_session
 ):
     """Test successful CalDAV sync."""
-    mock_fetch.return_value = [
+    mock_fetch.return_value = FetchedEvents([
         {
             "title": "Test Event",
             "start_time": datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc),
@@ -565,7 +566,7 @@ def test_sync_calendar_account_caldav_success(
             "recurrence_rule": None,
             "attendees": [],
         },
-    ]
+    ], True)
     mock_sync_event.delay.return_value = Mock(id="task-123")
 
     result = calendar.sync_calendar_account(caldav_account.id)
@@ -582,7 +583,7 @@ def test_sync_calendar_account_google_success(
     mock_sync_event, mock_fetch, google_calendar_account, db_session
 ):
     """Test successful Google Calendar sync."""
-    mock_fetch.return_value = [
+    mock_fetch.return_value = FetchedEvents([
         {
             "title": "Google Event",
             "start_time": datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc),
@@ -595,7 +596,7 @@ def test_sync_calendar_account_google_success(
             "recurrence_rule": None,
             "attendees": [],
         },
-    ]
+    ], True)
     mock_sync_event.delay.return_value = Mock(id="task-456")
 
     result = calendar.sync_calendar_account(google_calendar_account.id)
@@ -608,7 +609,7 @@ def test_sync_calendar_account_google_success(
 def test_sync_calendar_account_updates_timestamp(caldav_account, db_session):
     """Test that sync updates last_sync_at timestamp."""
     with patch("memory.workers.tasks.calendar.fetch_caldav_events") as mock_fetch:
-        mock_fetch.return_value = []
+        mock_fetch.return_value = FetchedEvents([], True)
 
         assert caldav_account.last_sync_at is None
 
@@ -787,3 +788,151 @@ def test_google_sync_records_failures(failure_stage, google_calendar_account, db
     assert google_calendar_account.sync_error
     assert google_calendar_account.sync_failing_since is not None
     assert google_calendar_account.last_sync_at is None
+
+
+# =============================================================================
+# Removing events deleted or cancelled upstream
+# =============================================================================
+
+
+def stored_event(account: CalendarAccount, external_id: str | None, start: datetime):
+    return CalendarEvent(
+        modality="calendar",
+        sha256=f"{account.id}:{external_id}:{start}".encode().ljust(32, b"-")[:32],
+        event_title="Event",
+        start_time=start,
+        calendar_account_id=account.id,
+        external_id=external_id,
+    )
+
+
+def fetched_event(external_id: str, start: datetime) -> EventData:
+    return EventData(
+        title="Event", start_time=start, external_id=external_id, attendees=[]
+    )
+
+
+@pytest.fixture
+def stored_events(db_session, caldav_account, google_calendar_account):
+    """Events in both accounts around a 30-days-back / 90-days-ahead window."""
+    now = datetime.now(timezone.utc)
+    starts = {
+        "seen": now + timedelta(days=1),
+        "gone": now + timedelta(days=2),
+        "near-future-edge": now + timedelta(days=90, hours=-1),
+        "near-past-edge": now - timedelta(days=30, hours=-1),
+        "before-window": now - timedelta(days=60),
+    }
+    for account in (caldav_account, google_calendar_account):
+        db_session.add_all(
+            [stored_event(account, ext, start) for ext, start in starts.items()]
+        )
+        db_session.add(stored_event(account, None, now + timedelta(days=3)))
+    db_session.commit()
+    return fetched_event("seen", starts["seen"])
+
+
+def remaining_ids(db_session, account: CalendarAccount) -> set[str | None]:
+    db_session.expire_all()
+    events = db_session.query(CalendarEvent).filter_by(calendar_account_id=account.id)
+    return {e.external_id for e in events}
+
+
+ALL_STORED = {
+    "seen", "gone", "near-future-edge", "near-past-edge", "before-window", None
+}
+
+
+@pytest.mark.parametrize(
+    "account_fixture, fetcher",
+    [
+        ("caldav_account", "fetch_caldav_events"),
+        ("google_calendar_account", "_fetch_google_calendar_events"),
+    ],
+)
+@pytest.mark.parametrize(
+    "complete, expected",
+    [(True, ALL_STORED - {"gone"}), (False, ALL_STORED)],
+)
+def test_sync_calendar_account_deletes_events_gone_upstream(
+    request, db_session, stored_events, account_fixture, fetcher, complete, expected
+):
+    account = request.getfixturevalue(account_fixture)
+    other = {
+        "caldav_account": "google_calendar_account",
+        "google_calendar_account": "caldav_account",
+    }[account_fixture]
+
+    with (
+        patch(
+            f"memory.workers.tasks.calendar.{fetcher}",
+            return_value=FetchedEvents([stored_events], complete),
+        ),
+        patch("memory.workers.tasks.calendar.sync_calendar_event.delay"),
+    ):
+        result = calendar.sync_calendar_account(account.id)
+
+    assert result["events_deleted"] == len(ALL_STORED - expected)
+    assert remaining_ids(db_session, account) == expected
+    assert remaining_ids(db_session, request.getfixturevalue(other)) == ALL_STORED
+
+
+def caldav_calendar(cal_id: str, vevents=None, error: Exception | None = None):
+    cal = Mock()
+    cal.id = cal_id
+    cal.name = cal_id
+    cal.date_search.return_value = vevents or []
+    cal.date_search.side_effect = error
+    return cal
+
+
+@pytest.mark.parametrize(
+    "calendars, calendar_ids, parse_error, complete",
+    [
+        ([caldav_calendar("a"), caldav_calendar("b")], [], None, True),
+        ([caldav_calendar("a")], ["a"], None, True),
+        ([], [], None, False),
+        ([caldav_calendar("a")], ["missing"], None, False),
+        ([caldav_calendar("a"), caldav_calendar("b", error=OSError())], [], None, False),
+        ([caldav_calendar("a", vevents=[Mock()])], [], ValueError(), False),
+    ],
+)
+def test_fetch_caldav_events_reports_completeness(
+    calendars, calendar_ids, parse_error, complete
+):
+    client = Mock()
+    client.principal.return_value.calendars.return_value = calendars
+    now = datetime.now(timezone.utc)
+
+    with (
+        patch("memory.workers.tasks.calendar.DAVClient", return_value=client),
+        patch(
+            "memory.workers.tasks.calendar.parse_caldav_event",
+            side_effect=parse_error,
+        ),
+    ):
+        fetched = calendar.fetch_caldav_events(
+            "https://caldav.example.com", "u", "p", calendar_ids, now, now
+        )
+
+    assert fetched.complete is complete
+
+
+def test_fetch_google_events_without_calendars_is_incomplete(
+    google_calendar_account, db_session
+):
+    service = Mock()
+    service.calendarList.return_value.list.return_value.execute.return_value = {
+        "items": []
+    }
+    now = datetime.now(timezone.utc)
+
+    with (
+        patch("memory.workers.tasks.calendar.refresh_credentials"),
+        patch("memory.workers.tasks.calendar.build", return_value=service),
+    ):
+        fetched = calendar._fetch_google_calendar_events(
+            google_calendar_account, [], now, now, db_session
+        )
+
+    assert fetched == FetchedEvents([], False)
