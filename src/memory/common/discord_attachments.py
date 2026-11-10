@@ -11,7 +11,8 @@ from memory.common import paths, settings
 
 def unsigned(url: str) -> str:
     """Discord's CDN signs attachment URLs with a query that changes over
-    time, while the path (channel, attachment id, filename) stays the same."""
+    time, while the path (channel, attachment id, filename) stays the same.
+    The result identifies the attachment; the CDN won't serve it unsigned."""
     return url.split("?")[0]
 
 

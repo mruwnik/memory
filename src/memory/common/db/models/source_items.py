@@ -476,7 +476,8 @@ class DiscordMessage(SourceItem):
     reactions: Mapped[dict[str, list[str]] | None] = mapped_column(JSONB, nullable=True)
     # embeds: Discord embed objects (link previews, etc.)
     embeds: Mapped[list[dict] | None] = mapped_column(JSONB, nullable=True)
-    # attachments: filename, content_type, size and unsigned url of every attachment
+    # attachments: filename, content_type, size and unsigned url of every attachment.
+    # The CDN refuses an unsigned url: it identifies the attachment, it is not a link to fetch.
     attachments: Mapped[list[dict] | None] = mapped_column(JSONB, nullable=True)
 
     # Relationships
