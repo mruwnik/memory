@@ -6,6 +6,7 @@ from celery.schedules import crontab
 from kombu.utils.url import safequote
 
 from memory.common import settings
+from memory.common.redis_pool import get_redis
 
 logger = logging.getLogger(__name__)
 
@@ -285,10 +286,7 @@ def publish_custom_schedule_to_redis() -> None:
         return
 
     try:
-        import redis
-
-        r = redis.from_url(settings.REDIS_URL)
-        r.set(REDIS_BEAT_SCHEDULE_KEY, json.dumps(custom_entries))
+        get_redis().set(REDIS_BEAT_SCHEDULE_KEY, json.dumps(custom_entries))
         logger.info("Published %d custom beat entries to Redis", len(custom_entries))
     except Exception:
         logger.exception("Failed to publish custom beat schedule to Redis")

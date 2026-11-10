@@ -5,12 +5,10 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import cast
 
-import redis
 from fastapi import APIRouter
 from sqlalchemy import func, case
 
 from memory.api.auth import require_scope
-from memory.common import settings
 from memory.common.scopes import SCOPE_ADMIN
 from memory.common.celery_app import (
     REDIS_BEAT_SCHEDULE_KEY,
@@ -20,6 +18,7 @@ from memory.common.celery_app import (
 from memory.common.db.connection import make_session
 from memory.common.db.models.metrics import MetricEvent
 from memory.common.db.models.users import User
+from memory.common.redis_pool import get_redis
 
 logger = logging.getLogger(__name__)
 
@@ -29,8 +28,7 @@ router = APIRouter(prefix="/api/celery", tags=["celery"])
 def load_custom_schedule_from_redis() -> dict[str, dict]:
     """Read custom beat schedule entries published by the worker/ingest-hub."""
     try:
-        r = redis.from_url(settings.REDIS_URL)
-        raw = r.get(REDIS_BEAT_SCHEDULE_KEY)
+        raw = get_redis().get(REDIS_BEAT_SCHEDULE_KEY)
         if raw:
             return json.loads(cast(bytes, raw))
     except Exception:

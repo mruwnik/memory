@@ -6,7 +6,6 @@ import secrets
 from datetime import datetime, timezone
 from typing import Literal, cast
 
-import redis
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import func
@@ -16,7 +15,6 @@ from memory.api.auth import get_interactive_user, get_user_account, resolve_user
 from memory.api.llm_keys import LLMKeyInput, LLMKeyView, apply_llm_key, llm_key_view
 from memory.api.sync_status import PushHealthResponse, SyncStatusResponse, push_health_fields, sync_status_fields
 from memory.common.access_control import has_admin_scope
-from memory.common import settings
 from memory.common.celery_app import (
     app as celery_app,
     ENSURE_GITHUB_WEBHOOKS,
@@ -29,6 +27,7 @@ from memory.common.db.models import User, GithubProject
 from memory.common.db.models.sources import CONTENT_FULL, GithubAccount, GithubRepo
 from memory.common.github import GithubClient, GithubCredentials, GithubQueryError, webhook_url
 from memory.common.push_health import GITHUB_PUSH_STATUSES, push_stale
+from memory.common.redis_pool import get_redis
 
 # The modes of GithubRepo.content_mode (memory.common.db.models.sources).
 ContentMode = Literal["full", "metadata"]
@@ -45,16 +44,6 @@ logger = logging.getLogger(__name__)
 # Cache TTL for available repos (5 minutes)
 AVAILABLE_REPOS_CACHE_TTL = 300
 
-# Redis connection pool for caching (lazy initialized)
-_redis_pool: redis.ConnectionPool | None = None
-
-
-def get_redis_client() -> redis.Redis:
-    """Get Redis client with connection pooling."""
-    global _redis_pool
-    if _redis_pool is None:
-        _redis_pool = redis.ConnectionPool.from_url(settings.REDIS_URL)
-    return redis.Redis(connection_pool=_redis_pool)
 
 router = APIRouter(prefix="/github", tags=["github"])
 
@@ -516,7 +505,7 @@ def get_cached_available_repos(
 ) -> list[dict] | None:
     """Get cached available repos from Redis."""
     try:
-        r = get_redis_client()
+        r = get_redis()
         cache_key = get_available_repos_cache_key(account_id, include_archived)
         cached = r.get(cache_key)
         if cached:
@@ -531,7 +520,7 @@ def set_cached_available_repos(
 ) -> None:
     """Cache available repos in Redis."""
     try:
-        r = get_redis_client()
+        r = get_redis()
         cache_key = get_available_repos_cache_key(account_id, include_archived)
         r.set(cache_key, json.dumps(repos), ex=AVAILABLE_REPOS_CACHE_TTL)
     except Exception as e:

@@ -21,6 +21,7 @@ from memory.common.data_source_access import (
 )
 from memory.common.db.connection import DBSession, get_session, make_session
 from memory.common.db.models import User
+from memory.common.redis_pool import get_redis
 from memory.common.db.models.sources import (
     GoogleAccount,
     GoogleFolder,
@@ -148,22 +149,16 @@ class GoogleOAuthState:
     KEY_PREFIX = "google_oauth_state:"
 
     @classmethod
-    def _get_redis(cls):
-        import redis
-        from memory.common import settings
-        return redis.from_url(settings.REDIS_URL)
-
-    @classmethod
     def create(cls, user_id: int) -> str:
         state = secrets.token_urlsafe(32)
         key = f"{cls.KEY_PREFIX}{state}"
-        cls._get_redis().setex(key, cls.STATE_TTL_SECONDS, str(user_id))
+        get_redis().setex(key, cls.STATE_TTL_SECONDS, str(user_id))
         return state
 
     @classmethod
     def validate(cls, state: str) -> int | None:
         key = f"{cls.KEY_PREFIX}{state}"
-        redis_client = cls._get_redis()
+        redis_client = get_redis()
         # Get and delete atomically using pipeline
         pipe = redis_client.pipeline()
         pipe.get(key)

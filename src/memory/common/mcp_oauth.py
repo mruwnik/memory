@@ -24,7 +24,6 @@ from typing import Any, cast
 from urllib.parse import urlencode, urlparse
 
 import httpx
-import redis
 from mcp.client.auth.exceptions import OAuthFlowError
 from mcp.client.auth.oauth2 import PKCEParameters
 from mcp.client.auth.utils import (
@@ -49,6 +48,7 @@ from sqlalchemy.exc import OperationalError
 from memory.common import settings
 from memory.common.db.connection import make_session
 from memory.common.db.models import ExternalMCPServer, ServerStatus
+from memory.common.redis_pool import get_redis
 from memory.common.safe_http import public_http_client
 
 logger = logging.getLogger(__name__)
@@ -278,17 +278,13 @@ def manual_auth_method(client_secret: str | None, supported: tuple[str, ...]) ->
     return "client_secret_post" if "client_secret_post" in supported else "client_secret_basic"
 
 
-def redis_client() -> redis.Redis:
-    return redis.from_url(settings.REDIS_URL)
-
-
 def start_authorization(server: ExternalMCPServer) -> str:
     """Mint a single-use state for this server and owner; the authorize URL."""
     if not (server.authorization_endpoint and server.client_id):
         raise MCPServerError("this server isn't set up for OAuth")
     pkce = PKCEParameters.generate()
     state = secrets.token_urlsafe(32)
-    redis_client().setex(
+    get_redis().setex(
         f"{STATE_PREFIX}{state}",
         settings.MCP_OAUTH_STATE_TTL_SEC,
         json.dumps(
@@ -324,7 +320,7 @@ def check_issuer(flow: dict[str, Any], iss: str | None, required: bool) -> None:
 def take_state(state: str, user_id: int) -> dict[str, Any]:
     """Consume a flow's state, unless it belongs to another user: whoever holds
     a state value must not be able to burn someone else's authorization."""
-    client, key = redis_client(), f"{STATE_PREFIX}{state}"
+    client, key = get_redis(), f"{STATE_PREFIX}{state}"
     raw = client.get(key)
     if raw is None:
         raise StateError("this authorization link expired or was already used")
