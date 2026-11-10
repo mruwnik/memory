@@ -363,6 +363,7 @@ def malformed_ts_reaction(ts: str) -> dict:
         malformed_ts_message(ts="1704067200"),
         malformed_ts_message(ts="1704067200.000100\n"),
         malformed_ts_message(ts="1704067200.000100/../x"),
+        malformed_ts_message(ts="\u0661\u0667\u0660\u0664\u0660\u0666\u0667\u0662\u0660\u0660.\u0661"),
         malformed_ts_message(thread_ts="/srv/x"),
         malformed_ts_message(edited={"ts": "../x"}),
         malformed_ts_message(subtype="message_changed", message={"ts": "/var/tmp/x", "user": "U1"}),

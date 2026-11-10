@@ -1551,11 +1551,13 @@ class FakeSlack:
     def __init__(self, messages: dict[str, list[dict]], readable: dict[str, set[str]]):
         self.messages = messages
         self.readable = readable
-        self.outage: str | Exception | None = None
+        self.outage: str | Exception | httpx.Response | None = None
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         if isinstance(self.outage, Exception):
             raise self.outage
+        if isinstance(self.outage, httpx.Response):
+            return self.outage
         if self.outage:
             return httpx.Response(200, json={"ok": False, "error": self.outage}, headers={"Retry-After": "120"})
         token = request.headers["Authorization"].removeprefix("Bearer ")
@@ -1671,7 +1673,13 @@ def test_a_pushed_new_message_is_stored_as_slack_has_it(
 
 
 @pytest.mark.parametrize(
-    "outage", ["ratelimited", "internal_error", httpx.ConnectError("connection refused")]
+    "outage",
+    [
+        "ratelimited",
+        "internal_error",
+        httpx.ConnectError("connection refused"),
+        httpx.Response(503, text="<html>Service Unavailable</html>"),
+    ],
 )
 def test_a_pushed_message_slack_cannot_serve_yet_is_retried_not_dropped(db_session, two_tenants, fake_slack, outage):
     fake_slack.outage = outage
@@ -1691,7 +1699,13 @@ def test_a_pushed_reply_under_a_thread_slack_does_not_have_is_dropped(db_session
 
 @pytest.mark.parametrize(
     "message_ts, thread_ts",
-    [("/var/tmp/x", None), ("1704067200_000100", None), ("1704067200.000100", "/srv/x"), ("", None)],
+    [
+        ("/var/tmp/x", None),
+        ("1704067200_000100", None),
+        ("1704067200.000100", "/srv/x"),
+        ("", None),
+        ("\u0661\u0667\u0660\u0664.\u0661", None),
+    ],
 )
 def test_a_message_with_a_malformed_timestamp_is_not_stored(
     db_session, sample_message_data, slack_credentials, message_ts, thread_ts

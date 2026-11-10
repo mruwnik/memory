@@ -39,7 +39,7 @@ MAX_RETRY_AFTER = 30  # seconds
 
 # A message timestamp: epoch seconds, a dot, a sequence number. It names the
 # message's image directory, so nothing else may pass for one.
-SLACK_TS_PATTERN = re.compile(r"\d{1,12}\.\d{1,9}")
+SLACK_TS_PATTERN = re.compile(r"[0-9]{1,12}\.[0-9]{1,9}")
 
 
 def is_slack_ts(value: str | None) -> bool:

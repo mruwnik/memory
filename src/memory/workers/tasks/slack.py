@@ -1248,7 +1248,8 @@ def read_pushed_message(
     try:
         with client:
             return find_message(client, channel_id, message_ts, thread_ts)
-    except httpx.TransportError as e:
+    except (httpx.TransportError, json.JSONDecodeError) as e:
+        # A JSONDecodeError is Slack's edge answering with an HTML error page.
         raise PushedMessageUnread(type(e).__name__) from e
     except SlackAPIError as e:
         if e.error in TRANSIENT_SLACK_ERRORS:
