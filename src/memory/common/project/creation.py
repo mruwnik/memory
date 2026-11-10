@@ -7,12 +7,14 @@ generation.
 
 import logging
 from dataclasses import dataclass
-from typing import Any
+from datetime import datetime
+from typing import Any, Literal
 
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session as DBSession
 
-from memory.common.access_control import has_admin_scope, user_can_access_project
+from memory.common.access_control import UserLike, has_admin_scope, user_can_access_project
 from memory.common.db.models import Project, Team
 from memory.common.db.models.sources import GithubAccount, GithubRepo
 from memory.common.github import GithubClient
@@ -35,6 +37,8 @@ from memory.common.project.errors import (
 
 logger = logging.getLogger(__name__)
 
+ProjectState = Literal["open", "closed"]
+
 
 @dataclass
 class ProjectCreationResult:
@@ -51,7 +55,7 @@ class ProjectCreationResult:
     milestone_created: bool = False
 
 
-def _next_negative_project_id(session: Any) -> int:
+def _next_negative_project_id(session: DBSession) -> int:
     """Compute the next negative ID candidate (`min(id) - 1`).
 
     Used by `create_project_with_retry`. Note: the value is racy on its own —
@@ -66,7 +70,7 @@ def _next_negative_project_id(session: Any) -> int:
 
 
 def create_project_with_retry(
-    session: Any,
+    session: DBSession,
     teams: list[Team],
     max_retries: int = 3,
     **project_kwargs: Any,
@@ -113,7 +117,7 @@ def create_project_with_retry(
 
 
 def find_existing_project_by_repo(
-    session: Any,
+    session: DBSession,
     repo_path: str,
     milestone_title: str | None = None,
 ) -> Project | None:
@@ -165,14 +169,14 @@ def find_existing_project_by_repo(
 
 
 def create_standalone_project(
-    session: Any,
+    session: DBSession,
     teams: list[Team],
     title: str,
     description: str | None,
-    state: str,
+    state: ProjectState,
     parent_id: int | None,
     owner_id: int | None,
-    due_on: Any | None,
+    due_on: datetime | None,
     doc_url: str | None,
 ) -> ProjectCreationResult:
     """Create a new standalone project.
@@ -208,8 +212,8 @@ def create_standalone_project(
 
 
 def _ensure_repo_for_create(
-    session: Any,
-    user: Any,
+    session: DBSession,
+    user: UserLike,
     repo_path: str,
     description: str | None,
     create_repo: bool,
@@ -276,16 +280,16 @@ def _ensure_repo_for_create(
 
 
 def create_repo_project(
-    session: Any,
-    user: Any,
+    session: DBSession,
+    user: UserLike,
     teams: list[Team],
     repo_path: str,
     description: str | None,
-    state: str,
+    state: ProjectState,
     parent_id: int | None,
     title_override: str | None,
     owner_id: int | None,
-    due_on: Any | None,
+    due_on: datetime | None,
     doc_url: str | None,
     create_repo: bool = False,
     private: bool = True,
@@ -321,7 +325,7 @@ def create_repo_project(
         ):
             raise ProjectAccessDeniedError(existing_project.id)
         # Update teams if provided
-        existing_project.teams = teams  # type: ignore[assignment]
+        existing_project.teams = teams
         if parent_id is not None:
             existing_project.parent_id = parent_id
         if description is not None:
@@ -362,8 +366,8 @@ def create_repo_project(
 
 
 def create_milestone_project(
-    session: Any,
-    user: Any,
+    session: DBSession,
+    user: UserLike,
     teams: list[Team],
     repo_path: str,
     milestone_title: str,
@@ -371,7 +375,7 @@ def create_milestone_project(
     parent_id: int | None,
     title_override: str | None,
     owner_id: int | None,
-    due_on: Any | None,
+    due_on: datetime | None,
     doc_url: str | None,
     create_repo: bool = False,
     private: bool = True,
@@ -426,7 +430,7 @@ def create_milestone_project(
         ):
             raise ProjectAccessDeniedError(existing_project.id)
         # Update teams if provided
-        existing_project.teams = teams  # type: ignore[assignment]
+        existing_project.teams = teams
         if parent_id is not None:
             existing_project.parent_id = parent_id
         session.commit()
