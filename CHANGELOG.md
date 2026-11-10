@@ -76,9 +76,9 @@ None
 - `20261220_github_incomplete_since` adds a nullable `github_repos.incomplete_since` column and a `github_repos.sync_incomplete` boolean defaulting to false (instant).
 - `20261221_agent_run_notify_seen` adds `agent_runs.notify_on_finish`, `notified_at` and `seen_at` with two partial indexes, and backfills `seen_at = finished_at` for ended runs started through MCP or by hand that aren't sub-runs (an `UPDATE` scanning all of `agent_runs`: slow on a large table, and the indexes are built without `CONCURRENTLY`).
 - `20261222_item_inserted_idx` builds two indexes on `source_item`, `(inserted_at, id)` and `(type, inserted_at, id)`, with `CREATE INDEX CONCURRENTLY`: writes continue while they build, but the upgrade's time grows with the number of stored items. If it is interrupted, drop any invalid `source_inserted_at_idx` or `source_type_inserted_at_idx` before re-running it: Postgres keeps a half-built concurrent index, and `IF NOT EXISTS` would skip it.
+- `20261223_transcript_task_options` adds `transcript_accounts.create_tasks` (default true) and a `transcript_account_task_people` table (instant).
 - `20261223_gmail_declined_ids` adds `email_accounts.gmail_declined_ids`, a text array defaulting to empty (instant).
 - `20261224_recurrence_expandable` adds a nullable `calendar_event.recurrence_expandable` boolean (instant).
-- `20261223_transcript_task_options` adds `transcript_accounts.create_tasks` (default true) and a `transcript_account_task_people` table (instant).
 
 ### Post-deploy commands
 - Optional, re-runnable: Discord messages stored before this release that hold only an attachment stay unindexed until re-embedded. To catch up, run `UPDATE source_item SET embed_status='RAW' WHERE embed_status='SKIPPED' AND id IN (SELECT id FROM discord_message WHERE cardinality(images) > 0 OR attachments @> '[{}]');` and the hourly `process_raw_items` job embeds them (300 an hour). Re-processing records a change, so `on_edit` subscriptions may receive those messages once more.
