@@ -18,6 +18,7 @@ from memory.common.jobs import LOST_JOB_ERROR
 from memory.common.redis_lock import distributed_lock
 from memory.common import settings
 from memory.common.db.models import (
+    ACCESS_CONTROLLED_SOURCE_MODELS,
     Chunk,
     SourceItem,
     MailMessage,
@@ -46,6 +47,7 @@ from memory.workers.tasks.maintenance import (
     update_source_access_control,
     reconcile_access_control,
     get_item_class,
+    get_items_for_source,
     _payloads_equal,
 )
 from memory.common.db.models.source_item import MAX_EMBED_ATTEMPTS
@@ -2280,3 +2282,17 @@ def test_clean_chunk_images_skips_while_another_run_holds_the_lock(db_session):
 
     assert result == {"status": "locked"}
     assert orphan.exists()
+
+
+@pytest.mark.parametrize("source_type", sorted(ACCESS_CONTROLLED_SOURCE_MODELS))
+def test_get_items_for_source_handles_every_access_controlled_source(
+    db_session, source_type
+):
+    """Every source the dispatch listener can name has a branch here, so a
+    reconciliation job for it never dies on "Unknown source type"."""
+    assert list(get_items_for_source(db_session, source_type, 0)) == []
+
+
+def test_get_items_for_source_rejects_unknown_source_type(db_session):
+    with pytest.raises(ValueError, match="Unknown source type"):
+        get_items_for_source(db_session, "not_a_source", 0)

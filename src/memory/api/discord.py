@@ -28,10 +28,6 @@ from memory.common import settings
 from memory.common.access_control import has_admin_scope
 from memory.common.celery_app import DISCOVER_DISCORD_SERVERS, HANDLE_DISCORD_EVENT
 from memory.common.celery_app import app as celery_app
-from memory.common.data_source_access import (
-    enqueue_access_control_propagation,
-    mark_access_control_changed_if_needed,
-)
 from memory.common.db.connection import get_session
 from memory.common.db.models import User
 from memory.common.db.models.events import NO_ITEM_TYPE, NOT_COLLECTED, STORED, record_raw_event, storable
@@ -523,7 +519,6 @@ def update_server(
     if not user_can_manage_server(user, db, server):
         raise HTTPException(status_code=404, detail="Server not found")
 
-    snap_pid, snap_sens = server.project_id, server.sensitivity
     if updates.collect_messages is not None:
         server.collect_messages = updates.collect_messages
     if "project_id" in updates.model_fields_set:
@@ -534,17 +529,8 @@ def update_server(
         server.sensitivity = updates.sensitivity
     apply_llm_key(db, user, server, updates.llm_key)
 
-    access_changed = mark_access_control_changed_if_needed(
-        server,
-        snapshot_project_id=snap_pid,
-        snapshot_sensitivity=snap_sens,
-    )
-
     db.commit()
     db.refresh(server)
-
-    if access_changed:
-        enqueue_access_control_propagation("discord_server", server)
 
     return server_to_response(server, db, user, user_bots_by_server(db, user).get(server.id, []))
 
@@ -572,7 +558,6 @@ def update_channel(
     if not user_can_manage_channel(user, db, channel):
         raise HTTPException(status_code=404, detail="Channel not found")
 
-    snap_pid, snap_sens = channel.project_id, channel.sensitivity
     # None is a value here (inherit, no project), so only fields sent in the body change.
     if "collect_messages" in updates.model_fields_set:
         channel.collect_messages = updates.collect_messages
@@ -583,17 +568,8 @@ def update_channel(
     if updates.sensitivity is not None:
         channel.sensitivity = updates.sensitivity
 
-    access_changed = mark_access_control_changed_if_needed(
-        channel,
-        snapshot_project_id=snap_pid,
-        snapshot_sensitivity=snap_sens,
-    )
-
     db.commit()
     db.refresh(channel)
-
-    if access_changed:
-        enqueue_access_control_propagation("discord_channel", channel)
 
     return channel_to_response(channel)
 
