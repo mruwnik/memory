@@ -78,6 +78,7 @@ describe('checkAuth', () => {
           user_type: 'human',
           scopes: ['teams'],
           modules: ['teams'],
+          person: { id: 3, display_name: 'Grace Hopper' },
         },
       }),
     )
@@ -90,11 +91,12 @@ describe('checkAuth', () => {
       user_type: 'human',
       scopes: ['teams'],
       modules: ['teams'],
+      person: { id: 3, display_name: 'Grace Hopper' },
     })
     expect(result.current.isLoading).toBe(false)
   })
 
-  it('defaults scopes and modules to [] when /auth/me omits them', async () => {
+  it('defaults scopes and modules to [] and person to null when /auth/me omits them', async () => {
     setCookie('access_token', 'tok')
     mockFetch(async () =>
       mockResponse({
@@ -110,6 +112,7 @@ describe('checkAuth', () => {
     await waitFor(() => expect(result.current.isAuthenticated).toBe(true))
     expect(result.current.user?.scopes).toEqual([])
     expect(result.current.user?.modules).toEqual([])
+    expect(result.current.user?.person).toBeNull()
   })
 
   it('drops the tokens when /auth/me is 401 and there is no refresh token', async () => {

@@ -14,7 +14,7 @@ from memory.api import auth
 from memory.api.auth import is_whitelisted_path
 from memory.common import settings
 from memory.common.modules import MODULES
-from memory.common.db.models import APIKey, HumanUser, User, UserSession
+from memory.common.db.models import APIKey, HumanUser, Person, User, UserSession
 from memory.common.scopes import SCOPE_AGENTS
 
 
@@ -736,6 +736,25 @@ def test_require_scope_uses_the_credentials_scopes(
 
     assert response.status_code == expected
 
+
+
+def add_person(db_session, user_id=None) -> Person:
+    person = Person(identifier="me_person", display_name="Test Person", user_id=user_id)
+    db_session.add(person)
+    db_session.commit()
+    return person
+
+
+def test_me_names_your_own_person(client, user, db_session):
+    person = add_person(db_session, user.id)
+
+    assert client.get("/auth/me").json()["person"] == {"id": person.id, "display_name": "Test Person"}
+
+
+def test_me_without_a_linked_person_names_none(client, user, db_session):
+    add_person(db_session)
+
+    assert client.get("/auth/me").json()["person"] is None
 
 
 def test_me_lists_the_enabled_modules(client):
