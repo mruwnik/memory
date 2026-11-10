@@ -426,6 +426,33 @@ def test_expand_recurring_event_accepts_rrule_prefix(rule):
     ]
 
 
+@pytest.mark.parametrize(
+    "until, expected_days",
+    [
+        ("20240117", [15, 16, 17]),
+        ("20240117T000000", [15, 16, 17]),
+        ("20240116T235959Z", [15, 16]),
+        ("20240116T235959", [15, 16]),
+    ],
+)
+def test_expand_recurring_event_until_without_utc(until, expected_days):
+    event = CalendarEvent(
+        modality="calendar",
+        sha256=b"u" * 32,
+        event_title="All-day series",
+        start_time=datetime(2024, 1, 15, tzinfo=timezone.utc),
+        end_time=datetime(2024, 1, 16, tzinfo=timezone.utc),
+        all_day=True,
+        recurrence_rule=f"FREQ=DAILY;UNTIL={until}",
+    )
+    start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    end = datetime(2024, 1, 31, tzinfo=timezone.utc)
+
+    starts = [s for s, _ in expand_recurring_event(event, start, end)]
+
+    assert starts == [datetime(2024, 1, d, tzinfo=timezone.utc) for d in expected_days]
+
+
 def test_expand_recurring_event_huge_count_is_valid(deadline):
     event = CalendarEvent(
         modality="calendar",

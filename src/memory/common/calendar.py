@@ -75,6 +75,21 @@ def is_bounded_rule(parts: dict[str, str]) -> bool:
     return interval.isdigit() and int(interval) >= 1
 
 
+def with_utc_until(parts: dict[str, str]) -> dict[str, str]:
+    """Rewrite a DATE or floating UNTIL as UTC, which dateutil requires with an
+    aware DTSTART.
+
+    A DATE UNTIL (all-day series) includes that whole day, so it becomes the
+    day's last second; a floating date-time is read as UTC.
+    """
+    until = parts.get("UNTIL", "")
+    if until.isdigit() and len(until) == 8:
+        return parts | {"UNTIL": f"{until}T235959Z"}
+    if len(until) == 15 and until[8] == "T":
+        return parts | {"UNTIL": f"{until}Z"}
+    return parts
+
+
 def occurrence_starts(
     event: CalendarEvent, start_range: datetime, end_range: datetime
 ) -> list[datetime]:
@@ -88,6 +103,7 @@ def occurrence_starts(
     if parts is None or not is_bounded_rule(parts):
         logger.warning("Skipping unsupported recurrence rule on calendar event %s", event.id)
         return []
+    rule_text = ";".join(f"{k}={v}" for k, v in with_utc_until(parts).items())
     try:
         rule = rrulestr(f"RRULE:{rule_text}", dtstart=event.start_time)
         return list(rule.between(start_range, end_range, inc=True))
