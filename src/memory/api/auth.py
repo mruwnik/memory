@@ -715,8 +715,10 @@ def setup_warnings(user: User) -> list[str]:
 
 @router.get("/me")
 def get_me(user: User = Depends(get_current_user)):
-    """Get current user info, with the modules this instance runs."""
+    """Get current user info, with their own Person and the modules this instance runs."""
+    person = user.person
     return user.serialize() | {
+        "person": person and {"id": person.id, "display_name": person.display_name},
         # The credential's scopes; serialize() reads the account row's.
         "scopes": user.scopes or [],
         "modules": sorted(enabled_modules()),

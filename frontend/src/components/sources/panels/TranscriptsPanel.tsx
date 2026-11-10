@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSources, TranscriptAccount, LLMKeyChoice } from '@/hooks/useSources'
 import { useModule } from '@/hooks/useModule'
+import { useAuth } from '@/hooks/useAuth'
 import { useProjects, Project } from '@/hooks/useProjects'
 import { ProjectField, PUSH_CAUSES, PushBadge, SensitivitySelect, SourceRow, TagsInput } from '../shared'
 import { RowError, Button, ConfirmButton, DetailList, EmptyState, ErrorState, Field, FieldRow, FormActions, Input, List, LoadingState, Modal, Notice, Section, Select, useActionNotice, CopyButton, NewTabLink } from '@/components/shared/ui'
@@ -189,6 +190,7 @@ interface TranscriptFormProps {
 }
 
 const TranscriptForm = ({ account, providers, pushOnly, projects, onSubmit, onCancel }: TranscriptFormProps) => {
+  const { user } = useAuth()
   const [formData, setFormData] = useState({
     name: account?.name || '',
     provider: account?.provider || providers[0] || 'fireflies',
@@ -312,7 +314,7 @@ const TranscriptForm = ({ account, providers, pushOnly, projects, onSubmit, onCa
         <TaskPeopleField
           createTasks={formData.create_tasks}
           people={formData.task_people}
-          me={account?.owner_person ?? null}
+          me={account ? account.owner_person : user?.person ?? null}
           onChange={(create_tasks, task_people) => setFormData({ ...formData, create_tasks, task_people })}
         />
 

@@ -11,6 +11,7 @@ const makeUser = (overrides: Partial<AuthUser> = {}): AuthUser => ({
   scopes: ['*'],
   timezone: 'UTC',
   modules: [],
+  person: null,
   ...overrides,
 })
 

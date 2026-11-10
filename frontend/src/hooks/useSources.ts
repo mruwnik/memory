@@ -1,5 +1,7 @@
 import { useCallback } from 'react'
-import { useAuth } from './useAuth'
+import { useAuth, PersonRef } from './useAuth'
+
+export type { PersonRef }
 import { apiError } from './apiError'
 
 /** Outcome of a source's latest sync; a failing streak keeps its start time until a sync succeeds. */
@@ -488,11 +490,6 @@ export interface CalendarAccountUpdate {
 }
 
 // Types for Transcript Accounts (Fireflies, etc.)
-export interface PersonRef {
-  id: number
-  display_name: string
-}
-
 export interface TranscriptAccount extends SyncStatus {
   id: number
   name: string
