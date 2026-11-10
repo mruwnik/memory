@@ -250,7 +250,7 @@ def search_folder(conn: imaplib.IMAP4, folder: str, criteria: str) -> list[str]:
     try:
         status, _ = conn.select(imap_mailbox(folder))
         if status != "OK":
-            raise FolderUidsError(f"Error selecting folder {folder}")
+            raise FolderUnavailableError(f"Error selecting folder {folder}")
         status, data = conn.uid("SEARCH", criteria)
         if status != "OK":
             raise FolderUidsError(f"Error searching folder {folder}")
@@ -284,12 +284,17 @@ def process_folder(
     Returns:
         Stats dictionary for the folder. ``errors`` counts every message that
         was not fetched or queued, plus one for a folder that couldn't be read.
+        ``unavailable`` is True when the server refused to open the folder,
+        which is not counted in ``errors``.
     """
     try:
         emails, unfetched = fetch_email_since(conn, folder, since_date)
+    except FolderUnavailableError:
+        logger.warning(f"Account {account.id} lists a folder the server won't open")
+        return {"messages_found": 0, "new_messages": 0, "errors": 0, "unavailable": True}
     except FolderUidsError:
         logger.exception(f"Could not read a folder of account {account.id}")
-        return {"messages_found": 0, "new_messages": 0, "errors": 1}
+        return {"messages_found": 0, "new_messages": 0, "errors": 1, "unavailable": False}
 
     new_messages, errors = 0, unfetched
     for uid, raw_email, received_at in emails:
@@ -311,6 +316,7 @@ def process_folder(
         "messages_found": len(emails) + unfetched,
         "new_messages": new_messages,
         "errors": errors,
+        "unavailable": False,
     }
 
 
@@ -396,6 +402,11 @@ class FolderUidsError(Exception):
     callers can avoid treating a transient read failure as "the folder is empty"
     (which would mass-delete the local copies).
     """
+
+
+class FolderUnavailableError(FolderUidsError):
+    """The server refused to open a folder (SELECT answered NO), as it does
+    for one that was renamed or deleted: the account's folder list is wrong."""
 
 
 def get_folder_uids(conn: imaplib.IMAP4, folder: str) -> set[str]:

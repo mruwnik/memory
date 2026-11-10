@@ -447,7 +447,7 @@ def test_process_folder(email_provider):
         email_provider, "INBOX", account, datetime(1970, 1, 1), MagicMock()
     )
 
-    assert results == {"messages_found": 2, "new_messages": 2, "errors": 0}
+    assert results == {"messages_found": 2, "new_messages": 2, "errors": 0, "unavailable": False}
 
 
 def test_process_folder_no_emails(email_provider):
@@ -458,7 +458,7 @@ def test_process_folder_no_emails(email_provider):
     result = process_folder(
         email_provider, "Empty", account, datetime(1970, 1, 1), MagicMock()
     )
-    assert result == {"messages_found": 0, "new_messages": 0, "errors": 0}
+    assert result == {"messages_found": 0, "new_messages": 0, "errors": 0, "unavailable": False}
 
 
 def test_process_folder_error(email_provider):
@@ -475,15 +475,27 @@ def test_process_folder_error(email_provider):
     result = process_folder(
         email_provider, "INBOX", account, datetime(1970, 1, 1), mock_processor
     )
-    assert result == {"messages_found": 0, "new_messages": 0, "errors": 1}
+    assert result == {"messages_found": 0, "new_messages": 0, "errors": 1, "unavailable": False}
 
 
 @pytest.mark.parametrize(
     "provider_kwargs, processor_error, expected",
     [
-        ({"unselectable": {"INBOX"}}, None, {"messages_found": 0, "new_messages": 0, "errors": 1}),
-        ({"unfetchable": {2}}, None, {"messages_found": 2, "new_messages": 1, "errors": 1}),
-        ({}, RuntimeError("broker down"), {"messages_found": 2, "new_messages": 0, "errors": 2}),
+        (
+            {"unselectable": {"INBOX"}},
+            None,
+            {"messages_found": 0, "new_messages": 0, "errors": 0, "unavailable": True},
+        ),
+        (
+            {"unfetchable": {2}},
+            None,
+            {"messages_found": 2, "new_messages": 1, "errors": 1, "unavailable": False},
+        ),
+        (
+            {},
+            RuntimeError("broker down"),
+            {"messages_found": 2, "new_messages": 0, "errors": 2, "unavailable": False},
+        ),
     ],
 )
 def test_process_folder_counts_every_failure(provider_kwargs, processor_error, expected):

@@ -340,6 +340,11 @@ def queue_message(
 # behind ours; mail fetched twice is dropped by Message-ID.
 SYNC_OVERLAP = timedelta(days=1)
 
+# How long mail that fails to fetch or queue holds an IMAP account's cutoff
+# back. Every sync re-downloads all mail since the cutoff, so mail still
+# failing after this long is given up on rather than re-fetching ever more.
+FAILURE_HOLD_LIMIT = timedelta(days=3)
+
 
 def get_cutoff_date(account: EmailAccount, since_date: str | None) -> datetime:
     """The date to sync from: ``since_date`` if given, else a day before the
@@ -432,11 +437,12 @@ def finalize_sync(
     db: DBSession,
     started_at: datetime,
     error: Exception | str | None = None,
+    move_cutoff: bool = False,
 ) -> None:
     """Record how the sync that began at ``started_at`` ended.
 
-    Only a clean sync moves ``last_sync_at``, to its start: mail that arrived
-    while it ran, or that it failed to fetch or queue, is fetched again next time.
+    ``move_cutoff`` moves ``last_sync_at`` to the sync's start, so mail that
+    arrived while it ran is fetched next time; mail older than that isn't.
 
     ``error`` is the exception that aborted the sync, or a message for one that
     finished with failures; the latter keeps the sync's own writes.
@@ -447,11 +453,9 @@ def finalize_sync(
         # first so the sync_error write can actually be committed instead
         # of cascading into PendingRollbackError and losing the status.
         db.rollback()
-    if error:
-        account.record_sync(error)
-    else:
+    if move_cutoff:
         account.last_sync_at = started_at  # type: ignore
-        account.record_sync(None)
+    account.record_sync(error or None)
     db.commit()
 
 
@@ -467,6 +471,7 @@ def sync_imap_messages(
     new_messages = 0
     errors = 0
     deleted_messages = 0
+    unavailable_folders: list[str] = []
 
     def message_processor(
         account_id: int, message_id: str, folder: str, raw_email: str, received_at: datetime | None
@@ -502,6 +507,9 @@ def sync_imap_messages(
             messages_found += folder_stats["messages_found"]
             new_messages += folder_stats["new_messages"]
             errors += folder_stats["errors"]
+            if folder_stats["unavailable"]:
+                unavailable_folders.append(folder)
+                continue
 
             deleted_messages += delete_removed_emails(
                 conn, db, cast(int, account.id), folder
@@ -512,6 +520,7 @@ def sync_imap_messages(
         "new_messages": new_messages,
         "deleted_messages": deleted_messages,
         "errors": errors,
+        "unavailable_folders": unavailable_folders,
         "folders_processed": len(folders_to_process),
     }
 
@@ -582,14 +591,62 @@ def sync_gmail_messages(
     }
 
 
-def sync_failures(stats: dict) -> str | None:
-    """What a sync that finished with failures tells the user, else None."""
-    if not (errors := stats.get("errors")):
-        return None
-    return (
-        f"{errors} messages or folders could not be fetched or queued; "
-        "the next sync tries them again"
+def gives_up_on_failures(account: EmailAccount, errors: int, now: datetime) -> bool:
+    """Whether this IMAP sync moves the cutoff past mail it failed to fetch or
+    queue, because the cutoff has been held for ``FAILURE_HOLD_LIMIT``.
+
+    Gmail syncs retry failed mail whatever ``last_sync_at`` says.
+    """
+    if account.account_type == "gmail":
+        return False
+    held_since = cast(datetime | None, account.last_sync_at) or cast(
+        datetime, account.created_at
     )
+    if now - held_since < FAILURE_HOLD_LIMIT:
+        return False
+    logger.warning(
+        f"Account {account.id}: moving the sync cutoff past {errors} failed "
+        f"messages or folders, held since {held_since.isoformat()}"
+    )
+    return True
+
+
+def failure_notes(errors: int, unavailable: list[str], gave_up: bool) -> list[str]:
+    """The sync error lines for a sync's failures."""
+    notes = []
+    if unavailable:
+        notes.append(
+            f"the server won't open folder(s) {', '.join(unavailable)}; "
+            "check the account's folder list"
+        )
+    if errors and gave_up:
+        days = FAILURE_HOLD_LIMIT.days
+        notes.append(
+            f"{errors} messages or folders could not be fetched or queued for "
+            f"over {days} days; the sync moved on without them"
+        )
+    elif errors:
+        notes.append(
+            f"{errors} messages or folders could not be fetched or queued; "
+            "the next sync tries them again"
+        )
+    return notes
+
+
+def sync_failures(
+    account: EmailAccount, stats: dict, now: datetime
+) -> tuple[str | None, bool]:
+    """What a finished sync tells the user (None if nothing failed), and
+    whether it moves the cutoff.
+
+    Failed mail holds the cutoff back for up to ``FAILURE_HOLD_LIMIT``. A
+    folder the server won't open never does: it fails until the folder list
+    is fixed.
+    """
+    errors = stats.get("errors", 0)
+    gave_up = bool(errors) and gives_up_on_failures(account, errors, now)
+    notes = failure_notes(errors, stats.get("unavailable_folders", []), gave_up)
+    return "; ".join(notes) or None, gave_up or not errors
 
 
 @app.task(name=SYNC_ACCOUNT)
@@ -640,7 +697,8 @@ def sync_account(account_id: int, since_date: str | None = None) -> dict:
                 if stats.get("aborted"):
                     return {"status": "aborted", **stats}
 
-                finalize_sync(account, db, started_at, sync_failures(stats))
+                error, move_cutoff = sync_failures(account, stats, started_at)
+                finalize_sync(account, db, started_at, error, move_cutoff)
 
             except Exception as e:
                 logger.exception(f"Error syncing account {account_id}")

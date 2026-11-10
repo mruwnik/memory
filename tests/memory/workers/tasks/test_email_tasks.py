@@ -31,6 +31,7 @@ from memory.common.email_sender import (
 )
 from memory.parsers.email import parse_email_message
 from memory.workers.tasks.email import (
+    FAILURE_HOLD_LIMIT,
     SYNC_OVERLAP,
     QueueOutcome,
     get_cutoff_date,
@@ -1097,7 +1098,6 @@ def test_imap_sync_moves_cutoff_to_its_start(db_session, test_email_account):
 @pytest.mark.parametrize(
     "provider_kwargs, queue_error",
     [
-        ({"unselectable": {"Sent"}}, None),
         ({"unfetchable": {1}}, None),
         ({}, RuntimeError("broker down")),
     ],
@@ -1105,16 +1105,77 @@ def test_imap_sync_moves_cutoff_to_its_start(db_session, test_email_account):
 def test_imap_sync_with_failures_keeps_cutoff(
     db_session, test_email_account, provider_kwargs, queue_error
 ):
-    test_email_account.last_sync_at = PREVIOUS_SYNC
+    previous_sync = datetime.now(timezone.utc) - timedelta(days=1)
+    test_email_account.last_sync_at = previous_sync
     db_session.commit()
     provider = MockEmailProvider({"INBOX": [{"uid": 1}], "Sent": []}, **provider_kwargs)
 
     run_imap_sync(test_email_account.id, provider, queue_error)
 
     db_session.refresh(test_email_account)
-    assert test_email_account.last_sync_at == PREVIOUS_SYNC
-    assert "1 messages or folders could not be fetched or queued" in (
-        test_email_account.sync_error or ""
+    assert test_email_account.last_sync_at == previous_sync
+    assert test_email_account.sync_error == (
+        "1 messages or folders could not be fetched or queued; "
+        "the next sync tries them again"
+    )
+
+
+@pytest.mark.parametrize(
+    "last_sync_age, created_age",
+    [
+        (FAILURE_HOLD_LIMIT + timedelta(hours=1), timedelta(days=30)),
+        # Never synced cleanly: the hold runs from when the account was added
+        (None, FAILURE_HOLD_LIMIT + timedelta(hours=1)),
+    ],
+)
+def test_imap_sync_gives_up_on_failures_held_past_the_limit(
+    db_session, test_email_account, last_sync_age, created_age
+):
+    now = datetime.now(timezone.utc)
+    test_email_account.last_sync_at = last_sync_age and now - last_sync_age
+    test_email_account.created_at = now - created_age
+    db_session.commit()
+    provider = MockEmailProvider({"INBOX": [{"uid": 1}]}, unfetchable={1})
+
+    run_imap_sync(test_email_account.id, provider)
+
+    db_session.refresh(test_email_account)
+    assert now <= test_email_account.last_sync_at <= cast(datetime, provider.searched_at)
+    assert test_email_account.sync_error == (
+        "1 messages or folders could not be fetched or queued for over "
+        f"{FAILURE_HOLD_LIMIT.days} days; the sync moved on without them"
+    )
+
+
+def test_imap_sync_failures_of_a_never_synced_account_hold_cutoff(
+    db_session, test_email_account
+):
+    provider = MockEmailProvider({"INBOX": [{"uid": 1}]}, unfetchable={1})
+
+    run_imap_sync(test_email_account.id, provider)
+
+    db_session.refresh(test_email_account)
+    assert test_email_account.last_sync_at is None
+
+
+def test_imap_sync_moves_cutoff_past_a_folder_the_server_wont_open(
+    db_session, test_email_account
+):
+    test_email_account.folders = ["INBOX", "Gone"]
+    test_email_account.last_sync_at = datetime.now(timezone.utc) - timedelta(days=1)
+    db_session.commit()
+    cutoffs = []
+
+    for _ in range(2):
+        provider = MockEmailProvider({"INBOX": [{"uid": 1}]}, unselectable={"Gone"})
+        before = datetime.now(timezone.utc)
+        run_imap_sync(test_email_account.id, provider)
+        db_session.refresh(test_email_account)
+        cutoffs.append((before, test_email_account.last_sync_at, provider.searched_at))
+
+    assert all(before <= cutoff <= searched for before, cutoff, searched in cutoffs)
+    assert test_email_account.sync_error == (
+        "the server won't open folder(s) Gone; check the account's folder list"
     )
 
 
