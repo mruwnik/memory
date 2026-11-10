@@ -17,7 +17,7 @@ from sqlalchemy import text
 from memory.agents.provider_keys import credential
 from memory.api.search import hyde
 from memory.api.search.query_analysis import QueryAnalysis
-from memory.api.search.types import SearchConfig
+from memory.api.search.types import SearchConfig, SearchFilters
 from memory.common import settings
 from memory.common.access_control import AccessCondition, AccessFilter
 from memory.common.db.models import AgentObservation, BlogPost, Chunk, LLMProviderKey, Person, SourceItem
@@ -869,18 +869,19 @@ CONTENT_FILTER_CASES = [
 ]
 
 
-def resolve_filters(filters: dict, ids: dict[str, int]) -> dict:
-    """``filters`` with fixture names in person_id/source_ids replaced by ids."""
+def resolve_filters(filters: dict, ids: dict[str, int]) -> SearchFilters:
+    """``filters`` with fixture names in person_id/source_ids replaced by ids,
+    as superadmin search filters."""
     resolved = dict(filters)
     resolved.update({k: ids[v] for k, v in filters.items() if k == "person_id"})
     resolved.update({k: [ids[n] for n in v] for k, v in filters.items() if k == "source_ids"})
-    return resolved
+    return SearchFilters(access_filter=None, **resolved)
 
 
 @pytest.mark.parametrize("filters, expected", CONTENT_FILTER_CASES)
 def test_fetch_chunks_by_title_applies_content_filters(db_session, filtered_posts, filters, expected):
     found = fetch_chunks_by_title(
-        ["The Bottom Line"], {"blog"}, {"access_filter": None, **resolve_filters(filters, filtered_posts)}
+        ["The Bottom Line"], {"blog"}, resolve_filters(filters, filtered_posts)
     )
 
     assert found_sources(db_session, found) == {filtered_posts[name] for name in expected}
@@ -894,7 +895,7 @@ def test_search_sources_applies_content_filters(db_session, filtered_posts, filt
 
     results = asyncio.run(
         search_module.search_sources(
-            chunks, filters={"access_filter": None, **resolve_filters(filters, filtered_posts)}
+            chunks, filters=resolve_filters(filters, filtered_posts)
         )
     )
 
