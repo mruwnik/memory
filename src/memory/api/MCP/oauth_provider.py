@@ -334,30 +334,6 @@ def make_token(
     )
 
 
-def revoke_access_token(session: Session, token: str) -> bool:
-    user_session = session.get(UserSession, hash_token(token))
-    if not user_session:
-        return False
-    session.delete(user_session)
-    return True
-
-
-def revoke_refresh_token(session: Session, token: str) -> bool:
-    refresh_token = (
-        session.query(OAuthRefreshToken)
-        .filter(OAuthRefreshToken.token_hash == hash_token(token))
-        .first()
-    )
-    if not refresh_token:
-        return False
-    refresh_token.revoked = True
-    if refresh_token.access_token_session_id is not None:
-        session.query(UserSession).filter(
-            UserSession.id == refresh_token.access_token_session_id
-        ).delete(synchronize_session=False)
-    return True
-
-
 class SimpleOAuthProvider(OAuthProvider):
     """OAuth provider that extends fastmcp's OAuthProvider with custom login flow."""
 
@@ -1019,20 +995,8 @@ class SimpleOAuthProvider(OAuthProvider):
             return make_token(session, db_refresh_token, scopes)
 
     async def revoke_token(self, token: FastMCPAccessToken | RefreshToken) -> None:
-        """Revoke a token the SDK's revocation handler has already loaded.
-
-        Revoking a refresh token also ends the access session it was paired with.
-        """
-        with make_session() as session:
-            if isinstance(token, RefreshToken):
-                revoked = revoke_refresh_token(session, token.token)
-            else:
-                revoked = revoke_access_token(session, token.token)
-            if not revoked:
-                logger.warning(f"Token not found for revocation: id={token_id(token.token)}")
-                return
-            session.commit()
-            logger.info(f"Revoked token: id={token_id(token.token)}")
+        """Token revocation isn't offered: the /revoke endpoint isn't mounted."""
+        raise NotImplementedError
 
     def get_protected_resource_metadata(self) -> dict[str, Any]:
         """Return metadata about the protected resource."""
