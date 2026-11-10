@@ -292,6 +292,14 @@ class EmailAccount(PolledSource, SyncStatusMixin, LLMKeyChoice, Base):
     tags: Mapped[list[str]] = mapped_column(
         ARRAY(Text), nullable=False, server_default="{}"
     )
+    # Gmail ids of messages the sync fetched but did not store (a copy this
+    # account already stored, password-reset mail, a worker killer), so later
+    # syncs don't fetch them again. An id is dropped once its message leaves
+    # the mailbox. A copy stored by another account isn't remembered, so this
+    # account stores its own once that copy is gone.
+    gmail_declined_ids: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, server_default="{}"
+    )
     send_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="true"
     )
@@ -1216,6 +1224,26 @@ class CalendarAccount(PolledSource, SyncStatusMixin, LLMKeyChoice, Base):
     )
 
 
+# The people a transcript account makes action item tasks for.
+transcript_account_task_people = Table(
+    "transcript_account_task_people",
+    Base.metadata,
+    Column(
+        "transcript_account_id",
+        BigInteger,
+        ForeignKey("transcript_accounts.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "person_id",
+        BigInteger,
+        ForeignKey("people.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Index("transcript_account_task_people_person_idx", "person_id"),
+)
+
+
 class TranscriptAccount(SyncStatusMixin, LLMKeyChoice, Base):
     """A meeting-transcript provider account (Fireflies, Granola, Otter, ...).
 
@@ -1299,9 +1327,17 @@ class TranscriptAccount(SyncStatusMixin, LLMKeyChoice, Base):
     config_version: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default="1"
     )
+    # Whether action items in this account's meetings become Tasks.
+    create_tasks: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
 
     user: Mapped[User] = relationship(
         "User", foreign_keys=[user_id], backref=backref("transcript_accounts", passive_deletes="all")
+    )
+    # When set, only action items assigned to one of these people become Tasks.
+    task_people: Mapped[list[Person]] = relationship(
+        "Person", secondary=transcript_account_task_people, order_by="Person.display_name"
     )
     project: Mapped["Project | None"] = relationship(
         "Project", foreign_keys=[project_id]

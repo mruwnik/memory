@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import userEvent from '@testing-library/user-event'
 import { renderWithRouter, screen, waitFor, within } from '@/test/utils'
-import { mockFetchRoutes, setAuthCookies, clearCookies } from '@/test/utils'
-import { mcpResult, mcpToolError, mcpCallsTo } from '../../hooks/mcpEnvelope.testhelper'
+import { mockFetch, mockFetchRoutes, mockResponse, mcpToolFromRequest, setAuthCookies, clearCookies } from '@/test/utils'
+import { mcpEnvelopeJson, mcpResult, mcpToolError, mcpCallsTo } from '../../hooks/mcpEnvelope.testhelper'
 import PeopleManagement from './PeopleManagement'
 
 const authMe = {
@@ -354,6 +354,51 @@ describe('PeopleManagement expand', () => {
     await waitFor(() => {
       expect(mcpCallsTo(fetchMock, 'people_fetch').length > 0).toBe(true)
     })
+  })
+})
+
+describe('PeopleManagement failed expand loads', () => {
+  // people_fetch serves both loads: include_teams for teams, include_tidbits for tidbits.
+  const serve = (state: { failing: boolean }) => mockFetch(async (input, init) => {
+    const tool = mcpToolFromRequest(input, init)
+    if (tool === 'people_list_all') return mockResponse({ json: mcpEnvelopeJson([person()]) })
+    if (tool === 'teams_list_all') return mockResponse({ json: mcpEnvelopeJson({ teams: [], count: 0 }) })
+    if (tool !== 'people_fetch') return mockResponse(authMe)
+    if (state.failing) return mockResponse({ status: 500, json: { detail: 'down' } })
+    const teams = String(init?.body).includes('"include_teams":true')
+    return mockResponse({ json: mcpEnvelopeJson(teams
+      ? { person: { teams: [{ id: 3, name: 'Eng' }] } }
+      : person({ tidbits: [{ id: 7, person_id: 1, content: 'Likes tea', creator_id: 1 }] })) })
+  })
+
+  it('says the teams and tidbits failed to load and retries them', async () => {
+    const state = { failing: true }
+    serve(state)
+    const { user } = renderWithRouter(<PeopleManagement />)
+    await user.click(await screen.findByRole('button', { name: 'Alice' }))
+    expect(await screen.findByText(/Couldn't load teams/)).toBeInTheDocument()
+    expect(await screen.findByText(/Couldn't load tidbits/)).toBeInTheDocument()
+    expect(screen.queryByText('No tidbits yet')).not.toBeInTheDocument()
+    state.failing = false
+    await user.click(screen.getByRole('button', { name: 'Retry loading teams' }))
+    await user.click(screen.getByRole('button', { name: 'Retry loading tidbits' }))
+    expect(await screen.findByText('Eng')).toBeInTheDocument()
+    expect(await screen.findByText('Likes tea')).toBeInTheDocument()
+    expect(screen.queryByText(/Couldn't load/)).not.toBeInTheDocument()
+  })
+
+  it('refetches failed loads when the card is expanded again', async () => {
+    const state = { failing: true }
+    const fetchMock = serve(state)
+    const { user } = renderWithRouter(<PeopleManagement />)
+    await user.click(await screen.findByRole('button', { name: 'Alice' }))
+    await waitFor(() => expect(mcpCallsTo(fetchMock, 'people_fetch')).toHaveLength(2))
+    await waitFor(() => expect(screen.queryByText(/Loading (teams|tidbits)/)).not.toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Alice' }))
+    state.failing = false
+    await user.click(screen.getByRole('button', { name: 'Alice' }))
+    expect(await screen.findByText('Eng')).toBeInTheDocument()
+    expect(await screen.findByText('Likes tea')).toBeInTheDocument()
   })
 })
 

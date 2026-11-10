@@ -215,9 +215,13 @@ def compute_message_hash(msg_id: str, subject: str, sender: str, body: str) -> b
     return hashlib.sha256(hash_content).digest()
 
 
-def parse_email_message(
-    raw_email: str, message_id: str, with_attachments: bool = True
-) -> EmailMessage:
+def generated_message_id(raw_email: str) -> str:
+    """An id for mail without a Message-ID header, derived from its content so
+    different messages never share one and refetching a message reuses it."""
+    return f"generated-{hashlib.sha256(raw_email.encode()).hexdigest()}"
+
+
+def parse_email_message(raw_email: str, with_attachments: bool = True) -> EmailMessage:
     """
     Parse raw email into structured data.
 
@@ -230,7 +234,7 @@ def parse_email_message(
         Dict with parsed email data
     """
     msg = email.message_from_string(raw_email)
-    message_id = msg.get("Message-ID") or f"generated-{message_id}"
+    message_id = msg.get("Message-ID") or generated_message_id(raw_email)
     subject = msg.get("Subject", "")
     from_ = msg.get("From", "")
     body = extract_body(msg)

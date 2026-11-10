@@ -14,7 +14,7 @@ from memory.api import auth
 from memory.api.auth import is_whitelisted_path
 from memory.common import settings
 from memory.common.modules import MODULES
-from memory.common.db.models import APIKey, HumanUser, User, UserSession
+from memory.common.db.models import APIKey, HumanUser, Person, User, UserSession
 from memory.common.scopes import SCOPE_AGENTS
 
 
@@ -31,11 +31,10 @@ from memory.common.scopes import SCOPE_AGENTS
         "/authorize/code",
         "/token",
         "/token/refresh",
-        # OAuth Dynamic Client Registration (RFC 7591) and Token Revocation
-        # (RFC 7009) endpoints exposed by the MCP SDK. Clients haven't been
-        # issued credentials at /register time, so they CANNOT authenticate.
+        # OAuth Dynamic Client Registration (RFC 7591) endpoint exposed by
+        # the MCP SDK. Clients haven't been issued credentials at /register
+        # time, so they CANNOT authenticate.
         "/register",
-        "/revoke",
         "/mcp",
         "/mcp/tools",
         "/oauth/login",
@@ -61,14 +60,11 @@ from memory.common.scopes import SCOPE_AGENTS
         "/transcripts/ingest/7",
         # GitHub webhooks are HMAC-signed per account.
         "/github/webhook/3",
-        # /register and /revoke are RFC 7591 / RFC 7009 endpoints exposed
-        # at root by the MCP SDK. DCR clients have no credentials at
-        # registration time by definition, so the middleware bypass is
-        # mandatory. Re-added by master commit bd7d388 ("make sure mcp
-        # can register").
+        # /register is the RFC 7591 endpoint exposed at root by the MCP
+        # SDK. DCR clients have no credentials at registration time by
+        # definition, so the middleware bypass is mandatory.
         "/register",
         "/register/finish",
-        "/revoke",
         "/auth/password-reset",
         "/auth/password-reset/request",
         "/auth/password-reset/confirm",
@@ -86,10 +82,13 @@ def test_is_whitelisted_path_lets_real_routes_through(path):
         "/healthcheck",
         "/health-secret",
         "/healthxxx",
-        # /register and /revoke ARE whitelisted (covered above) — but
-        # prefix-overrun siblings must still be blocked.
+        # /register IS whitelisted (covered above) — but prefix-overrun
+        # siblings must still be blocked.
         "/registerme",
         "/registers",
+        # Token revocation (RFC 7009) isn't mounted: the provider leaves the
+        # SDK's revocation route disabled.
+        "/revoke",
         "/revoked",
         "/revokeall",
         "/authorize-anything",
@@ -159,9 +158,6 @@ def test_is_whitelisted_path_blocks_prefix_overrun(path):
         # clients have no credentials yet — middleware MUST let this
         # through or enrollment is impossible.
         ("POST", "/register"),
-        # OAuth Token Revocation (RFC 7009). Revoking a stolen token
-        # by definition can't require that token to authenticate.
-        ("POST", "/revoke"),
         # Discovery + flow endpoints, also pre-auth by spec.
         ("GET", "/.well-known/oauth-authorization-server"),
         ("GET", "/.well-known/oauth-protected-resource"),
@@ -740,6 +736,25 @@ def test_require_scope_uses_the_credentials_scopes(
 
     assert response.status_code == expected
 
+
+
+def add_person(db_session, user_id=None) -> Person:
+    person = Person(identifier="me_person", display_name="Test Person", user_id=user_id)
+    db_session.add(person)
+    db_session.commit()
+    return person
+
+
+def test_me_names_your_own_person(client, user, db_session):
+    person = add_person(db_session, user.id)
+
+    assert client.get("/auth/me").json()["person"] == {"id": person.id, "display_name": "Test Person"}
+
+
+def test_me_without_a_linked_person_names_none(client, user, db_session):
+    add_person(db_session)
+
+    assert client.get("/auth/me").json()["person"] is None
 
 
 def test_me_lists_the_enabled_modules(client):

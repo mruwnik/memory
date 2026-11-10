@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from memory.common.db.models import HumanUser
+from memory.common.db.models import HumanUser, Person
 from memory.common.db.models.sources import TranscriptAccount
 
 
@@ -42,6 +42,13 @@ def make_account(
     db_session.commit()
     db_session.refresh(account)
     return account
+
+
+def make_person(db_session, display_name, user_id=None) -> Person:
+    person = Person(identifier=display_name.lower().replace(" ", "_"), display_name=display_name, user_id=user_id)
+    db_session.add(person)
+    db_session.commit()
+    return person
 
 
 def make_other_user(db_session, user_id=999, email="other@example.com") -> HumanUser:
@@ -667,3 +674,162 @@ def test_full_crud_round_trip(client, user, db_session):
     # confirm gone
     final_get = client.get(f"/transcript-accounts/{account_id}")
     assert final_get.status_code == 404
+
+
+# Test action item task options
+
+
+def test_new_accounts_make_tasks_for_every_action_item(client, user, db_session):
+    response = client.post("/transcript-accounts", json={"name": "FF", "provider": "fireflies", "api_key": "k"})
+
+    body = response.json()
+    assert (body["create_tasks"], body["task_people"]) == (True, [])
+
+
+def test_create_account_with_task_options(client, user, db_session):
+    person = make_person(db_session, "Ann Lee")
+
+    response = client.post(
+        "/transcript-accounts",
+        json={"name": "FF", "provider": "fireflies", "api_key": "k", "create_tasks": False, "task_person_ids": [person.id]},
+    )
+
+    body = response.json()
+    assert (body["create_tasks"], body["task_people"]) == (False, [{"id": person.id, "display_name": "Ann Lee"}])
+
+
+@pytest.mark.parametrize("create_tasks", [False, True])
+def test_update_account_create_tasks(client, user, db_session, create_tasks):
+    account = make_account(db_session, user.id)
+    account.create_tasks = not create_tasks
+    db_session.commit()
+
+    response = client.patch(f"/transcript-accounts/{account.id}", json={"create_tasks": create_tasks})
+
+    assert response.json()["create_tasks"] is create_tasks
+    assert db_session.get(TranscriptAccount, account.id).create_tasks is create_tasks
+
+
+@pytest.mark.parametrize(
+    "picked, expected",
+    [
+        (["bob", "ann"], ["Ann Lee", "Bob Ray"]),
+        (["bob"], ["Bob Ray"]),
+        ([], []),
+    ],
+)
+def test_update_account_task_people(client, user, db_session, picked, expected):
+    people = {"ann": make_person(db_session, "Ann Lee"), "bob": make_person(db_session, "Bob Ray")}
+    account = make_account(db_session, user.id)
+    account.task_people = [people["ann"]]
+    db_session.commit()
+
+    response = client.patch(
+        f"/transcript-accounts/{account.id}", json={"task_person_ids": [people[k].id for k in picked]}
+    )
+
+    assert [p["display_name"] for p in response.json()["task_people"]] == expected
+    assert [p.display_name for p in db_session.get(TranscriptAccount, account.id).task_people] == expected
+
+
+@pytest.mark.parametrize("update", [{"name": "Renamed"}, {"task_person_ids": None}])
+def test_update_account_keeps_task_people_when_not_given(client, user, db_session, update):
+    account = make_account(db_session, user.id)
+    account.task_people = [make_person(db_session, "Ann Lee")]
+    db_session.commit()
+
+    response = client.patch(f"/transcript-accounts/{account.id}", json=update)
+
+    assert [p["display_name"] for p in response.json()["task_people"]] == ["Ann Lee"]
+
+
+def test_update_account_unknown_task_person_returns_400(client, user, db_session):
+    account = make_account(db_session, user.id)
+
+    response = client.patch(f"/transcript-accounts/{account.id}", json={"task_person_ids": [987654]})
+
+    assert response.status_code == 400
+    assert db_session.get(TranscriptAccount, account.id).task_people == []
+
+
+def test_without_people_scope_only_your_own_person_can_be_picked(regular_client, user, db_session):
+    mine = make_person(db_session, "Test User", user_id=user.id)
+    other = make_person(db_session, "Ann Lee")
+    account = make_account(db_session, user.id)
+
+    refused = regular_client.patch(f"/transcript-accounts/{account.id}", json={"task_person_ids": [other.id, mine.id]})
+    accepted = regular_client.patch(f"/transcript-accounts/{account.id}", json={"task_person_ids": [mine.id]})
+
+    assert (refused.status_code, accepted.status_code) == (403, 200)
+    assert accepted.json()["task_people"] == [{"id": mine.id, "display_name": "Test User"}]
+
+
+@pytest.mark.parametrize("pick", ["missing", "someone_else"])
+def test_without_people_scope_missing_and_others_ids_get_the_same_answer(regular_client, user, db_session, pick):
+    ids = {"missing": 987654, "someone_else": make_person(db_session, "Ann Lee").id}
+    account = make_account(db_session, user.id)
+
+    response = regular_client.patch(f"/transcript-accounts/{account.id}", json={"task_person_ids": [ids[pick]]})
+
+    assert (response.status_code, response.json()) == (
+        403,
+        {"detail": "Without the people scope you can only pick yourself"},
+    )
+    assert db_session.get(TranscriptAccount, account.id).task_people == []
+
+
+@pytest.mark.parametrize("linked", [False, True])
+def test_response_names_the_owners_person(client, user, db_session, linked):
+    person = make_person(db_session, "Test User", user_id=user.id if linked else None)
+    account = make_account(db_session, user.id)
+
+    response = client.get(f"/transcript-accounts/{account.id}")
+
+    expected = {"id": person.id, "display_name": "Test User"} if linked else None
+    assert response.json()["owner_person"] == expected
+
+
+def test_task_people_of_an_account_you_dont_own_cant_be_set(regular_client, user, db_session):
+    other_user = make_other_user(db_session)
+    account = make_account(db_session, other_user.id)
+    mine = make_person(db_session, "Test User", user_id=user.id)
+
+    response = regular_client.patch(f"/transcript-accounts/{account.id}", json={"task_person_ids": [mine.id]})
+
+    assert response.status_code == 404
+    assert db_session.get(TranscriptAccount, account.id).task_people == []
+
+
+@pytest.mark.parametrize("update", [{"name": "Renamed"}, {"create_tasks": False}])
+def test_without_people_scope_people_already_picked_can_be_kept(regular_client, user, db_session, update):
+    ann = make_person(db_session, "Ann Lee")
+    mine = make_person(db_session, "Test User", user_id=user.id)
+    account = make_account(db_session, user.id)
+    account.task_people = [ann]
+    db_session.commit()
+
+    response = regular_client.patch(
+        f"/transcript-accounts/{account.id}", json={**update, "task_person_ids": [ann.id, mine.id]}
+    )
+
+    assert response.status_code == 200
+    assert sorted(p.display_name for p in db_session.get(TranscriptAccount, account.id).task_people) == [
+        "Ann Lee",
+        "Test User",
+    ]
+
+
+def test_without_people_scope_people_already_picked_dont_let_others_in(regular_client, user, db_session):
+    ann = make_person(db_session, "Ann Lee")
+    bob = make_person(db_session, "Bob Ray")
+    account = make_account(db_session, user.id)
+    account.task_people = [ann]
+    db_session.commit()
+
+    response = regular_client.patch(f"/transcript-accounts/{account.id}", json={"task_person_ids": [ann.id, bob.id]})
+
+    assert (response.status_code, response.json()) == (
+        403,
+        {"detail": "Without the people scope you can only pick yourself"},
+    )
+    assert [p.display_name for p in db_session.get(TranscriptAccount, account.id).task_people] == ["Ann Lee"]

@@ -3,12 +3,13 @@
 import hashlib
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, NotRequired, TypedDict, cast
+from typing import Any, NamedTuple, NotRequired, TypedDict, cast
 
 from caldav.collection import Calendar
 from caldav.davclient import DAVClient
 from googleapiclient.discovery import build
 
+from memory.common.calendar import recurrence_expandable, strip_rrule_prefix
 from memory.common.celery_app import (
     SYNC_CALENDAR_ACCOUNT,
     SYNC_CALENDAR_EVENT,
@@ -43,6 +44,13 @@ class EventData(TypedDict):
     recurrence_rule: NotRequired[str | None]
     attendees: NotRequired[list[str]]
     meeting_link: NotRequired[str | None]
+
+
+class FetchedEvents(NamedTuple):
+    events: list[EventData]
+    # Every calendar and event in the window was read, so a stored event
+    # missing from ``events`` was deleted or cancelled upstream.
+    complete: bool
 
 
 # -----------------------------------------------------------------------------
@@ -146,6 +154,9 @@ def _create_calendar_event(
         all_day=event_data.get("all_day", False),
         location=event_data.get("location"),
         recurrence_rule=event_data.get("recurrence_rule"),
+        recurrence_expandable=recurrence_expandable(
+            event_data.get("recurrence_rule"), event_data["start_time"]
+        ),
         calendar_account_id=account.id,
         calendar_name=event_data.get("calendar_name"),
         external_id=event_data.get("external_id"),
@@ -156,6 +167,13 @@ def _create_calendar_event(
 
 def _update_existing_event(existing: CalendarEvent, event_data: EventData) -> None:
     """Update an existing CalendarEvent with new data."""
+    rule = event_data.get("recurrence_rule")
+    if (
+        rule != existing.recurrence_rule
+        or event_data["start_time"] != existing.start_time
+        or (rule and existing.recurrence_expandable is None)
+    ):
+        existing.recurrence_expandable = recurrence_expandable(rule, event_data["start_time"])
     existing.event_title = event_data["title"]
     existing.start_time = event_data["start_time"]
     existing.end_time = event_data.get("end_time")
@@ -232,16 +250,21 @@ def fetch_caldav_events(
     calendar_ids: list[str],
     since: datetime,
     until: datetime,
-) -> list[EventData]:
+) -> FetchedEvents:
     """Fetch events from a CalDAV server within the specified date range.
 
     Uses CalDAV date_search to fetch only events in the range, which:
     - Limits memory usage for large calendars
     - Still returns recurring events with RRULE that overlap the range
+
+    A calendar or event that fails to load is skipped and makes the result
+    incomplete, as does finding no calendar to sync.
     """
     client = DAVClient(url=url, username=username, password=password)
     principal = client.principal()
     events: list[EventData] = []
+    calendars_read = 0
+    complete = True
 
     # caldav annotates calendars() as `list | Coroutine` to support sync+async
     # callers; we use the sync client so the runtime value is always a list.
@@ -255,20 +278,38 @@ def fetch_caldav_events(
             # Use date_search to fetch only events in the range
             # This returns recurring events with RRULE intact (not expanded)
             vevents = calendar.date_search(start=since, end=until, expand=False)
-            for vevent in vevents:
-                try:
-                    events.append(parse_caldav_event(vevent, calendar_name))
-                except Exception:
-                    logger.exception("Error parsing CalDAV event from calendar %s", calendar.id)
         except Exception:
-            logger.exception("Error fetching events from calendar %s", calendar.id)
+            logger.exception("Unable to fetch events from a CalDAV calendar")
+            complete = False
+            continue
 
-    return events
+        calendars_read += 1
+        for vevent in vevents:
+            try:
+                events.append(parse_caldav_event(vevent, calendar_name))
+            except Exception:
+                logger.exception("Unable to parse a CalDAV event")
+                complete = False
+
+    return FetchedEvents(events, complete and calendars_read > 0)
 
 
 # -----------------------------------------------------------------------------
 # Google Calendar parsing
 # -----------------------------------------------------------------------------
+
+
+def google_rrule(recurrence: list[str]) -> str | None:
+    """The first RRULE value among a Google event's recurrence lines.
+
+    The list may also hold EXRULE, RDATE and EXDATE lines, in any order.
+    """
+    rules = (
+        strip_rrule_prefix(line)
+        for line in recurrence
+        if line.upper().startswith("RRULE:")
+    )
+    return next(rules, None)
 
 
 def _parse_google_event(event: dict[str, Any], calendar_name: str) -> EventData:
@@ -303,9 +344,7 @@ def _parse_google_event(event: dict[str, Any], calendar_name: str) -> EventData:
                 meeting_link = ep.get("uri")
                 break
 
-    # Extract recurrence rule (first one if multiple)
-    recurrence = event.get("recurrence", [])
-    recurrence_rule = recurrence[0] if recurrence else None
+    recurrence_rule = google_rrule(event.get("recurrence", []))
 
     return EventData(
         title=event.get("summary", "Untitled Event"),
@@ -322,14 +361,30 @@ def _parse_google_event(event: dict[str, Any], calendar_name: str) -> EventData:
     )
 
 
+def list_google_calendar_ids(service: Any) -> list[str]:
+    """Ids of every calendar on the account's calendar list, across all pages."""
+    ids: list[str] = []
+    page_token = None
+    while True:
+        page = service.calendarList().list(pageToken=page_token).execute()
+        ids += [cal["id"] for cal in page.get("items", [])]
+        page_token = page.get("nextPageToken")
+        if not page_token:
+            return ids
+
+
 def _fetch_google_calendar_events(
     account: CalendarAccount,
     calendar_ids: list[str],
     since: datetime,
     until: datetime,
     session: DBSession,
-) -> list[EventData]:
-    """Fetch events from Google Calendar using existing GoogleAccount."""
+) -> FetchedEvents:
+    """Fetch events from Google Calendar using existing GoogleAccount.
+
+    Any failure raises, so the result is complete unless there was no
+    calendar to sync.
+    """
     google_account = account.google_account
     if not google_account:
         raise ValueError("Google Calendar account requires linked GoogleAccount")
@@ -346,8 +401,7 @@ def _fetch_google_calendar_events(
     calendars_to_sync = calendar_ids
     if not calendars_to_sync:
         try:
-            calendar_list = service.calendarList().list().execute()
-            calendars_to_sync = [cal["id"] for cal in calendar_list.get("items", [])]
+            calendars_to_sync = list_google_calendar_ids(service)
         except Exception:
             logger.exception("Unable to list calendars for account %s", account.id)
             raise
@@ -393,12 +447,49 @@ def _fetch_google_calendar_events(
             logger.exception("Unable to fetch Google events for account %s", account.id)
             raise
 
-    return events
+    return FetchedEvents(events, bool(calendars_to_sync))
 
 
 # -----------------------------------------------------------------------------
 # Celery tasks
 # -----------------------------------------------------------------------------
+
+
+# Events this close to the edge of the sync window may be missed or included by
+# the server depending on how it bounds the range, so they are never judged stale.
+STALE_EVENT_MARGIN = timedelta(days=1)
+
+
+def delete_stale_events(
+    session: DBSession,
+    account_id: int,
+    seen_external_ids: set[str],
+    since: datetime,
+    until: datetime,
+) -> int:
+    """Delete the account's events that a complete fetch of the window no longer
+    returned. Returns how many were deleted.
+
+    Only events starting inside the window (less the margin) with an
+    external id are considered; others cannot be matched against the fetch.
+    """
+    stale = (
+        session.query(CalendarEvent)
+        .filter(
+            CalendarEvent.calendar_account_id == account_id,
+            CalendarEvent.start_time >= since + STALE_EVENT_MARGIN,
+            CalendarEvent.start_time <= until - STALE_EVENT_MARGIN,
+            CalendarEvent.external_id.isnot(None),
+            CalendarEvent.external_id.notin_(seen_external_ids),
+        )
+        .all()
+    )
+    for event in stale:
+        clear_item_chunks(event, session)
+        session.delete(event)
+    if stale:
+        logger.info("Deleted %d stale events for calendar account %s", len(stale), account_id)
+    return len(stale)
 
 
 @app.task(name=SYNC_CALENDAR_EVENT)
@@ -483,7 +574,7 @@ def sync_calendar_account(account_id: int, force_full: bool = False) -> dict[str
                     session.commit()
                     return {"status": "error", "error": "CalDAV credentials incomplete"}
 
-                events = fetch_caldav_events(
+                fetched = fetch_caldav_events(
                     caldav_url,
                     caldav_username,
                     caldav_password,
@@ -492,7 +583,7 @@ def sync_calendar_account(account_id: int, force_full: bool = False) -> dict[str
                     until,
                 )
             elif calendar_type == "google":
-                events = _fetch_google_calendar_events(
+                fetched = _fetch_google_calendar_events(
                     account, calendar_ids, since, until, session
                 )
             else:
@@ -505,7 +596,7 @@ def sync_calendar_account(account_id: int, force_full: bool = False) -> dict[str
 
             # Queue sync tasks for each event
             task_ids = []
-            for event_data in events:
+            for event_data in fetched.events:
                 try:
                     serialized = _serialize_event_data(event_data)
                     task = sync_calendar_event.delay(account.id, serialized)  # type: ignore[attr-defined]
@@ -513,6 +604,15 @@ def sync_calendar_account(account_id: int, force_full: bool = False) -> dict[str
                 except Exception:
                     logger.exception("Unable to queue a calendar event for account %s", account.id)
                     raise
+
+            deleted = 0
+            if fetched.complete:
+                seen = {
+                    external_id
+                    for event_data in fetched.events
+                    if (external_id := event_data.get("external_id"))
+                }
+                deleted = delete_stale_events(session, account.id, seen, since, until)
 
             account.last_sync_at = now
             account.record_sync(None)
@@ -530,5 +630,6 @@ def sync_calendar_account(account_id: int, force_full: bool = False) -> dict[str
             "account_name": account.name,
             "calendar_type": calendar_type,
             "events_synced": len(task_ids),
+            "events_deleted": deleted,
             "task_ids": task_ids,
         }

@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from 'vitest'
 import { act, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { useState } from 'react'
+import { useState, type FormEvent } from 'react'
 import { createMemoryRouter, Link, MemoryRouter, RouterProvider, useSearchParams } from 'react-router-dom'
-import { Button, Combobox, ConfirmButton, CopyButton, Field, Fieldset, Input, List, Modal, NewTabLink, Row, SplitView, Tabs, useActionNotice, useUnsavedGuard } from './ui'
+import { Button, Combobox, ConfirmButton, CopyButton, Field, Fieldset, Input, List, Modal, MultiSelect, NewTabLink, Row, SplitView, Tabs, useActionNotice, useUnsavedGuard } from './ui'
 
 describe('ConfirmButton', () => {
   it('focuses Cancel, keeps Tab inside the dialog, and returns focus to the trigger', async () => {
@@ -21,6 +21,18 @@ describe('ConfirmButton', () => {
     await user.click(cancel)
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(trigger).toHaveFocus()
+  })
+
+  it('cancelling inside a form does not submit the form', async () => {
+    const user = userEvent.setup()
+    const onSubmit = vi.fn((e: FormEvent) => e.preventDefault())
+    render(<form onSubmit={onSubmit}><ConfirmButton confirm="Clear it?" onConfirm={vi.fn()} /></form>)
+    await user.click(screen.getByRole('button', { name: 'Delete' }))
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(onSubmit).not.toHaveBeenCalled()
   })
 })
 
@@ -370,5 +382,32 @@ describe('NewTabLink', () => {
     expect(link).toHaveAttribute('rel', 'noopener noreferrer')
     expect(link).toHaveAccessibleName('Docs (opens in a new tab)')
     expect(link.querySelector('svg[aria-hidden="true"]')).not.toBeNull()
+  })
+})
+
+describe('MultiSelect', () => {
+  const options = [{ value: '1', label: 'Ann Lee' }, { value: '2', label: 'Bob Ray' }]
+
+  it.each([
+    ['filters the options itself', undefined, ['Ann Lee']],
+    ['shows every option when the parent searches', vi.fn(), ['Ann Lee', 'Bob Ray']],
+  ])('%s', async (_, onQueryChange, shown) => {
+    const user = userEvent.setup()
+    render(<MultiSelect aria-label="People" options={options} value={[]} onChange={vi.fn()} onQueryChange={onQueryChange} />)
+
+    await user.type(screen.getByRole('combobox', { name: 'People' }), 'ann')
+
+    expect(screen.getAllByRole('option').map(o => o.textContent)).toEqual(shown)
+  })
+
+  it('tells the parent the query, and that it cleared on pick', async () => {
+    const user = userEvent.setup()
+    const onQueryChange = vi.fn()
+    render(<MultiSelect aria-label="People" options={options} value={[]} onChange={vi.fn()} onQueryChange={onQueryChange} />)
+
+    await user.type(screen.getByRole('combobox', { name: 'People' }), 'b')
+    await user.click(screen.getByRole('option', { name: 'Bob Ray' }))
+
+    expect(onQueryChange.mock.calls.map(c => c[0])).toEqual(['b', ''])
   })
 })

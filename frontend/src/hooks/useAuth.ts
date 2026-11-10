@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { resetUserTimezone, setUserTimezone } from '@/utils/timezones'
+import { deleteCookie, getCookie, setCookie } from '@/utils/cookies'
 
 export const SERVER_URL = import.meta.env.VITE_SERVER_URL || ''
 export const SESSION_COOKIE_NAME = import.meta.env.VITE_SESSION_COOKIE_NAME || 'session_id'
@@ -12,24 +13,6 @@ export const CLIENT_ID_KEY = `oauth_client_id:${REDIRECT_URI}`
 export const LEGACY_CLIENT_ID_KEY = 'oauth_client_id'
 
 const AUTH_LOST_EVENT = 'memory:auth-lost'
-
-// Cookie utilities
-const getCookie = (name: string) => {
-  const value = `; ${document.cookie}`
-  const parts = value.split(`; ${name}=`)
-  if (parts.length === 2) return parts[1].split(';')[0]
-  return null
-}
-
-const setCookie = (name: string, value: string, days = 30) => {
-  const expires = new Date()
-  expires.setTime(expires.getTime() + days * 24 * 60 * 60 * 1000)
-  document.cookie = `${name}=${value};expires=${expires.toUTCString()};path=/;SameSite=Lax`
-}
-
-const deleteCookie = (name: string) => {
-  document.cookie = `${name}=;expires=Thu, 01 Jan 1970 00:00:01 GMT;path=/`
-}
 
 /** Signs this browser in with a session token, the way an OAuth code exchange does. */
 export const storeSession = (accessToken: string) => {
@@ -117,6 +100,11 @@ const refreshOnce = (staleAccessToken: string) => {
   return refreshInFlight
 }
 
+export interface PersonRef {
+  id: number
+  display_name: string
+}
+
 export interface AuthUser {
   id: number
   name: string
@@ -125,6 +113,8 @@ export interface AuthUser {
   scopes: string[]
   timezone: string
   modules: string[]
+  // The Person linked to this user.
+  person: PersonRef | null
 }
 
 export const useAuth = () => {
@@ -195,6 +185,7 @@ export const useAuth = () => {
       scopes: userData.scopes || [],
       timezone: userData.timezone,
       modules: userData.modules || [],
+      person: userData.person ?? null,
     })
     setIsAuthenticated(true)
     setIsLoading(false)

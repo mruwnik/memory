@@ -10,7 +10,12 @@ from fastmcp import FastMCP
 from memory.api.MCP.access import get_mcp_current_user, get_project_roles_by_user_id
 from memory.api.MCP.visibility import require_scopes, visible_when
 from memory.common import paths, settings
-from memory.common.access_control import has_admin_scope, user_can_access
+from memory.common.access_control import (
+    has_admin_scope,
+    user_can_access,
+    user_can_delete,
+    user_can_edit,
+)
 from memory.common.celery_app import SYNC_REPORT
 from memory.common.celery_app import app as celery_app
 from memory.common.content_processing import clear_item_chunks
@@ -46,6 +51,8 @@ async def upsert(
         tags: Organization tags for filtering and discovery
         filename: Stable filename for upsert (e.g. "my_report.html").
                   If omitted, one is generated from the content hash + title.
+                  A report already stored under this filename can be
+                  overwritten only by its creator or an admin.
         allow_scripts: Whether to allow JavaScript in the report (default False, admin only).
                   Scripts run sandboxed in an opaque origin: they can't call this app's API
                   or use cookies/localStorage, and must be inline or fetch from allowed_connect_urls.
@@ -110,6 +117,8 @@ async def upsert(
             project_roles = get_project_roles_by_user_id(user_id)
             if not user_can_access(user, existing, project_roles):
                 return {"error": "Cannot overwrite this report - access denied"}
+            if not user_can_edit(user, existing):
+                return {"error": "Only the report's creator or an admin can overwrite it"}
             existing_report_id = existing.id
 
             # Update metadata directly for existing reports (only if provided)
@@ -151,6 +160,7 @@ async def upsert(
 async def delete(report_id: int) -> dict:
     """
     Delete a report and its associated data (chunks, vectors, file).
+    Only the report's creator or an admin can delete it.
 
     Args:
         report_id: ID of the report to delete
@@ -172,6 +182,8 @@ async def delete(report_id: int) -> dict:
         )
         if not user_can_access(user, report, project_roles):
             return {"error": "Report not found"}
+        if not user_can_delete(user, report):
+            return {"error": "Only the report's creator or an admin can delete it"}
 
         try:
             clear_item_chunks(report, session)

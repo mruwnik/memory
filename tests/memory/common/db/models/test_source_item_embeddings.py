@@ -142,7 +142,7 @@ def test_base_source_item_mixed_embeddings(mock_voyage_client):
 
 @pytest.mark.skip(reason="TODO: Update expected chunks after sentence boundary chunking changes")
 def test_mail_message_with_attachments_embeddings(mock_voyage_client):
-    email = parse_email_message(SAMPLE_EMAIL, "123")
+    email = parse_email_message(SAMPLE_EMAIL)
     item = MailMessage(
         id=1,
         content=SAMPLE_EMAIL,

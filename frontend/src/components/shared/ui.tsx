@@ -551,11 +551,13 @@ interface MultiSelectProps {
   'aria-invalid'?: boolean
   /** Typed text that matches no option can be added as a value, as for free-form tags. */
   creatable?: boolean
+  /** For async search: options are then shown unfiltered (the parent filters). */
+  onQueryChange?: (query: string) => void
   className?: string
 }
 
 /** Searchable multi-select: picked values show as removable chips, typing filters the remaining options. */
-export const MultiSelect = ({ options, value, onChange, id, placeholder, creatable, className, ...props }: MultiSelectProps) => {
+export const MultiSelect = ({ options, value, onChange, id, placeholder, creatable, onQueryChange, className, ...props }: MultiSelectProps) => {
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
   const [active, setActive] = useState(0)
@@ -574,7 +576,7 @@ export const MultiSelect = ({ options, value, onChange, id, placeholder, creatab
   const typed = query.trim()
   const q = typed.toLowerCase()
   const matches: MultiSelectOption[] = opts.filter(o =>
-    !value.includes(o.value) && [o.value, o.label, o.description].some(s => s?.toLowerCase().includes(q)))
+    !value.includes(o.value) && (!!onQueryChange || [o.value, o.label, o.description].some(s => s?.toLowerCase().includes(q))))
   const canCreate = creatable && typed && !value.includes(typed) && !opts.some(o => o.value.toLowerCase() === q)
   const choices = canCreate ? [...matches, { value: typed, label: `Add "${typed}"` }] : matches
   const current = Math.min(active, choices.length - 1)
@@ -582,6 +584,7 @@ export const MultiSelect = ({ options, value, onChange, id, placeholder, creatab
   const add = (v: string) => {
     onChange([...value, v])
     setQuery('')
+    onQueryChange?.('')
     setActive(0)
   }
   const remove = (v: string) => onChange(value.filter(x => x !== v))
@@ -619,7 +622,7 @@ export const MultiSelect = ({ options, value, onChange, id, placeholder, creatab
           aria-autocomplete="list" aria-activedescendant={open && choices[current] ? `${listId}-${current}` : undefined}
           className="flex-1 min-w-[8rem] bg-transparent px-1 py-0.5 outline-none placeholder:text-slate-500"
           value={query} placeholder={value.length ? undefined : placeholder}
-          onChange={e => { setQuery(e.target.value); setOpen(true); setActive(0) }}
+          onChange={e => { setQuery(e.target.value); setOpen(true); setActive(0); onQueryChange?.(e.target.value) }}
           onFocus={() => setOpen(true)} onKeyDown={onKeyDown} />
       </div>
       {open && (
@@ -1139,7 +1142,7 @@ export const ConfirmDialog = ({ message, onConfirm, onCancel, title, confirmLabe
         {title && <h2 id={titleId} className="text-lg font-semibold text-slate-900 mb-2">{title}</h2>}
         <p id={title ? undefined : titleId} className="text-slate-800 mb-4">{message}</p>
         <div className="flex justify-end gap-2">
-          <button ref={cancelRef} className={buttonClass('secondary')} onClick={onCancel}>{cancelLabel}</button>
+          <button ref={cancelRef} type="button" className={buttonClass('secondary')} onClick={onCancel}>{cancelLabel}</button>
           <Button variant="dangerSolid" onClick={onConfirm}>{confirmLabel}</Button>
         </div>
       </div>

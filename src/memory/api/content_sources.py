@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session as DBSession
 
-from memory.api.auth import require_rest_access, request_api_key
+from memory.api.auth import assert_project_membership, require_rest_access, request_api_key
 from memory.common.access_control import (
     apply_access_filter_to_query,
     build_access_filter,
@@ -18,6 +18,8 @@ from memory.common.access_control import (
     get_user_project_roles,
     has_admin_scope,
     user_can_access,
+    user_can_delete,
+    user_can_edit,
 )
 from memory.common.db.connection import get_session
 from memory.common.db.models import ForumComment, ForumPost, ForumSyncConfig, User, JobType
@@ -177,6 +179,11 @@ def delete_photo(
     project_roles = get_user_project_roles(db, user)
     if not user_can_access(user, photo, project_roles):
         raise HTTPException(status_code=404, detail="Photo not found")
+    if not user_can_delete(user, photo):
+        raise HTTPException(
+            status_code=403,
+            detail="Only the photo's creator or an admin can delete it",
+        )
 
     # Delete chunks from Qdrant and PostgreSQL
     try:
@@ -420,6 +427,7 @@ async def upload_report(
     # rather than 403 — keeps the upload flow usable.
     if not is_admin:
         allowed_connect_urls = ""
+    assert_project_membership(db, user, project_id)
 
     settings.REPORT_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -441,26 +449,25 @@ async def upload_report(
         paths.to_db_filename(settings.REPORT_STORAGE_DIR) + f"/{content_hash}_"
     )
 
-    # Check for existing report with same content hash (prefix match) to catch
-    # duplicate content regardless of original filename
-    # autoescape=True for defense-in-depth and consistency with notes.py:145.
-    # `content_hash` is hex-only so no LIKE metacharacter concern today, but
-    # if the prefix construction ever changes to include user-supplied bytes
-    # this prevents `%`/`_` from broadening the match.
-    existing = (
+    # An upload overwrites the report stored under the same filename; one
+    # with the same content under another name is a duplicate the worker
+    # skips. autoescape=True keeps `%`/`_` literal should the prefix ever
+    # include user-supplied bytes (content_hash is hex-only today).
+    target = db.query(Report).filter(Report.filename == db_filename).one_or_none()
+    duplicate = target or (
         db.query(Report)
         .filter(Report.filename.startswith(db_filename_prefix, autoescape=True))
         .first()
     )
-    if not existing:
-        # Also check exact filename match for update-in-place
-        existing = (
-            db.query(Report).filter(Report.filename == db_filename).one_or_none()
-        )
-    if existing:
-        project_roles = get_user_project_roles(db, user) if not has_admin_scope(user) else {}
-        if not user_can_access(user, existing, project_roles):
+    if duplicate:
+        project_roles = get_user_project_roles(db, user) if not is_admin else {}
+        if not user_can_access(user, duplicate, project_roles):
             raise HTTPException(status_code=403, detail="Cannot overwrite this report")
+    if target and not user_can_edit(user, target):
+        raise HTTPException(
+            status_code=403,
+            detail="Only the report's creator or an admin can overwrite it",
+        )
 
     file_path.write_bytes(content)
     logger.info(f"Saved report to {file_path}")
@@ -484,6 +491,7 @@ async def upload_report(
                 "report_format": report_format,
                 "project_id": project_id,
                 "creator_id": user.id,
+                "existing_report_id": target.id if target else None,
                 "allow_scripts": allow_scripts,
                 "allowed_connect_urls": url_list,
             },

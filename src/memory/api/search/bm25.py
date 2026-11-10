@@ -9,27 +9,23 @@ import asyncio
 import logging
 import re
 
-from sqlalchemy import func, text, or_, exists, select
+from sqlalchemy import func, text
 
 from memory.api.search.embeddings import require_access_filter
 from memory.api.search.filters import (
     FILTER_REGISTRY,
     SPECIAL_FILTER_KEYS,
-    account_match_sql,
-    beeper_match_sql,
-    apply_registry_filters_sql,
+    apply_content_filters_sql,
     reject_unknown_filter_keys,
 )
 from memory.api.search.types import SearchFilters
 from memory.common import extract
 from memory.common.access_control import apply_access_filter_to_query
 from memory.common.db.connection import make_session
-from memory.common.db.models import Chunk, ConfidenceScore, SourceItem
-from memory.common.db.models.source_item import source_item_people
+from memory.common.db.models import Chunk, SourceItem
 
 # BM25 accepts every logical filter: the declarative registry plus the
-# hand-coded special keys (access/person/source_ids/confidence/observation/
-# created_at). Anything else is a programming error.
+# hand-coded special keys (access/person/source_ids/confidence/created_at). Anything else is a programming error.
 BM25_ALLOWED_FILTER_KEYS = set(FILTER_REGISTRY) | SPECIAL_FILTER_KEYS
 
 logger = logging.getLogger(__name__)
@@ -135,76 +131,18 @@ def run_bm25_query(
             Chunk.search_vector.op("@@")(func.to_tsquery("english", tsquery)),
         )
 
-        access_filter = filters.get("access_filter")
-        person_id = filters.get("person_id")
-        account = filters.get("account")
-
         # SourceItem is joined unconditionally. The hidden-tombstone exclusion in
         # apply_access_filter_to_query filters on SourceItem.sensitivity and must
         # apply for EVERYONE — including the admin / access_filter=None path,
         # mirroring the always-on Qdrant must_not — so the join can't be gated on
-        # the other filters. The access/person/account/registry filters below
-        # also rely on it. (Joining always also removes the old min_size=0
-        # uncorrelated-cross-join hazard: the join is never conditionally skipped
-        # while a registry filter still emits a SourceItem predicate.)
+        # the other filters. The content filters below also rely on it.
         items_query = items_query.join(SourceItem, SourceItem.id == Chunk.source_id)
 
         # Apply access control. Called even when access_filter is None so the
         # hidden-tombstone exclusion runs on the admin path too — the helper
         # short-circuits to "hidden filter only" for None.
-        items_query = apply_access_filter_to_query(items_query, access_filter)
-
-        # Declarative content-metadata filters (tags/size/mail/blog/doc). The
-        # joins are 1:1 on id so rank/order is unaffected. SourceItem is
-        # already joined above; pass it as pre-joined so registry helper only
-        # adds the subclass joins.
-        items_query = apply_registry_filters_sql(
-            items_query, filters, joined={SourceItem}
-        )
-
-        # Apply person filter (requires source join)
-        # Include items where: no people associations exist OR person is associated
-        #
-        # This filtering logic now matches the Qdrant person filter in embeddings.py:
-        # both filter by person associations via the source_item_people junction table.
-        # Items without any person associations are always included (not filtered out).
-        if person_id is not None:
-            person_associated = exists(
-                select(source_item_people.c.source_item_id)
-                .where(source_item_people.c.source_item_id == SourceItem.id)
-                .where(source_item_people.c.person_id == person_id)
-            )
-            no_people = ~exists(
-                select(source_item_people.c.source_item_id)
-                .where(source_item_people.c.source_item_id == SourceItem.id)
-            )
-            items_query = items_query.filter(or_(no_people, person_associated))
-
-        # Mail account filter: SourceItem is joined above, so the SourceItem.id
-        # subquery correlates correctly.
-        if account:
-            items_query = items_query.filter(account_match_sql(account))
-        if (beeper_clause := beeper_match_sql(filters)) is not None:
-            items_query = items_query.filter(beeper_clause)
-
-        if source_ids := filters.get("source_ids"):
-            items_query = items_query.filter(Chunk.source_id.in_(source_ids))
-
-        # Observation type filter - restricts to specific collection types
-        if observation_types := filters.get("observation_types"):
-            items_query = items_query.filter(
-                Chunk.collection_name.in_(observation_types)
-            )
-
-        # Add confidence filtering if specified
-        if min_confidences := filters.get("min_confidences"):
-            for confidence_type, min_score in min_confidences.items():
-                items_query = items_query.join(
-                    ConfidenceScore,
-                    (ConfidenceScore.source_item_id == Chunk.source_id)
-                    & (ConfidenceScore.confidence_type == confidence_type)
-                    & (ConfidenceScore.score >= min_score),
-                )
+        items_query = apply_access_filter_to_query(items_query, filters.get("access_filter"))
+        items_query = apply_content_filters_sql(items_query, filters)
 
         # Order by rank descending and limit results
         items_query = items_query.order_by(text("rank DESC")).limit(limit)

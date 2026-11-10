@@ -278,7 +278,7 @@ def test_parse_simple_email():
         message_id=msg_id,
     )
 
-    result = parse_email_message(msg.as_string(), msg_id)
+    result = parse_email_message(msg.as_string())
 
     assert result == {
         "message_id": msg_id,
@@ -318,7 +318,7 @@ def test_parse_simple_email():
 def test_parse_email_decodes_mime_headers(raw_from, raw_subject, sender, subject, address):
     raw = f"From: {raw_from}\nTo: r@example.com\nSubject: {raw_subject}\nMessage-ID: <m@x>\n\nbody"
 
-    result = parse_email_message(raw, "1")
+    result = parse_email_message(raw)
 
     assert (result["sender"], result["subject"]) == (sender, subject)
     assert mail_addresses([result["sender"]]) == [address]
@@ -347,7 +347,7 @@ def test_parse_email_hash_uses_raw_headers():
     raw_from, raw_subject = "=?UTF-8?Q?Wal=C4=99cik?= <k@far.ai>", "=?UTF-8?Q?Cze=C5=9B=C4=87?="
     raw = f"From: {raw_from}\nSubject: {raw_subject}\nMessage-ID: <m@x>\n\nbody"
 
-    result = parse_email_message(raw, "1")
+    result = parse_email_message(raw)
 
     assert result["hash"] == compute_message_hash("<m@x>", raw_subject, raw_from, "body")
 
@@ -357,7 +357,25 @@ def test_parse_email_with_attachments(with_attachments, filenames):
     attachments = [{"filename": "test.txt", "content": b"attachment content"}]
     msg = create_email_message(attachments=attachments)
 
-    result = parse_email_message(msg.as_string(), "123", with_attachments=with_attachments)
+    result = parse_email_message(msg.as_string(), with_attachments=with_attachments)
 
     assert [a["filename"] for a in result["attachments"]] == filenames
-    assert result["body"] == parse_email_message(msg.as_string(), "123")["body"]
+    assert result["body"] == parse_email_message(msg.as_string())["body"]
+
+
+NO_ID_EMAIL = "From: a@example.com\nTo: b@example.com\nSubject: {subject}\n\nbody"
+
+
+@pytest.mark.parametrize(
+    "first, second, same",
+    [
+        (NO_ID_EMAIL.format(subject="one"), NO_ID_EMAIL.format(subject="two"), False),
+        (NO_ID_EMAIL.format(subject="one"), NO_ID_EMAIL.format(subject="one"), True),
+    ],
+)
+def test_parse_email_generates_message_id_from_content(first, second, same):
+    first_id = parse_email_message(first)["message_id"]
+    second_id = parse_email_message(second)["message_id"]
+
+    assert first_id.startswith("generated-")
+    assert (first_id == second_id) is same

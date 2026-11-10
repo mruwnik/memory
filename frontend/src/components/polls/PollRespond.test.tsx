@@ -6,6 +6,7 @@ import {
   fireEvent,
   userEvent,
   mockFetch,
+  mockFetchRoutes,
   mockResponse,
 } from '@/test/utils'
 import PollRespond from './PollRespond'
@@ -174,7 +175,7 @@ describe('PollRespond - open poll form', () => {
     await user.click(ifNeeded)
     // After selecting "If needed", painting a slot marks it at level 2.
     const cell = screen.getByLabelText(/9:00 AM on .*: not selected/)
-    fireEvent.mouseDown(cell)
+    fireEvent.pointerDown(cell, { pointerType: 'mouse', button: 0 })
     expect(
       await screen.findByLabelText(/9:00 AM on .*: selected as if needed/),
     ).toBeInTheDocument()
@@ -185,7 +186,7 @@ describe('PollRespond - open poll form', () => {
     renderRespond()
     await screen.findByRole('heading', { name: 'Respond Poll' })
     const cell = screen.getByLabelText(/9:00 AM on .*: not selected/)
-    fireEvent.mouseDown(cell)
+    fireEvent.pointerDown(cell, { pointerType: 'mouse', button: 0 })
     expect(
       await screen.findByLabelText(/9:00 AM on .*: selected as available/),
     ).toBeInTheDocument()
@@ -198,7 +199,7 @@ describe('PollRespond - submission', () => {
     const { user } = renderRespond()
     await user.type(await screen.findByLabelText(/Your name/), 'Bob')
     const cell = screen.getByLabelText(/9:00 AM on .*: not selected/)
-    fireEvent.mouseDown(cell)
+    fireEvent.pointerDown(cell, { pointerType: 'mouse', button: 0 })
     await user.click(screen.getByRole('button', { name: 'Submit availability' }))
     expect(await screen.findByText('Response submitted')).toBeInTheDocument()
     expect((screen.getByRole('textbox', { name: 'Edit link' }) as HTMLInputElement).value).toMatch(/\?edit=tok-123$/)
@@ -216,7 +217,7 @@ describe('PollRespond - submission', () => {
     expect(await screen.findByText('save failed')).toBeInTheDocument()
   })
 
-  it('returns to the form when clicking Edit Response from the success screen', async () => {
+  it('returns to the form in edit mode when clicking Edit Response from the success screen', async () => {
     mockRespond()
     const { user } = renderRespond()
     await user.type(await screen.findByLabelText(/Your name/), 'Dave')
@@ -224,8 +225,42 @@ describe('PollRespond - submission', () => {
     await screen.findByText('Response submitted')
     await user.click(screen.getByRole('button', { name: 'Edit response' }))
     expect(
-      await screen.findByRole('button', { name: 'Submit availability' }),
+      await screen.findByRole('button', { name: 'Update availability' }),
     ).toBeInTheDocument()
+  })
+
+  it('saving again after Edit Response updates the new response instead of creating another', async () => {
+    const fetchMock = mockRespond()
+    const { user } = renderRespond()
+    await user.type(await screen.findByLabelText(/Your name/), 'Dave')
+    await user.click(screen.getByRole('button', { name: 'Submit availability' }))
+    await user.click(await screen.findByRole('button', { name: 'Edit response' }))
+    await user.click(await screen.findByRole('button', { name: 'Update availability' }))
+    await screen.findByText('Response submitted')
+
+    const writes = fetchMock.mock.calls
+      .filter(([, init]) => ['POST', 'PUT'].includes((init?.method || 'GET').toUpperCase()))
+      .map(([input, init]) => `${init?.method} ${new URL(input.toString(), 'http://x').pathname}`)
+    expect(writes).toEqual(['POST /api/polls/respond/respond-me', 'PUT /api/polls/respond/respond-me/5'])
+  })
+
+  it('does not report a failed results refresh after a save as a save error', async () => {
+    mockRespond()
+    const { user } = renderRespond()
+    await user.type(await screen.findByLabelText(/Your name/), 'Erin')
+    const headers = { 'content-type': 'application/json' }
+    mockFetchRoutes({
+      '/results': { status: 500, json: { detail: 'results down' }, headers },
+      __default: { json: { response_id: 5, edit_token: 'tok-123', status: 'created' }, headers },
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await user.click(screen.getByRole('button', { name: 'Submit availability' }))
+    await screen.findByText('Response submitted')
+    await user.click(screen.getByRole('button', { name: 'Edit response' }))
+
+    expect(await screen.findByLabelText(/Your name/)).toHaveValue('Erin')
+    expect(screen.queryByText('results down')).not.toBeInTheDocument()
+    expect(warn).toHaveBeenCalled()
   })
 })
 

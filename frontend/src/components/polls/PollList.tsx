@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { usePolls } from '../../hooks/usePolls'
 import type { Poll, PollStatus } from '../../hooks/usePolls'
+import { useNewestRequest } from '@/hooks/useNewestRequest'
 import { formatShortDate } from '../../utils/timezones'
 import { Button, ButtonLink, ConfirmButton, EmptyState, List, LoadingState, Notice, Page, Row, Select, Toolbar, useActionNotice, copyText } from '@/components/shared/ui'
 import { PollStatusBadge } from './PollStatusBadge'
@@ -15,18 +16,23 @@ export const PollList: React.FC = () => {
   const [actionLoading, setActionLoading] = useState<number | null>(null)
   const { run, notice } = useActionNotice()
 
+  const beginLoad = useNewestRequest()
+
   const loadPolls = useCallback(async () => {
+    const isStale = beginLoad()
     setLoading(true)
     setError(null)
     try {
       const data = await listPolls(statusFilter || undefined)
+      if (isStale()) return
       setPolls(data)
     } catch (err) {
+      if (isStale()) return
       setError(err instanceof Error ? err.message : 'Failed to load polls')
     } finally {
-      setLoading(false)
+      if (!isStale()) setLoading(false)
     }
-  }, [listPolls, statusFilter])
+  }, [listPolls, statusFilter, beginLoad])
 
   useEffect(() => {
     loadPolls()

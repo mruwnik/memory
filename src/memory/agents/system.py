@@ -127,7 +127,8 @@ MEETING_EXTRACT = SystemAgent(
         "1. A concise 2-3 sentence summary of the meeting's main purpose and outcomes\n"
         "2. Key discussion points, decisions made, and important information (as bullet points)\n"
         "3. Action items - tasks that were assigned or need to be done, with assignee, due date, "
-        "and priority if mentioned\n\n"
+        "and priority if mentioned. Give each assignee's full name as it appears in the attendee "
+        "list when they are on it\n\n"
         "The message starts with the date the meeting was held. Resolve relative dates "
         '("tomorrow", "Friday", "same time next week") against it. Leave due_date null '
         "unless the transcript states or clearly implies one; never guess a date."

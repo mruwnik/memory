@@ -51,6 +51,11 @@ describe('ToolBreakdownChart', () => {
     expect(screen.queryByTestId('chart')).not.toBeInTheDocument()
   })
 
+  it('names the metric picker for screen readers', () => {
+    render(<ToolBreakdownChart data={makeResponse([makeTool({ tool_name: 'A' })])} />)
+    expect(screen.getByRole('combobox', { name: 'Chart metric' })).toBeInTheDocument()
+  })
+
   it('sorts tools by total tokens descending by default', () => {
     const data = makeResponse([
       makeTool({ tool_name: 'Low', total_tokens: 10 }),
@@ -91,7 +96,7 @@ describe('ToolBreakdownChart', () => {
     const { user } = renderWithUser(<ToolBreakdownChart data={data} />)
     // Default total ordering: A before B.
     expect(readData().map((d: { fullName: string }) => d.fullName)).toEqual(['A', 'B'])
-    await user.selectOptions(screen.getByRole('combobox'), 'median')
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Chart metric' }), 'median')
     // Median ordering: B (500) before A (5).
     const sorted = readData()
     expect(sorted.map((d: { fullName: string }) => d.fullName)).toEqual(['B', 'A'])
@@ -108,7 +113,7 @@ describe('ToolBreakdownChart', () => {
       }),
     ])
     const { user } = renderWithUser(<ToolBreakdownChart data={data} />)
-    await user.selectOptions(screen.getByRole('combobox'), 'p90')
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Chart metric' }), 'p90')
     const sorted = readData()
     expect(sorted[0].fullName).toBe('WithStats')
     expect(sorted.find((d: { fullName: string }) => d.fullName === 'NoStats').value).toBe(0)
