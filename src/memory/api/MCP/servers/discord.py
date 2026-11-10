@@ -208,14 +208,17 @@ async def send_to_channel(
     target = str(channel.id)
     senders = channel_senders(session, channel)
 
+    is_dm = channel.server_id is None
     if bot_id is not None:
         sender = resolve_bot(session, bot_id)
         if sender not in senders:
-            raise ValueError(f"Bot {bot_id} is not in this channel's server")
+            where = "the bot of this DM" if is_dm else "in this channel's server"
+            raise ValueError(f"Bot {bot_id} is not {where}")
     elif senders:
         sender = senders[0]
     else:
-        raise ValueError("None of your Discord bots is in this channel's server")
+        where = "holds this DM" if is_dm else "is in this channel's server"
+        raise ValueError(f"None of your Discord bots {where}")
 
     success = await asyncio.to_thread(
         discord_client.send_to_channel, sender, target, message
