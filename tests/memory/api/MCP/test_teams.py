@@ -10,10 +10,8 @@ from memory.common.db.models import (
     HumanUser,
     UserSession,
 )
-from memory.common.db.models.discord import DiscordServer
 from memory.common.db.models.sources import Project, team_members, project_teams
 from memory.common.db import connection as db_connection
-from memory.common import discord as discord_client
 from memory.api.MCP.servers.teams import (
     fetch,
     list_all,
@@ -340,42 +338,6 @@ def test_make_slug(name, expected_slug):
     """Test make_slug generates correct URL-safe slugs."""
 
     assert make_slug(name) == expected_slug
-
-
-def test_resolve_guild_with_int(db_session):
-    """Test resolve_guild returns int directly."""
-
-    assert discord_client.resolve_guild(123456789, db_session) == 123456789
-
-
-def test_resolve_guild_with_numeric_string(db_session):
-    """Test resolve_guild parses numeric string as ID."""
-
-    assert discord_client.resolve_guild("123456789", db_session) == 123456789
-
-
-def test_resolve_guild_with_name(db_session):
-    """Test resolve_guild looks up server by name."""
-
-    # Create a Discord server
-    server = DiscordServer(id=987654321, name="Test Server")
-    db_session.add(server)
-    db_session.commit()
-
-    assert discord_client.resolve_guild("Test Server", db_session) == 987654321
-
-
-def test_resolve_guild_not_found(db_session):
-    """Test resolve_guild raises for unknown server name."""
-
-    with pytest.raises(ValueError, match="Discord server 'Unknown Server' not found"):
-        discord_client.resolve_guild("Unknown Server", db_session)
-
-
-def test_resolve_guild_none(db_session):
-    """Test resolve_guild returns None for None input."""
-
-    assert discord_client.resolve_guild(None, db_session) is None
 
 
 # =============================================================================

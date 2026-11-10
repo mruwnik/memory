@@ -8,17 +8,13 @@ its real-time events. The collector's API server reports gateway health.
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import requests
 
-if TYPE_CHECKING:
-    from sqlalchemy.orm import Session
-    from sqlalchemy.orm.scoping import scoped_session
-
 from memory.common import settings
 from memory.common.db.connection import make_session
-from memory.common.db.models import DiscordBot, DiscordChannel, DiscordServer, DiscordUser
+from memory.common.db.models import DiscordBot, DiscordChannel, DiscordUser
 from memory.discord.rest import BotAccess, DiscordAPIError, DiscordRest, bot_access
 
 logger = logging.getLogger(__name__)
@@ -130,45 +126,6 @@ def refresh_discord_metadata(bot_id: int) -> dict[str, Any] | None:
     except requests.RequestException as e:
         logger.error(f"Failed to refresh Discord metadata: {e}")
         return None
-
-
-# =============================================================================
-# Resolution Helpers
-# =============================================================================
-
-
-def resolve_guild(guild: int | str | None, session: "Session | scoped_session[Session] | None" = None) -> int | None:
-    """Resolve guild ID from either numeric ID or server name.
-
-    Args:
-        guild: Numeric guild ID (int or numeric string) or server name, or None
-        session: Database session (required only for name lookups)
-
-    Returns:
-        Resolved guild ID as int, or None if guild is None
-
-    Raises:
-        ValueError: If guild is a name string but session is None, or name not found
-    """
-    if guild is None:
-        return None
-
-    # Try as numeric first
-    if isinstance(guild, int):
-        return guild
-    try:
-        return int(guild)
-    except ValueError:
-        pass
-
-    # It's a name string - need database lookup
-    if session is None:
-        raise ValueError("Database session required to resolve guild by name")
-
-    server = session.query(DiscordServer).filter(DiscordServer.name == guild).first()
-    if not server:
-        raise ValueError(f"Discord server '{guild}' not found")
-    return server.id
 
 
 # Convenience functions

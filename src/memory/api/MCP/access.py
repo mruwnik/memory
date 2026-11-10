@@ -135,21 +135,6 @@ def fetch_accessible_source_items(
     return query.all()
 
 
-def build_user_access_filter(user: "User") -> AccessFilter | None:
-    """
-    Build an access filter for a user based on their project collaborations.
-
-    Args:
-        user: User object (must have id and scopes attributes)
-
-    Returns:
-        AccessFilter for search queries, or None if user is superadmin
-    """
-    with make_session() as db:
-        project_roles = get_user_project_roles(db, user)
-    return build_access_filter(user, project_roles)
-
-
 def fetch_user_by_token(
     session: "Session | scoped_session[Session]", token: str
 ) -> User | None:
