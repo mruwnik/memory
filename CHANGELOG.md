@@ -36,6 +36,7 @@ a new, empty `## Unreleased` above it.
 - Browse what has been ingested: each content type on the Ingestion overview opens its items, newest first, a page at a time, and the overview page can show each type's latest five items inline. The list can be narrowed to one connection (email account, Discord or Slack channel, Beeper chat, feed, GitHub repo, Google Drive folder, calendar or transcript account, book), filtered by indexing status, and searched by title, subject, sender, author or filename (not the item text). Only items you can access are listed.
 - MCP `core_list_items` and `core_count_items` take `item_types`, `embed_statuses` (default still indexed items only), `contains` and `connection_id`. List rows carry `type` and `embed_status`; `include_total=false` skips the total count; pages sort by id within equal timestamps so they never overlap. `core_count_items` adds `by_type` and, for types that share a kind of connection, `by_connection`.
 
+- Discord `send_message` to a channel now posts only with one of your own bots in that channel's server (by default the server's owning bot if it is yours, else another of yours there), and accepts any of your bots that has joined the server. It no longer falls back to another user's bot; with none of yours in the server it says so.
 ### Required env vars
 None
 
