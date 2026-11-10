@@ -160,6 +160,7 @@ BY_TYPE: dict[type[SourceItem], dict[str, Getter]] = {
         "thread_id": lambda i: i.thread_id,
         "parent_id": discord_parent_id,
         "author_id": lambda i: i.author_id,
+        "attachments": lambda i: i.attachment_files,
     },
     Meeting: {
         "date": lambda i: i.meeting_date,
@@ -189,7 +190,7 @@ LONG = frozenset({"content", "summary", "notes", "diff_summary", "files", "revie
 # Anyone can set these, display names included.
 UNTRUSTED = LONG | {
     "title", "subject", "labels", "action_items", "head_ref", "author", "from", "to", "checks",
-    "attendees", "message_id",
+    "attendees", "message_id", "attachments",
 }
 # Shown in the default rendering's header line instead.
 HEADER = frozenset({"id", "type", "changes"})

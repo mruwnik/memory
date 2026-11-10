@@ -13,6 +13,7 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.exc import IntegrityError
 
 from memory.agents.activity import run_outcome, subscription_activity
+from memory.agents.caps import subscription_limit
 from memory.agents.clock import (
     CHANNELS,
     CRON,
@@ -38,6 +39,7 @@ from memory.agents.subscriptions import (
     IngestConfig,
     PerItem,
     accessible_ids,
+    backlog_limit,
     dry_run,
     redispatch,
     resume_from_trip,
@@ -266,6 +268,11 @@ def check_combination(kind: str, handler: dict[str, Any], shaping: dict[str, Any
     for field in ("max_per_hour", "backlog_max"):
         if shaping[field] is not None and shaping[field] < 0:
             raise ValueError(f"{field} must be at least 0")
+    if (shaping["max_per_hour"] or 0) > settings.AGENT_MAX_DELIVERIES_PER_HOUR:
+        raise ValueError(
+            f"max_per_hour can be at most {settings.AGENT_MAX_DELIVERIES_PER_HOUR} "
+            "(AGENT_MAX_DELIVERIES_PER_HOUR)"
+        )
 
 
 def checked_raw(db: DBSession, user_id: int, config: dict[str, Any]) -> dict[str, Any]:
@@ -308,6 +315,16 @@ def merged_source(stored: dict[str, Any], given: dict[str, Any], handler: dict[s
     if "agent" not in handler and "input" not in given:
         merged.pop("input", None)
     return merged
+
+
+def shown(subscription: Subscription) -> dict[str, Any]:
+    """The subscription as the tools return it; a filter or raw one adds `limits`, its own
+    caps in effect: max_per_hour (deliveries an hour) and backlog_max (null: no limit)."""
+    listed = subscription.serialize()
+    if subscription.kind not in READING_KINDS:
+        return listed
+    limits = {"max_per_hour": subscription_limit(subscription).runs, "backlog_max": backlog_limit(subscription)}
+    return listed | {"limits": limits}
 
 
 def timer_payload(timer: Event) -> dict[str, Any]:
@@ -437,9 +454,10 @@ async def upsert(
       subscription's key and yours could read the items filed where it came from.
       Anything that becomes an item is better taken as a filter source, which
       gap-fill polling also feeds. Takes max_per_hour (default
-      AGENT_MAX_RUNS_PER_HOUR) and backlog_max (default 1000 waiting): deliveries
-      over either are shed at once, recorded as failed runs. Unclaimed ones expire
-      after 7 days. The queue can't change.
+      AGENT_MAX_RUNS_PER_HOUR, which 0 restores, at most
+      AGENT_MAX_DELIVERIES_PER_HOUR) and backlog_max (default 1000
+      waiting, which 0 restores): deliveries over either are shed at once, recorded
+      as failed runs. Unclaimed ones expire after 7 days. The queue can't change.
     - {"cron": "<5 fields>", "input"}: a tick each time it is due, in your
       timezone (meta_get_user), at most every MIN_CRON_INTERVAL_MINUTES (agent and
       notify handlers). An agent's input is required; its run's trigger_ref has the
@@ -450,13 +468,21 @@ async def upsert(
       and can't be updated; cancel one with subscription_delete. Counts toward
       MAX_TIMERS_PER_USER. Returns the timer (kind "timer").
 
-    Filter sources also take: max_per_hour (deliveries an hour; default
-    AGENT_MAX_RUNS_PER_HOUR, which 0 restores), backlog_max (waiting deliveries
-    beyond which the oldest are shed; 0 for no limit), coalesce ("latest": a new event for an item, or its order_by
+    Filter sources also take: max_per_hour (deliveries an hour, above or below
+    AGENT_MAX_RUNS_PER_HOUR, the default, which 0 restores, up to
+    AGENT_MAX_DELIVERIES_PER_HOUR; an agent handler's runs are still held to that
+    agent's own hourly limit, at most AGENT_MAX_RUNS_PER_HOUR),
+    backlog_max (waiting deliveries beyond which the oldest are shed; default and 0:
+    no limit), coalesce ("latest": a new event for an item, or its order_by
     key, replaces its waiting delivery), and for queue handlers order_by ("item",
     the default, "thread" or "none": a later delivery with the same key waits for
     the earlier one to end). Over a cap, deliveries wait an hour and are then shed;
-    you're notified once per episode.
+    you're notified once per episode, which ends after two hours with nothing held
+    back; `state.throttled` describes the latest episode and clears at the first
+    delivery after it ends. Filter and raw subscriptions are returned with `limits`:
+    their own max_per_hour and backlog_max in effect (null: no limit). An agent
+    handler's runs also count against that agent's hourly limit, shared with its
+    other runs, so they can be held below `limits.max_per_hour`.
 
     Subscriptions act with the credential that created them (an API key's scopes,
     if one was used), for good; an API key can change only what it created. One
@@ -487,7 +513,7 @@ async def upsert(
             check_pause_binding(db, existing, key)
             existing.enabled, existing.next_at = False, None
             db.flush()
-            return existing.serialize()
+            return shown(existing)
         if existing is not None:
             check_binding(existing.api_key_id, key)
             kind = existing.kind
@@ -571,7 +597,7 @@ async def upsert(
                 raise
             raise ValueError(f"you already have a subscription named '{subscription.name}'") from e
         warnings = await exposure_warnings(spec) if spec is not None and kind == INGEST else []
-        saved = subscription.serialize() | {"warnings": warnings}
+        saved = shown(subscription) | {"warnings": warnings}
         subscription_id = subscription.id
     # After the commit, so the fire sees it enabled.
     if woken:
@@ -586,9 +612,10 @@ async def list_all(
 ) -> dict:
     """Your subscriptions and the timers still waiting to fire; with definition_id or
     queue, only those handed to that definition or queue. Each subscription has
-    `api_key_name` (the key it was set up through, if any) and `activity`: `pending`
-    deliveries, `oldest_pending_at`, and `last`, its latest delivery or tick ({status,
-    at, run_id, run_status}). include_fired adds `fired`:
+    `api_key_name` (the key it was set up through, if any), for filter and raw ones
+    `limits` (their own max_per_hour and backlog_max in effect, null: no limit), and
+    `activity`: `pending` deliveries (deferred ones too), `oldest_pending_at`, and
+    `last`, its latest delivery or tick ({status, at, run_id, run_status}). include_fired adds `fired`:
     the latest FIRED_TIMERS_LISTED timers that ended, newest first, each with its
     `result` (sent, done with the run_id, failed with the error, or skipped:<reason>;
     `late_sec` when it went out late). A tripped subscription's state says why.
@@ -619,7 +646,7 @@ async def list_all(
         subscriptions = list(db.scalars(query.order_by(Subscription.id)))
         activity = subscription_activity(db, subscriptions, token_api_key(caller_token()[0], db))
         listed = {
-            "subscriptions": [t.serialize() | activity[t.id] for t in subscriptions],
+            "subscriptions": [shown(t) | activity[t.id] for t in subscriptions],
             "timers": [timer_payload(t) for t in timers],
         }
         return listed | ({"fired": [timer_payload(t) for t in fired]} if include_fired else {})
@@ -733,7 +760,7 @@ async def fetch(
             runs = runs.where(AgentRun.trigger_ref["item_ids"].contains([item_id]))
         ordered_runs = runs.order_by(AgentRun.created_at.desc(), AgentRun.id.desc()).limit(limit)
         return {
-            "subscription": subscription.serialize(),
+            "subscription": shown(subscription),
             "deliveries": deliveries,
             "runs": [run_summary(r) for r in db.scalars(ordered_runs)],
         }

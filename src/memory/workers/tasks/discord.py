@@ -10,7 +10,6 @@ This module provides tasks for:
 import asyncio
 import hashlib
 import logging
-import pathlib
 from datetime import datetime
 from typing import Any
 from uuid import uuid4
@@ -33,7 +32,7 @@ from memory.common.celery_app import (
 )
 from memory.common.db.connection import make_session
 from memory.common.db.models import DiscordMessage, Person
-from memory.common import discord_events
+from memory.common import discord_attachments, discord_events
 from memory.common.db.models.discord import DM_CHANNEL_TYPES, DiscordBot, DiscordChannel, DiscordUser
 from memory.common.db.models.events import CAUSING_EVENT, reject_raw_event
 from memory.common.people import DBSession, json_string
@@ -73,32 +72,17 @@ def safe_process_discord_message(
 
 
 def download_and_save_images(image_urls: list[str], message_id: int) -> list[str]:
-    """Download images from URLs and save to disk. Returns relative file paths.
-
-    Filenames are SHA-256 truncated to match the convention in
-    parsers/html.py — pre-fix this site used MD5, an inconsistency that
-    showed the three sites had drifted independently.
-    """
+    """Download images from URLs to their ``discord_attachments.image_path``.
+    Returns the stored paths, relative to FILE_STORAGE_DIR."""
     (settings.DISCORD_STORAGE_DIR / str(message_id)).mkdir(parents=True, exist_ok=True)
     saved_paths = []
     for url in image_urls:
-        local_path = image_path(url, message_id)
+        local_path = discord_attachments.image_path(url, message_id)
         if not stream_download_to_path(url, local_path, MAX_IMAGE_SIZE):
             continue
         saved_paths.append(paths.to_db_filename(local_path))
 
     return saved_paths
-
-
-def image_path(url: str, message_id: int) -> pathlib.Path:
-    """Named by the URL without its query: Discord's CDN signs attachment URLs
-    with a query that changes over time, while the path (channel, attachment
-    id, filename) stays the same."""
-    unsigned = url.split("?")[0]
-    # SHA-256 truncated, matches parsers/html.py.
-    url_hash = hashlib.sha256(unsigned.encode()).hexdigest()[:32]
-    ext = (pathlib.Path(unsigned).suffix or ".jpg")[:10]
-    return settings.DISCORD_STORAGE_DIR / str(message_id) / f"{url_hash}{ext}"
 
 
 def person_for_discord_user(session: DBSession, discord_user: DiscordUser) -> Person:
@@ -399,7 +383,7 @@ def rewrite_message(session: DBSession, message: DiscordMessage, data: dict) -> 
     Reactions are cleared either way, as a message read doesn't say who
     reacted. Images are downloaded again only when their attachments differ."""
     kwargs = discord_events.message_task_kwargs(data, bot_id=0)
-    images = [paths.to_db_filename(image_path(url, message.message_id)) for url in kwargs["images"] or []]
+    images = [discord_attachments.stored_image_name(url, message.message_id) for url in kwargs["images"] or []]
     fields = {
         "content": kwargs["content"],
         "author_id": kwargs["author_id"],

@@ -1216,6 +1216,26 @@ class CalendarAccount(PolledSource, SyncStatusMixin, LLMKeyChoice, Base):
     )
 
 
+# The people a transcript account makes action item tasks for.
+transcript_account_task_people = Table(
+    "transcript_account_task_people",
+    Base.metadata,
+    Column(
+        "transcript_account_id",
+        BigInteger,
+        ForeignKey("transcript_accounts.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "person_id",
+        BigInteger,
+        ForeignKey("people.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Index("transcript_account_task_people_person_idx", "person_id"),
+)
+
+
 class TranscriptAccount(SyncStatusMixin, LLMKeyChoice, Base):
     """A meeting-transcript provider account (Fireflies, Granola, Otter, ...).
 
@@ -1299,9 +1319,17 @@ class TranscriptAccount(SyncStatusMixin, LLMKeyChoice, Base):
     config_version: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default="1"
     )
+    # Whether action items in this account's meetings become Tasks.
+    create_tasks: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
 
     user: Mapped[User] = relationship(
         "User", foreign_keys=[user_id], backref=backref("transcript_accounts", passive_deletes="all")
+    )
+    # When set, only action items assigned to one of these people become Tasks.
+    task_people: Mapped[list[Person]] = relationship(
+        "Person", secondary=transcript_account_task_people, order_by="Person.display_name"
     )
     project: Mapped["Project | None"] = relationship(
         "Project", foreign_keys=[project_id]

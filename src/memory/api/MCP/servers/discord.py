@@ -31,7 +31,7 @@ from memory.common.scopes import (
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import DiscordBot, DiscordChannel, DiscordMessage, DiscordUser
 from memory.common.db.models.discord import DM_CHANNEL_TYPES
-from memory.common.people import find_person, primary_contact
+from memory.common.people import discord_ids, find_person
 from memory.common.reactions import reaction_counts
 from memory.common.discord_data import (
     caller_can_see_discord_user,
@@ -287,18 +287,10 @@ def suggest_people(session: DBSession, caller: UserProxy, query: str, tag: str) 
     if not person:
         return []
 
-    discord_id = None
-    discord_username = None
-    if person.discord_accounts:
-        discord_id = str(person.discord_accounts[0].id)
-        discord_username = person.discord_accounts[0].username
-    elif person.contact_info:
-        discord_id = primary_contact(person.contact_info.get("discord_id"))
-        discord_username = primary_contact(person.contact_info.get("discord"))
-
-    if not discord_id or not str(discord_id).isdigit():
-        return []
-    if not caller_can_see_discord_user(session, caller, int(discord_id)):
+    accounts = person.discord_accounts
+    discord_id = str(accounts[0].id) if accounts else next(iter(discord_ids(person.contact_info)), None)
+    discord_username = accounts[0].username if accounts else None
+    if discord_id is None or not caller_can_see_discord_user(session, caller, int(discord_id)):
         return []
 
     return [{
@@ -378,10 +370,14 @@ async def channel_history(
         after: ISO datetime - only get messages after this time
 
     Returns:
-        Dict with untrusted (names the tag its name, author and text blocks
-        carry), channel (id, name, server_id, server_name), messages oldest first, count
-        and limit; each message has id, message_id, author, author_id, sent_at,
-        edited_at, text, is_pinned, reactions and reply_to (a message_id)
+        Dict with untrusted (names the tag its name, author, text, filename and
+        content_type blocks carry), channel (id, name, server_id, server_name),
+        messages oldest first, count and limit; each message has id, message_id,
+        author, author_id, sent_at, edited_at, text (ending in a line per
+        attachment), attachments, is_pinned, reactions and reply_to (a
+        message_id). Each attachment has filename, content_type, size and file:
+        pass file to core_fetch_file for the stored copy (null when there is
+        none; only images are stored)
     """
     if channel_id is None and channel_name is None:
         raise ValueError("Must specify either channel_id or channel_name")
@@ -412,6 +408,19 @@ async def channel_history(
         )
 
 
+def attachment_fields(tag: str, message: DiscordMessage) -> list[dict[str, Any]]:
+    """Each attachment; pass ``file`` to core_fetch_file for the stored copy."""
+    return [
+        {
+            "filename": untrusted(tag, message.id, "filename", a["filename"] or ""),
+            "content_type": a["content_type"] and untrusted(tag, message.id, "content_type", a["content_type"]),
+            "size": a["size"],
+            "file": a["file"],
+        }
+        for a in message.attachment_files
+    ]
+
+
 def thread_message(tag: str, message: DiscordMessage) -> dict[str, Any]:
     return {
         "id": message.id,
@@ -422,7 +431,8 @@ def thread_message(tag: str, message: DiscordMessage) -> dict[str, Any]:
             else str(message.author_id)
         ),
         "sent_at": message.sent_at.isoformat(),
-        "text": untrusted(tag, message.id, "text", message.content or ""),
+        "text": untrusted(tag, message.id, "text", message.readable_content),
+        "attachments": attachment_fields(tag, message),
     }
 
 
@@ -513,10 +523,11 @@ async def thread(item_id: int, limit: int = settings.CHAT_THREAD_REPLIES) -> dic
         limit: How many of the latest replies to return, oldest first (max 100)
 
     Returns:
-        Dict with untrusted (names the tag its author and text blocks carry),
-        thread_id (null when the message isn't in a thread), parent (null if you
-        can't read it) and replies; each message has id, message_id, author,
-        sent_at and text
+        Dict with untrusted (names the tag its author, text, filename and
+        content_type blocks carry), thread_id (null when the message isn't in a
+        thread), parent (null if you can't read it) and replies; each message
+        has id, message_id, author, sent_at, text and attachments, as in
+        discord_channel_history
     """
     with make_session() as session:
         return await asyncio.to_thread(fetch_thread, session, item_id, max(1, min(100, limit)))

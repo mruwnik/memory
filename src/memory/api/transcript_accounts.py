@@ -2,6 +2,7 @@
 
 import logging
 import secrets
+from collections.abc import Sequence
 from typing import Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -21,8 +22,9 @@ from memory.common import settings
 from memory.common.celery_app import RESCAN_TRANSCRIPT_ACCOUNT, SYNC_TRANSCRIPT_ACCOUNT
 from memory.common.celery_app import app as celery_app
 from memory.common.db.connection import get_session
-from memory.common.db.models import User
+from memory.common.db.models import Person, User
 from memory.common.db.models.sources import TranscriptAccount
+from memory.common.scopes import SCOPE_PEOPLE, has_scope
 from memory.common.transcripts import (
     POLLING_PROVIDERS,
     PUSH_ONLY_PROVIDERS,
@@ -43,6 +45,9 @@ class TranscriptAccountCreate(BaseModel):
     project_id: int | None = None
     sensitivity: Literal["public", "basic", "internal", "confidential"] = "basic"
     llm_key: LLMKeyInput | None = None
+    create_tasks: bool = True
+    # Empty: every action item becomes a task.
+    task_person_ids: list[int] = []
 
 
 class TranscriptAccountUpdate(BaseModel):
@@ -54,6 +59,14 @@ class TranscriptAccountUpdate(BaseModel):
     project_id: int | None = None
     sensitivity: Literal["public", "basic", "internal", "confidential"] | None = None
     llm_key: LLMKeyInput | None = None
+    create_tasks: bool | None = None
+    # None keeps the current people; [] makes tasks for every action item.
+    task_person_ids: list[int] | None = None
+
+
+class PersonRef(BaseModel):
+    id: int
+    display_name: str
 
 
 class TranscriptAccountResponse(SyncStatusResponse):
@@ -72,6 +85,11 @@ class TranscriptAccountResponse(SyncStatusResponse):
     project_id: int | None
     sensitivity: str
     llm_key: LLMKeyView
+    create_tasks: bool
+    # Action items become tasks only for these people; empty means everyone.
+    task_people: list[PersonRef]
+    # The Person linked to the account's owner, for picking "me".
+    owner_person: PersonRef | None
 
 
 class WebhookSecretResponse(BaseModel):
@@ -87,6 +105,38 @@ def ingest_url(account_id: int) -> str:
 def secret_hint(account: TranscriptAccount) -> str | None:
     secret = account.webhook_secret
     return secret[-4:] if secret else None
+
+
+def person_ref(person: Person) -> PersonRef:
+    return PersonRef(id=person.id, display_name=person.display_name)
+
+
+def resolve_task_people(
+    db: Session, user: User, owner_id: int, person_ids: list[int], current: Sequence[Person] = ()
+) -> list[Person]:
+    """The Persons `person_ids` name, checked as ones `user` may pick.
+
+    Callers without the people scope can't list People, so besides the people
+    already `current`ly picked they may only add the account owner's own Person.
+    They get the same error for an id that doesn't exist as for someone else's,
+    so it can't be used to probe ids.
+    """
+    ids = set(person_ids)
+    if not ids:
+        return []
+    if has_scope(user.scopes or [], SCOPE_PEOPLE):
+        people = db.query(Person).filter(Person.id.in_(ids)).all()
+        if len(people) != len(ids):
+            raise HTTPException(status_code=400, detail="Unknown person in task_person_ids")
+        return people
+    kept = [p for p in current if p.id in ids]
+    added = ids - {p.id for p in kept}
+    people = db.query(Person).filter(Person.id.in_(added), Person.user_id == owner_id).all()
+    if len(people) != len(added):
+        raise HTTPException(
+            status_code=403, detail="Without the people scope you can only pick yourself"
+        )
+    return kept + people
 
 
 def account_to_response(
@@ -109,6 +159,9 @@ def account_to_response(
         project_id=account.project_id,
         sensitivity=cast(str, account.sensitivity) or "basic",
         llm_key=llm_key_view(db, user, account),
+        create_tasks=account.create_tasks,
+        task_people=[person_ref(p) for p in account.task_people],
+        owner_person=person_ref(owner) if (owner := account.user.person) else None,
     )
 
 
@@ -178,6 +231,8 @@ def create_account(
         tags=data.tags,
         project_id=data.project_id,
         sensitivity=data.sensitivity,
+        create_tasks=data.create_tasks,
+        task_people=resolve_task_people(db, user, user.id, data.task_person_ids),
     )
     if data.api_key:
         account.api_key = data.api_key
@@ -245,6 +300,12 @@ def update_account(
         account.project_id = updates.project_id
     if updates.sensitivity is not None:
         account.sensitivity = updates.sensitivity
+    if updates.create_tasks is not None:
+        account.create_tasks = updates.create_tasks
+    if updates.task_person_ids is not None:
+        account.task_people = resolve_task_people(
+            db, user, account.user_id, updates.task_person_ids, account.task_people
+        )
     apply_llm_key(db, user, account, updates.llm_key)
 
     db.commit()

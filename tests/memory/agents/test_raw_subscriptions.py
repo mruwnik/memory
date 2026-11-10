@@ -265,6 +265,23 @@ async def test_over_its_hourly_rate_a_raw_subscription_sheds_and_records_it(
 
 
 @pytest.mark.asyncio
+async def test_a_raw_subscriptions_max_per_hour_lifts_it_above_the_default_rate(
+    db_session, regular_user, worker_session, monkeypatch
+):
+    monkeypatch.setattr(settings, "AGENT_MAX_RUNS_PER_HOUR", 1)
+    account_row = account(db_session, regular_user)
+    subscription = raw_subscription(db_session, regular_user, max_per_hour=3)
+    for n in range(3):
+        delivered(db_session, account_row, delivery_id=f"d-{n}")
+
+    claimed = [await claim(worker_session.token, queues=[QUEUE]) for _ in range(3)]
+
+    db_session.refresh(subscription)
+    assert all(c is not None for c in claimed)
+    assert "throttled" not in subscription.state
+
+
+@pytest.mark.asyncio
 async def test_a_raw_subscription_is_made_for_an_account_of_ones_own(db_session, regular_user, worker_session):
     gh = account(db_session, regular_user)
 
@@ -667,3 +684,18 @@ async def test_a_claim_walks_past_only_so_many_raw_runs_the_claimer_cant_render(
 
     assert await claim(narrow.key, queues=[QUEUE]) is None
     assert len(rendered) == 2
+
+
+@pytest.mark.parametrize(
+    "max_per_hour,backlog_max,limits",
+    [
+        (None, None, {"max_per_hour": 60, "backlog_max": 1000}),
+        (500, 5, {"max_per_hour": 500, "backlog_max": 5}),
+        # Saved before AGENT_MAX_DELIVERIES_PER_HOUR was lowered below it.
+        (5000, None, {"max_per_hour": 3600, "backlog_max": 1000}),
+    ],
+)
+def test_a_raw_subscription_reports_the_limits_in_effect(db_session, regular_user, max_per_hour, backlog_max, limits):
+    subscription = raw_subscription(db_session, regular_user, max_per_hour=max_per_hour, backlog_max=backlog_max)
+
+    assert subscription_tools.shown(subscription)["limits"] == limits
