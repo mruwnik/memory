@@ -569,7 +569,7 @@ def sync_account(account_id: int, since_date: str | None = None) -> dict:
                 finalize_sync(account, db)
 
             except Exception as e:
-                logger.error(f"Error syncing account {account.email_address}: {e}")
+                logger.exception("Error syncing email account %s", account_id)
                 finalize_sync(account, db, error=e)
                 return {"status": "error", "error": str(e)}
 

@@ -1,5 +1,6 @@
 import base64
 import io
+import logging
 import pathlib
 from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
@@ -690,6 +691,21 @@ def test_sync_account_nonexistent_account(db_session):
 
     assert result["status"] == "error"
     assert "not found" in result["error"]
+
+
+def test_sync_failure_keeps_the_mailbox_out_of_error_log(db_session, test_email_account, caplog):
+    """ERROR records reach the appliance operator, so a failed sync logs the account id."""
+    error = RuntimeError(f"NO [AUTHENTICATIONFAILED] {test_email_account.email_address}")
+    with (
+        patch("memory.workers.tasks.email.sync_imap_messages", side_effect=error),
+        caplog.at_level(logging.ERROR),
+    ):
+        result = sync_account(test_email_account.id)
+
+    messages = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert result["status"] == "error"
+    assert messages
+    assert not [m for m in messages if test_email_account.email_address in m]
 
 
 def test_sync_gmail_handles_api_error(db_session, gmail_email_account, qdrant):
