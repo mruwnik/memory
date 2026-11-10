@@ -343,7 +343,7 @@ def test_get_events_in_range_simple(db_session, simple_event):
     start = datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
     end = datetime(2024, 1, 31, 23, 59, 59, tzinfo=timezone.utc)
 
-    events = get_events_in_range(db_session, start, end)
+    events = get_events_in_range(db_session, start, end, access_filter=None)
 
     assert len(events) == 1
     assert events[0]["event_title"] == "Team Meeting"
@@ -354,7 +354,7 @@ def test_get_events_in_range_excludes_out_of_range(db_session, simple_event):
     start = datetime(2024, 2, 1, 0, 0, 0, tzinfo=timezone.utc)
     end = datetime(2024, 2, 28, 23, 59, 59, tzinfo=timezone.utc)
 
-    events = get_events_in_range(db_session, start, end)
+    events = get_events_in_range(db_session, start, end, access_filter=None)
 
     assert len(events) == 0
 
@@ -364,7 +364,7 @@ def test_get_events_in_range_expands_recurring(db_session, recurring_event):
     start = datetime(2024, 1, 15, 0, 0, 0, tzinfo=timezone.utc)
     end = datetime(2024, 1, 19, 23, 59, 59, tzinfo=timezone.utc)
 
-    events = get_events_in_range(db_session, start, end)
+    events = get_events_in_range(db_session, start, end, access_filter=None)
 
     # 5 weekdays
     assert len(events) == 5
@@ -379,7 +379,7 @@ def test_get_events_in_range_mixed_events(
     start = datetime(2024, 1, 15, 0, 0, 0, tzinfo=timezone.utc)
     end = datetime(2024, 1, 21, 23, 59, 59, tzinfo=timezone.utc)
 
-    events = get_events_in_range(db_session, start, end)
+    events = get_events_in_range(db_session, start, end, access_filter=None)
 
     titles = [e["event_title"] for e in events]
     assert "Team Meeting" in titles
@@ -394,7 +394,7 @@ def test_get_events_in_range_sorted_by_start_time(
     start = datetime(2024, 1, 15, 0, 0, 0, tzinfo=timezone.utc)
     end = datetime(2024, 1, 16, 23, 59, 59, tzinfo=timezone.utc)
 
-    events = get_events_in_range(db_session, start, end)
+    events = get_events_in_range(db_session, start, end, access_filter=None)
 
     # Verify sorted order
     times = [e["start_time"] for e in events]
@@ -406,7 +406,7 @@ def test_get_events_in_range_respects_limit(db_session, recurring_event):
     start = datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
     end = datetime(2024, 1, 31, 23, 59, 59, tzinfo=timezone.utc)
 
-    events = get_events_in_range(db_session, start, end, limit=3)
+    events = get_events_in_range(db_session, start, end, limit=3, access_filter=None)
 
     assert len(events) == 3
 
@@ -416,7 +416,7 @@ def test_get_events_in_range_empty_database(db_session, calendar_account):
     start = datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
     end = datetime(2024, 1, 31, 23, 59, 59, tzinfo=timezone.utc)
 
-    events = get_events_in_range(db_session, start, end)
+    events = get_events_in_range(db_session, start, end, access_filter=None)
 
     assert events == []
 
@@ -439,7 +439,7 @@ def test_get_events_in_range_recurring_no_end_time(db_session, calendar_account)
     start = datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
     end = datetime(2024, 1, 15, 23, 59, 59, tzinfo=timezone.utc)
 
-    events = get_events_in_range(db_session, start, end)
+    events = get_events_in_range(db_session, start, end, access_filter=None)
 
     # Should have occurrences on Mondays: 1st, 8th, 15th = 3
     assert len(events) >= 2

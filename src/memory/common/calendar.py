@@ -7,6 +7,7 @@ from typing import TypedDict
 
 from dateutil.rrule import rrulestr
 
+from memory.common.access_control import AccessFilter, apply_access_filter_to_query
 from memory.common.dates import parse_iso_datetime
 from memory.common.db.connection import DBSession
 from memory.common.db.models import CalendarEvent
@@ -98,6 +99,8 @@ def get_events_in_range(
     end_date: datetime,
     limit: int = 200,
     user_ids: list[int] | None = None,
+    *,
+    access_filter: AccessFilter | None,
 ) -> list[EventDict]:
     """Get all calendar events (including expanded recurring) in a date range.
 
@@ -107,6 +110,8 @@ def get_events_in_range(
         end_date: End of the date range (inclusive)
         limit: Maximum number of events to return
         user_ids: If provided, only return events from calendars owned by these users
+        access_filter: The caller's access filter; None means no filtering
+            (admins only)
 
     Returns:
         List of event dictionaries, sorted by start_time
@@ -119,8 +124,9 @@ def get_events_in_range(
         on upgrade). Admins can reassign each row via
         ``PATCH /calendar-accounts/{id}`` to restore visibility.
     """
-    # Build base query with optional user filtering
+    # Build base query with access and optional user filtering
     def apply_user_filter(query):  # type: ignore[no-untyped-def]
+        query = apply_access_filter_to_query(query, access_filter)
         if user_ids is None:
             return query
         # Filter by CalendarAccount.user_id (set on creation; backfilled for
