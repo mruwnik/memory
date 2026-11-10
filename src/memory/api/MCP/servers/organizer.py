@@ -2,6 +2,7 @@
 MCP subserver for organizational tools: calendar, todos, reminders.
 """
 
+import asyncio
 import hashlib
 import logging
 from datetime import datetime, timezone
@@ -75,7 +76,22 @@ async def upcoming(
         raise PermissionError("Only admins can view other users' calendars")
 
     range_start, range_end = parse_date_range(start_date, end_date, days)
+    # Expanding recurring events is CPU-bound and can take a while, so it runs
+    # in a thread rather than stalling every other request on this server.
+    return await asyncio.to_thread(
+        events_in_range_for, user, is_admin, range_start, range_end, limit, user_ids
+    )
 
+
+def events_in_range_for(
+    user: Any,
+    is_admin: bool,
+    range_start: datetime,
+    range_end: datetime,
+    limit: int,
+    user_ids: list[int] | None,
+) -> list[EventDict]:
+    """The calendar events in the range that ``user`` may see."""
     with make_session() as session:
         access_filter = None
         if not is_admin:

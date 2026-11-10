@@ -1,5 +1,6 @@
 """Tests for Organizer MCP tools (tasks/todos and calendar events)."""
 
+import asyncio
 import hashlib
 import sys
 from datetime import datetime, timedelta, timezone
@@ -1342,3 +1343,33 @@ async def test_upcoming_admin_can_view_another_users_calendar(
     results = await call_upcoming(db_session, _mock_admin_user, user_ids=[owner.id])
 
     assert [r["event_title"] for r in results] == ["Owner event"]
+
+
+@pytest.mark.asyncio
+async def test_upcoming_expands_events_off_the_event_loop(db_session, _mock_admin_user):
+    # Synced before the expandability check, so it is still expanded: no date
+    # satisfies the rule, which takes dateutil seconds to find out.
+    db_session.add(
+        CalendarEvent(
+            modality="calendar",
+            sha256=b"n" * 32,
+            event_title="Never",
+            start_time=datetime(2020, 1, 1, 9, 0, tzinfo=timezone.utc),
+            recurrence_rule="FREQ=DAILY;BYMONTH=2;BYMONTHDAY=30",
+        )
+    )
+    db_session.commit()
+    ticks = 0
+
+    async def tick():
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.01)
+            ticks += 1
+
+    ticker = asyncio.create_task(tick())
+    results = await call_upcoming(db_session, _mock_admin_user)
+    ticker.cancel()
+
+    assert results == []
+    assert ticks > 20
