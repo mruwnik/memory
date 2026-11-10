@@ -1225,7 +1225,7 @@ def test_a_discord_image_that_cannot_be_read_leaves_the_message_to_its_text(stor
 
 CATCH_UP_SQL = (
     "UPDATE source_item SET embed_status='RAW' WHERE embed_status='SKIPPED' AND id IN "
-    "(SELECT id FROM discord_message WHERE images IS NOT NULL OR attachments @> '[{}]');"
+    "(SELECT id FROM discord_message WHERE cardinality(images) > 0 OR attachments @> '[{}]');"
 )
 
 
@@ -1270,6 +1270,8 @@ def test_discord_catch_up_sql_reindexes_only_messages_with_attachments(db_sessio
 
     assert (msg.embed_status == "RAW") is caught_up
 
+        # An edit without images stores an empty array: nothing to gain.
+        (None, [], False),
 
 # ====== SlackMessage.preview_text tests ======
 
