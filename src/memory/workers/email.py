@@ -249,15 +249,17 @@ def search_folder(conn: imaplib.IMAP4, folder: str, criteria: str) -> list[str]:
     """
     try:
         status, _ = conn.select(imap_mailbox(folder))
-        if status != "OK":
-            raise FolderUnavailableError(f"Error selecting folder {folder}")
-        status, data = conn.uid("SEARCH", criteria)
-        if status != "OK":
-            raise FolderUidsError(f"Error searching folder {folder}")
-    except FolderUidsError:
-        raise
     except Exception as e:
-        raise FolderUidsError(f"Error reading folder {folder}: {e}") from e
+        raise FolderUidsError(f"Error selecting folder {folder}: {e}") from e
+    if status != "OK":
+        raise FolderUnavailableError(f"Error selecting folder {folder}")
+
+    try:
+        status, data = conn.uid("SEARCH", criteria)
+    except Exception as e:
+        raise FolderUidsError(f"Error searching folder {folder}: {e}") from e
+    if status != "OK":
+        raise FolderUidsError(f"Error searching folder {folder}")
 
     if not data or not data[0]:
         return []
