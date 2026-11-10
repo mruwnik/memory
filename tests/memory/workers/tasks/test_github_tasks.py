@@ -1436,6 +1436,14 @@ def test_serialize_deserialize_with_pr_data(mock_pr_data_with_extended):
     assert deserialized["pr_data"]["diff"] == mock_pr_data_with_extended["pr_data"]["diff"]
 
 
+@pytest.mark.parametrize("missing", ["created_at", "github_updated_at"])
+def test_deserialize_issue_data_raises_on_missing_required_date(mock_issue_data, missing):
+    serialized = serialize_issue_data(mock_issue_data) | {missing: None}
+
+    with pytest.raises(ValueError, match="Missing required GitHub date"):
+        _deserialize_issue_data(serialized)
+
+
 def test_serialize_deserialize_without_pr_data(mock_issue_data):
     """Test serialization roundtrip for issue without pr_data."""
     # mock_issue_data already has pr_data=None

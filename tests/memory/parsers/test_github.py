@@ -666,6 +666,27 @@ def test_fetch_milestone_single():
     assert ms["title"] == "v1.0"
 
 
+@pytest.mark.parametrize("missing", ["createdAt", "updatedAt"])
+def test_fetch_milestone_raises_on_missing_required_date(missing):
+    milestone = {
+        "id": "M_123",
+        "number": 1,
+        "title": "v1.0",
+        "description": None,
+        "state": "OPEN",
+        "dueOn": None,
+        "createdAt": "2024-01-01T00:00:00Z",
+        "updatedAt": "2024-01-15T00:00:00Z",
+        "closedAt": None,
+    } | {missing: None}
+    client = GithubClient(GithubCredentials(auth_type="pat", access_token="token"))
+    response = mock_graphql_response({"repository": {"milestone": milestone}})
+
+    with patch.object(requests.Session, "post", return_value=response):
+        with pytest.raises(ValueError, match="Missing required GitHub date"):
+            client.fetch_milestone("owner", "repo", 1)
+
+
 def test_fetch_milestone_not_found():
     """Test fetching a non-existent milestone."""
     credentials = GithubCredentials(auth_type="pat", access_token="token")

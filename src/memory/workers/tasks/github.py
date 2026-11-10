@@ -49,6 +49,7 @@ from memory.common.github import (
     not_found_message,
     org_hooks,
     parse_github_date,
+    parse_required_github_date,
     repo_hooks,
     serialize_issue_data,
     webhook_url,
@@ -542,9 +543,9 @@ def _update_existing_item(
                 existing.pr_data.changed_files_count = pr_data_dict.get(
                     "changed_files_count"
                 )
-                existing.pr_data.files = pr_data_dict.get("files")  # type: ignore[assignment]
-                existing.pr_data.reviews = pr_data_dict.get("reviews")  # type: ignore[assignment]
-                existing.pr_data.review_comments = pr_data_dict.get("review_comments")  # type: ignore[assignment]
+                existing.pr_data.files = pr_data_dict.get("files")
+                existing.pr_data.reviews = pr_data_dict.get("reviews")
+                existing.pr_data.review_comments = pr_data_dict.get("review_comments")
                 existing.pr_data.diff = pr_data_dict.get("diff")
             else:
                 # Create new pr_data
@@ -601,8 +602,8 @@ def update_metadata(
         existing.pr_data.additions = pr["additions"]
         existing.pr_data.deletions = pr["deletions"]
         existing.pr_data.changed_files_count = pr["changed_files_count"]
-        existing.pr_data.reviews = pr["reviews"]  # type: ignore[assignment]
-        existing.pr_data.review_comments = pr["review_comments"]  # type: ignore[assignment]
+        existing.pr_data.reviews = pr["reviews"]
+        existing.pr_data.review_comments = pr["review_comments"]
     elif pr:
         existing.pr_data = _create_pr_data(issue_data)
     if changes:
@@ -629,10 +630,10 @@ def _deserialize_issue_data(data: dict[str, Any]) -> GithubIssueData:
         labels=data["labels"],
         assignees=data["assignees"],
         milestone_number=data.get("milestone_number"),
-        created_at=parse_github_date(data["created_at"]),  # type: ignore
+        created_at=parse_required_github_date(data["created_at"]),
         closed_at=parse_github_date(data.get("closed_at")),
         merged_at=parse_github_date(data.get("merged_at")),
-        github_updated_at=parse_github_date(data["github_updated_at"]),  # type: ignore
+        github_updated_at=parse_required_github_date(data["github_updated_at"]),
         comment_count=data["comment_count"],
         comments=data["comments"],
         diff_summary=data.get("diff_summary"),
