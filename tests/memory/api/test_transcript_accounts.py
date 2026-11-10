@@ -764,6 +764,20 @@ def test_without_people_scope_only_your_own_person_can_be_picked(regular_client,
     assert accepted.json()["task_people"] == [{"id": mine.id, "display_name": "Test User"}]
 
 
+@pytest.mark.parametrize("pick", ["missing", "someone_else"])
+def test_without_people_scope_missing_and_others_ids_get_the_same_answer(regular_client, user, db_session, pick):
+    ids = {"missing": 987654, "someone_else": make_person(db_session, "Ann Lee").id}
+    account = make_account(db_session, user.id)
+
+    response = regular_client.patch(f"/transcript-accounts/{account.id}", json={"task_person_ids": [ids[pick]]})
+
+    assert (response.status_code, response.json()) == (
+        403,
+        {"detail": "Without the people scope you can only pick yourself"},
+    )
+    assert db_session.get(TranscriptAccount, account.id).task_people == []
+
+
 @pytest.mark.parametrize("linked", [False, True])
 def test_response_names_the_owners_person(client, user, db_session, linked):
     person = make_person(db_session, "Test User", user_id=user.id if linked else None)

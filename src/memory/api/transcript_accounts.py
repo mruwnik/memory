@@ -124,15 +124,19 @@ def resolve_task_people(db: Session, user: User, owner_id: int, person_ids: list
     """The Persons `person_ids` name, checked as ones `user` may pick.
 
     Callers without the people scope can't list People, so they may only pick
-    the account owner's own Person.
+    the account owner's own Person. They get the same error for an id that
+    doesn't exist as for someone else's, so it can't be used to probe ids.
     """
     ids = set(person_ids)
-    people = db.query(Person).filter(Person.id.in_(ids)).all() if ids else []
-    if len(people) != len(ids):
-        raise HTTPException(status_code=400, detail="Unknown person in task_person_ids")
+    if not ids:
+        return []
     if has_scope(user.scopes or [], SCOPE_PEOPLE):
+        people = db.query(Person).filter(Person.id.in_(ids)).all()
+        if len(people) != len(ids):
+            raise HTTPException(status_code=400, detail="Unknown person in task_person_ids")
         return people
-    if any(p.user_id != owner_id for p in people):
+    people = db.query(Person).filter(Person.id.in_(ids), Person.user_id == owner_id).all()
+    if len(people) != len(ids):
         raise HTTPException(
             status_code=403, detail="Without the people scope you can only pick yourself"
         )
