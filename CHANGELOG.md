@@ -37,6 +37,7 @@ a new, empty `## Unreleased` above it.
 - Browse what has been ingested: each content type on the Ingestion overview opens its items, newest first, a page at a time, and the overview page can show each type's latest five items inline. The list can be narrowed to one connection (email account, Discord or Slack channel, Beeper chat, feed, GitHub repo, Google Drive folder, calendar or transcript account, book), filtered by indexing status, and searched by title, subject, sender, author or filename (not the item text). Only items you can access are listed.
 - MCP `core_list_items` and `core_count_items` take `item_types`, `embed_statuses` (default still indexed items only), `contains` and `connection_id`. List rows carry `type` and `embed_status`; `include_total=false` skips the total count; pages sort by id within equal timestamps so they never overlap. `core_count_items` adds `by_type` and, for types that share a kind of connection, `by_connection`.
 - A subscription's `max_per_hour` sets its hourly delivery limit, above `AGENT_MAX_RUNS_PER_HOUR` as well as below: it was held to that setting, so deliveries over 60 an hour were throttled whatever it said. Runs an agent handler starts are still held to that agent's own hourly limit, which `AGENT_MAX_RUNS_PER_HOUR` caps. Rate refusals name the limit that fired (`max_per_hour`, `max_runs_per_hour`, or `AGENT_MAX_RUNS_PER_HOUR` as default or ceiling). Filter and raw subscriptions are returned with `limits`, the `max_per_hour` and `backlog_max` in effect (null: no limit).
+- Discord messages holding only an image or file are no longer empty to agents (#121): their text names each attachment (`[image attachment: cat.png]`), `discord_*` results, `core_fetch`/search metadata and subscription deliveries list the attachments, image-only messages are indexed with their images embedded, and `core_fetch_file` serves a message's stored images.
 
 ### Required env vars
 None
@@ -55,7 +56,7 @@ None
 - `20261222_item_inserted_idx` builds two indexes on `source_item`, `(inserted_at, id)` and `(type, inserted_at, id)`, with `CREATE INDEX CONCURRENTLY`: writes continue while they build, but the upgrade's time grows with the number of stored items. If it is interrupted, drop any invalid `source_inserted_at_idx` or `source_type_inserted_at_idx` before re-running it: Postgres keeps a half-built concurrent index, and `IF NOT EXISTS` would skip it.
 
 ### Post-deploy commands
-None
+- Optional, re-runnable: Discord messages stored before this release that hold only an attachment stay unindexed until re-embedded. To catch up, run `UPDATE source_item SET embed_status='RAW' WHERE embed_status='SKIPPED' AND id IN (SELECT id FROM discord_message WHERE images IS NOT NULL OR attachments IS NOT NULL);` and the hourly `process_raw_items` job embeds them (300 an hour). Re-processing records a change, so `on_edit` subscriptions may receive those messages once more.
 
 ## v0.5.2 (2026-11-08)
 
