@@ -151,26 +151,26 @@ class GoogleOAuthState:
     KEY_PREFIX = "google_oauth_state:"
 
     @classmethod
-    def _get_redis(cls) -> redis.Redis:
+    def redis_client(cls) -> redis.Redis:
         return redis.from_url(settings.REDIS_URL)
 
     @classmethod
     def create(cls, user_id: int) -> str:
         state = secrets.token_urlsafe(32)
         key = f"{cls.KEY_PREFIX}{state}"
-        cls._get_redis().setex(key, cls.STATE_TTL_SECONDS, str(user_id))
+        cls.redis_client().setex(key, cls.STATE_TTL_SECONDS, str(user_id))
         return state
 
     @classmethod
     def owner(cls, state: str) -> int | None:
         """The user a live state was issued to, without consuming it."""
-        result = cls._get_redis().get(f"{cls.KEY_PREFIX}{state}")
+        result = cls.redis_client().get(f"{cls.KEY_PREFIX}{state}")
         return int(cast(bytes, result)) if result is not None else None
 
     @classmethod
     def consume(cls, state: str) -> bool:
         """Use up a state; only one of two racing callbacks gets True."""
-        return bool(cls._get_redis().delete(f"{cls.KEY_PREFIX}{state}"))
+        return bool(cls.redis_client().delete(f"{cls.KEY_PREFIX}{state}"))
 
 
 class OAuthConfigResponse(BaseModel):
