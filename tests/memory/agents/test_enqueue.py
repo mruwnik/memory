@@ -311,6 +311,7 @@ def fire(db, user, t, d, dedupe_key=None):
         input="hi",
         trigger=TriggerInfo(kind="ingest", subscription_id=t.id, dedupe_key=dedupe_key),
         definition=d,
+        agent=None if d else t.handler["agent"],
     )
 
 
@@ -339,6 +340,24 @@ def test_a_subscription_starts_at_most_its_hourly_limit_of_runs(
 
     with pytest.raises(CapExceeded, match="subscription rate: 2 runs in the last hour, limit 2"):
         fire(db_session, regular_user, t, d)
+
+
+@pytest.mark.parametrize("handler,what", [("definition", "definition"), ("fact-check", "agent")])
+def test_an_agent_subscription_above_the_ceiling_is_held_to_its_agents_limit(
+    db_session, regular_user, fake_providers, monkeypatch, handler, what
+):
+    monkeypatch.setattr(settings, "AGENT_MAX_RUNS_PER_HOUR", 2)
+    t, d = subscription(db_session, regular_user, handler, max_per_hour=100)
+    fire(db_session, regular_user, t, d)
+    fire(db_session, regular_user, t, d)
+
+    with pytest.raises(CapExceeded) as refused:
+        fire(db_session, regular_user, t, d)
+
+    assert str(refused.value) == (
+        f"{what} rate: 2 runs in the last hour, limit 2 "
+        "(AGENT_MAX_RUNS_PER_HOUR, the server's ceiling); try again later or raise it"
+    )
 
 
 def test_a_subscriptions_limit_counts_only_its_own_runs(db_session, regular_user, fake_providers):

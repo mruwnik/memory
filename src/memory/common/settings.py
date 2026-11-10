@@ -292,7 +292,9 @@ AGENT_DEFAULT_USER_KEY_RUN_COST_USD = Decimal(
 AGENT_DEFAULT_USER_KEY_DAILY_COST_USD = Decimal(
     os.getenv("AGENT_DEFAULT_USER_KEY_DAILY_COST_USD", "20.00")
 )
-# Runs one definition may start per rolling hour; a definition's max_runs_per_hour may only lower it.
+# Runs one definition (or a user's prebuilt agent) may start per rolling hour; a definition's
+# max_runs_per_hour may only lower it. Also the default for a subscription's max_per_hour,
+# which may set it higher.
 AGENT_MAX_RUNS_PER_HOUR = int(os.getenv("AGENT_MAX_RUNS_PER_HOUR", "60"))
 AGENT_MAX_SUBSCRIPTIONS_PER_USER = int(os.getenv("AGENT_MAX_SUBSCRIPTIONS_PER_USER", "20"))
 AGENT_MAX_TIMEOUT_SEC = int(os.getenv("AGENT_MAX_TIMEOUT_SEC", "1800"))

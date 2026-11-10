@@ -240,31 +240,58 @@ def resolve_run_cap(
     return min([per_run, *(p.remaining for p in pools)])
 
 
-def check_hourly_rate(
-    db: DBSession, of: ColumnElement[bool], rate: int | None, what: str, knob: str
-) -> None:
-    """RateExceeded once the runs matching `of` have reached `rate` (or the global ceiling) this hour."""
-    limit = min(settings.AGENT_MAX_RUNS_PER_HOUR, rate or settings.AGENT_MAX_RUNS_PER_HOUR)
+@dataclass(frozen=True)
+class HourlyLimit:
+    """Runs allowed per rolling hour, and which setting set that number."""
+
+    runs: int
+    source: str
+
+
+def ceilinged_limit(rate: int | None, knob: str) -> HourlyLimit:
+    """`rate` held to the AGENT_MAX_RUNS_PER_HOUR ceiling, which also applies when it is unset:
+    the limit of runs an agent definition or a prebuilt agent starts."""
+    ceiling = settings.AGENT_MAX_RUNS_PER_HOUR
+    if rate and rate < ceiling:
+        return HourlyLimit(rate, knob)
+    return HourlyLimit(ceiling, "AGENT_MAX_RUNS_PER_HOUR, the server's ceiling")
+
+
+def subscription_limit(subscription: Subscription) -> HourlyLimit:
+    """A subscription's own max_per_hour, else the AGENT_MAX_RUNS_PER_HOUR default.
+    The agent a delivery starts is still held to its own ceilinged limit."""
+    if subscription.max_per_hour:
+        return HourlyLimit(subscription.max_per_hour, "max_per_hour")
+    return HourlyLimit(
+        settings.AGENT_MAX_RUNS_PER_HOUR, "AGENT_MAX_RUNS_PER_HOUR, the default when max_per_hour is unset"
+    )
+
+
+def check_hourly_rate(db: DBSession, of: ColumnElement[bool], limit: HourlyLimit, what: str) -> None:
+    """RateExceeded once the runs matching `of` have reached `limit` this hour."""
     since = datetime.now(timezone.utc) - timedelta(hours=1)
     started = (
         db.query(func.count(AgentRun.id)).filter(of, AgentRun.created_at > since).scalar()
     )
-    if started >= limit:
+    if started >= limit.runs:
         raise RateExceeded(
-            f"{what} rate: {started} runs in the last hour, limit {limit} "
-            f"({knob} / AGENT_MAX_RUNS_PER_HOUR); try again later or raise it"
+            f"{what} rate: {started} runs in the last hour, limit {limit.runs} "
+            f"({limit.source}); try again later or raise it"
         )
 
 
 def check_run_rate(db: DBSession, definition: AgentDefinition, spec_rate: int | None) -> None:
     """CapExceeded once a definition has started its hourly allowance of runs."""
     check_hourly_rate(
-        db, AgentRun.definition_id == definition.id, spec_rate, "definition", "max_runs_per_hour"
+        db,
+        AgentRun.definition_id == definition.id,
+        ceilinged_limit(spec_rate, "max_runs_per_hour"),
+        "definition",
     )
 
 
 def check_subscription_rate(db: DBSession, subscription: Subscription) -> None:
     """CapExceeded once a subscription has started its hourly allowance of runs."""
     check_hourly_rate(
-        db, AgentRun.subscription_id == subscription.id, subscription.max_per_hour, "subscription", "max_per_hour"
+        db, AgentRun.subscription_id == subscription.id, subscription_limit(subscription), "subscription"
     )
