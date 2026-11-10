@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from typing import cast
 from urllib.parse import urlsplit
 
-
 from memory.common.redis_pool import get_redis
 
 GIT_SYNC_STATUS_KEY = "memory:notes:git_sync_status"
