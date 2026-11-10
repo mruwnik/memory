@@ -605,6 +605,29 @@ async def test_send_dm_suggests_only_people_the_caller_may_see(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "discord_contact, suggested",
+    [
+        ("500", [("pal_person", "500")]),
+        (500, [("pal_person", "500")]),
+        (["friend", "500"], [("pal_person", "500")]),
+        ("friend", []),
+    ],
+)
+async def test_send_dm_suggests_people_by_the_discord_id_in_their_contact_info(
+    db_session, discord_people, regular_user, sent, discord_contact, suggested
+):
+    regular_user.scopes = ["discord", "people"]
+    db_session.add(Person(identifier="pal_person", display_name="Pal Person", contact_info={"discord": discord_contact}))
+    db_session.commit()
+
+    with mcp_auth_context(discord_people.token):
+        result = await get_fn(send_message)(message="hi", username="Pal Person")
+
+    assert [(s["person"], s["discord_id"]) for s in result["suggestions"]] == suggested
+
+
+@pytest.mark.asyncio
 async def test_send_dm_suggestions_wrap_names(db_session, discord_people, regular_user, sent):
     regular_user.scopes = ["discord", "people"]
     friend = db_session.query(Person).filter_by(identifier="friend_person").one()

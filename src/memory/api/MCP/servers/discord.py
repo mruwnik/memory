@@ -31,7 +31,7 @@ from memory.common.scopes import (
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import DiscordBot, DiscordChannel, DiscordMessage, DiscordServer, DiscordUser
 from memory.common.db.models.discord import DM_CHANNEL_TYPES
-from memory.common.people import find_person, primary_contact
+from memory.common.people import discord_ids, find_person
 from memory.common.reactions import reaction_counts
 from memory.common.discord_data import (
     caller_can_see_discord_user,
@@ -264,18 +264,10 @@ def suggest_people(session: DBSession, caller: UserProxy, query: str, tag: str) 
     if not person:
         return []
 
-    discord_id = None
-    discord_username = None
-    if person.discord_accounts:
-        discord_id = str(person.discord_accounts[0].id)
-        discord_username = person.discord_accounts[0].username
-    elif person.contact_info:
-        discord_id = primary_contact(person.contact_info.get("discord_id"))
-        discord_username = primary_contact(person.contact_info.get("discord"))
-
-    if not discord_id or not str(discord_id).isdigit():
-        return []
-    if not caller_can_see_discord_user(session, caller, int(discord_id)):
+    accounts = person.discord_accounts
+    discord_id = str(accounts[0].id) if accounts else next(iter(discord_ids(person.contact_info)), None)
+    discord_username = accounts[0].username if accounts else None
+    if discord_id is None or not caller_can_see_discord_user(session, caller, int(discord_id)):
         return []
 
     return [{

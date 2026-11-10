@@ -51,7 +51,7 @@ from memory.common.db.models.discord import DiscordUser
 from memory.common.db.models.polls import PollResponse
 from memory.common.db.models.source_item import source_item_people
 from memory.common.db.models.sources import GithubUser
-from memory.common.people import contact_values
+from memory.common.people import contact_values, discord_ids
 
 logger = logging.getLogger(__name__)
 
@@ -215,11 +215,34 @@ def set_user_link(session: DBSession, person: Person, user_id: int) -> int:
     return user_id
 
 
+def named_discord_entries(contact_info: dict | None) -> set[str]:
+    """The Discord entries an upsert's contact_info argument adds: its values, or
+    the keys a dict sets to true."""
+    value = (contact_info or {}).get("discord")
+    entries = [key for key, add in value.items() if add] if isinstance(value, dict) else contact_values(value)
+    return {str(entry).strip() for entry in entries}
+
+
+def drop_discord_contact(person: Person, discord_id: int) -> None:
+    """Remove a Discord id from the Person's contact_info, so it stops claiming an
+    account now linked elsewhere."""
+    entries = contact_values((person.contact_info or {}).get("discord"))
+    remaining = [entry for entry in entries if str(entry).strip() != str(discord_id)]
+    if len(remaining) == len(entries):
+        return
+    rest = {key: value for key, value in person.contact_info.items() if key != "discord"}
+    if not remaining:
+        person.contact_info = rest
+        return
+    person.contact_info = {**rest, "discord": remaining if len(remaining) > 1 else remaining[0]}
+
+
 def link_discord_from_contact_info(
     session: DBSession, person: Person, contact_info: dict | None
 ) -> list[int]:
     """Attach the Discord users whose ids are in contact_info to ``person``.
-    Admin only: a Discord account's messages follow its Person.
+    Admin only: a Discord account's messages follow its Person. A Person the
+    account moves from loses the id from its contact_info.
 
     Returns list of Discord user IDs that were linked.
     """
@@ -258,6 +281,9 @@ def link_discord_from_contact_info(
             linked_ids.append(discord_user.id)
             continue
 
+        previous = session.get(Person, discord_user.person_id) if discord_user.person_id else None
+        if previous is not None:
+            drop_discord_contact(previous, discord_user.id)
         discord_user.person_id = person.id
         logger.info(
             f"Linked Discord user {discord_user.username} ({discord_user.id}) "
@@ -407,8 +433,15 @@ async def upsert(
         elif user_id is not None:
             linked_user = set_user_link(session, person, user_id)
 
+        # Only ids this call names: an edit to a Person that still lists an id
+        # must not take back an account since linked to someone else.
+        named = named_discord_entries(contact_info)
         linked_discord = (
-            link_discord_from_contact_info(session, person, person.contact_info)
+            link_discord_from_contact_info(
+                session,
+                person,
+                {"discord": [i for i in discord_ids(person.contact_info) if i in named]},
+            )
             if caller_is_admin
             else []
         )
