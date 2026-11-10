@@ -22,10 +22,17 @@ def test_agent_tasks_route_to_the_agents_queue():
 
 def test_worker_tasks_do_not_import_the_api_package_at_load_time():
     # Every worker autodiscovers the task modules; only agents-worker has the API's deps.
-    api_only = ["memory.agents.runner", "memory.agents.enqueue", "fastmcp", "fastapi", "jsonschema"]
+    api_only = [
+        "memory.agents.runner",
+        "memory.agents.enqueue",
+        "memory.agents.spec",
+        "fastmcp",
+        "fastapi",
+        "jsonschema",
+    ]
     code = (
         "import sys, memory.workers.tasks; "
-        f"print(any(m in sys.modules for m in {api_only!r}))"
+        f"print([m for m in {api_only!r} if m in sys.modules])"
     )
     env = {**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)}
     out = subprocess.run(
@@ -36,7 +43,7 @@ def test_worker_tasks_do_not_import_the_api_package_at_load_time():
         env=env,
     )
 
-    assert out.stdout.strip() == "False"
+    assert out.stdout.strip() == "[]"
 
 
 def test_run_agent_executes_the_run(monkeypatch):
