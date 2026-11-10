@@ -108,7 +108,10 @@ COMMON_FILTERS = {
         ("mail", {"sender", "recipients", "folder", "min_sent_at", "max_sent_at"}),
         ("blog", {"domain", "author", "authors", "min_published", "max_published"}),
         ("doc", {"folder_path"}),
-        ("book", set()),
+        ("book", {"author", "authors"}),
+        ("comic", {"author", "authors", "min_published", "max_published"}),
+        ("forum", {"author", "authors", "min_published", "max_published"}),
+        ("github", {"author", "authors"}),
     ],
 )
 @patch("memory.api.MCP.servers.meta.qdrant")
@@ -124,7 +127,8 @@ REGISTRY_FILTERS_BY_COLLECTION = [
     (spec.key, collection)
     for spec in FILTER_REGISTRY.values()
     if not isinstance(spec.qdrant_op, QdrantUnsupported)
-    for collection in (spec.model.get_collections() if spec.model else ["text"])
+    for target in spec.targets
+    for collection in (target.model.get_collections() if target.model else ["text"])
 ]
 
 

@@ -151,6 +151,11 @@ class FilterSpec:
     qdrant_op: QdrantOp | QdrantUnsupported
     lowercase_value: bool = False
 
+    def applies_to(self, collection: str) -> bool:
+        """Whether items in ``collection`` can match: a target is on every
+        item, or on a type stored in that collection."""
+        return any(t.model is None or collection in t.model.get_collections() for t in self.targets)
+
 
 def on_item(column: str) -> tuple[SqlTarget, ...]:
     return (SqlTarget(None, column),)
