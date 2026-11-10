@@ -226,47 +226,40 @@ export const PollGrid: React.FC<PollGridProps> = ({
     }
   }, [readonly, onSlotsChange, selectedMap, selectedSlots, dragMode, availabilityLevel])
 
-  // Mouse event handlers
-  const handleMouseDown = useCallback((slot: TimeSlot) => {
+  // Pointer handlers: one event stream for mouse, touch and pen, so a tap is not seen twice
+  // (touchstart plus its compatibility mousedown).
+  const handlePointerDown = useCallback((e: React.PointerEvent<HTMLButtonElement>, slot: TimeSlot) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return
+    // Touch captures the pointer to the first cell; release it so pointerenter fires on the cells dragged across
+    if (e.pointerType !== 'mouse') e.currentTarget.releasePointerCapture?.(e.pointerId)
     handleSlotInteraction(slot, true)
   }, [handleSlotInteraction])
 
-  const handleMouseEnter = useCallback((slot: TimeSlot) => {
+  const handlePointerEnter = useCallback((slot: TimeSlot) => {
     if (isDragging) {
       handleSlotInteraction(slot, false)
     }
   }, [isDragging, handleSlotInteraction])
 
-  const handleMouseUp = useCallback(() => {
+  // Keyboard and screen-reader activation arrive as a click with no pointer press (detail 0);
+  // pointer clicks were already handled on pointerdown.
+  const handleClick = useCallback((e: React.MouseEvent, slot: TimeSlot) => {
+    if (e.detail !== 0) return
+    toggleSlot(slot)
+  }, [toggleSlot])
+
+  const stopDragging = useCallback(() => {
     setIsDragging(false)
   }, [])
 
-  // Global mouse up listener
   useEffect(() => {
-    window.addEventListener('mouseup', handleMouseUp)
-    return () => window.removeEventListener('mouseup', handleMouseUp)
-  }, [handleMouseUp])
-
-  // Touch event handlers for mobile
-  const handleTouchStart = useCallback((slot: TimeSlot) => {
-    handleSlotInteraction(slot, true)
-  }, [handleSlotInteraction])
-
-  const handleTouchMove = useCallback((e: React.TouchEvent) => {
-    if (!isDragging || !gridRef.current) return
-
-    const touch = e.touches[0]
-    const element = document.elementFromPoint(touch.clientX, touch.clientY)
-    const slotKey = element?.getAttribute('data-slot-key')
-
-    if (slotKey) {
-      const allSlots = gridData.slots.flat().filter((s): s is TimeSlot => s !== null)
-      const slot = allSlots.find(s => s.key === slotKey)
-      if (slot) {
-        handleSlotInteraction(slot, false)
-      }
+    window.addEventListener('pointerup', stopDragging)
+    window.addEventListener('pointercancel', stopDragging)
+    return () => {
+      window.removeEventListener('pointerup', stopDragging)
+      window.removeEventListener('pointercancel', stopDragging)
     }
-  }, [isDragging, gridData.slots, handleSlotInteraction])
+  }, [stopDragging])
 
   // Keyboard navigation handler (roving tabIndex within the grid)
   const handleKeyDown = useCallback((e: React.KeyboardEvent, dayIndex: number, rowIndex: number) => {
@@ -301,13 +294,6 @@ export const PollGrid: React.FC<PollGridProps> = ({
         e.preventDefault()
         newDay = numDays - 1
         break
-      case ' ':
-      case 'Enter': {
-        e.preventDefault()
-        const slot = gridData.slots[dayIndex]?.[rowIndex]
-        if (slot) toggleSlot(slot)
-        return
-      }
       default:
         return
     }
@@ -317,7 +303,7 @@ export const PollGrid: React.FC<PollGridProps> = ({
     gridRef.current
       ?.querySelector<HTMLElement>(`[data-day="${newDay}"][data-row="${newRow}"]`)
       ?.focus()
-  }, [gridData.slots, gridData.timeKeys.length, toggleSlot])
+  }, [gridData.slots.length, gridData.timeKeys.length])
 
   // Render mode check
   const isHeatmapMode = !!aggregatedData
@@ -374,9 +360,6 @@ export const PollGrid: React.FC<PollGridProps> = ({
         style={{
           gridTemplateColumns: `auto repeat(${gridData.slots.length}, 1fr)`,
         }}
-        onMouseUp={handleMouseUp}
-        onTouchEnd={handleMouseUp}
-        onTouchMove={handleTouchMove}
       >
         {/* Header row - dates */}
         <div role="row" className="contents">
@@ -475,7 +458,7 @@ export const PollGrid: React.FC<PollGridProps> = ({
               }
 
               // Interactive cell: button for keyboard + screen reader support
-              const buttonClass = `w-full h-full min-h-[32px] flex items-center justify-center text-xs font-medium transition-colors cursor-pointer hover:opacity-80 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-inset ${colorClass}`
+              const buttonClass = `w-full h-full min-h-[32px] touch-none select-none flex items-center justify-center text-xs font-medium transition-colors cursor-pointer hover:opacity-80 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-inset ${colorClass}`
 
               return (
                 <div key={dayIndex} role="gridcell">
@@ -489,9 +472,9 @@ export const PollGrid: React.FC<PollGridProps> = ({
                     data-row={rowIndex}
                     className={buttonClass}
                     style={cellStyle}
-                    onMouseDown={() => handleMouseDown(slot)}
-                    onMouseEnter={() => handleMouseEnter(slot)}
-                    onTouchStart={() => handleTouchStart(slot)}
+                    onPointerDown={(e) => handlePointerDown(e, slot)}
+                    onPointerEnter={() => handlePointerEnter(slot)}
+                    onClick={(e) => handleClick(e, slot)}
                     onFocus={() => setActiveCell([dayIndex, rowIndex])}
                     onKeyDown={(e) => handleKeyDown(e, dayIndex, rowIndex)}
                   >

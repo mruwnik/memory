@@ -6,6 +6,7 @@ import { usePeople } from '@/hooks/usePeople'
 import { PersonSelect, type ListPeople } from '@/components/shared/PersonPicker'
 import { Badge, Button, ConfirmButton, cx, EmptyState, ExpandToggle, Field, FormActions, Input, List, LoadingState, Modal, MultiSelect, Notice, Page, Row, RowError, Select, SubList, Textarea, ToggleGroup, Toolbar, useActionNotice, NewTabLink } from '@/components/shared/ui'
 import { formatUserDateTime } from '@/utils/timezones'
+import { readStorage, readStoredArray, writeStorage } from '@/utils/storage'
 
 
 export const ProjectsPanel = () => {
@@ -35,7 +36,7 @@ export const ProjectsPanel = () => {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [viewMode, setViewMode] = useState<'tree' | 'list'>(() => {
-    const stored = localStorage.getItem('projects-view-mode')
+    const stored = readStorage('projects-view-mode')
     return stored === 'list' || stored === 'tree' ? stored : 'tree'
   })
   const [stateFilter, setStateFilter] = useState<'all' | 'open' | 'closed'>('open')
@@ -43,20 +44,9 @@ export const ProjectsPanel = () => {
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [editingProject, setEditingProject] = useState<Project | null>(null)
   const [managingTeams, setManagingTeams] = useState<Project | null>(null)
-  const [collapsedNodes, setCollapsedNodes] = useState<Set<number>>(() => {
-    const saved = localStorage.getItem('projects-collapsed-nodes')
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved)
-        if (Array.isArray(parsed)) {
-          return new Set(parsed)
-        }
-      } catch {
-        // Ignore parse errors
-      }
-    }
-    return new Set()
-  })
+  const [collapsedNodes, setCollapsedNodes] = useState<Set<number>>(
+    () => new Set(readStoredArray<number>('projects-collapsed-nodes') ?? []),
+  )
 
   const toggleCollapse = useCallback((nodeId: number) => {
     setCollapsedNodes(prev => {
@@ -72,7 +62,7 @@ export const ProjectsPanel = () => {
 
   // Persist collapsed state to localStorage
   useEffect(() => {
-    localStorage.setItem('projects-collapsed-nodes', JSON.stringify(Array.from(collapsedNodes)))
+    writeStorage('projects-collapsed-nodes', JSON.stringify(Array.from(collapsedNodes)))
   }, [collapsedNodes])
 
   const loadData = useCallback(async () => {
@@ -101,7 +91,7 @@ export const ProjectsPanel = () => {
 
   // Persist view mode preference
   useEffect(() => {
-    localStorage.setItem('projects-view-mode', viewMode)
+    writeStorage('projects-view-mode', viewMode)
   }, [viewMode])
 
   const handleCreate = async (data: ProjectCreate | ProjectUpdate) => {

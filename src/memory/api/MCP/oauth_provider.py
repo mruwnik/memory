@@ -751,7 +751,7 @@ class SimpleOAuthProvider(OAuthProvider):
 
             # Extract data needed for token creation
             auth_code_id = auth_code.id
-            user_id = auth_code.user_id
+            user_id = auth_code.user.id
             client_id = auth_code.client_id
             scopes = authorization_code.scopes
 
@@ -786,7 +786,7 @@ class SimpleOAuthProvider(OAuthProvider):
             token = make_token_from_data(
                 session,
                 oauth_state_id=auth_code_id,
-                user_id=user_id,  # type: ignore[arg-type]
+                user_id=user_id,
                 client_id=client_id,
                 scopes=scopes,
             )
@@ -994,39 +994,9 @@ class SimpleOAuthProvider(OAuthProvider):
 
             return make_token(session, db_refresh_token, scopes)
 
-    async def revoke_token(  # type: ignore[override]
-        self, token: str, token_type_hint: Optional[str] = None
-    ) -> None:
-        """Revoke a token (access token or refresh token)."""
-        with make_session() as session:
-            revoked = False
-
-            # Try to revoke as access token (UserSession)
-            if not token_type_hint or token_type_hint == "access_token":
-                user_session = session.get(UserSession, hash_token(token))
-                if user_session:
-                    session.delete(user_session)
-                    revoked = True
-                    logger.info(f"Revoked access token: id={token_id(token)}")
-
-            # Try to revoke as refresh token
-            if not revoked and (
-                not token_type_hint or token_type_hint == "refresh_token"
-            ):
-                refresh_token = (
-                    session.query(OAuthRefreshToken)
-                    .filter(OAuthRefreshToken.token_hash == hash_token(token))
-                    .first()
-                )
-                if refresh_token:
-                    refresh_token.revoked = True  # type: ignore
-                    revoked = True
-                    logger.info(f"Revoked refresh token: id={token_id(token)}")
-
-            if revoked:
-                session.commit()
-            else:
-                logger.warning(f"Token not found for revocation: id={token_id(token)}")
+    async def revoke_token(self, token: FastMCPAccessToken | RefreshToken) -> None:
+        """Token revocation isn't offered: the /revoke endpoint isn't mounted."""
+        raise NotImplementedError
 
     def get_protected_resource_metadata(self) -> dict[str, Any]:
         """Return metadata about the protected resource."""

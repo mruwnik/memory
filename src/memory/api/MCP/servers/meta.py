@@ -137,7 +137,7 @@ def search_filters(collection: str) -> dict[str, SchemaArg]:
         spec.key
         for spec in FILTER_REGISTRY.values()
         if not isinstance(spec.qdrant_op, QdrantUnsupported)
-        and (spec.model is None or collection in spec.model.get_collections())
+        and spec.applies_to(collection)
     ]
     # Outside the registry, but `search` applies them to every collection.
     created_at_keys = ["min_created_at", "max_created_at"]

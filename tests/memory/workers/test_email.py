@@ -19,9 +19,11 @@ from memory.common.db.models import (
 from memory.parsers.email import Attachment, parse_email_message
 from memory.workers.email import (
     FolderUidsError,
+    FolderUnavailableError,
     ImapFolder,
     create_mail_message,
     decode_imap_utf7,
+    encode_imap_utf7,
     delete_emails,
     delete_removed_emails,
     extract_email_uid,
@@ -34,6 +36,7 @@ from memory.workers.email import (
     get_gmail_label_ids,
     get_gmail_service,
     gmail_gone_message_ids,
+    imap_mailbox,
     imap_connection,
     list_gmail_message_ids,
     list_imap_folders,
@@ -41,6 +44,7 @@ from memory.workers.email import (
     process_attachment,
     process_attachments,
     process_folder,
+    search_folder,
     should_delete_email,
     vectorize_email,
 )
@@ -329,7 +333,7 @@ def test_create_mail_message(db_session):
         "--boundary--"
     )
     folder = "INBOX"
-    parsed_email = parse_email_message(raw_email, "321")
+    parsed_email = parse_email_message(raw_email)
 
     # Call function
     mail_message = create_mail_message(
@@ -400,10 +404,10 @@ def test_fetch_email(email_provider):
 
 def test_fetch_email_since(email_provider):
     # Fetch emails from INBOX folder
-    result = fetch_email_since(email_provider, "INBOX", datetime(1970, 1, 1))
+    result, unfetched = fetch_email_since(email_provider, "INBOX", datetime(1970, 1, 1))
 
     # Verify we got the expected number of emails
-    assert len(result) == 2
+    assert (len(result), unfetched) == (2, 0)
 
     # Verify content of fetched emails
     uids = sorted([uid or "" for uid, _, _ in result])
@@ -413,7 +417,27 @@ def test_fetch_email_since(email_provider):
     result = fetch_email_since(
         email_provider, "NonExistentFolder", datetime(1970, 1, 1)
     )
-    assert result == []
+    assert result == ([], 0)
+
+
+def test_fetch_email_since_counts_messages_it_could_not_fetch():
+    provider = cast(
+        imaplib.IMAP4,
+        MockEmailProvider({"INBOX": [{"uid": 1}, {"uid": 2}]}, unfetchable={2}),
+    )
+
+    emails, unfetched = fetch_email_since(provider, "INBOX", datetime(1970, 1, 1))
+
+    assert ([uid for uid, _, _ in emails], unfetched) == (["1"], 1)
+
+
+def test_fetch_email_since_raises_when_folder_unreadable():
+    provider = cast(
+        imaplib.IMAP4, MockEmailProvider({"INBOX": [{"uid": 1}]}, unselectable={"INBOX"})
+    )
+
+    with pytest.raises(FolderUidsError):
+        fetch_email_since(provider, "INBOX", datetime(1970, 1, 1))
 
 
 def test_process_folder(email_provider):
@@ -425,7 +449,7 @@ def test_process_folder(email_provider):
         email_provider, "INBOX", account, datetime(1970, 1, 1), MagicMock()
     )
 
-    assert results == {"messages_found": 2, "new_messages": 2, "errors": 0}
+    assert results == {"messages_found": 2, "new_messages": 2, "errors": 0, "unavailable": False}
 
 
 def test_process_folder_no_emails(email_provider):
@@ -436,7 +460,7 @@ def test_process_folder_no_emails(email_provider):
     result = process_folder(
         email_provider, "Empty", account, datetime(1970, 1, 1), MagicMock()
     )
-    assert result == {"messages_found": 0, "new_messages": 0, "errors": 0}
+    assert result == {"messages_found": 0, "new_messages": 0, "errors": 0, "unavailable": False}
 
 
 def test_process_folder_error(email_provider):
@@ -453,7 +477,48 @@ def test_process_folder_error(email_provider):
     result = process_folder(
         email_provider, "INBOX", account, datetime(1970, 1, 1), mock_processor
     )
-    assert result == {"messages_found": 0, "new_messages": 0, "errors": 0}
+    assert result == {"messages_found": 0, "new_messages": 0, "errors": 1, "unavailable": False}
+
+
+@pytest.mark.parametrize(
+    "provider_kwargs, processor_error, expected",
+    [
+        (
+            {"unselectable": {"INBOX"}},
+            None,
+            {"messages_found": 0, "new_messages": 0, "errors": 1, "unavailable": False},
+        ),
+        (
+            {"unselectable": {"INBOX"}, "select_code": "NONEXISTENT"},
+            None,
+            {"messages_found": 0, "new_messages": 0, "errors": 0, "unavailable": True},
+        ),
+        (
+            {"unfetchable": {2}},
+            None,
+            {"messages_found": 2, "new_messages": 1, "errors": 1, "unavailable": False},
+        ),
+        (
+            {},
+            RuntimeError("broker down"),
+            {"messages_found": 2, "new_messages": 0, "errors": 2, "unavailable": False},
+        ),
+    ],
+)
+def test_process_folder_counts_every_failure(provider_kwargs, processor_error, expected):
+    provider = cast(
+        imaplib.IMAP4,
+        MockEmailProvider({"INBOX": [{"uid": 1}, {"uid": 2}]}, **provider_kwargs),
+    )
+    account = MagicMock(spec=EmailAccount)
+    account.id = 123
+
+    result = process_folder(
+        provider, "INBOX", account, datetime(1970, 1, 1),
+        MagicMock(side_effect=processor_error),
+    )
+
+    assert result == expected
 
 
 def test_vectorize_email_basic(db_session, qdrant, mock_uuid4):
@@ -903,6 +968,54 @@ def test_decode_imap_utf7(encoded, decoded):
     assert decode_imap_utf7(encoded) == decoded
 
 
+@pytest.mark.parametrize(
+    "decoded,encoded",
+    [
+        ("INBOX", "INBOX"),
+        ("Sent & Received", "Sent &- Received"),
+        ("Ärger", "&AMQ-rger"),
+        ("Drafts ö test", "Drafts &APY- test"),
+        ("日本語", "&ZeVnLIqe-"),
+        ("~peter/mail/台北/日本語", "~peter/mail/&U,BTFw-/&ZeVnLIqe-"),
+    ],
+)
+def test_encode_imap_utf7(decoded, encoded):
+    assert encode_imap_utf7(decoded) == encoded
+    assert decode_imap_utf7(encoded) == decoded
+
+
+@pytest.mark.parametrize(
+    "name,wire",
+    [
+        ("INBOX", '"INBOX"'),
+        ("AI orgs", '"AI orgs"'),
+        ("Ärger", '"&AMQ-rger"'),
+        ('say "hi"', '"say \\"hi\\""'),
+    ],
+)
+def test_imap_mailbox(name, wire):
+    assert imap_mailbox(name) == wire
+
+
+SPECIAL_FOLDERS = ["AI orgs", "Ärger", "Projects (old)"]
+
+
+@pytest.mark.parametrize("folder", SPECIAL_FOLDERS)
+def test_fetch_email_since_selects_folder_with_special_name(folder):
+    provider = cast(imaplib.IMAP4, MockEmailProvider({folder: [{"uid": 5}]}))
+
+    emails, _ = fetch_email_since(provider, folder, datetime(1970, 1, 1))
+
+    assert [uid for uid, _, _ in emails] == ["5"]
+
+
+@pytest.mark.parametrize("folder", SPECIAL_FOLDERS)
+def test_get_folder_uids_selects_folder_with_special_name(folder):
+    provider = cast(imaplib.IMAP4, MockEmailProvider({folder: [{"uid": 5}]}))
+
+    assert get_folder_uids(provider, folder) == {"5"}
+
+
 def test_decode_imap_utf7_malformed_falls_back_to_raw():
     # Unterminated shift sequence — keep the raw value rather than dropping it.
     assert decode_imap_utf7("Broken &AOQ") == "Broken &AOQ"
@@ -977,7 +1090,7 @@ def test_create_mail_message_with_account(db_session, test_user):
         "Test body content\n"
     )
     folder = "INBOX"
-    parsed_email = parse_email_message(raw_email, "test-with-account")
+    parsed_email = parse_email_message(raw_email)
 
     # Create with account_id and imap_uid
     mail_message = create_mail_message(
@@ -1384,3 +1497,34 @@ def test_imap_starttls_failure_never_sends_password(connect):
     assert context.verify_mode == ssl.CERT_REQUIRED
     assert context.check_hostname
     connect.return_value.logout.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "folder, code, flags, gone",
+    [
+        # Still listed, no code: a passing refusal (throttling, a lock)
+        ("INBOX", None, {}, False),
+        ("Gone", None, {}, True),
+        ("Parent", None, {"Parent": "\\Noselect"}, True),
+        ("INBOX", "NONEXISTENT", {}, True),
+        ("Gone", "UNAVAILABLE", {}, False),
+        ("Gone", "INUSE", {}, False),
+    ],
+)
+def test_search_folder_tells_a_missing_folder_from_a_passing_refusal(
+    folder, code, flags, gone
+):
+    provider = cast(
+        imaplib.IMAP4,
+        MockEmailProvider(
+            {"INBOX": [], "Parent": []},
+            unselectable={folder},
+            select_code=code,
+            folder_flags=flags,
+        ),
+    )
+
+    with pytest.raises(FolderUidsError) as raised:
+        search_folder(provider, folder, "ALL")
+
+    assert isinstance(raised.value, FolderUnavailableError) is gone

@@ -9,6 +9,8 @@ live infrastructure either.
 """
 
 import asyncio
+import typing
+from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy.dialects import postgresql
@@ -19,9 +21,19 @@ from memory.api.search.bm25 import search_bm25
 from memory.api.search.embeddings import search_chunks
 from memory.api.search.types import MCPSearchFilters, SearchFilters
 from memory.api.MCP.servers.core import apply_item_filters
-from memory.common.db.models import Chunk, SourceItem
+from memory.common.db.models import (
+    BlogPost,
+    Book,
+    BookSection,
+    Chunk,
+    Comic,
+    ForumComment,
+    ForumPost,
+    GithubItem,
+    SourceItem,
+)
 from memory.common.extract import DataChunk
-from tests.conftest import make_source_item
+from tests.conftest import make_source_item, unique_sha256
 
 
 def compile_sql(query) -> str:
@@ -216,13 +228,12 @@ def test_registry_sql_authors_uses_in():
     assert "blog_post" in sql
 
 
-def test_registry_sql_joins_each_subclass_once():
+def test_registry_sql_matches_subclass_columns_without_joins():
     sql = compile_sql(
         registry_query({"sender": "a", "subject": "b", "min_sent_at": "2024-01-01"})
     )
-    # One join into the mail_message subclass even though three mail filters
-    # target it.
-    assert sql.count("JOIN mail_message") == 1
+    assert "JOIN" not in sql
+    assert sql.count("source_item.id IN (SELECT mail_message.id") == 3
 
 
 def test_registry_sql_empty_values_skipped():
@@ -244,10 +255,22 @@ def test_registry_sql_empty_values_skipped():
         ),
         # recipients/sender filter the derived clean-address payload keys.
         ({"recipients": ["a"]}, {"key": "recipient_emails", "match": {"any": ["a"]}}),
-        ({"authors": ["a"]}, {"key": "authors", "match": {"any": ["a"]}}),
+        (
+            {"authors": ["a"]},
+            {"should": [
+                {"key": "author", "match": {"any": ["a"]}},
+                {"key": "authors", "match": {"any": ["a"]}},
+            ]},
+        ),
         ({"sender": "s"}, {"key": "sender_email", "match": {"value": "s"}}),
         ({"domain": "d"}, {"key": "domain", "match": {"value": "d"}}),
-        ({"author": "a"}, {"key": "author", "match": {"value": "a"}}),
+        (
+            {"author": "a"},
+            {"should": [
+                {"key": "author", "match": {"value": "a"}},
+                {"key": "authors", "match": {"value": "a"}},
+            ]},
+        ),
         ({"folder_path": "p"}, {"key": "folder_path", "match": {"value": "p"}}),
         ({"folder": "INBOX"}, {"key": "folder", "match": {"value": "INBOX"}}),
         ({"min_size": 5}, {"key": "size", "range": {"gte": 5}}),
@@ -367,22 +390,87 @@ def test_embeddings_entry_rejects_subject_loudly():
         )
 
 
-def test_bm25_mail_filter_join_chain():
-    """Registry mail filters fold onto a bm25-style Chunk->SourceItem query.
-
-    bm25's base query is (Chunk.id, rank) joined to SourceItem; passing
-    joined={SourceItem} must suppress a duplicate SourceItem join and chain
-    MailMessage on SourceItem.id, yielding inner joins (no cartesian product).
-    """
+def test_bm25_mail_filter_chain():
+    """Registry mail filters fold onto a bm25-style Chunk->SourceItem query as
+    conditions on the SourceItem already joined, adding no joins."""
     base = Query(Chunk.id).join(SourceItem, SourceItem.id == Chunk.source_id)
-    q = F.apply_registry_filters_sql(
-        base, {"sender": "a@b.com", "recipients": ["x@y.com"]}, joined={SourceItem}
-    )
+    q = F.apply_registry_filters_sql(base, {"sender": "a@b.com", "recipients": ["x@y.com"]})
     sql = compile_sql(q)
-    # SourceItem joined exactly once (pre-joined), MailMessage chained on its id
-    # via the raw table (joining the polymorphic entity would re-alias
-    # source_item and produce a cartesian product).
-    assert sql.count("JOIN source_item") == 1
-    assert "JOIN mail_message ON mail_message.id = source_item.id" in sql
+    assert sql.count("JOIN") == 1
     assert "mail_message.sender ILIKE" in sql
     assert "array_to_string(mail_message.recipients" in sql
+
+
+# --- (e) every type writing a filter's payload key is matched in SQL ---------
+
+
+def source_item_types() -> list[type]:
+    def walk(cls):
+        for sub in cls.__subclasses__():
+            yield sub
+            yield from walk(sub)
+
+    return list(walk(SourceItem))
+
+
+def payload_keys(model: type) -> set[str]:
+    payload = typing.get_type_hints(model.as_payload).get("return")
+    return {key for base in getattr(payload, "__mro__", ()) for key in getattr(base, "__annotations__", {})}
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [spec for spec in F.FILTER_REGISTRY.values() if all(t.model for t in spec.targets)],
+    ids=lambda spec: spec.key,
+)
+def test_sql_targets_cover_every_type_writing_the_payload_key(spec):
+    """The vector arm matches any point whose payload has the key, so the SQL
+    arms and the final merge must match every type that writes it."""
+    writers = {model for model in source_item_types() if payload_keys(model) & set(spec.qdrant_keys)}
+    covered = {model for model in writers if any(issubclass(model, t.model) for t in spec.targets)}
+    assert writers - covered == set()
+
+
+def at(day: str) -> datetime:
+    return datetime.fromisoformat(day).replace(tzinfo=timezone.utc)
+
+
+@pytest.fixture
+def authored_items(db_session):
+    """One item of each type that has an author or publication date, by name."""
+    book = Book(title="A Book", author="Ann")
+    post = ForumPost(sha256=unique_sha256("post"), modality="forum", authors=["Ann", "Bob"], published_at=at("2021-06-01"))
+    db_session.add_all([book, post])
+    db_session.flush()
+    items = {
+        "blog": BlogPost(sha256=unique_sha256("blog"), modality="blog", author="Bob", published=at("2019-06-01")),
+        "comic": Comic(sha256=unique_sha256("comic"), modality="comic", author="Ann", published=at("2022-06-01")),
+        "comment": ForumComment(
+            sha256=unique_sha256("comment"), modality="forum", post_id=post.id, comment_id="c1",
+            author="Cid", posted_at=at("2023-06-01"),
+        ),
+        "github": GithubItem(sha256=unique_sha256("gh"), modality="github", kind="issue", repo_path="o/r", author="Ann"),
+        "section": BookSection(sha256=unique_sha256("section"), modality="book", book_id=book.id),
+    }
+    db_session.add_all(items.values())
+    db_session.commit()
+    return {"post": post.id} | {name: item.id for name, item in items.items()}
+
+
+@pytest.mark.parametrize(
+    "filters, expected",
+    [
+        ({"author": "Ann"}, {"post", "comic", "github", "section"}),
+        ({"author": "Cid"}, {"comment"}),
+        ({"authors": ["Bob"]}, {"post", "blog"}),
+        ({"authors": ["Cid", "Ann"]}, {"post", "comic", "comment", "github", "section"}),
+        ({"min_published": "2021-01-01"}, {"post", "comic", "comment"}),
+        ({"max_published": "2021-12-31"}, {"blog", "post"}),
+        ({"author": "Ann", "max_published": "2021-12-31"}, {"post"}),
+    ],
+)
+def test_registry_sql_author_and_published_match_every_type(db_session, authored_items, filters, expected):
+    names = {item_id: name for name, item_id in authored_items.items()}
+    query = db_session.query(SourceItem.id).filter(SourceItem.id.in_(names))
+    rows = F.apply_registry_filters_sql(query, filters).all()
+    assert {names[row.id] for row in rows} == expected

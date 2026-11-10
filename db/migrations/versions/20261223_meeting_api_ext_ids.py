@@ -11,14 +11,14 @@ The stored params of those submissions' jobs are renamed too, since a retry
 rebuilds the task's arguments from them.
 
 Revision ID: 20261223_meeting_api_ext_ids
-Revises: 20261223_transcript_task_options
+Revises: 20261224_recurrence_expandable
 Create Date: 2026-11-10
 """
 
 from alembic import op
 
 revision = "20261223_meeting_api_ext_ids"
-down_revision = "20261223_transcript_task_options"
+down_revision = "20261224_recurrence_expandable"
 branch_labels = None
 depends_on = None
 

@@ -68,6 +68,7 @@ export const ToolBreakdownChart: React.FC<ToolBreakdownChartProps> = ({ data }) 
     <div>
       <div className="flex justify-end mb-3">
         <Select
+          aria-label="Chart metric"
           value={metric}
           onChange={(e) => setMetric(e.target.value as MetricType)}
         >

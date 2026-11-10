@@ -111,19 +111,6 @@ def test_revoke_user_credentials_ends_oauth_sessions(db_session, keep_current):
     assert refresh_row(db_session, current).revoked is True
 
 
-@pytest.mark.asyncio
-async def test_revoke_token_ends_access_session(db_session):
-    user = create_test_user(db_session)
-    create_oauth_client(db_session)
-    token = issue_token(db_session, user)
-
-    await SimpleOAuthProvider().revoke_token(token.access_token, "access_token")
-
-    db_session.expire_all()
-    assert db_session.get(UserSession, hash_token(token.access_token)) is None
-    assert refresh_row(db_session, token).access_token_session_id is None
-
-
 # --- make_token tests ---
 
 

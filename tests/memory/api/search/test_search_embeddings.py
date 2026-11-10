@@ -66,7 +66,6 @@ def test_registry_combined_range_merges():
         ("tags", ["tag1", "tag2"], "tags"),
         # recipients filters the derived bare-address payload key.
         ("recipients", ["user1", "user2"], "recipient_emails"),
-        ("authors", ["author1"], "authors"),
     ],
 )
 def test_registry_list_filters(filter_key, filter_value, payload_key):
@@ -81,7 +80,6 @@ def test_registry_list_filters(filter_key, filter_value, payload_key):
         # sender filters the derived bare-address payload key.
         ("sender", "user@example.com", "sender_email"),
         ("domain", "example.com", "domain"),
-        ("author", "John Doe", "author"),
     ],
 )
 def test_registry_string_filters(filter_key, filter_value, payload_key):
@@ -101,13 +99,6 @@ def test_special_min_confidences():
 def test_special_source_ids_maps_to_singular_payload_key():
     result = build_qdrant_special_filters({"source_ids": [11, 22]})
     assert result == [{"key": "source_id", "match": {"any": [11, 22]}}]
-
-
-def test_special_observation_types():
-    result = build_qdrant_special_filters({"observation_types": ["belief", "preference"]})
-    assert result == [
-        {"key": "observation_types", "match": {"any": ["belief", "preference"]}}
-    ]
 
 
 def test_registry_empty_min_confidences_is_special_not_registry():

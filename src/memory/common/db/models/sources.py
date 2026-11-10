@@ -292,6 +292,14 @@ class EmailAccount(PolledSource, SyncStatusMixin, LLMKeyChoice, Base):
     tags: Mapped[list[str]] = mapped_column(
         ARRAY(Text), nullable=False, server_default="{}"
     )
+    # Gmail ids of messages the sync fetched but did not store (a copy this
+    # account already stored, password-reset mail, a worker killer), so later
+    # syncs don't fetch them again. An id is dropped once its message leaves
+    # the mailbox. A copy stored by another account isn't remembered, so this
+    # account stores its own once that copy is gone.
+    gmail_declined_ids: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, server_default="{}"
+    )
     send_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="true"
     )

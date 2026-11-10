@@ -1,7 +1,8 @@
 import contextlib
+import enum
 import logging
 import pathlib
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from email.parser import HeaderParser
 from email.utils import parseaddr
 from typing import Generator, cast
@@ -148,7 +149,7 @@ def store_email_message(
                 logger.error(f"Account {account_id} not found")
                 return {"status": "error", "error": "Account not found"}
 
-            parsed_email = parse_email_message(raw_email, message_id)
+            parsed_email = parse_email_message(raw_email)
             if find_stored_message(db, account_id, parsed_email):
                 return {"status": "already_exists", "message_id": message_id}
 
@@ -257,6 +258,24 @@ def is_password_reset_mail(raw_email: str) -> bool:
     )
 
 
+class QueueOutcome(enum.Enum):
+    """What ``queue_message`` did with a message."""
+
+    QUEUED = "queued"
+    STORED_HERE = "stored_here"
+    STORED_ELSEWHERE = "stored_elsewhere"
+    PASSWORD_RESET = "password_reset"
+    KILLS_WORKER = "kills_worker"
+
+
+# Declines a later sync would repeat for as long as the message exists. A copy
+# stored by another account is not among them: deleting that copy (or that
+# account) makes this account's own copy needed.
+LASTING_DECLINES = frozenset(
+    {QueueOutcome.STORED_HERE, QueueOutcome.PASSWORD_RESET, QueueOutcome.KILLS_WORKER}
+)
+
+
 def queue_message(
     db: DBSession,
     account_id: int,
@@ -264,11 +283,12 @@ def queue_message(
     folder: str,
     raw_email: str,
     received_at: datetime | None = None,
-) -> bool:
+) -> QueueOutcome:
     """Parse, dedup, spool, and queue a single message for async processing.
 
-    Returns True if the message was newly queued, False if it already
-    exists (dedup hit), is password-reset mail, or killed its worker before. On any failure the shared session is rolled back
+    Returns QUEUED if the message was newly queued, else why it was not: a
+    copy is already stored (by this account or another), it is password-reset
+    mail, or it killed its worker before. On any failure the shared session is rolled back
     before the exception propagates: a dropped connection (e.g. Postgres'
     idle-in-transaction timeout firing mid-sync) otherwise poisons the
     transaction and every subsequent statement cascades into
@@ -276,19 +296,21 @@ def queue_message(
     on the next statement.
     """
     if is_password_reset_mail(raw_email):
-        return False
+        return QueueOutcome.PASSWORD_RESET
     spooled: str | None = None
     try:
-        parsed_email = parse_email_message(raw_email, message_id, with_attachments=False)
-        if find_stored_message(db, account_id, parsed_email):
-            return False
+        parsed_email = parse_email_message(raw_email, with_attachments=False)
+        if stored := find_stored_message(db, account_id, parsed_email):
+            if stored.email_account_id == account_id:
+                return QueueOutcome.STORED_HERE
+            return QueueOutcome.STORED_ELSEWHERE
         if killed_its_worker(db, "process_message", account_id=account_id, message_id=message_id):
             logger.warning(
                 "Not queueing message %s of account %s: it keeps killing its worker",
                 message_id,
                 account_id,
             )
-            return False
+            return QueueOutcome.KILLS_WORKER
         spooled = spool_raw_email(
             account_id, message_id, raw_email, parsed_email["hash"].hex()
         )
@@ -302,7 +324,7 @@ def queue_message(
             spool_name=spooled,
             received_at=received_at and received_at.isoformat(),
         )
-        return True
+        return QueueOutcome.QUEUED
     except Exception:
         # If we spooled the body but never got it onto the queue (e.g. the
         # broker is unreachable — the exact failure this change guards against),
@@ -314,11 +336,28 @@ def queue_message(
         raise
 
 
+# IMAP SEARCH SINCE compares days in the server's timezone, which can be a day
+# behind ours; mail fetched twice is dropped by Message-ID.
+SYNC_OVERLAP = timedelta(days=1)
+
+# How long mail that fails to fetch or queue holds an IMAP account's cutoff
+# back. Every sync re-downloads all mail since the cutoff, so mail still
+# failing after this long is given up on rather than re-fetching ever more.
+FAILURE_HOLD_LIMIT = timedelta(days=3)
+# The same for an account that never synced cleanly, whose every retry
+# re-downloads the whole mailbox.
+FIRST_SYNC_HOLD_LIMIT = timedelta(hours=6)
+
+
 def get_cutoff_date(account: EmailAccount, since_date: str | None) -> datetime:
-    """Get the cutoff date for syncing emails."""
+    """The date to sync from: ``since_date`` if given, else a day before the
+    start of the last clean sync."""
     if since_date:
         return datetime.fromisoformat(since_date)
-    return cast(datetime, account.last_sync_at) or datetime(1970, 1, 1)
+    last_sync_at = cast(datetime | None, account.last_sync_at)
+    if not last_sync_at:
+        return datetime(1970, 1, 1)
+    return last_sync_at - SYNC_OVERLAP
 
 
 # Extend lock every N messages during batch processing
@@ -343,11 +382,14 @@ def process_email_batch(
         lock: Optional lock to extend during long-running operations
 
     Returns:
-        Stats dict with messages_found, new_messages, errors
+        Stats dict with messages_found, new_messages, errors, and declined_ids:
+        the ids of messages a later sync would decline again (see
+        ``LASTING_DECLINES``; failures are not among them)
     """
     messages_found = 0
     new_messages = 0
     errors = 0
+    declined_ids: list[str] = []
 
     for message_id, raw_email, received_at in messages:
         messages_found += 1
@@ -367,42 +409,56 @@ def process_email_batch(
                     "messages_found": messages_found,
                     "new_messages": new_messages,
                     "errors": errors,
+                    "declined_ids": declined_ids,
                     "aborted": True,
                     "abort_reason": "lock_extension_failed",
                 }
 
         try:
-            if queue_message(
+            outcome = queue_message(
                 db, cast(int, account.id), message_id, folder, raw_email, received_at
-            ):
-                new_messages += 1
-        except Exception as e:
-            logger.error(f"Error queuing message {message_id}: {e}")
+            )
+        except Exception:
+            logger.exception(f"Error queuing message {message_id}")
             errors += 1
+            continue
+        if outcome is QueueOutcome.QUEUED:
+            new_messages += 1
+        elif outcome in LASTING_DECLINES:
+            declined_ids.append(message_id)
 
     return {
         "messages_found": messages_found,
         "new_messages": new_messages,
         "errors": errors,
+        "declined_ids": declined_ids,
     }
 
 
 def finalize_sync(
     account: EmailAccount,
     db: DBSession,
-    error: Exception | None = None,
+    started_at: datetime,
+    error: Exception | str | None = None,
+    move_cutoff: bool = False,
 ) -> None:
-    """Update account sync status after sync completes."""
-    if error:
+    """Record how the sync that began at ``started_at`` ended.
+
+    ``move_cutoff`` moves ``last_sync_at`` to the sync's start, so mail that
+    arrived while it ran is fetched next time; mail older than that isn't.
+
+    ``error`` is the exception that aborted the sync, or a message for one that
+    finished with failures; the latter keeps the sync's own writes.
+    """
+    if isinstance(error, Exception):
         # The failing sync may have left the session in a poisoned
         # transaction (e.g. a dropped connection mid-query). Roll back
         # first so the sync_error write can actually be committed instead
         # of cascading into PendingRollbackError and losing the status.
         db.rollback()
-        account.record_sync(error)
-    else:
-        account.last_sync_at = datetime.now()  # type: ignore
-        account.record_sync(None)
+    if move_cutoff:
+        account.last_sync_at = started_at  # type: ignore
+    account.record_sync(error or None)
     db.commit()
 
 
@@ -418,17 +474,28 @@ def sync_imap_messages(
     new_messages = 0
     errors = 0
     deleted_messages = 0
+    unavailable_folders: list[str] = []
 
     def message_processor(
         account_id: int, message_id: str, folder: str, raw_email: str, received_at: datetime | None
     ) -> bool:
-        return queue_message(db, account_id, message_id, folder, raw_email, received_at)
+        outcome = queue_message(db, account_id, message_id, folder, raw_email, received_at)
+        return outcome is QueueOutcome.QUEUED
 
     with imap_connection(account) as conn:
         for folder in folders_to_process:
             # Extend lock before each folder (folders can be large)
-            if lock:
-                lock.extend()
+            if lock and not lock.extend():
+                logger.warning(
+                    "Failed to extend lock, another sync may have started - aborting"
+                )
+                return {
+                    "messages_found": messages_found,
+                    "new_messages": new_messages,
+                    "errors": errors,
+                    "aborted": True,
+                    "abort_reason": "lock_extension_failed",
+                }
 
             # Close any transaction left open by the previous folder's
             # delete pass before fetching this folder. fetch_email_since
@@ -443,6 +510,9 @@ def sync_imap_messages(
             messages_found += folder_stats["messages_found"]
             new_messages += folder_stats["new_messages"]
             errors += folder_stats["errors"]
+            if folder_stats["unavailable"]:
+                unavailable_folders.append(folder)
+                continue
 
             deleted_messages += delete_removed_emails(
                 conn, db, cast(int, account.id), folder
@@ -453,6 +523,7 @@ def sync_imap_messages(
         "new_messages": new_messages,
         "deleted_messages": deleted_messages,
         "errors": errors,
+        "unavailable_folders": unavailable_folders,
         "folders_processed": len(folders_to_process),
     }
 
@@ -467,7 +538,8 @@ def sync_gmail_messages(
 
     Syncs the account's selected labels, or with none selected all mail outside
     Spam and Trash. Every sync lists the ids and fetches only those not stored
-    yet, so it needs no date cutoff and picks up mail archived before it ran.
+    yet and not declined by an earlier sync, so it needs no date cutoff and
+    picks up mail archived before it ran.
     """
     service = get_gmail_service(account, db)
     mailbox_ids = list_gmail_message_ids(service)
@@ -485,7 +557,8 @@ def sync_gmail_messages(
             MailMessage.imap_uid.isnot(None),
         )
     }
-    new_message_ids = synced_ids - stored_ids
+    declined_ids = set(account.gmail_declined_ids or [])
+    new_message_ids = synced_ids - stored_ids - declined_ids
 
     # Release the read transaction from the existing-UID query before the
     # Gmail body fetch, which is network-bound and can exceed the 60s
@@ -495,8 +568,10 @@ def sync_gmail_messages(
     # Fetch content only for new messages
     messages = fetch_gmail_messages_by_ids(service, new_message_ids)
     stats = process_email_batch(account, db, messages, folder="INBOX", lock=lock)
+    newly_declined = set(stats.pop("declined_ids"))
     if stats.get("aborted"):
         return stats
+    account.gmail_declined_ids = sorted((declined_ids & mailbox_ids) | newly_declined)
 
     # Losing a synced label (archiving, relabelling) keeps a message; only one
     # missing from the whole mailbox might be gone, and Gmail confirms which.
@@ -519,6 +594,83 @@ def sync_gmail_messages(
     }
 
 
+def hold_limit(account: EmailAccount) -> timedelta:
+    """How long failed mail may hold this account's cutoff back."""
+    if account.last_sync_at is None:
+        return FIRST_SYNC_HOLD_LIMIT
+    return FAILURE_HOLD_LIMIT
+
+
+def describe_span(span: timedelta) -> str:
+    """``span`` in whole days, or whole hours when under a day."""
+    if span.days:
+        return f"{span.days} days"
+    return f"{span.seconds // 3600} hours"
+
+
+def gives_up_on_failures(account: EmailAccount, errors: int, now: datetime) -> bool:
+    """Whether this IMAP sync moves the cutoff past mail it failed to fetch or
+    queue, because the cutoff has been held for ``hold_limit(account)``.
+
+    Gmail syncs retry failed mail whatever ``last_sync_at`` says.
+    """
+    if account.account_type == "gmail":
+        return False
+    held_since = cast(datetime | None, account.last_sync_at) or cast(
+        datetime, account.created_at
+    )
+    if now - held_since < hold_limit(account):
+        return False
+    logger.warning(
+        f"Account {account.id}: moving the sync cutoff past {errors} failed "
+        f"messages or folders, held since {held_since.isoformat()}"
+    )
+    return True
+
+
+def failure_notes(
+    errors: int, unavailable: list[str], gave_up_after: timedelta | None
+) -> list[str]:
+    """The sync error lines for a sync's failures. ``gave_up_after`` is how
+    long failed mail held the cutoff before this sync moved on, if it did."""
+    notes = []
+    if unavailable:
+        notes.append(
+            f"the server won't open folder(s) {', '.join(unavailable)}; "
+            "check the account's folder list"
+        )
+    if errors and gave_up_after:
+        notes.append(
+            f"{errors} messages or folders could not be fetched or queued for "
+            f"over {describe_span(gave_up_after)}; the sync moved on without them"
+        )
+    elif errors:
+        notes.append(
+            f"{errors} messages or folders could not be fetched or queued; "
+            "the next sync tries them again"
+        )
+    return notes
+
+
+def sync_failures(
+    account: EmailAccount, stats: dict, now: datetime
+) -> tuple[str | None, bool]:
+    """What a finished sync tells the user (None if nothing failed), and
+    whether it moves the cutoff.
+
+    Failed mail holds the cutoff back for up to ``hold_limit(account)``. A
+    folder that no longer exists never does: it fails until the folder list
+    is fixed.
+    """
+    errors = stats.get("errors", 0)
+    limit = hold_limit(account)
+    gave_up = bool(errors) and gives_up_on_failures(account, errors, now)
+    notes = failure_notes(
+        errors, stats.get("unavailable_folders", []), limit if gave_up else None
+    )
+    return "; ".join(notes) or None, gave_up or not errors
+
+
 @app.task(name=SYNC_ACCOUNT)
 @tracked_task
 def sync_account(account_id: int, since_date: str | None = None) -> dict:
@@ -533,6 +685,7 @@ def sync_account(account_id: int, since_date: str | None = None) -> dict:
         dict with stats about the sync operation
     """
     logger.info(f"Syncing account {account_id} since {since_date}")
+    started_at = datetime.now(timezone.utc)
 
     # Use distributed lock to prevent concurrent syncs of the same account
     with email_sync_lock(account_id) as lock:
@@ -566,11 +719,12 @@ def sync_account(account_id: int, since_date: str | None = None) -> dict:
                 if stats.get("aborted"):
                     return {"status": "aborted", **stats}
 
-                finalize_sync(account, db)
+                error, move_cutoff = sync_failures(account, stats, started_at)
+                finalize_sync(account, db, started_at, error, move_cutoff)
 
             except Exception as e:
-                logger.error(f"Error syncing account {account.email_address}: {e}")
-                finalize_sync(account, db, error=e)
+                logger.exception(f"Error syncing account {account_id}")
+                finalize_sync(account, db, started_at, error=e)
                 return {"status": "error", "error": str(e)}
 
             return {

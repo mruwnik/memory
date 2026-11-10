@@ -38,6 +38,34 @@ def convert_html_report(file_path: pathlib.Path) -> tuple[str, list[str]]:
     return markdown_text, image_list
 
 
+def report_bytes(file_path: str, content: str | None) -> bytes:
+    """The report's bytes: the inline content, or the uploaded file on disk."""
+    if content is not None:
+        return content.encode("utf-8")
+    source = pathlib.Path(file_path)
+    if not source.exists():
+        raise FileNotFoundError(f"Report file not found: {file_path}")
+    return source.read_bytes()
+
+
+def overwrite_target(
+    session, filename: str, existing_report_id: int | None
+) -> Report | None:
+    """The report stored under ``filename``, if the caller may overwrite it.
+
+    The dispatching door checked edit rights on ``existing_report_id`` (None:
+    no report had this filename). Any other report found here appeared or
+    changed hands since, so the sync is refused.
+    """
+    report = session.query(Report).filter(Report.filename == filename).one_or_none()
+    if report is not None and report.id != existing_report_id:
+        raise PermissionError(
+            f"Report filename '{filename}' belongs to report {report.id}, "
+            f"not the one checked at dispatch ({existing_report_id})"
+        )
+    return report
+
+
 @app.task(name=SYNC_REPORT)
 @tracked_task
 def sync_report(
@@ -53,63 +81,38 @@ def sync_report(
     allowed_connect_urls: list[str] | None = None,
 ):
     tags = tags or []
-    # Reports are flat under REPORT_STORAGE_DIR — using `.name` here
-    # intentionally collapses any subdirectory structure the caller may have
-    # encoded in `file_path`. The MCP `upsert` and REST `upload_report`
-    # callers both build `file_path` from a content-hash + safe-title or
-    # validated filename, so subdirs aren't expected. Honouring subdirs
-    # would require a contract change with both callers and is left as a
-    # follow-up if/when the use case appears.
+    # Reports are flat under REPORT_STORAGE_DIR: `.name` drops any
+    # subdirectory in `file_path`. Both callers build it from a content hash
+    # or a validated filename, so none is expected.
     basename = pathlib.Path(file_path).name
     # Report.filename is FILE_STORAGE_DIR-relative (matches every other
     # SourceItem subtype). Reports always live directly under reports/.
     filename = paths.to_db_filename(settings.REPORT_STORAGE_DIR / basename)
     logger.info(f"Syncing report {filename} (format={report_format})")
 
-    if content is not None:
-        # MCP path: write content to file
-        dest = settings.REPORT_STORAGE_DIR / basename
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(content)
-        file_bytes = content.encode("utf-8")
-    else:
-        # Upload path: file already on disk
-        source = pathlib.Path(file_path)
-        if not source.exists():
-            raise FileNotFoundError(f"Report file not found: {file_path}")
-        file_bytes = source.read_bytes()
-
+    file_bytes = report_bytes(file_path, content)
     sha256 = create_content_hash(file_bytes)
-    content_size = len(file_bytes)
-
-    # Convert HTML to markdown for searchable content (like BlogPost does)
-    markdown_content = ""
-    image_paths: list[str] = []
-    actual_file = settings.REPORT_STORAGE_DIR / basename
-    if report_format == "html" and actual_file.exists():
-        markdown_content, image_paths = convert_html_report(actual_file)
-
     mime_type = "text/html" if report_format == "html" else "application/pdf"
+    actual_file = settings.REPORT_STORAGE_DIR / basename
 
     with make_session() as session:
-        # For new reports, check for duplicates
         existing = check_content_exists(session, Report, sha256=sha256)
         if existing:
             logger.info(f"Report already exists: {existing.id}")
             return create_task_result(existing, "already_exists")
 
-        # Check for update-in-place by filename
-        report = session.query(Report).filter(Report.filename == filename).one_or_none()
+        report = overwrite_target(session, filename, existing_report_id)
 
-        # TOCTOU mitigation: if the caller provided an existing_report_id,
-        # verify the report we found is the same one that was checked at
-        # dispatch time. If a different report now occupies this filename,
-        # refuse the overwrite.
-        if report and existing_report_id is not None and report.id != existing_report_id:
-            raise PermissionError(
-                f"Report filename '{filename}' now belongs to a different report "
-                f"(expected id={existing_report_id}, found id={report.id})"
-            )
+        if content is not None:
+            # MCP path: the file is written only once the overwrite is allowed.
+            actual_file.parent.mkdir(parents=True, exist_ok=True)
+            actual_file.write_text(content)
+
+        # Convert HTML to markdown for searchable content (like BlogPost does)
+        markdown_content = ""
+        image_paths: list[str] = []
+        if report_format == "html" and actual_file.exists():
+            markdown_content, image_paths = convert_html_report(actual_file)
 
         if not report:
             report = Report(
@@ -124,7 +127,7 @@ def sync_report(
         report.filename = filename  # type: ignore
         report.embed_status = "RAW"  # type: ignore
         report.sha256 = sha256  # type: ignore
-        report.size = content_size  # type: ignore
+        report.size = len(file_bytes)  # type: ignore
         report.allow_scripts = allow_scripts  # type: ignore
         report.allowed_connect_urls = allowed_connect_urls  # type: ignore
 
