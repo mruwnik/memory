@@ -6,6 +6,7 @@ import { ProjectField, PUSH_CAUSES, PushBadge, SensitivitySelect, SourceRow, Tag
 import { RowError, Button, ConfirmButton, DetailList, EmptyState, ErrorState, Field, FieldRow, FormActions, Input, List, LoadingState, Modal, Notice, Section, Select, useActionNotice, CopyButton, NewTabLink } from '@/components/shared/ui'
 import { useSourcesContext } from '../context'
 import { LLMKeyField, llmKeyLabel } from '../LLMKeyField'
+import { TaskPeopleField } from '../TaskPeopleField'
 
 export const TranscriptsPanel = () => {
   const {
@@ -134,6 +135,7 @@ export const TranscriptsPanel = () => {
                 !!account.tags?.length && `Tags: ${account.tags.join(', ')}`,
                 `Sensitivity: ${account.sensitivity}`,
                 `LLM: ${llmKeyLabel(account.llm_key)}`,
+                taskLabel(account),
               ]}
             >
               {account.polls && !account.has_api_key && <RowError>No API key set</RowError>}
@@ -170,6 +172,12 @@ export const TranscriptsPanel = () => {
   )
 }
 
+const taskLabel = (account: TranscriptAccount) => {
+  if (!account.create_tasks) return 'Tasks: off'
+  if (!account.task_people.length) return 'Tasks: everyone'
+  return `Tasks: ${account.task_people.map(p => p.display_name).join(', ')}`
+}
+
 interface TranscriptFormProps {
   account?: TranscriptAccount
   providers: string[]
@@ -189,6 +197,8 @@ const TranscriptForm = ({ account, providers, pushOnly, projects, onSubmit, onCa
     project_id: account?.project_id || undefined as number | undefined,
     sensitivity: account?.sensitivity || 'basic' as 'public' | 'basic' | 'internal' | 'confidential',
     llm_key: undefined as LLMKeyChoice | undefined,
+    create_tasks: account?.create_tasks ?? true,
+    task_people: account?.task_people ?? [],
   })
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -204,6 +214,8 @@ const TranscriptForm = ({ account, providers, pushOnly, projects, onSubmit, onCa
         tags: formData.tags,
         project_id: formData.project_id,
         sensitivity: formData.sensitivity,
+        create_tasks: formData.create_tasks,
+        task_person_ids: formData.task_people.map(p => p.id),
         ...(formData.llm_key !== undefined ? { llm_key: formData.llm_key } : {}),
       }
 
@@ -296,6 +308,13 @@ const TranscriptForm = ({ account, providers, pushOnly, projects, onSubmit, onCa
         </FieldRow>
 
         <LLMKeyField value={account?.llm_key} onChange={llm_key => setFormData({ ...formData, llm_key })} />
+
+        <TaskPeopleField
+          createTasks={formData.create_tasks}
+          people={formData.task_people}
+          me={account?.owner_person ?? null}
+          onChange={(create_tasks, task_people) => setFormData({ ...formData, create_tasks, task_people })}
+        />
 
         <FormActions>
           <Button type="button" onClick={onCancel}>Cancel</Button>
