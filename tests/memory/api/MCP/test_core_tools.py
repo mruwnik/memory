@@ -30,8 +30,14 @@ from memory.api.MCP.servers.core import (
 )
 from memory.api.search.types import SearchFilters, SearchResult
 from memory.common.access_control import AccessFilter, has_admin_scope
+from memory.common import settings
 from memory.common.db.models import (
     APIKey,
+    BlogPost,
+    DiscordChannel,
+    DiscordMessage,
+    DiscordUser,
+    HumanUser,
     JournalEntry,
     MailMessage,
     Note,
@@ -42,7 +48,16 @@ from memory.common.db.models import (
     UserSession,
 )
 from memory.common.db.models.source_item import Chunk, SourceItem
-from tests.conftest import make_source_item, mcp_auth_context, shown, untrusted_tag, unwrapped
+from PIL import Image
+from tests.conftest import (
+    discord_image_name,
+    make_source_item,
+    mcp_auth_context,
+    shown,
+    unique_sha256,
+    untrusted_tag,
+    unwrapped,
+)
 
 
 # ====== search tests ======
@@ -990,6 +1005,75 @@ def test_fetch_file_unknown_file_not_found(db_session, admin_session):
     with mcp_auth_context(admin_session.token):
         with pytest.raises(FileNotFoundError, match="File not found"):
             fetch_file.fn(filename="/notes/nonexistent.md")
+
+
+@pytest.fixture
+def discord_image(db_session, regular_user):
+    """An image attached to a Discord message the regular user owns, stored where ingest puts it."""
+    url = "https://cdn.discordapp.com/attachments/77/1/cat.png?ex=1&hm=sig"
+    name = discord_image_name(url, 701)
+    path = settings.FILE_STORAGE_DIR / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (4, 4), "red").save(path)
+    db_session.add_all([DiscordUser(id=7, username="ann"), DiscordChannel(id=77, name="general", channel_type="text")])
+    db_session.flush()
+    db_session.add(
+        DiscordMessage(
+            modality="message",
+            sha256=unique_sha256("discord"),
+            message_id=701,
+            channel_id=77,
+            author_id=7,
+            sent_at=datetime(2026, 11, 1, tzinfo=timezone.utc),
+            content="",
+            attachments=[{"filename": "cat.png", "content_type": "image/png", "size": 5, "url": url.split("?")[0]}],
+            images=[name],
+            creator_id=regular_user.id,
+        )
+    )
+    db_session.commit()
+    return name, base64.b64encode(path.read_bytes()).decode("ascii")
+
+
+@pytest.mark.parametrize("caller", ["user_session", "admin_session"])
+def test_fetch_file_returns_a_discord_messages_image(request, discord_image, caller):
+    name, data = discord_image
+    with mcp_auth_context(request.getfixturevalue(caller).token):
+        result = fetch_file.fn(filename=name)
+
+    assert result == {"content": [{"type": "image", "mime_type": "image/png", "data": data}]}
+
+
+def test_fetch_file_refuses_a_discord_image_of_a_message_the_caller_cannot_read(db_session, discord_image):
+    stranger = HumanUser(name="Stranger", email="stranger@example.com", password_hash="x", scopes=["read"])
+    db_session.add(stranger)
+    db_session.flush()
+    session = UserSession(token="stranger-token", user_id=stranger.id, expires_at=datetime.now() + timedelta(days=1))
+    db_session.add(session)
+    db_session.commit()
+
+    with mcp_auth_context(session.token):
+        with pytest.raises(PermissionError, match="Access denied"):
+            fetch_file.fn(filename=discord_image[0])
+
+
+@pytest.mark.parametrize("name", ["discord/702/cat.png", "blog/cat.png"])
+def test_fetch_file_serves_only_discord_images_from_their_own_message(db_session, admin_session, discord_image, name):
+    """Another message's directory, or another type's images column, doesn't serve the file."""
+    path = settings.FILE_STORAGE_DIR / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"png")
+    db_session.add(
+        BlogPost(
+            modality="blog", sha256=unique_sha256("blog"), url="https://example.com/cat",
+            content="cat", images=[name, "discord/702/cat.png"],
+        )
+    )
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.token):
+        with pytest.raises(FileNotFoundError, match="File not found"):
+            fetch_file.fn(filename=name)
 
 
 # ====== filter_observation_source_ids tests ======

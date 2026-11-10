@@ -33,7 +33,7 @@ from sqlalchemy import and_, case, exists, func, or_, select, update
 from sqlalchemy.orm import aliased
 
 from memory.common import settings
-from memory.agents.caps import RateExceeded, check_hourly_rate
+from memory.agents.caps import RateExceeded, check_hourly_rate, subscription_limit
 from memory.agents.principal import PrincipalRevoked, standing_key
 from memory.agents.raw_events import DEFAULT_RAW_BACKLOG, RawConfig, raw_matches
 from memory.common.access_control import (
@@ -390,6 +390,10 @@ def item_title(item: SourceItem) -> str | None:
 
 
 def item_body(item: SourceItem) -> str:
+    """The item's text; a Discord message's names its attachments, so one
+    holding only an image doesn't arrive empty."""
+    if isinstance(item, DiscordMessage):
+        return item.readable_content
     resolved = item.resolved_content if isinstance(item, SlackMessage) else None
     return resolved or item.content or ""
 
@@ -1333,14 +1337,22 @@ def end_run(run: AgentRun, reason: str) -> None:
     run.status, run.error, run.finished_at = FAILED, reason, datetime.now(timezone.utc)
 
 
+def backlog_limit(subscription: Subscription) -> int | None:
+    """Waiting deliveries the subscription keeps before shedding the oldest; None for no
+    limit. Unset, a raw subscription keeps DEFAULT_RAW_BACKLOG and a filter one any number."""
+    if subscription.kind == RAW:
+        return subscription.backlog_max or DEFAULT_RAW_BACKLOG
+    return subscription.backlog_max
+
+
 def shed_raw_backlog(db: DBSession, subscription: Subscription) -> int:
     """End, uncommitted, the oldest of the subscription's unclaimed raw deliveries beyond
-    its backlog_max (else DEFAULT_RAW_BACKLOG)."""
+    its backlog_limit."""
     excess = db.scalars(
         select(AgentRun)
         .where(AgentRun.subscription_id == subscription.id, *RAW_WAITING)
         .order_by(AgentRun.created_at.desc(), AgentRun.id.desc())
-        .offset(subscription.backlog_max or DEFAULT_RAW_BACKLOG)
+        .offset(backlog_limit(subscription))
         .with_for_update(skip_locked=True)
     ).all()
     for run in excess:
@@ -1379,14 +1391,14 @@ def deliver_raw(db: DBSession, subscription: Subscription, event: Event) -> Clai
     delivered = and_(AgentRun.subscription_id == subscription.id, AgentRun.error.is_distinct_from(SHED_RATE))
     reason, shed = None, False
     try:
-        check_hourly_rate(db, delivered, subscription.max_per_hour, "subscription", "max_per_hour")
+        check_hourly_rate(db, delivered, subscription_limit(subscription), "subscription")
     except RateExceeded as e:
         end_run(run, SHED_RATE)
         reason, shed = str(e), True
     db.add(run)
     db.flush()
     if not shed and shed_raw_backlog(db, subscription):
-        reason = f"more than {subscription.backlog_max or DEFAULT_RAW_BACKLOG} deliveries waiting"
+        reason = f"more than {backlog_limit(subscription)} deliveries waiting"
     locked = lock_subscription(db, subscription.id) if reason else None
     throttle = reason if locked is not None and reason and throttled(locked, reason) else None
     return Claimed(subscription.id, f"raw:{event.id}", False, throttle, shed=shed)

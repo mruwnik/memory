@@ -1922,3 +1922,113 @@ async def test_non_admin_cannot_precreate_identity_contacts(db_session, user_ses
         with pytest.raises(PermissionError, match="Only an admin"):
             await upsert.fn(identifier="preclaimed", display_name="Victim", contact_info={field: "victim"})
     assert db_session.query(Person).filter_by(identifier="preclaimed").count() == 0
+
+
+OWN_DISCORD_ID = 4242424242
+
+
+@pytest.fixture
+def ingested_own_discord_account(db_session, regular_user):
+    """A user's own Person, and their Discord account as ingest leaves it: linked to
+    the ``discord_<id>`` Person ingest made, whose contact_info names the id."""
+    own = Person(identifier="regular", display_name="Regular User", user_id=regular_user.id, contact_info={})
+    ingested = Person(
+        identifier=f"discord_{OWN_DISCORD_ID}",
+        display_name="regular",
+        contact_info={"discord": str(OWN_DISCORD_ID), "phone": "555"},
+    )
+    db_session.add_all([own, ingested])
+    db_session.flush()
+    db_session.add(DiscordUser(id=OWN_DISCORD_ID, username="regular", person_id=ingested.id))
+    db_session.commit()
+    return own, ingested
+
+
+async def link_own_discord_account(admin_session):
+    with mcp_auth_context(admin_session.token):
+        return await upsert.fn(identifier="regular", contact_info={"discord": str(OWN_DISCORD_ID)})
+
+
+@pytest.mark.parametrize(
+    "unrelated_change",
+    [
+        {"display_name": "Someone on Discord"},
+        {"aliases": ["@regular"]},
+        {"contact_info": {"phone": "556"}},
+    ],
+)
+@pytest.mark.asyncio
+async def test_editing_the_ingested_person_keeps_the_linked_discord_account(
+    db_session, admin_session, regular_user, ingested_own_discord_account, unrelated_change
+):
+    own, _ = ingested_own_discord_account
+    await link_own_discord_account(admin_session)
+
+    with mcp_auth_context(admin_session.token):
+        await upsert.fn(identifier=f"discord_{OWN_DISCORD_ID}", **unrelated_change)
+
+    db_session.expire_all()
+    assert db_session.get(DiscordUser, OWN_DISCORD_ID).person_id == own.id
+    assert user_info_for(db_session, regular_user)["discord_accounts"] == {str(OWN_DISCORD_ID): "regular"}
+
+
+@pytest.mark.asyncio
+async def test_linking_a_discord_account_drops_it_from_the_previous_persons_contact_info(
+    db_session, admin_session, ingested_own_discord_account
+):
+    _, ingested = ingested_own_discord_account
+
+    result = await link_own_discord_account(admin_session)
+
+    assert result["linked_discord_users"] == [str(OWN_DISCORD_ID)]
+    assert result["moved_discord_users"] == [{"id": str(OWN_DISCORD_ID), "from": ingested.identifier}]
+    db_session.expire_all()
+    assert db_session.get(Person, ingested.id).contact_info == {"phone": "555"}
+
+
+@pytest.mark.asyncio
+async def test_linking_an_already_linked_discord_account_moves_nothing(
+    db_session, admin_session, ingested_own_discord_account
+):
+    await link_own_discord_account(admin_session)
+
+    result = await link_own_discord_account(admin_session)
+
+    assert result["linked_discord_users"] == [str(OWN_DISCORD_ID)]
+    assert "moved_discord_users" not in result
+
+
+@pytest.mark.parametrize(
+    "contact_info, kept",
+    [
+        ({"discord": [str(OWN_DISCORD_ID), "777"]}, {"discord": "777"}),
+        ({"discord": ["777", OWN_DISCORD_ID]}, {"discord": "777"}),
+        ({"discord": [str(OWN_DISCORD_ID), "888", "777"]}, {"discord": ["888", "777"]}),
+        ({"discord": OWN_DISCORD_ID}, {}),
+    ],
+)
+@pytest.mark.asyncio
+async def test_relinking_keeps_the_previous_persons_other_discord_entries(
+    db_session, admin_session, ingested_own_discord_account, contact_info, kept
+):
+    _, ingested = ingested_own_discord_account
+    ingested.contact_info = contact_info
+    db_session.commit()
+
+    await link_own_discord_account(admin_session)
+
+    db_session.expire_all()
+    assert db_session.get(Person, ingested.id).contact_info == kept
+
+
+@pytest.mark.asyncio
+async def test_naming_a_listed_discord_id_again_relinks_it(db_session, admin_session, ingested_own_discord_account):
+    own, _ = ingested_own_discord_account
+    own.contact_info = {"discord": str(OWN_DISCORD_ID)}
+    db_session.commit()
+
+    result = await link_own_discord_account(admin_session)
+
+    assert result["linked_discord_users"] == [str(OWN_DISCORD_ID)]
+    db_session.expire_all()
+    assert db_session.get(DiscordUser, OWN_DISCORD_ID).person_id == own.id

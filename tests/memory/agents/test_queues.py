@@ -443,6 +443,64 @@ async def test_a_queue_subscription_over_its_hourly_rate_defers_its_deliveries(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("max_per_hour,ceiling", [(3, 1), (3, 60)])
+async def test_a_queue_subscriptions_max_per_hour_overrides_the_default_rate(
+    db_session, regular_user, worker_session, monkeypatch, max_per_hour, ceiling
+):
+    monkeypatch.setattr(settings, "AGENT_MAX_RUNS_PER_HOUR", ceiling)
+    subscription = subscribe(db_session, regular_user, max_per_hour=max_per_hour)
+    for _ in range(max_per_hour + 1):
+        route_item(db_session, post(db_session, creator_id=regular_user.id).id)
+
+    claimed = [await claim(worker_session.token, queues=[QUEUE]) for _ in range(max_per_hour + 1)]
+
+    db_session.refresh(subscription)
+    assert [c is not None for c in claimed] == [True] * max_per_hour + [False]
+    assert subscription.state["throttled"]["reason"] == (
+        f"subscription rate: {max_per_hour} runs in the last hour, limit {max_per_hour} "
+        "(max_per_hour); try again later or raise it"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_queue_subscription_is_held_to_the_delivery_ceiling(
+    db_session, regular_user, worker_session, monkeypatch
+):
+    subscription = subscribe(db_session, regular_user, max_per_hour=5)
+    monkeypatch.setattr(settings, "AGENT_MAX_DELIVERIES_PER_HOUR", 1)
+    for _ in range(2):
+        route_item(db_session, post(db_session, creator_id=regular_user.id).id)
+
+    claimed = [await claim(worker_session.token, queues=[QUEUE]) for _ in range(2)]
+
+    db_session.refresh(subscription)
+    assert [c is not None for c in claimed] == [True, False]
+    assert subscription.state["throttled"]["reason"] == (
+        "subscription rate: 1 runs in the last hour, limit 1 "
+        "(AGENT_MAX_DELIVERIES_PER_HOUR, the server's ceiling); try again later or raise it"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_queue_subscription_without_max_per_hour_names_the_default_it_hit(
+    db_session, regular_user, worker_session, monkeypatch
+):
+    monkeypatch.setattr(settings, "AGENT_MAX_RUNS_PER_HOUR", 1)
+    subscription = subscribe(db_session, regular_user)
+    for _ in range(2):
+        route_item(db_session, post(db_session, creator_id=regular_user.id).id)
+
+    claimed = [await claim(worker_session.token, queues=[QUEUE]) for _ in range(2)]
+
+    db_session.refresh(subscription)
+    assert [c is not None for c in claimed] == [True, False]
+    assert subscription.state["throttled"]["reason"] == (
+        "subscription rate: 1 runs in the last hour, limit 1 "
+        "(AGENT_MAX_RUNS_PER_HOUR, the default when max_per_hour is unset); try again later or raise it"
+    )
+
+
+@pytest.mark.asyncio
 async def test_a_queue_batch_is_claimed_together_once_its_window_closes(
     db_session, regular_user, worker_session
 ):

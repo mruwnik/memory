@@ -23,9 +23,10 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any, FrozenSet, Protocol, runtime_checkable
 
-from sqlalchemy import literal, select
+from sqlalchemy import any_, literal, select
 from sqlalchemy.orm import Query
 
+from memory.common import discord_attachments
 from memory.common.db.models.sources import Project, Team, project_teams, team_members
 from memory.common.scopes import SCOPE_ADMIN, SCOPE_READ, SCOPE_WRITE
 
@@ -375,6 +376,23 @@ def apply_access_filter_to_query(
     return query.filter(or_(*conditions))
 
 
+def discord_image_holders(
+    session: "Session | scoped_session[Session]", filename: str
+) -> list[Any]:
+    """The Discord message an image stored at ``filename`` was downloaded from, found
+    by the message id its directory is named after."""
+    from memory.common.db.models.source_items import DiscordMessage  # avoid circular import
+
+    message_id = discord_attachments.message_id_of(filename)
+    if message_id is None:
+        return []
+    return (
+        session.query(DiscordMessage)
+        .filter(DiscordMessage.message_id == message_id, literal(filename) == any_(DiscordMessage.images))
+        .all()
+    )
+
+
 def get_accessible_source_item_by_filename(
     session: "Session | scoped_session[Session]",
     user: UserLike,
@@ -400,7 +418,10 @@ def get_accessible_source_item_by_filename(
     from memory.common.db.models.source_item import SourceItem  # avoid circular import
 
     # Several items can share a file (e.g. one user's copy of another's upload).
-    items = session.query(SourceItem).filter(SourceItem.filename == filename).all()
+    # A Discord message's downloaded images are named in its images column, not filename.
+    items = session.query(SourceItem).filter(
+        SourceItem.filename == filename
+    ).all() or discord_image_holders(session, filename)
     if not items:
         raise FileNotFoundError(filename)
 

@@ -1,4 +1,6 @@
 import hashlib
+import pathlib
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 from unittest.mock import patch, Mock, PropertyMock
 from typing import Any, cast
@@ -26,7 +28,10 @@ from memory.common.db.models.source_items import (
 )
 from memory.common.collections import ALL_COLLECTIONS
 from memory.common.db.models.source_item import SourceItem, truncate_preview
-from memory.common.db.models import Person
+from memory.common.db.models import DiscordChannel, DiscordUser, Person
+from memory.common.content_processing import embed_source_item
+from memory.common.embedding import estimated_tokens
+from tests.conftest import discord_image_name, unique_sha256
 from tests.data.contents import SAMPLE_MARKDOWN
 
 
@@ -1111,6 +1116,186 @@ def test_discord_message_preview_text_unknown_author():
     msg = DiscordMessage(sha256=b"dm2", modality="discord", content="Some message")
     msg.author = None
     assert msg.preview_text == "unknown: Some message"
+
+
+# ====== DiscordMessage attachments ======
+
+CAT_URL = "https://cdn.discordapp.com/attachments/5/1/cat.png"
+CAT = {"filename": "cat.png", "content_type": "image/png", "size": 5, "url": CAT_URL}
+NOTES = {"filename": "notes.pdf", "content_type": "application/pdf", "size": 7, "url": "https://cdn.discordapp.com/attachments/5/2/notes.pdf"}
+
+
+def discord_message_with(content: str, attachments: list[dict] | None, images: list[str] | None) -> DiscordMessage:
+    return DiscordMessage(
+        sha256=b"dm-attached", modality="message", message_id=801, content=content,
+        attachments=attachments, images=images,
+    )
+
+
+@pytest.fixture
+def stored_cat():
+    name = discord_image_name(CAT_URL, 801)
+    path = settings.FILE_STORAGE_DIR / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (8, 8), "orange").save(path)
+    return name
+
+
+@pytest.mark.parametrize(
+    "content, attachments, images, expected",
+    [
+        ("", None, None, False),
+        ("short", None, None, False),
+        ("long enough to be worth finding", None, None, True),
+        ("", [NOTES], None, True),
+        ("", [CAT], [discord_image_name(CAT_URL, 801)], True),
+        ("", None, [discord_image_name(CAT_URL, 801)], True),
+    ],
+)
+def test_discord_message_with_an_attachment_is_embedded_however_short(content, attachments, images, expected):
+    assert discord_message_with(content, attachments, images).should_embed is expected
+
+
+@pytest.mark.parametrize(
+    "content, attachments, images, text",
+    [
+        ("", [CAT], [discord_image_name(CAT_URL, 801)], "[image attachment: cat.png]"),
+        ("look", [CAT, NOTES], None, "look\n[image attachment: cat.png]\n[attachment: notes.pdf]"),
+        ("", None, [discord_image_name(CAT_URL, 801)], f"[image attachment: {discord_image_name(CAT_URL, 801).split('/')[-1]}]"),
+        ("plain", None, None, "plain"),
+    ],
+)
+def test_discord_message_text_names_its_attachments(content, attachments, images, text):
+    msg = discord_message_with(content, attachments, images)
+
+    assert (msg.readable_content, msg.title) == (text, f"unknown: {text}")
+
+
+@pytest.mark.parametrize(
+    "attachments, images, expected",
+    [
+        (
+            [CAT, NOTES],
+            [discord_image_name(CAT_URL, 801)],
+            [
+                {"filename": "cat.png", "content_type": "image/png", "size": 5, "file": discord_image_name(CAT_URL, 801)},
+                {"filename": "notes.pdf", "content_type": "application/pdf", "size": 7, "file": None},
+            ],
+        ),
+        # The image failed to download: nothing to fetch.
+        ([CAT], None, [{"filename": "cat.png", "content_type": "image/png", "size": 5, "file": None}]),
+        # A stored image with no attachment record.
+        (
+            None,
+            [discord_image_name(CAT_URL, 801)],
+            [
+                {
+                    "filename": discord_image_name(CAT_URL, 801).split("/")[-1],
+                    "content_type": "image/png",
+                    "size": None,
+                    "file": discord_image_name(CAT_URL, 801),
+                }
+            ],
+        ),
+    ],
+)
+def test_discord_message_payload_lists_attachments_with_their_stored_file(attachments, images, expected):
+    msg = discord_message_with("", attachments, images)
+
+    assert msg.as_payload()["attachments"] == expected
+
+
+def test_an_image_only_discord_message_is_embedded_with_its_image(stored_cat):
+    msg = discord_message_with("", [CAT], [stored_cat])
+
+    chunk_count = embed_source_item(msg)
+
+    assert (chunk_count, msg.embed_status) == (2, "QUEUED")
+    assert [(c.content, len(c.images)) for c in msg.chunks] == [
+        ("unknown: [image attachment: cat.png]", 0),
+        ("unknown: [image attachment: cat.png]", 1),
+    ]
+
+
+# Voyage's multimodal models read at most 32k tokens per input.
+VOYAGE_INPUT_TOKENS = 32_000
+
+
+@pytest.fixture
+def ten_large_images():
+    names = [discord_image_name(f"https://cdn.discordapp.com/attachments/5/{i}/big.png", 801) for i in range(10)]
+    for name in names:
+        path = settings.FILE_STORAGE_DIR / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (2000, 1500), "orange").save(path)
+    return names
+
+
+def test_each_discord_image_is_its_own_input_within_voyages_limit(ten_large_images):
+    msg = discord_message_with("", None, ten_large_images)
+
+    embed_source_item(msg)
+
+    image_chunks = msg.chunks[1:]
+    assert [len(c.images) for c in image_chunks] == [1] * 10
+    assert max(estimated_tokens([c.content or "", *c.images]) for c in image_chunks) < VOYAGE_INPUT_TOKENS
+
+
+def test_a_discord_image_that_cannot_be_read_leaves_the_message_to_its_text(stored_cat):
+    (settings.FILE_STORAGE_DIR / stored_cat).write_bytes(b"not an image")
+    msg = discord_message_with("", [CAT], [stored_cat])
+
+    assert (embed_source_item(msg), msg.embed_status) == (1, "QUEUED")
+
+
+CATCH_UP_SQL = (
+    "UPDATE source_item SET embed_status='RAW' WHERE embed_status='SKIPPED' AND id IN "
+    "(SELECT id FROM discord_message WHERE cardinality(images) > 0 OR attachments @> '[{}]');"
+)
+
+
+def test_changelog_documents_the_discord_catch_up_sql():
+    changelog = pathlib.Path(__file__).parents[5] / "CHANGELOG.md"
+
+    assert f"`{CATCH_UP_SQL}`" in changelog.read_text()
+
+
+@pytest.mark.parametrize(
+    "attachments, images, caught_up",
+    [
+        # Passed as None explicitly, as ingest does: stored as JSON null, not SQL NULL.
+        (None, None, False),
+        ([], None, False),
+        ([NOTES], None, True),
+        ([CAT], [discord_image_name(CAT_URL, 801)], True),
+        # Stored before attachments recorded images.
+        (None, [discord_image_name(CAT_URL, 801)], True),
+        # An edit without images stores an empty array: nothing to gain.
+        (None, [], False),
+    ],
+)
+def test_discord_catch_up_sql_reindexes_only_messages_with_attachments(db_session, attachments, images, caught_up):
+    db_session.add_all([DiscordUser(id=8, username="ann"), DiscordChannel(id=88, name="general", channel_type="text")])
+    db_session.flush()
+    msg = DiscordMessage(
+        modality="message",
+        sha256=unique_sha256("catch-up"),
+        message_id=801,
+        channel_id=88,
+        author_id=8,
+        sent_at=datetime(2026, 11, 1),
+        content="hi",
+        attachments=attachments,
+        images=images,
+        embed_status="SKIPPED",
+    )
+    db_session.add(msg)
+    db_session.flush()
+
+    db_session.execute(text(CATCH_UP_SQL))
+    db_session.refresh(msg)
+
+    assert (msg.embed_status == "RAW") is caught_up
 
 
 # ====== SlackMessage.preview_text tests ======
