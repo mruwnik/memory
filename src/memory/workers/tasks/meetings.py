@@ -444,6 +444,64 @@ def sync_action_item_tasks(session, meeting: Meeting, action_items: list[dict]) 
     return created
 
 
+def name_key(value: str) -> str:
+    """Names that differ only in case or spacing compare equal."""
+    return " ".join(value.casefold().split())
+
+
+def person_names(person: Person) -> set[str]:
+    """Everything an action item may call `person` by: display name, aliases and emails."""
+    emails = contact_values((person.contact_info or {}).get("email"))
+    return {name_key(str(v)) for v in [person.display_name, *(person.aliases or []), *emails] if v}
+
+
+def first_names(person: Person) -> set[str]:
+    return {name.split(" ")[0] for name in person_names(person) if "@" not in name}
+
+
+def assigned_to(
+    session: DBSession, assignee: str | None, chosen: Sequence[Person], attendees: Sequence[Person]
+) -> bool:
+    """Whether the action item `assignee` names one of the `chosen` people.
+
+    Matches a chosen person's display name, alias or email case-insensitively,
+    else the one Person the name resolves to. A bare first name matches when
+    every chosen person and attendee with that first name is a chosen one.
+    """
+    key = name_key(assignee or "")
+    if not key:
+        return False
+    chosen_ids = {p.id for p in chosen}
+    if any(key in person_names(p) for p in chosen):
+        return True
+    resolved = find_person_by_name(session, key)
+    if resolved is not None:
+        return resolved.id in chosen_ids
+    if " " in key:
+        return False
+    namesakes = {p.id for p in [*chosen, *attendees] if key in first_names(p)}
+    return bool(namesakes) and namesakes <= chosen_ids
+
+
+def task_action_items(session: DBSession, meeting: Meeting, action_items: list[dict]) -> list[dict]:
+    """The action items the meeting's transcript account makes Tasks for.
+
+    An account can turn tasks off, or limit them to action items assigned to
+    its chosen people. Meetings without an account make Tasks for every item.
+    """
+    account = meeting.transcript_account
+    if account is None:
+        return action_items
+    if not account.create_tasks:
+        return []
+    if not account.task_people:
+        return action_items
+    return [
+        item for item in action_items
+        if assigned_to(session, item.get("assignee"), account.task_people, meeting.people)
+    ]
+
+
 def detach_meeting_tasks(session: DBSession, meeting: Meeting) -> None:
     """Detach action item tasks from a meeting about to be deleted.
 
@@ -483,7 +541,8 @@ def extract_and_update_meeting(session: DBSession, meeting: Meeting) -> dict:
 
     meeting.summary = extracted.get("summary", "")
     meeting.notes = extracted.get("notes", "")
-    created = sync_action_item_tasks(session, meeting, extracted.get("action_items", []))
+    action_items = task_action_items(session, meeting, extracted.get("action_items", []))
+    created = sync_action_item_tasks(session, meeting, action_items)
     logger.info(f"Created {len(created)} tasks from meeting {meeting.id}")
 
     return {

@@ -36,6 +36,7 @@ a new, empty `## Unreleased` above it.
 - Browse what has been ingested: each content type on the Ingestion overview opens its items, newest first, a page at a time, and the overview page can show each type's latest five items inline. The list can be narrowed to one connection (email account, Discord or Slack channel, Beeper chat, feed, GitHub repo, Google Drive folder, calendar or transcript account, book), filtered by indexing status, and searched by title, subject, sender, author or filename (not the item text). Only items you can access are listed.
 - MCP `core_list_items` and `core_count_items` take `item_types`, `embed_statuses` (default still indexed items only), `contains` and `connection_id`. List rows carry `type` and `embed_status`; `include_total=false` skips the total count; pages sort by id within equal timestamps so they never overlap. `core_count_items` adds `by_type` and, for types that share a kind of connection, `by_connection`.
 
+- Transcript accounts can stop turning meeting action items into tasks (notes and summaries are still written), or make tasks only for action items assigned to chosen people, e.g. just you: set them in the account's edit form on the Sources page, or with `create_tasks` and `task_person_ids` on `/transcript-accounts`. An assignee matches a chosen person by display name, alias or email (ignoring case), or by a first name no other attendee shares; with people chosen, unassigned action items make no task. Re-extracting a meeting removes tasks nobody has started that the account no longer wants. Existing accounts keep making tasks for every action item, and meetings sent without an account are unchanged.
 ### Required env vars
 None
 
@@ -50,6 +51,7 @@ None
 - `20261220_github_incomplete_since` adds a nullable `github_repos.incomplete_since` column and a `github_repos.sync_incomplete` boolean defaulting to false (instant).
 - `20261221_agent_run_notify_seen` adds `agent_runs.notify_on_finish`, `notified_at` and `seen_at` with two partial indexes, and backfills `seen_at = finished_at` for ended runs started through MCP or by hand that aren't sub-runs (an `UPDATE` scanning all of `agent_runs`: slow on a large table, and the indexes are built without `CONCURRENTLY`).
 - `20261222_item_inserted_idx` builds two indexes on `source_item`, `(inserted_at, id)` and `(type, inserted_at, id)`, with `CREATE INDEX CONCURRENTLY`: writes continue while they build, but the upgrade's time grows with the number of stored items. If it is interrupted, drop any invalid `source_inserted_at_idx` or `source_type_inserted_at_idx` before re-running it: Postgres keeps a half-built concurrent index, and `IF NOT EXISTS` would skip it.
+- `20261223_transcript_task_options` adds `transcript_accounts.create_tasks` (default true) and a `transcript_account_task_people` table (instant).
 
 ### Post-deploy commands
 None
