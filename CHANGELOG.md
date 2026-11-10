@@ -38,6 +38,9 @@ a new, empty `## Unreleased` above it.
 - IMAP folders whose names contain spaces, parentheses or non-ASCII characters (e.g. `AI orgs`, `Ärger`) sync. Before, the server refused to open them and their mail was never fetched.
 - An IMAP sync that can't open a folder, fetch a message or queue it no longer moves the account's last sync time past that mail: the account shows how many failed and the next sync fetches them again. A clean sync records when it started rather than when it finished, so mail arriving mid-sync isn't skipped, and each sync re-checks the day before the last one (copies already stored are skipped).
 - Emails without a Message-ID header are no longer dropped when another such email has the same IMAP UID in a different folder or account. Their generated id now comes from the message's content; such mail received within a day before upgrading may be stored a second time on the first sync.
+- `core_search_observations` filters by `subject` (exact) and `observation_types`. Before, a subject returned no observations (it was matched against mail subjects) and observation types were ignored. The generic search filters no longer accept `observation_types`.
+- The `author`, `authors`, `min_published` and `max_published` search filters match every item type that has an author or publication date (blog posts, comics, forum posts and comments, GitHub items, book sections). Before, keyword search and `core_list_items`/`core_count_items` matched them on blog posts only, and `authors` matched only forum posts in semantic search.
+- Titles recalled by query analysis no longer bring in results that the search filters exclude. Before, they honoured only access control, tags and the item-id filters, so e.g. an `author`, `sender`, `person_id` or `min_confidences` filter could still return a non-matching item.
 
 ### Required env vars
 None

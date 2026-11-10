@@ -19,8 +19,8 @@ covered by a pure-Python test) forces every new ``MCPSearchFilters`` key to be
 wired here or explicitly marked special.
 
 Filters that are genuinely backend-specific and hand-coded (access control,
-person association, source-id prefiltering, confidence scores, observation
-collection routing, and created_at, described below) live in
+person association, source-id prefiltering, confidence scores and
+created_at, described below) live in
 :data:`SPECIAL_FILTER_KEYS` rather than the registry.
 """
 
@@ -29,7 +29,7 @@ from enum import Enum
 from typing import Any
 
 from sqlalchemy import cast as sql_cast
-from sqlalchemy import func, or_, select
+from sqlalchemy import exists, false, func, or_, select
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy import Text
 from sqlalchemy.orm import Session
@@ -39,11 +39,19 @@ from memory.common.db.models import (
     BeeperMessage,
     BeeperNetwork,
     BlogPost,
+    Book,
+    BookSection,
+    Comic,
+    ConfidenceScore,
     EmailAccount,
+    ForumComment,
+    ForumPost,
+    GithubItem,
     GoogleDoc,
     MailMessage,
     SourceItem,
 )
+from memory.common.db.models.source_item import source_item_people
 from memory.api.search.types import MCPSearchFilters, SearchFilters
 
 
@@ -55,6 +63,7 @@ class SqlOp(Enum):
     LTE = "lte"
     IN = "in"
     ARRAY_ANY = "array_any"  # Postgres ``&&`` overlap on an ARRAY column
+    ARRAY_HAS = "array_has"  # the scalar value is an element of an ARRAY column
     ARRAY_NONE = "array_none"  # no overlap with an ARRAY column
     ILIKE_SUBSTR = "ilike_substr"  # case-insensitive substring match
     # case-insensitive substring against any element of an ARRAY column, via
@@ -98,20 +107,39 @@ QDRANT_UNSUPPORTED = QdrantUnsupported()
 
 
 @dataclass(frozen=True)
+class SqlTarget:
+    """One column a filter matches in SQL.
+
+    Attributes:
+        model: The joined-table subclass whose table holds the column, or
+            ``None`` for a column on ``SourceItem`` itself.
+        column: Column name on that table (or on ``via``'s table).
+        op: Overrides the spec's ``sql_op`` for this column, e.g. an ARRAY
+            column matched by a scalar filter.
+        via: ``(related model, foreign-key column on model's table)`` when the
+            value lives on a related row, e.g. a book section's book.
+    """
+
+    model: type | None
+    column: str
+    op: SqlOp | None = None
+    via: tuple[type, str] | None = None
+
+
+@dataclass(frozen=True)
 class FilterSpec:
     """Declarative description of one logical filter across all backends.
 
     Attributes:
         key: The ``MCPSearchFilters`` TypedDict key.
-        model: Target ORM model. ``None`` means the column lives on
-            ``SourceItem`` itself; otherwise the model is a joined-table
-            subclass joined on ``model.id == SourceItem.id``.
-        column: Attribute name of the column on ``model`` (or ``SourceItem``).
-        sql_op: How the value constrains that column in SQL.
-        qdrant_key: Payload key in Qdrant, or ``None`` when unsupported.
+        targets: The SQL columns the filter matches; an item matches when any
+            of them does. Every item type that writes one of ``qdrant_keys``
+            into its payload must be among them (tested), or the SQL arms and
+            the final merge would drop what the vector arm finds.
+        sql_op: How the value constrains each target column in SQL.
+        qdrant_keys: Payload keys in Qdrant (a point matches when any of them
+            does), or empty when unsupported.
         qdrant_op: Qdrant operator, or :data:`QDRANT_UNSUPPORTED`.
-        array_cast: When ``True`` the bound value is cast to ``ARRAY(Text)``
-            before the SQL comparison (matches the ARRAY(Text) columns).
         lowercase_value: When ``True`` the filter value is lowercased before the
             Qdrant exact match. The SQL arm is case-insensitive already (ILIKE);
             this keeps the case-sensitive Qdrant arm in agreement when the
@@ -119,19 +147,39 @@ class FilterSpec:
     """
 
     key: str
-    model: type | None
-    column: str
+    targets: tuple[SqlTarget, ...]
     sql_op: SqlOp
-    qdrant_key: str | None
+    qdrant_keys: tuple[str, ...]
     qdrant_op: QdrantOp | QdrantUnsupported
-    array_cast: bool = False
     lowercase_value: bool = False
 
-    def target_model(self) -> type:
-        return self.model or SourceItem
+    def applies_to(self, collection: str) -> bool:
+        """Whether items in ``collection`` can match: a target is on every
+        item, or on a type stored in that collection."""
+        return any(t.model is None or collection in t.model.get_collections() for t in self.targets)
 
-    def column_attr(self):
-        return getattr(self.target_model(), self.column)
+
+def on_item(column: str) -> tuple[SqlTarget, ...]:
+    return (SqlTarget(None, column),)
+
+
+# Every type whose payload carries "author" (one name) or "authors" (a list).
+AUTHOR_TARGETS = (
+    SqlTarget(BlogPost, "author"),
+    SqlTarget(Comic, "author"),
+    SqlTarget(ForumComment, "author"),
+    SqlTarget(GithubItem, "author"),
+    SqlTarget(BookSection, "author", via=(Book, "book_id")),
+)
+AUTHOR_KEYS = ("author", "authors")
+
+# Every type whose payload carries "published".
+PUBLISHED_TARGETS = (
+    SqlTarget(BlogPost, "published"),
+    SqlTarget(Comic, "published"),
+    SqlTarget(ForumPost, "published_at"),
+    SqlTarget(ForumComment, "posted_at"),
+)
 
 
 # Content-metadata filters. Each min/max pair is two specs on the same column.
@@ -149,13 +197,10 @@ class FilterSpec:
 # spec routed to Qdrant must target an indexed key (add it to
 # EXTRA_PAYLOAD_INDEXES) or be QDRANT_UNSUPPORTED.
 _SPECS: tuple[FilterSpec, ...] = (
-    FilterSpec("tags", None, "tags", SqlOp.ARRAY_ANY, "tags", QdrantOp.MATCH_ANY, array_cast=True),
-    FilterSpec(
-        "exclude_tags", None, "tags", SqlOp.ARRAY_NONE, "tags", QdrantOp.MATCH_NONE,
-        array_cast=True,
-    ),
-    FilterSpec("min_size", None, "size", SqlOp.GTE, "size", QdrantOp.RANGE_GTE),
-    FilterSpec("max_size", None, "size", SqlOp.LTE, "size", QdrantOp.RANGE_LTE),
+    FilterSpec("tags", on_item("tags"), SqlOp.ARRAY_ANY, ("tags",), QdrantOp.MATCH_ANY),
+    FilterSpec("exclude_tags", on_item("tags"), SqlOp.ARRAY_NONE, ("tags",), QdrantOp.MATCH_NONE),
+    FilterSpec("min_size", on_item("size"), SqlOp.GTE, ("size",), QdrantOp.RANGE_GTE),
+    FilterSpec("max_size", on_item("size"), SqlOp.LTE, ("size",), QdrantOp.RANGE_LTE),
     # Mail.
     #
     # The stored ``sender``/``recipients`` columns hold raw header strings:
@@ -175,30 +220,39 @@ _SPECS: tuple[FilterSpec, ...] = (
     # merge never leaks a non-matching mail (a full-address query agrees on both;
     # a partial-substring query matches only on the SQL/BM25 arm).
     FilterSpec(
-        "sender", MailMessage, "sender", SqlOp.ILIKE_SUBSTR,
-        "sender_email", QdrantOp.MATCH_VALUE, lowercase_value=True,
+        "sender", (SqlTarget(MailMessage, "sender"),), SqlOp.ILIKE_SUBSTR,
+        ("sender_email",), QdrantOp.MATCH_VALUE, lowercase_value=True,
     ),
     FilterSpec(
-        "recipients", MailMessage, "recipients", SqlOp.ARRAY_ILIKE_SUBSTR,
-        "recipient_emails", QdrantOp.MATCH_ANY, lowercase_value=True,
+        "recipients", (SqlTarget(MailMessage, "recipients"),), SqlOp.ARRAY_ILIKE_SUBSTR,
+        ("recipient_emails",), QdrantOp.MATCH_ANY, lowercase_value=True,
     ),
-    FilterSpec("subject", MailMessage, "subject", SqlOp.ILIKE_SUBSTR, None, QDRANT_UNSUPPORTED),
+    FilterSpec("subject", (SqlTarget(MailMessage, "subject"),), SqlOp.ILIKE_SUBSTR, (), QDRANT_UNSUPPORTED),
     # Mail folder is a discrete IMAP identifier ("INBOX", "[Gmail]/Sent Mail"),
     # so exact match on both backends. Distinct from GoogleDoc.folder_path below.
-    FilterSpec("folder", MailMessage, "folder", SqlOp.EQ, "folder", QdrantOp.MATCH_VALUE),
-    FilterSpec("min_sent_at", MailMessage, "sent_at", SqlOp.GTE, "date", QdrantOp.RANGE_GTE),
-    FilterSpec("max_sent_at", MailMessage, "sent_at", SqlOp.LTE, "date", QdrantOp.RANGE_LTE),
+    FilterSpec("folder", (SqlTarget(MailMessage, "folder"),), SqlOp.EQ, ("folder",), QdrantOp.MATCH_VALUE),
+    FilterSpec("min_sent_at", (SqlTarget(MailMessage, "sent_at"),), SqlOp.GTE, ("date",), QdrantOp.RANGE_GTE),
+    FilterSpec("max_sent_at", (SqlTarget(MailMessage, "sent_at"),), SqlOp.LTE, ("date",), QdrantOp.RANGE_LTE),
     # Google Docs
     FilterSpec(
-        "folder_path", GoogleDoc, "folder_path", SqlOp.ILIKE_SUBSTR,
-        "folder_path", QdrantOp.MATCH_VALUE,
+        "folder_path", (SqlTarget(GoogleDoc, "folder_path"),), SqlOp.ILIKE_SUBSTR,
+        ("folder_path",), QdrantOp.MATCH_VALUE,
     ),
     # Blog
-    FilterSpec("domain", BlogPost, "domain", SqlOp.EQ, "domain", QdrantOp.MATCH_VALUE),
-    FilterSpec("author", BlogPost, "author", SqlOp.EQ, "author", QdrantOp.MATCH_VALUE),
-    FilterSpec("authors", BlogPost, "author", SqlOp.IN, "authors", QdrantOp.MATCH_ANY),
-    FilterSpec("min_published", BlogPost, "published", SqlOp.GTE, "published", QdrantOp.RANGE_GTE),
-    FilterSpec("max_published", BlogPost, "published", SqlOp.LTE, "published", QdrantOp.RANGE_LTE),
+    FilterSpec("domain", (SqlTarget(BlogPost, "domain"),), SqlOp.EQ, ("domain",), QdrantOp.MATCH_VALUE),
+    # Authors and publication dates, on every type that has them. Forum posts
+    # list several authors; a Qdrant exact match on a list payload matches
+    # when any element does.
+    FilterSpec(
+        "author", (*AUTHOR_TARGETS, SqlTarget(ForumPost, "authors", op=SqlOp.ARRAY_HAS)),
+        SqlOp.EQ, AUTHOR_KEYS, QdrantOp.MATCH_VALUE,
+    ),
+    FilterSpec(
+        "authors", (*AUTHOR_TARGETS, SqlTarget(ForumPost, "authors", op=SqlOp.ARRAY_ANY)),
+        SqlOp.IN, AUTHOR_KEYS, QdrantOp.MATCH_ANY,
+    ),
+    FilterSpec("min_published", PUBLISHED_TARGETS, SqlOp.GTE, ("published",), QdrantOp.RANGE_GTE),
+    FilterSpec("max_published", PUBLISHED_TARGETS, SqlOp.LTE, ("published",), QdrantOp.RANGE_LTE),
 )
 
 FILTER_REGISTRY: dict[str, FilterSpec] = {spec.key: spec for spec in _SPECS}
@@ -228,7 +282,6 @@ SPECIAL_FILTER_KEYS: frozenset[str] = frozenset(
         "chat",
         "source_ids",
         "min_confidences",
-        "observation_types",
         "min_created_at",
         "max_created_at",
     }
@@ -334,60 +387,69 @@ def escape_like(s: str) -> str:
     return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
-def apply_spec_sql(query, spec: FilterSpec, value: Any, *, joined: set[type]):
-    """Fold one registry spec onto a SQLAlchemy query.
+def list_value(key: str, value: Any) -> list | tuple:
+    """``value`` itself, which must be a list: a scalar would cast to a
+    malformed array and fail at execution, so reject it at build time."""
+    if not isinstance(value, (list, tuple)):
+        raise ValueError(f"filter {key!r} expects a list value, got {type(value).__name__}")
+    return value
 
-    ``joined`` tracks subclass models already joined to ``SourceItem`` so each
-    is joined at most once (joins are 1:1 on ``id``, so they never multiply
-    rows). Returns the updated query.
-    """
-    model = spec.model
-    if model is not None and model not in joined:
-        # Join the raw subclass table (not the polymorphic entity) so the
-        # ON clause binds to the outer SourceItem row. Joining the entity
-        # re-aliases source_item and yields a cartesian product.
-        table = model.__table__
-        query = query.join(table, table.c.id == SourceItem.id)
-        joined.add(model)
 
-    column = spec.column_attr()
-
-    if spec.sql_op is SqlOp.EQ:
-        return query.filter(column == value)
-    if spec.sql_op is SqlOp.GTE:
-        return query.filter(column >= value)
-    if spec.sql_op is SqlOp.LTE:
-        return query.filter(column <= value)
-    if spec.sql_op is SqlOp.IN:
-        return query.filter(column.in_(value))
-    if spec.sql_op in (SqlOp.ARRAY_ANY, SqlOp.ARRAY_NONE):
-        # The Postgres `&&` overlap needs an array on both sides. A scalar here
-        # (e.g. tags="foo" instead of ["foo"]) would cast to a malformed array
-        # and fail at execution; reject it loudly at build time instead.
-        if not isinstance(value, (list, tuple)):
-            raise ValueError(
-                f"filter {spec.key!r} expects a list value, got {type(value).__name__}"
-            )
-        bound = sql_cast(value, ARRAY(Text)) if spec.array_cast else value
-        overlap = column.op("&&")(bound)
-        return query.filter(overlap if spec.sql_op is SqlOp.ARRAY_ANY else ~overlap)
-    if spec.sql_op is SqlOp.ILIKE_SUBSTR:
-        return query.filter(column.ilike(f"%{escape_like(value)}%", escape="\\"))
-    if spec.sql_op is SqlOp.ARRAY_ILIKE_SUBSTR:
-        if not isinstance(value, (list, tuple)):
-            raise ValueError(
-                f"filter {spec.key!r} expects a list value, got {type(value).__name__}"
-            )
+def column_clause(op: SqlOp, column, value: Any, key: str):
+    """The SQL condition ``op`` puts on ``column`` for ``value``."""
+    if op is SqlOp.EQ:
+        return column == value
+    if op is SqlOp.GTE:
+        return column >= value
+    if op is SqlOp.LTE:
+        return column <= value
+    if op is SqlOp.IN:
+        return column.in_(list_value(key, value))
+    if op is SqlOp.ARRAY_HAS:
+        return column.any(value)
+    if op in (SqlOp.ARRAY_ANY, SqlOp.ARRAY_NONE):
+        overlap = column.op("&&")(sql_cast(list_value(key, value), ARRAY(Text)))
+        return overlap if op is SqlOp.ARRAY_ANY else ~overlap
+    if op is SqlOp.ILIKE_SUBSTR:
+        return column.ilike(f"%{escape_like(value)}%", escape="\\")
+    if op is SqlOp.ARRAY_ILIKE_SUBSTR:
         # Flatten the array to a single string so one ILIKE scans every element.
         # The unit-separator (0x1f) can't occur in an email header, so a query
         # value can't accidentally span two elements (and unlike NUL it is a
         # legal Postgres string literal). Match if any value is a substring (OR).
         flattened = func.array_to_string(column, "\x1f")
-        clauses = [
-            flattened.ilike(f"%{escape_like(v)}%", escape="\\") for v in value
-        ]
-        return query.filter(or_(*clauses)) if clauses else query
-    raise ValueError(f"unhandled SQL op {spec.sql_op}")  # pragma: no cover
+        return or_(
+            false(),
+            *(flattened.ilike(f"%{escape_like(v)}%", escape="\\") for v in list_value(key, value)),
+        )
+    raise ValueError(f"unhandled SQL op {op}")  # pragma: no cover
+
+
+def target_clause(target: SqlTarget, op: SqlOp, value: Any, key: str):
+    """SQL condition on ``SourceItem`` rows whose ``target`` column matches.
+
+    A subclass column is matched through ``SourceItem.id IN (subquery)`` on the
+    raw subclass table, so the clause composes with any query over
+    ``SourceItem`` (list/count, BM25's Chunk join, the final merge) without
+    joins, and several targets can be OR-ed.
+    """
+    op = target.op or op
+    if target.model is None:
+        return column_clause(op, getattr(SourceItem, target.column), value, key)
+    table = target.model.__table__
+    ids = select(table.c.id)
+    if target.via is None:
+        return SourceItem.id.in_(ids.where(column_clause(op, table.c[target.column], value, key)))
+    related, foreign_key = target.via
+    related_table = related.__table__
+    ids = ids.join(related_table, related_table.c.id == table.c[foreign_key])
+    return SourceItem.id.in_(ids.where(column_clause(op, related_table.c[target.column], value, key)))
+
+
+def spec_clause(spec: FilterSpec, value: Any):
+    """SQL condition on ``SourceItem`` rows matching ``spec`` for ``value``:
+    any of its targets matches."""
+    return or_(*(target_clause(target, spec.sql_op, value, spec.key) for target in spec.targets))
 
 
 def lowercase_filter_value(value: Any) -> Any:
@@ -412,26 +474,20 @@ def is_empty_value(value: Any) -> bool:
     return value is None or value == [] or value == {} or value == ""
 
 
-def apply_registry_filters_sql(query, filters, *, joined: set[type] | None = None):
+def apply_registry_filters_sql(query, filters):
     """Fold all registry filters present in ``filters`` onto a SQL query.
 
-    Used by both list/count (query over ``SourceItem``) and BM25 (query over
-    ``Chunk`` already joined to ``SourceItem``); the same ``model.id ==
-    SourceItem.id`` join works in both because the join is 1:1.
-
-    Combining filters from two different subclasses can never match a row (an
-    item is exactly one subclass) — that is the correct outcome, not a bug.
-
-    Pass ``joined`` to share join-tracking with a caller that has already
-    joined some subclass tables. Returns the updated query.
+    Works on any query that has ``SourceItem`` in its FROM: list/count (over
+    ``SourceItem``), BM25 (``Chunk`` joined to ``SourceItem``) and the final
+    merge. Combining filters only one item type can satisfy each with filters
+    of another can never match a row (an item is exactly one type) — that is
+    the correct outcome, not a bug. Returns the updated query.
     """
-    if joined is None:
-        joined = set()
     for key, spec in FILTER_REGISTRY.items():
         value = filters.get(key)
         if is_empty_value(value):
             continue
-        query = apply_spec_sql(query, spec, value, joined=joined)
+        query = query.filter(spec_clause(spec, value))
     return query
 
 
@@ -466,23 +522,29 @@ def build_registry_qdrant_filters(filters) -> list[dict[str, Any]]:
                 f"(SQL uses {spec.sql_op.value}); it cannot be applied to a "
                 "vector search"
             )
-        qkey = spec.qdrant_key
-        # Past the QDRANT_UNSUPPORTED guard above, every remaining spec pairs a
-        # concrete payload key with its qdrant_op; the registry never leaves
-        # qdrant_key None alongside a usable op.
-        assert qkey is not None
         if spec.lowercase_value:
             value = lowercase_filter_value(value)
-        if spec.qdrant_op is QdrantOp.MATCH_VALUE:
-            result.append({"key": qkey, "match": {"value": value}})
-        elif spec.qdrant_op is QdrantOp.MATCH_ANY:
-            result.append({"key": qkey, "match": {"any": value}})
-        elif spec.qdrant_op is QdrantOp.MATCH_NONE:
-            # A nested filter, so callers can keep AND-ing everything under must.
-            result.append({"must_not": [{"key": qkey, "match": {"any": value}}]})
-        elif spec.qdrant_op in (QdrantOp.RANGE_GTE, QdrantOp.RANGE_LTE):
+        if spec.qdrant_op in (QdrantOp.RANGE_GTE, QdrantOp.RANGE_LTE):
+            (qkey,) = spec.qdrant_keys  # min/max pairs merge on one key
             merge_range(result, qkey, spec.qdrant_op, value)
+            continue
+        conditions = [qdrant_condition(spec.qdrant_op, qkey, value) for qkey in spec.qdrant_keys]
+        # Several keys: a nested filter matching any of them, so callers can
+        # keep AND-ing everything under must.
+        result.append(conditions[0] if len(conditions) == 1 else {"should": conditions})
     return result
+
+
+def qdrant_condition(op: QdrantOp, key: str, value: Any) -> dict[str, Any]:
+    """The Qdrant condition ``op`` puts on payload ``key`` for ``value``."""
+    if op is QdrantOp.MATCH_VALUE:
+        return {"key": key, "match": {"value": value}}
+    if op is QdrantOp.MATCH_ANY:
+        return {"key": key, "match": {"any": value}}
+    if op is QdrantOp.MATCH_NONE:
+        # A nested filter, so callers can keep AND-ing everything under must.
+        return {"must_not": [{"key": key, "match": {"any": value}}]}
+    raise ValueError(f"unhandled Qdrant op {op}")  # pragma: no cover
 
 
 def reject_unknown_filter_keys(filters, *, allowed: set[str]) -> None:
@@ -522,3 +584,49 @@ def beeper_match_sql(filters: MCPSearchFilters | SearchFilters):
 
 def resolve_beeper_chat_ids(filters: SearchFilters, session: Session) -> list[int]:
     return list(session.scalars(beeper_chat_ids(filters.get("network"), filters.get("chat"))))
+
+
+def person_match_sql(person_id: int):
+    """SQL clause for items associated with ``person_id``, or with no one: the
+    same rule as the Qdrant ``people`` filter (build_person_filter)."""
+    associations = select(source_item_people.c.source_item_id).where(
+        source_item_people.c.source_item_id == SourceItem.id
+    )
+    return or_(~exists(associations), exists(associations.where(source_item_people.c.person_id == person_id)))
+
+
+def confidence_match_sql(confidence_type: str, min_score: float):
+    """SQL clause for items whose ``confidence_type`` score is at least ``min_score``."""
+    scored = select(ConfidenceScore.source_item_id).where(
+        ConfidenceScore.confidence_type == confidence_type,
+        ConfidenceScore.score >= min_score,
+    )
+    return SourceItem.id.in_(scored)
+
+
+def special_conditions_sql(filters: MCPSearchFilters | SearchFilters) -> list:
+    """SQL clauses for the hand-coded content filters: person, account,
+    network/chat, source ids and confidences. created_at reaches search as
+    source ids; access control is applied separately."""
+    person_id = filters.get("person_id")
+    account = filters.get("account")
+    beeper = beeper_match_sql(filters)
+    source_ids = filters.get("source_ids")
+    min_confidences = filters.get("min_confidences") or {}
+    return [
+        *([person_match_sql(person_id)] if person_id is not None else []),
+        *([account_match_sql(account)] if account else []),
+        *([beeper] if beeper is not None else []),
+        *([SourceItem.id.in_(source_ids)] if source_ids else []),
+        *(confidence_match_sql(ctype, score) for ctype, score in min_confidences.items()),
+    ]
+
+
+def apply_content_filters_sql(query, filters: MCPSearchFilters | SearchFilters):
+    """Fold every content filter in ``filters`` onto a query with ``SourceItem``
+    in its FROM: the registry plus :func:`special_conditions_sql`.
+
+    BM25, title recall and the final merge all use it, so a candidate that
+    reached the merge by any path is held to the same filters.
+    """
+    return apply_registry_filters_sql(query, filters).filter(*special_conditions_sql(filters))

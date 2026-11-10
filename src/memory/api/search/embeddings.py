@@ -27,7 +27,7 @@ from memory.common.db.connection import make_session
 
 # Qdrant accepts every logical filter key. Registry filters become payload
 # conditions; the special keys are hand-coded (access/person compound
-# conditions, source_id/confidence/observation payload shapes, and created_at,
+# conditions, source_id/confidence payload shapes, and created_at,
 # which arrives as source_ids). Anything else is rejected loudly.
 QDRANT_ALLOWED_FILTER_KEYS = set(FILTER_REGISTRY) | SPECIAL_FILTER_KEYS
 
@@ -282,7 +282,6 @@ def build_qdrant_special_filters(filters: "SearchFilters") -> list[dict[str, Any
     Covers the Qdrant-specific payload shapes:
       - source_ids -> payload key "source_id" (singular) match.any
       - min_confidences -> "confidence.{type}" range
-      - observation_types -> "observation_types" match.any
 
     access_filter and person_id are NOT handled here — they build compound
     conditions in :func:`search_chunks`.
@@ -308,8 +307,6 @@ def build_qdrant_special_filters(filters: "SearchFilters") -> list[dict[str, Any
         with make_session() as session:
             chat_ids = resolve_beeper_chat_ids(filters, session)
         result.append({"key": "beeper_chat_id", "match": {"any": chat_ids}})
-    if observation_types := filters.get("observation_types"):
-        result.append({"key": "observation_types", "match": {"any": observation_types}})
     if min_confidences := filters.get("min_confidences"):
         result.extend(
             {"key": f"confidence.{ctype}", "range": {"gte": score}}

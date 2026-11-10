@@ -67,7 +67,7 @@ from memory.api.search.constants import (
 )
 
 from memory.api.search.bm25 import search_bm25_chunks
-from memory.api.search.filters import apply_registry_filters_sql
+from memory.api.search.filters import apply_content_filters_sql
 from memory.api.search.hyde import expand_query_hyde
 from memory.api.search.rerank import rerank_chunks, rerank_timeout
 from memory.api.search.query_analysis import analyze_query, mentions_date, QueryAnalysis
@@ -429,8 +429,9 @@ def title_matches(title, recalled):
 def titled_sources(
     db, titles: list[str], modalities: set[str], filters: SearchFilters, limit: int
 ) -> list[int]:
-    """For each of ``titles``, the ``limit`` accessible sources whose titles match
-    it, closest in length first. One scan per title column covers every title."""
+    """For each of ``titles``, the ``limit`` accessible sources matching
+    ``filters`` whose titles match it, closest in length first. One scan per
+    title column covers every title."""
     recalled = values(
         sql_column("n", Integer), sql_column("title", Text), name="recalled"
     ).data([(n, t.lower()) for n, t in enumerate(titles)])
@@ -442,9 +443,8 @@ def titled_sources(
         candidates = db.query(model.id, func.lower(column).label("title")).filter(
             model.modality.in_(modalities), func.length(column) > 0
         )
-        if source_ids := filters.get("source_ids"):
-            candidates = candidates.filter(model.id.in_(source_ids))
         candidates = apply_access_filter_to_query(candidates, filters.get("access_filter"))
+        candidates = apply_content_filters_sql(candidates, filters)
         # Materialized so each title is lowercased once, not once per recalled title.
         titled = candidates.cte("titled").prefix_with("MATERIALIZED")
         distance = func.abs(func.length(titled.c.title) - func.length(recalled.c.title))
@@ -853,9 +853,9 @@ async def search_sources(
         with make_session() as db:
             query = db.query(SourceItem).filter(SourceItem.id.in_(by_source.keys()))
             query = apply_access_filter_to_query(query, filters["access_filter"])
-            # Title recall adds chunks that never passed the Qdrant/BM25 tag filters.
-            tag_filters = {k: filters.get(k) for k in ("tags", "exclude_tags")}
-            query = apply_registry_filters_sql(query, tag_filters)
+            # Every candidate path must have honoured the filters; holding the
+            # merged sources to them again keeps any one that didn't out.
+            query = apply_content_filters_sql(query, filters)
             sources = loadable(db, query.all())
             summaries = item_summaries(db, [source.id for source in sources])
             return [
