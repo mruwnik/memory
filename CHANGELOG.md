@@ -46,14 +46,14 @@ a new, empty `## Unreleased` above it.
 - Only a photo's creator or an admin can delete it (`DELETE /photos/{id}`); others who can see it get 403.
 - MCP `organizer_upcoming` only returns calendar events the caller can access, as `list_tasks` does (admins see all). Before, every user saw everyone's events. Non-admins naming other users in `user_ids` are refused.
 - MCP `organizer_upcoming` with a date-only `start_date` or `end_date` (e.g. "2024-01-15") includes recurring events again; dates and times without an offset are read as UTC.
-- Recurring calendar events whose rule has `INTERVAL=0`, whitespace or a `:` (which could smuggle in another property) are skipped with a warning; an `INTERVAL=0` rule from a synced calendar hung `organizer_upcoming` forever. Expanding a rule stops after 50,000 occurrences from the series start, so dense or decades-old series can no longer stall the query, and an event that fails to expand no longer fails the whole query.
+- Recurring calendar events whose rule has `INTERVAL=0`, whitespace or a `:` (which could smuggle in another property) are skipped with a warning; an `INTERVAL=0` rule from a synced calendar hung `organizer_upcoming` forever. Expanding a rule visits at most 50,000 occurrences from the series start, which keeps a dense or decades-old series to about a quarter second, and an event that fails to expand no longer fails the whole query.
 - Recurring all-day calendar series that end on a date (a date-only `UNTIL`, as CalDAV and Google send them) show in `organizer_upcoming` again, through the end of that day; a floating `UNTIL` time is read as UTC.
 - Calendar syncs remove events deleted or cancelled in CalDAV or Google Calendar. A sync that read every calendar deletes the account's stored events starting inside the sync window (less a day at each end) that the calendar no longer returns; a sync that skipped a calendar or event, or found no calendar, deletes nothing. The sync result reports `events_deleted`.
 - Gmail syncs no longer re-download, on every run, messages they never store (a copy already stored, password-reset mail, a message that keeps killing its worker). The account remembers their ids (new column `email_accounts.gmail_declined_ids`) until they leave the mailbox; messages that failed to queue are retried.
 - Connecting a Google account finishes only in a browser logged in as the memory user who started it: a logged-out browser is asked to log in and reload, another user's authorization link is refused, and a Google account already connected to another memory user is refused instead of having its tokens replaced.
 - On https, the login cookies the web app sets carry the Secure flag, so the browser never sends them over plain http.
 - Web UI: a slow earlier search, month or Tasks/Polls filter load no longer replaces newer results; the calendar loads a month once, works with browser storage blocked, and shows a tappable event count per day on phones; People says when a person's teams or tidbits failed to load, with Retry, instead of showing none.
-- Calendar syncs check once whether each recurring event's rule yields any occurrence at all; `organizer_upcoming` skips the events whose rule no date satisfies (e.g. 30 February), which took seconds each to expand.
+- Calendar syncs check once whether each recurring event's rule yields any occurrence at all; `organizer_upcoming` skips the events whose rule no date satisfies (e.g. 30 February), which took seconds each to expand. The expansion runs off the MCP server's event loop, so a slow event no longer holds up other requests.
 
 ### Required env vars
 None
@@ -70,6 +70,7 @@ None
 - `20261220_github_incomplete_since` adds a nullable `github_repos.incomplete_since` column and a `github_repos.sync_incomplete` boolean defaulting to false (instant).
 - `20261221_agent_run_notify_seen` adds `agent_runs.notify_on_finish`, `notified_at` and `seen_at` with two partial indexes, and backfills `seen_at = finished_at` for ended runs started through MCP or by hand that aren't sub-runs (an `UPDATE` scanning all of `agent_runs`: slow on a large table, and the indexes are built without `CONCURRENTLY`).
 - `20261222_item_inserted_idx` builds two indexes on `source_item`, `(inserted_at, id)` and `(type, inserted_at, id)`, with `CREATE INDEX CONCURRENTLY`: writes continue while they build, but the upgrade's time grows with the number of stored items. If it is interrupted, drop any invalid `source_inserted_at_idx` or `source_type_inserted_at_idx` before re-running it: Postgres keeps a half-built concurrent index, and `IF NOT EXISTS` would skip it.
+- `20261223_gmail_declined_ids` adds `email_accounts.gmail_declined_ids`, a text array defaulting to empty (instant).
 - `20261224_recurrence_expandable` adds a nullable `calendar_event.recurrence_expandable` boolean (instant).
 
 ### Post-deploy commands
