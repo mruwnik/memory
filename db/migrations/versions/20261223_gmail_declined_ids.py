@@ -4,7 +4,7 @@ Adds email_accounts.gmail_declined_ids so Gmail syncs stop re-downloading
 duplicates and other mail they never store.
 
 Revision ID: 20261223_gmail_declined_ids
-Revises: 20261222_item_inserted_idx
+Revises: 20261223_transcript_task_options
 Create Date: 2026-11-10
 """
 
@@ -13,7 +13,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision = "20261223_gmail_declined_ids"
-down_revision = "20261222_item_inserted_idx"
+down_revision = "20261223_transcript_task_options"
 branch_labels = None
 depends_on = None
 
