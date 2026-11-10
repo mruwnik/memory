@@ -699,8 +699,8 @@ def _lookup_milestone_id(
                 f"Milestone #{milestone_number} not found on GitHub for {repo.repo_path}"
             )
             return None
-    except Exception as e:
-        logger.error(f"Failed to fetch milestone #{milestone_number} from GitHub: {e}")
+    except Exception:
+        logger.exception(f"Failed to fetch milestone #{milestone_number} from GitHub")
         return None
 
 

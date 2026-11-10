@@ -136,7 +136,7 @@ def verify_emails(
             return verify_imap_messages(imap_uids, items)
 
     except Exception as e:
-        logger.error(f"Email verification failed for account {account_id}: {e}")
+        logger.exception(f"Email verification failed for account {account_id}")
         return {
             item.id: VerificationResult(item.id, exists=True, error=str(e))
             for item in items
@@ -216,7 +216,7 @@ def verify_github_items(
             results[item.id] = VerificationResult(item.id, exists=exists)
 
     except Exception as e:
-        logger.error(f"GitHub verification failed for repo {repo_id}: {e}")
+        logger.exception(f"GitHub verification failed for repo {repo_id}")
         # On error, preserve all verifiable items (don't mark as missing)
         for item, _, _ in verifiable:
             results[item.id] = VerificationResult(item.id, exists=True, error=str(e))

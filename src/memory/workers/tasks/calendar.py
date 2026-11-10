@@ -258,12 +258,10 @@ def fetch_caldav_events(
             for vevent in vevents:
                 try:
                     events.append(parse_caldav_event(vevent, calendar_name))
-                except Exception as e:
-                    logger.error(
-                        f"Error parsing CalDAV event from {calendar_name}: {e}"
-                    )
-        except Exception as e:
-            logger.error(f"Error fetching events from calendar {calendar_name}: {e}")
+                except Exception:
+                    logger.exception("Error parsing CalDAV event from calendar %s", calendar.id)
+        except Exception:
+            logger.exception("Error fetching events from calendar %s", calendar.id)
 
     return events
 

@@ -283,8 +283,8 @@ def docx_to_pdf(
         )
         logger.info(f"Successfully converted {docx_path} to PDF")
         return output_path
-    except Exception as e:
-        logger.error(f"Error converting document to PDF: {e}")
+    except Exception:
+        logger.exception("Error converting document to PDF")
         raise
 
 

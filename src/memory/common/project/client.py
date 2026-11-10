@@ -145,7 +145,7 @@ def ensure_github_repo(
             owner, repo_name, description=description, private=private
         )
         if not github_repo_data:
-            logger.error(f"Failed to create repository '{owner}/{repo_name}' on GitHub")
+            logger.error("Failed to create a GitHub repository for account %s", account_id)
             return None, False, False
 
     # Create tracking entry in our database

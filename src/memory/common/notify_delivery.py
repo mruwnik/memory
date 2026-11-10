@@ -215,7 +215,7 @@ def send_via_email(params: NotificationParams) -> bool:
     if result.success:
         logger.info(f"Email sent to {to_address}")
         return True
-    logger.error(f"Failed to send email: {result.error}")
+    logger.error(f"Failed to send notification email for user {params.user_id}")
     return False
 
 

@@ -309,13 +309,13 @@ def send_via_smtp(
         return EmailResult(success=True, message_id=message_id)
 
     except smtplib.SMTPAuthenticationError as e:
-        logger.error(f"SMTP authentication failed for {config.email_address}: {e}")
+        logger.error("SMTP authentication failed")
         return EmailResult(success=False, error=f"Authentication failed: {e}")
     except smtplib.SMTPException as e:
-        logger.error(f"SMTP error sending email: {e}")
+        logger.exception("SMTP error sending email")
         return EmailResult(success=False, error=f"SMTP error: {e}")
     except Exception as e:
-        logger.exception(f"Unexpected error sending email via SMTP: {e}")
+        logger.exception("Unexpected error sending email via SMTP")
         return EmailResult(success=False, error=str(e))
 
 
@@ -403,7 +403,7 @@ def send_via_gmail_api(
         return EmailResult(success=True, message_id=message_id)
 
     except Exception as e:
-        logger.exception(f"Error sending email via Gmail API: {e}")
+        logger.exception("Error sending email via Gmail API")
         return EmailResult(success=False, error=str(e))
 
 

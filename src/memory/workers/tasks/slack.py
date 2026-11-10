@@ -416,7 +416,7 @@ def sync_slack_workspace(
         except Exception as e:
             workspace.record_sync(e)
             session.commit()
-            logger.exception(f"Unexpected error syncing workspace {workspace_id}: {e}")
+            logger.exception(f"Unexpected error syncing workspace {workspace_id}")
             return {"status": "error", "error": str(e)}
 
 

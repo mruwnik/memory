@@ -1031,10 +1031,10 @@ class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
                 logger.info(f"Created milestone '{title}' in {owner}/{repo} (#{data.get('number')})")
                 return data
             else:
-                logger.error(f"Failed to create milestone: {response.status_code} {response.text}")
+                logger.error("Failed to create milestone: HTTP %s", response.status_code)
                 return None
-        except Exception as e:
-            logger.error(f"Failed to create milestone '{title}': {e}")
+        except Exception:
+            logger.exception("Failed to create milestone")
             return None
 
     def update_milestone(
@@ -1091,10 +1091,12 @@ class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
                 logger.info(f"Updated milestone #{milestone_number} in {owner}/{repo}")
                 return data
             else:
-                logger.error(f"Failed to update milestone: {response.status_code} {response.text}")
+                logger.error(
+                    "Failed to update milestone #%s: HTTP %s", milestone_number, response.status_code
+                )
                 return None
-        except Exception as e:
-            logger.error(f"Failed to update milestone #{milestone_number}: {e}")
+        except Exception:
+            logger.exception("Failed to update milestone #%s", milestone_number)
             return None
 
     def add_issue_comment(
@@ -1291,12 +1293,10 @@ class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
                     "html_url": data.get("html_url"),
                 }
             else:
-                logger.error(
-                    f"Failed to create repository: {response.status_code} {response.text}"
-                )
+                logger.error("Failed to create repository: HTTP %s", response.status_code)
                 return None
-        except Exception as e:
-            logger.error(f"Failed to create repository '{name}': {e}")
+        except Exception:
+            logger.exception("Failed to create repository")
             return None
 
     def ensure_repository(
