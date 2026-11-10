@@ -391,7 +391,7 @@ const Calendar = () => {
             key={index}
             role="group"
             aria-label={day.date.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}
-            className={`min-h-28 p-2 border-b border-r border-slate-100 ${
+            className={`min-h-16 sm:min-h-28 p-1 sm:p-2 border-b border-r border-slate-100 ${
               !day.isCurrentMonth ? 'bg-slate-50/50' : 'bg-white'
             } ${day.isToday ? 'bg-primary/10' : ''}`}
           >
@@ -406,7 +406,18 @@ const Calendar = () => {
                 {day.date.getDate()}
               </span>
             </div>
-            <div className="space-y-1">
+            {/* Event titles don't fit a phone-width column, so phones get one tappable count per day. */}
+            {day.events.length > 0 && (
+              <button
+                type="button"
+                className="sm:hidden w-full min-h-11 rounded bg-primary/20 text-xs font-medium text-primary-dark focus-visible:outline-2 focus-visible:outline-primary"
+                aria-label={`${day.events.length} event${day.events.length === 1 ? '' : 's'}`}
+                onClick={() => setSelectedDayEvents({ date: day.date, events: day.events })}
+              >
+                {day.events.length}
+              </button>
+            )}
+            <div className="hidden sm:block space-y-1">
               {day.events.slice(0, 4).map((event) => (
                 <button
                   type="button"
@@ -443,7 +454,7 @@ const Calendar = () => {
         )}
       </Card>
 
-      {/* Day Events Modal (for +N more) */}
+      {/* Day Events Modal (for +N more and the phone day buttons) */}
       {selectedDayEvents && (
         <Modal title={formatDateHeader(selectedDayEvents.date)} onClose={() => setSelectedDayEvents(null)}>
           <div className="space-y-2">

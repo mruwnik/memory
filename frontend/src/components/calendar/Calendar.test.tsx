@@ -125,6 +125,22 @@ describe('Calendar', () => {
     expect(await screen.findByRole('dialog', { name: 'E5' })).toBeInTheDocument()
   })
 
+  it('gives phones a day button that opens the day, in place of the event list', async () => {
+    getEventsForMonths.mockResolvedValue([
+      onDay(14, { id: 1, event_title: 'Breakfast' }),
+      onDay(14, { id: 2, event_title: 'Lunch', start_time: new Date(new Date().getFullYear(), new Date().getMonth(), 14, 12).toISOString() }),
+    ])
+    const user = userEvent.setup()
+    renderWithRouter(<Calendar />)
+    const dayButton = await screen.findByRole('button', { name: '2 events' })
+    expect(dayButton).toHaveClass('sm:hidden', 'min-h-11', 'w-full')
+    expect(screen.getByRole('button', { name: /Breakfast/ }).parentElement).toHaveClass('hidden', 'sm:block')
+    await user.click(dayButton)
+    const day = screen.getByRole('dialog')
+    expect(within(day).getByRole('button', { name: /Breakfast/ })).toBeInTheDocument()
+    expect(within(day).getByRole('button', { name: /Lunch/ })).toBeInTheDocument()
+  })
+
   it('filters events by calendar via the Calendars dropdown', async () => {
     getEventsForMonths.mockResolvedValue([
       onDay(8, { id: 1, event_title: 'WorkEvt', calendar_name: 'Work' }),
