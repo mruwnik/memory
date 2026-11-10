@@ -36,6 +36,7 @@ a new, empty `## Unreleased` above it.
 - Browse what has been ingested: each content type on the Ingestion overview opens its items, newest first, a page at a time, and the overview page can show each type's latest five items inline. The list can be narrowed to one connection (email account, Discord or Slack channel, Beeper chat, feed, GitHub repo, Google Drive folder, calendar or transcript account, book), filtered by indexing status, and searched by title, subject, sender, author or filename (not the item text). Only items you can access are listed.
 - MCP `core_list_items` and `core_count_items` take `item_types`, `embed_statuses` (default still indexed items only), `contains` and `connection_id`. List rows carry `type` and `embed_status`; `include_total=false` skips the total count; pages sort by id within equal timestamps so they never overlap. `core_count_items` adds `by_type` and, for types that share a kind of connection, `by_connection`.
 - MCP `organizer_upcoming` only returns calendar events the caller can access, as `list_tasks` does (admins see all). Before, every user saw everyone's events. Non-admins naming other users in `user_ids` are refused.
+- MCP `organizer_upcoming` with a date-only `start_date` or `end_date` (e.g. "2024-01-15") includes recurring events again; dates and times without an offset are read as UTC.
 
 ### Required env vars
 None

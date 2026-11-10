@@ -8,7 +8,7 @@ from typing import TypedDict
 from dateutil.rrule import rrulestr
 
 from memory.common.access_control import AccessFilter, apply_access_filter_to_query
-from memory.common.dates import parse_iso_datetime
+from memory.common.dates import parse_iso_datetime_utc
 from memory.common.db.connection import DBSession
 from memory.common.db.models import CalendarEvent
 from memory.common.db.models.sources import CalendarAccount
@@ -177,8 +177,8 @@ def parse_date_range(
     """Parse date range from string inputs.
 
     Args:
-        start_date: ISO format start date (defaults to now)
-        end_date: ISO format end date (defaults to start + days)
+        start_date: ISO format start date (defaults to now); naive values are UTC
+        end_date: ISO format end date (defaults to start + days); naive values are UTC
         days: Number of days if end_date not specified
 
     Returns:
@@ -188,14 +188,14 @@ def parse_date_range(
         ValueError: If date format is invalid
     """
     if start_date:
-        range_start = parse_iso_datetime(start_date)
+        range_start = parse_iso_datetime_utc(start_date)
         if range_start is None:
             raise ValueError(f"Invalid start_date format: {start_date}")
     else:
         range_start = datetime.now(timezone.utc)
 
     if end_date:
-        range_end = parse_iso_datetime(end_date)
+        range_end = parse_iso_datetime_utc(end_date)
         if range_end is None:
             raise ValueError(f"Invalid end_date format: {end_date}")
     else:

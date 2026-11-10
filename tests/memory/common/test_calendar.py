@@ -165,6 +165,33 @@ def test_parse_date_range_uses_days():
     assert end.day == expected_end.day
 
 
+@pytest.mark.parametrize(
+    "start_date, end_date",
+    [
+        ("2024-01-15", "2024-01-20"),
+        ("2024-01-15T09:00:00", None),
+        ("2024-01-15", "2024-01-20T18:00:00Z"),
+    ],
+)
+def test_parse_date_range_naive_input_is_utc(start_date, end_date):
+    start, end = parse_date_range(start_date, end_date)
+
+    assert (start.tzinfo, end.tzinfo) == (timezone.utc, timezone.utc)
+
+
+def test_get_events_in_range_date_only_range_expands_recurring(
+    db_session, recurring_event
+):
+    start, end = parse_date_range("2024-01-15", "2024-01-17")
+
+    events = get_events_in_range(db_session, start, end, access_filter=None)
+
+    assert [e["start_time"] for e in events] == [
+        "2024-01-15T09:00:00+00:00",
+        "2024-01-16T09:00:00+00:00",
+    ]
+
+
 def test_parse_date_range_invalid_start_date():
     """Test error on invalid start date."""
     with pytest.raises(ValueError, match="Invalid start_date"):
