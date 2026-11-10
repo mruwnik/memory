@@ -62,7 +62,7 @@ def item(description, assignee):
 def assigned(db, assignee, chosen, attendees=(), content="Alice: hi"):
     meeting = make_meeting(db, None, attendees=attendees, content=content)
     others = meetings.other_attendee_names(meeting, chosen)
-    return meetings.assigned_to(assignee, chosen, others)
+    return meetings.chosen_assignee(assignee, chosen, others)
 
 
 @pytest.mark.parametrize(
@@ -81,14 +81,14 @@ def assigned(db, assignee, chosen, attendees=(), content="Alice: hi"):
         (None, False),
     ],
 )
-def test_assigned_to_matches_the_chosen_people(db_session, me, alice, assignee, expected):
-    assert assigned(db_session, assignee, [me], [me, alice]) is expected
+def test_chosen_assignee_matches_the_chosen_people(db_session, me, alice, assignee, expected):
+    assert (assigned(db_session, assignee, [me], [me, alice]) == me) is expected
 
 
-def test_assigned_to_matches_any_chosen_person(db_session, me):
+def test_chosen_assignee_matches_any_chosen_person(db_session, me):
     other_me = make_person(db_session, "Dee", aliases=["The Boss"])
 
-    assert assigned(db_session, "the boss", [me, other_me])
+    assert assigned(db_session, "the boss", [me, other_me]) == other_me
 
 
 @pytest.mark.parametrize(
@@ -100,7 +100,7 @@ def test_assigned_to_matches_any_chosen_person(db_session, me):
     ],
 )
 def test_a_name_an_unlinked_attendee_shares_is_ambiguous(db_session, me, assignee, content):
-    assert not assigned(db_session, assignee, [me], [me], content)
+    assert assigned(db_session, assignee, [me], [me], content) is None
 
 
 @pytest.mark.parametrize(
@@ -114,7 +114,7 @@ def test_a_name_an_unlinked_attendee_shares_is_ambiguous(db_session, me, assigne
 def test_a_name_a_linked_attendee_shares_is_ambiguous(db_session, me, assignee, namesake):
     other = make_person(db_session, namesake[0], aliases=namesake[1])
 
-    assert not assigned(db_session, assignee, [me], [me, other])
+    assert assigned(db_session, assignee, [me], [me, other]) is None
 
 
 @pytest.mark.parametrize(
@@ -128,7 +128,7 @@ def test_a_name_a_linked_attendee_shares_is_ambiguous(db_session, me, assignee, 
 def test_a_bare_first_name_never_matches(db_session, me, attendees, content):
     people = [make_person(db_session, name) for name in attendees]
 
-    assert not assigned(db_session, "Daniel", [me], people, content)
+    assert assigned(db_session, "Daniel", [me], people, content) is None
 
 
 @pytest.mark.parametrize(
@@ -143,13 +143,13 @@ def test_a_bare_first_name_never_matches(db_session, me, attendees, content):
 def test_labels_naming_the_chosen_person_or_someone_else_dont_block_them(
     db_session, me, assignee, content
 ):
-    assert assigned(db_session, assignee, [me], [], content)
+    assert assigned(db_session, assignee, [me], [], content) == me
 
 
-def test_a_name_two_chosen_people_share_matches(db_session, me):
+def test_a_first_name_of_another_chosen_person_does_not_block(db_session, me):
     namesake = make_person(db_session, "Danny Jones")
 
-    assert assigned(db_session, "Danny", [me, namesake], [me, namesake])
+    assert assigned(db_session, "Danny", [me, namesake], [me, namesake]) == me
 
 
 @pytest.mark.parametrize(
@@ -159,6 +159,8 @@ def test_a_name_two_chosen_people_share_matches(db_session, me):
         ("Alice: hi\nBob Brown: hello: there", {"alice", "bob brown"}),
         ("Attendees: Ann, b@x.com\n\nCarl: hi", {"ann", "b@x.com", "carl"}),
         ("See https://x.com/a\nno label here", set()),
+        ("Attendees: Smith, Daniel\n\nAnn: hi", {"smith", "daniel", "ann"}),
+        ("[00:01:23] Ann: hi", set()),
     ],
 )
 def test_transcript_names_reads_the_attendee_list_and_speaker_labels(content, expected):
@@ -194,6 +196,12 @@ def test_meetings_without_an_account_make_tasks_for_every_item(db_session, regul
     meeting = make_meeting(db_session, regular_user.id)
 
     assert meetings.task_action_items(meeting, ITEMS) == ITEMS
+
+
+def test_a_name_two_chosen_people_both_go_by_matches_neither(db_session, me):
+    twin = make_person(db_session, "Dan Twin", aliases=["Danny"])
+
+    assert assigned(db_session, "Danny", [me, twin], [me, twin]) is None
 
 
 EXTRACTED = {"summary": "We met.", "notes": "- a", "action_items": ITEMS}
@@ -240,3 +248,20 @@ def test_reextracting_after_turning_tasks_off_drops_untouched_tasks(
     meetings.extract_and_update_meeting(db_session, meeting)
 
     assert meeting_tasks(db_session, meeting) == ["Hers"]
+
+
+@pytest.mark.parametrize("assignee", ["Danny", "daniel  o'connell", "DAN@example.com"])
+def test_extracted_task_goes_to_the_chosen_person_whatever_namesakes_exist(
+    db_session, regular_user, llm_key, scripted_llm, me, alice, assignee
+):
+    make_person(db_session, "Bob Brown", aliases=["Danny"])
+    make_person(db_session, "Daniel O'Connell")
+    make_person(db_session, "Carl", email="dan@example.com")
+    scripted_llm.script = [submitted({**EXTRACTED, "action_items": [item("Mine", assignee)]})]
+    account = make_account(db_session, regular_user.id, task_people=[me])
+    meeting = make_meeting(db_session, regular_user.id, account, [me, alice])
+
+    meetings.extract_and_update_meeting(db_session, meeting)
+
+    task = db_session.query(Task).filter(Task.source_item_id == meeting.id).one()
+    assert (task.people, task.tags) == ([me], ["meeting", "action-item", f"assignee:{me.identifier}"])

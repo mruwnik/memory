@@ -370,9 +370,16 @@ def action_item_key(description: str) -> str:
 
 
 def apply_action_item(session, task: Task, item: dict, held_at: datetime) -> list[str]:
-    """Set the task's fields from its action item; returns the change tags of those that changed."""
-    assignee_name = item.get("assignee")
-    assignee = find_person_by_name(session, assignee_name) if assignee_name else None
+    """Set the task's fields from its action item; returns the change tags of those that changed.
+
+    The assignee is the item's `assignee_id` when the account's filter matched
+    one of its chosen people, else the one Person the assignee name resolves to.
+    """
+    assignee = (
+        session.get(Person, item["assignee_id"])
+        if "assignee_id" in item
+        else find_person_by_name(session, item.get("assignee"))
+    )
     priority = item.get("priority")
     fields = {
         "title": ("task_title", item["description"]),
@@ -466,7 +473,12 @@ def with_first_names(names: set[str]) -> set[str]:
 
 
 def transcript_names(content: str) -> set[str]:
-    """The attendee list and speaker labels written in a meeting's transcript."""
+    """The attendee list and speaker labels written in a meeting's transcript.
+
+    The list splits on commas, so "Smith, Daniel" reads as two names, and only
+    labels at the start of a line count. Both only ever add names, which can
+    block a match but never make one.
+    """
     listed: list[str] = []
     if content.startswith(ATTENDEES_PREFIX):
         header, _, content = content.partition("\n")
@@ -488,22 +500,29 @@ def other_attendee_names(meeting: Meeting, chosen: Sequence[Person]) -> set[str]
     return set().union(*(with_first_names(names) for names in [*linked, unlinked]))
 
 
-def assigned_to(assignee: str | None, chosen: Sequence[Person], others: set[str]) -> bool:
-    """Whether the action item `assignee` names one of the `chosen` people.
+def chosen_assignee(
+    assignee: str | None, chosen: Sequence[Person], others: set[str]
+) -> Person | None:
+    """The one `chosen` person the action item `assignee` names, if any.
 
     Matches a chosen person's display name, alias or email case-insensitively,
-    but never a name in `others`, the names of the meeting's other attendees: a
-    task for the wrong person is worse than a missed one.
+    but never a name in `others`, the names of the meeting's other attendees,
+    nor a name two chosen people share: a task for the wrong person is worse
+    than a missed one.
     """
     key = name_key(assignee or "")
-    return bool(key) and key not in others and any(key in person_names(p) for p in chosen)
+    if not key or key in others:
+        return None
+    matches = [p for p in chosen if key in person_names(p)]
+    return matches[0] if len(matches) == 1 else None
 
 
 def task_action_items(meeting: Meeting, action_items: list[dict]) -> list[dict]:
     """The action items the meeting's transcript account makes Tasks for.
 
     An account can turn tasks off, or limit them to action items assigned to
-    its chosen people. Meetings without an account make Tasks for every item.
+    its chosen people; those items carry the matched person's `assignee_id`.
+    Meetings without an account make Tasks for every item.
     """
     account = meeting.transcript_account
     if account is None:
@@ -513,10 +532,11 @@ def task_action_items(meeting: Meeting, action_items: list[dict]) -> list[dict]:
     if not account.task_people:
         return action_items
     others = other_attendee_names(meeting, account.task_people)
-    return [
-        item for item in action_items
-        if assigned_to(item.get("assignee"), account.task_people, others)
+    matched = [
+        (item, chosen_assignee(item.get("assignee"), account.task_people, others))
+        for item in action_items
     ]
+    return [{**item, "assignee_id": person.id} for item, person in matched if person]
 
 
 def detach_meeting_tasks(session: DBSession, meeting: Meeting) -> None:
