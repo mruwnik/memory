@@ -38,7 +38,6 @@ a new, empty `## Unreleased` above it.
 - MCP `organizer_upcoming` only returns calendar events the caller can access, as `list_tasks` does (admins see all). Before, every user saw everyone's events. Non-admins naming other users in `user_ids` are refused.
 - MCP `organizer_upcoming` with a date-only `start_date` or `end_date` (e.g. "2024-01-15") includes recurring events again; dates and times without an offset are read as UTC.
 - Recurring calendar events with an `INTERVAL=0`, secondly or minutely rule, or multi-line rule text, are skipped with a warning instead of expanding: an `INTERVAL=0` rule from a synced calendar hung `organizer_upcoming` forever, and sub-hourly rules on old series took minutes.
-- Recurring Google Calendar events show their occurrences in `organizer_upcoming`. Their rules were stored with an `RRULE:` prefix that expansion rejected, so only non-recurring Google events appeared; existing rows work without a re-sync, and a sync now stores the series' RRULE line even when Google lists EXDATE or RDATE lines first.
 - Recurring all-day calendar series that end on a date (a date-only `UNTIL`, as CalDAV and Google send them) show in `organizer_upcoming` again, through the end of that day; a floating `UNTIL` time is read as UTC.
 
 ### Required env vars
