@@ -1,8 +1,8 @@
 import { useCallback } from 'react'
 import { useAuth, PersonRef } from './useAuth'
+import { apiError } from './apiError'
 
 export type { PersonRef }
-import { apiError } from './apiError'
 
 /** Outcome of a source's latest sync; a failing streak keeps its start time until a sync succeeds. */
 export interface SyncStatus {

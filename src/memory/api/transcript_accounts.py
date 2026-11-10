@@ -111,14 +111,8 @@ def secret_hint(account: TranscriptAccount) -> str | None:
     return secret[-4:] if secret else None
 
 
-def person_ref(person: Person | None) -> PersonRef | None:
-    if person is None:
-        return None
+def person_ref(person: Person) -> PersonRef:
     return PersonRef(id=person.id, display_name=person.display_name)
-
-
-def owner_person(db: Session, owner_id: int) -> Person | None:
-    return db.query(Person).filter(Person.user_id == owner_id).first()
 
 
 def resolve_task_people(
@@ -170,8 +164,8 @@ def account_to_response(
         sensitivity=cast(str, account.sensitivity) or "basic",
         llm_key=llm_key_view(db, user, account),
         create_tasks=account.create_tasks,
-        task_people=[PersonRef(id=p.id, display_name=p.display_name) for p in account.task_people],
-        owner_person=person_ref(owner_person(db, account.user_id)),
+        task_people=[person_ref(p) for p in account.task_people],
+        owner_person=person_ref(owner) if (owner := account.user.person) else None,
     )
 
 

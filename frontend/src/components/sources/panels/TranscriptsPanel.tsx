@@ -205,6 +205,7 @@ const TranscriptForm = ({ account, providers, pushOnly, projects, onSubmit, onCa
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const polls = account ? account.polls : !pushOnly.includes(formData.provider)
+  const owner = account ? account.owner_person : user?.person ?? null
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -314,7 +315,8 @@ const TranscriptForm = ({ account, providers, pushOnly, projects, onSubmit, onCa
         <TaskPeopleField
           createTasks={formData.create_tasks}
           people={formData.task_people}
-          me={account ? account.owner_person : user?.person ?? null}
+          owner={owner}
+          ownerIsYou={owner?.id === user?.person?.id}
           onChange={(create_tasks, task_people) => setFormData({ ...formData, create_tasks, task_people })}
         />
 

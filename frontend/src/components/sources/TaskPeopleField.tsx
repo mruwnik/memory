@@ -8,13 +8,15 @@ const SEARCH_DELAY_MS = 250
 interface TaskPeopleFieldProps {
   createTasks: boolean
   people: PersonRef[]
-  /** The account owner's own Person, offered as "Only me". */
-  me: PersonRef | null
+  /** The account owner's own Person, offered as "Only me" or "Only the owner". */
+  owner: PersonRef | null
+  /** Whether the viewer owns the account. */
+  ownerIsYou: boolean
   onChange: (createTasks: boolean, people: PersonRef[]) => void
 }
 
 /** Whether a transcript account turns action items into tasks, and for whom. */
-export const TaskPeopleField = ({ createTasks, people, me, onChange }: TaskPeopleFieldProps) => {
+export const TaskPeopleField = ({ createTasks, people, owner, ownerIsYou, onChange }: TaskPeopleFieldProps) => {
   const { listPeople } = usePeople()
   const [query, setQuery] = useState('')
   const [found, setFound] = useState<PersonRef[]>([])
@@ -30,13 +32,13 @@ export const TaskPeopleField = ({ createTasks, people, me, onChange }: TaskPeopl
     return () => { live = false; clearTimeout(timer) }
   }, [listPeople, query])
 
-  const known = new Map([...found, ...people, ...(me ? [me] : [])].map(p => [String(p.id), p]))
+  const known = new Map([...found, ...people, ...(owner ? [owner] : [])].map(p => [String(p.id), p]))
   const options = [...known.values()].map(p => ({
     value: String(p.id),
     label: p.display_name,
-    description: p.id === me?.id ? 'You' : undefined,
+    description: p.id === owner?.id ? (ownerIsYou ? 'You' : 'Owner') : undefined,
   }))
-  const onlyMe = me && !(people.length === 1 && people[0].id === me.id)
+  const onlyOwner = owner && !(people.length === 1 && people[0].id === owner.id)
 
   return (
     <div className="space-y-3">
@@ -59,8 +61,10 @@ export const TaskPeopleField = ({ createTasks, people, me, onChange }: TaskPeopl
           />
         </Field>
       )}
-      {createTasks && onlyMe && (
-        <Button size="sm" onClick={() => onChange(true, [me])}>Only me ({me.display_name})</Button>
+      {createTasks && onlyOwner && (
+        <Button size="sm" onClick={() => onChange(true, [owner])}>
+          {ownerIsYou ? 'Only me' : 'Only the owner'} ({owner.display_name})
+        </Button>
       )}
     </div>
   )

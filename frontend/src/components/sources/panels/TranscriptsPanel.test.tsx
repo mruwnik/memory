@@ -294,6 +294,17 @@ describe('TranscriptsPanel - action item tasks', () => {
     )
   })
 
+  it('offers "Only the owner" on an account someone else owns', async () => {
+    listTranscriptAccounts.mockResolvedValue([account({ owner_person: { id: 9, display_name: 'Other Owner' } })])
+    const { user } = renderWithRouter(<TranscriptsPanel />)
+    await screen.findByText('My Fireflies')
+
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
+
+    expect(screen.getByRole('button', { name: 'Only the owner (Other Owner)' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Only me/ })).not.toBeInTheDocument()
+  })
+
   it("doesn't offer your own Person as \"Only me\" on an account whose owner has none", async () => {
     listTranscriptAccounts.mockResolvedValue([account({ owner_person: null })])
     const { user } = renderWithRouter(<TranscriptsPanel />)

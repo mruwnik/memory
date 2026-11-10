@@ -15,7 +15,7 @@ const ann = { id: 8, display_name: 'Ann Lee' }
 
 const renderField = (props: Partial<Parameters<typeof TaskPeopleField>[0]> = {}) => {
   const onChange = vi.fn()
-  render(<TaskPeopleField createTasks people={[]} me={me} onChange={onChange} {...props} />)
+  render(<TaskPeopleField createTasks people={[]} owner={me} ownerIsYou onChange={onChange} {...props} />)
   return { onChange, user: userEvent.setup() }
 }
 
@@ -43,11 +43,20 @@ describe('TaskPeopleField', () => {
     expect(onChange).toHaveBeenCalledWith(true, [me])
   })
 
+  it('names the owner, not "me", on someone else\'s account', async () => {
+    const { onChange, user } = renderField({ ownerIsYou: false })
+    expect(screen.queryByRole('button', { name: /Only me/ })).not.toBeInTheDocument()
+    await user.click(screen.getByLabelText('Only for these people'))
+    expect(screen.getByRole('option', { name: /Test User.*Owner/ })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Only the owner (Test User)' }))
+    expect(onChange).toHaveBeenCalledWith(true, [me])
+  })
+
   it.each([
     ['the owner is already the only pick', [me], me],
     ['there is no owner Person', [], null],
   ])('offers no "Only me" when %s', (_, people, owner) => {
-    renderField({ people, me: owner })
+    renderField({ people, owner })
     expect(screen.queryByRole('button', { name: /Only me/ })).not.toBeInTheDocument()
   })
 
