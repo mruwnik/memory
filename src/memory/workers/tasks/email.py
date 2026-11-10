@@ -413,13 +413,17 @@ def finalize_sync(
 
     Only a clean sync moves ``last_sync_at``, to its start: mail that arrived
     while it ran, or that it failed to fetch or queue, is fetched again next time.
+
+    ``error`` is the exception that aborted the sync, or a message for one that
+    finished with failures; the latter keeps the sync's own writes.
     """
-    if error:
+    if isinstance(error, Exception):
         # The failing sync may have left the session in a poisoned
         # transaction (e.g. a dropped connection mid-query). Roll back
         # first so the sync_error write can actually be committed instead
         # of cascading into PendingRollbackError and losing the status.
         db.rollback()
+    if error:
         account.record_sync(error)
     else:
         account.last_sync_at = started_at  # type: ignore

@@ -865,6 +865,32 @@ def test_sync_gmail_does_not_remember_failed_mail(
     assert gmail_email_account.gmail_declined_ids == []
 
 
+def test_sync_account_keeps_declined_mail_when_other_mail_fails(
+    db_session, gmail_email_account
+):
+    # "dup" is a copy of stored mail, so it is declined; "new" fails to queue.
+    add_gmail_mail(db_session, gmail_email_account, "dup")
+    db_session.query(MailMessage).filter_by(imap_uid="dup").update(
+        {"imap_uid": "earlier-copy"}
+    )
+    db_session.commit()
+    service = FakeGmailService(
+        {"earlier-copy": ["INBOX"], "dup": ["INBOX"], "new": ["INBOX"]}
+    )
+
+    with (
+        patch("memory.workers.tasks.email.get_gmail_service", return_value=service),
+        patch("memory.workers.tasks.email.process_message") as mock_process,
+    ):
+        mock_process.delay.side_effect = RuntimeError("broker down")
+        sync_account(gmail_email_account.id)
+
+    db_session.refresh(gmail_email_account)
+    assert gmail_email_account.gmail_declined_ids == ["dup"]
+    assert gmail_email_account.sync_error is not None
+    assert gmail_email_account.last_sync_at is None
+
+
 class PoisonableSession:
     """Minimal fake session that reproduces SQLAlchemy's poisoned-transaction
     behaviour: once a statement fails, every later statement raises
