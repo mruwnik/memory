@@ -175,7 +175,7 @@ describe('PollRespond - open poll form', () => {
     await user.click(ifNeeded)
     // After selecting "If needed", painting a slot marks it at level 2.
     const cell = screen.getByLabelText(/9:00 AM on .*: not selected/)
-    fireEvent.mouseDown(cell)
+    fireEvent.pointerDown(cell, { pointerType: 'mouse', button: 0 })
     expect(
       await screen.findByLabelText(/9:00 AM on .*: selected as if needed/),
     ).toBeInTheDocument()
@@ -186,7 +186,7 @@ describe('PollRespond - open poll form', () => {
     renderRespond()
     await screen.findByRole('heading', { name: 'Respond Poll' })
     const cell = screen.getByLabelText(/9:00 AM on .*: not selected/)
-    fireEvent.mouseDown(cell)
+    fireEvent.pointerDown(cell, { pointerType: 'mouse', button: 0 })
     expect(
       await screen.findByLabelText(/9:00 AM on .*: selected as available/),
     ).toBeInTheDocument()
@@ -199,7 +199,7 @@ describe('PollRespond - submission', () => {
     const { user } = renderRespond()
     await user.type(await screen.findByLabelText(/Your name/), 'Bob')
     const cell = screen.getByLabelText(/9:00 AM on .*: not selected/)
-    fireEvent.mouseDown(cell)
+    fireEvent.pointerDown(cell, { pointerType: 'mouse', button: 0 })
     await user.click(screen.getByRole('button', { name: 'Submit availability' }))
     expect(await screen.findByText('Response submitted')).toBeInTheDocument()
     expect((screen.getByRole('textbox', { name: 'Edit link' }) as HTMLInputElement).value).toMatch(/\?edit=tok-123$/)
