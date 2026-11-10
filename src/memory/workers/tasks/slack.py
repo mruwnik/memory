@@ -746,6 +746,21 @@ def set_channel_cursor(channel_id: str, expected: str | None, message_ts: str | 
     return moved == 1
 
 
+def message_fields(msg: dict, thread_ts: str | None = None) -> dict[str, Any]:
+    """store_slack_message's message arguments for a message as Slack's API returns it."""
+    return {
+        "message_ts": msg["ts"],
+        "author_id": msg.get("user"),
+        "content": msg.get("text", ""),
+        "thread_ts": thread_ts or msg.get("thread_ts"),
+        "reply_count": msg.get("reply_count"),
+        "subtype": msg.get("subtype"),
+        "edited_ts": msg.get("edited", {}).get("ts"),
+        "reactions": msg.get("reactions"),
+        "files": msg.get("files"),
+    }
+
+
 def store_history_message(
     msg: dict, workspace_id: str, channel_id: str, slack_app_id: int, thread_ts: str | None = None
 ) -> dict[str, Any]:
@@ -756,17 +771,9 @@ def store_history_message(
     result = store_slack_message(
         workspace_id=workspace_id,
         channel_id=channel_id,
-        message_ts=msg["ts"],
-        author_id=msg.get("user"),
-        content=msg.get("text", ""),
         slack_app_id=slack_app_id,
-        thread_ts=thread_ts or msg.get("thread_ts"),
-        reply_count=msg.get("reply_count"),
-        subtype=subtype,
-        edited_ts=msg.get("edited", {}).get("ts"),
-        reactions=msg.get("reactions"),
-        files=msg.get("files"),
         polled=True,
+        **message_fields(msg, thread_ts),
     )
     if "slackmessage_id" in result and result["status"] not in ("already_exists", "updated"):
         check_push_missed(channel_id, slack_app_id, msg["ts"])
@@ -1189,7 +1196,95 @@ def store_slack_message(
     return _merge_after_race(msg_kwargs)
 
 
-add_slack_message = app.task(name=ADD_SLACK_MESSAGE)(tracked_task(job_type="add_slack_message")(store_slack_message))
+def message_stored(workspace_id: str, channel_id: str, message_ts: str) -> bool:
+    with make_session() as session:
+        identity = {"workspace_id": workspace_id, "channel_id": channel_id, "message_ts": message_ts}
+        return _get_existing_slack_message(session, identity) is not None
+
+
+def find_message(client: SlackClient, channel_id: str, message_ts: str, thread_ts: str | None) -> dict | None:
+    """The message at ``message_ts`` as the client's token sees it, or None."""
+    window = {"channel": channel_id, "oldest": message_ts, "latest": message_ts, "inclusive": "true"}
+    if thread_ts and thread_ts != message_ts:
+        # A reply listing always starts with the thread's parent.
+        listing = client.call("conversations.replies", ts=thread_ts, limit=2, **window)
+    else:
+        listing = client.call("conversations.history", limit=1, **window)
+    return next((m for m in listing.get("messages", []) if m.get("ts") == message_ts), None)
+
+
+def read_pushed_message(
+    workspace_id: str, channel_id: str, message_ts: str, thread_ts: str | None, slack_app_id: int
+) -> dict | None:
+    """The pushed message read back with the pushing app's own token; None
+    when that app can't read it."""
+    with make_session() as session:
+        credentials = get_workspace_credentials(session, workspace_id, slack_app_id)
+        if not credentials or not credentials.access_token:
+            return None
+        try:
+            client = slack_client_for(credentials)
+        except SlackAPIError:
+            return None
+    try:
+        with client:
+            return find_message(client, channel_id, message_ts, thread_ts)
+    except SlackAPIError as e:
+        logger.info(f"Slack app {slack_app_id} can't read pushed message {message_ts} in {channel_id}: {e.error}")
+        return None
+
+
+def store_pushed_slack_message(
+    workspace_id: str,
+    channel_id: str,
+    message_ts: str,
+    author_id: str | None,
+    content: str,
+    slack_app_id: int,
+    thread_ts: str | None = None,
+    reply_count: int | None = None,
+    subtype: str | None = None,
+    edited_ts: str | None = None,
+    reactions: list[dict] | None = None,
+    files: list[dict] | None = None,
+) -> dict[str, Any]:
+    """Apply a pushed message event.
+
+    A signed push proves only which app sent it, not what Slack holds. A
+    stored message takes the pushed changes when an app of the same owner
+    ingested it. A new one is read back with the pushing app's own token and
+    stored as Slack returns it, so it lands only in channels that app can
+    read, under the author Slack names; one the app can't read is dropped.
+    """
+    if not author_id:
+        return {"status": "skipped", "reason": "no_author"}
+    if message_stored(workspace_id, channel_id, message_ts):
+        return store_slack_message(
+            workspace_id=workspace_id,
+            channel_id=channel_id,
+            message_ts=message_ts,
+            author_id=author_id,
+            content=content,
+            slack_app_id=slack_app_id,
+            thread_ts=thread_ts,
+            reply_count=reply_count,
+            subtype=subtype,
+            edited_ts=edited_ts,
+            reactions=reactions,
+            files=files,
+        )
+    message = read_pushed_message(workspace_id, channel_id, message_ts, thread_ts, slack_app_id)
+    if message is None:
+        return {"status": "skipped", "reason": "not_readable"}
+    fields = message_fields(message)
+    if fields["subtype"] in SKIPPED_SUBTYPES:
+        return {"status": "skipped", "reason": fields["subtype"]}
+    return store_slack_message(workspace_id=workspace_id, channel_id=channel_id, slack_app_id=slack_app_id, **fields)
+
+
+add_slack_message = app.task(name=ADD_SLACK_MESSAGE)(
+    tracked_task(job_type="add_slack_message")(store_pushed_slack_message)
+)
 
 
 # ---------------------------------------------------------------------------
