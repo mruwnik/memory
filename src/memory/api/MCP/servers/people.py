@@ -9,7 +9,7 @@ from fastmcp import FastMCP
 from sqlalchemy import ColumnElement, Text, exists, false, or_, text, true
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import ARRAY
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import InstrumentedAttribute, selectinload
 from sqlalchemy.orm.query import RowReturningQuery
 
 from memory.api.MCP.access import (
@@ -40,6 +40,9 @@ from memory.common.celery_app import app as celery_app
 from memory.common.db.connection import DBSession, make_session
 from memory.common.discord_data import discord_user_seen_by
 from memory.common.db.models import (
+    BeeperParticipant,
+    Deadline,
+    GithubItem,
     Person,
     PersonTidbit,
     Project,
@@ -740,16 +743,37 @@ def merge_contact_info(primary: Person, secondaries: list[Person]) -> None:
     )
 
 
-def merge_tidbits(session: DBSession, primary: Person, secondaries: list[Person]) -> int:
-    """Move all tidbits from secondaries to primary. Returns count moved."""
-    total = 0
-    for sec in secondaries:
-        total += (
-            session.query(PersonTidbit)
-            .filter(PersonTidbit.person_id == sec.id)
-            .update({PersonTidbit.person_id: primary.id})
-        )
-    return total
+# Each column here holds a plain reference to a Person; a merge points the
+# secondaries' rows at the primary. The key is its count in the merge stats.
+# team_members and source_item_people are link tables merged with dedup by
+# merge_team_memberships and merge_source_items.
+REPOINTED_PERSON_COLUMNS: dict[str, InstrumentedAttribute[Any]] = {
+    "tidbits_moved": PersonTidbit.person_id,
+    "discord_users_moved": DiscordUser.person_id,
+    "github_users_moved": GithubUser.person_id,
+    "poll_responses_moved": PollResponse.person_id,
+    "projects_moved": Project.owner_id,
+    "teams_moved": Team.owner_id,
+    "deadlines_moved": Deadline.owner_id,
+    "beeper_participants_moved": BeeperParticipant.person_id,
+    "github_items_moved": GithubItem.author_person_id,
+}
+
+
+def repoint_person_column(
+    session: DBSession,
+    column: InstrumentedAttribute[Any],
+    primary: Person,
+    secondaries: list[Person],
+) -> int:
+    """Point every row of ``column`` that references a secondary at the
+    primary. Returns the number of rows changed."""
+    secondary_ids = [sec.id for sec in secondaries]
+    return (
+        session.query(column.class_)
+        .filter(column.in_(secondary_ids))
+        .update({column: primary.id}, synchronize_session="fetch")
+    )
 
 
 ROLE_PRIORITY = {"admin": 3, "lead": 2, "member": 1}
@@ -840,66 +864,6 @@ def merge_source_items(session: DBSession, primary: Person, secondaries: list[Pe
     return total
 
 
-def merge_discord_users(session: DBSession, primary: Person, secondaries: list[Person]) -> int:
-    """Move Discord user links from secondaries to primary. Returns count moved."""
-    total = 0
-    for sec in secondaries:
-        total += (
-            session.query(DiscordUser)
-            .filter(DiscordUser.person_id == sec.id)
-            .update({DiscordUser.person_id: primary.id})
-        )
-    return total
-
-
-def merge_github_users(session: DBSession, primary: Person, secondaries: list[Person]) -> int:
-    """Move GitHub user links from secondaries to primary. Returns count moved."""
-    total = 0
-    for sec in secondaries:
-        total += (
-            session.query(GithubUser)
-            .filter(GithubUser.person_id == sec.id)
-            .update({GithubUser.person_id: primary.id})
-        )
-    return total
-
-
-def merge_poll_responses(session: DBSession, primary: Person, secondaries: list[Person]) -> int:
-    """Move poll responses from secondaries to primary. Returns count moved."""
-    total = 0
-    for sec in secondaries:
-        total += (
-            session.query(PollResponse)
-            .filter(PollResponse.person_id == sec.id)
-            .update({PollResponse.person_id: primary.id})
-        )
-    return total
-
-
-def merge_project_ownership(session: DBSession, primary: Person, secondaries: list[Person]) -> int:
-    """Transfer project ownership from secondaries to primary. Returns count moved."""
-    total = 0
-    for sec in secondaries:
-        total += (
-            session.query(Project)
-            .filter(Project.owner_id == sec.id)
-            .update({Project.owner_id: primary.id})
-        )
-    return total
-
-
-def merge_team_ownership(session: DBSession, primary: Person, secondaries: list[Person]) -> int:
-    """Transfer team ownership from secondaries to primary. Returns count moved."""
-    total = 0
-    for sec in secondaries:
-        total += (
-            session.query(Team)
-            .filter(Team.owner_id == sec.id)
-            .update({Team.owner_id: primary.id})
-        )
-    return total
-
-
 def merged_user_id(session: DBSession, primary: Person, secondaries: list[Person]) -> int | None:
     """The User the merged Person will link to: the people's own links,
     primary's before the rest.
@@ -967,9 +931,10 @@ async def merge(
        - Person tidbits
        - Team memberships (preserving highest role per team)
        - Source item associations
-       - Discord/GitHub user links
+       - Discord/GitHub/Beeper accounts
        - Poll responses
-       - Project/team ownership
+       - Project/team ownership and deadline owners
+       - GitHub item authorship
     4. Resolves User links (direct and via Discord accounts). A user has one
        Person, so the merge is refused if that user already has a Person
        outside the merge.
@@ -1014,18 +979,16 @@ async def merge(
         user_id = merged_user_id(session, primary, secondaries)
         merge_aliases(primary, secondaries)
         merge_contact_info(primary, secondaries)
-        discord_users_moved = merge_discord_users(session, primary, secondaries)
+        repointed = {
+            key: repoint_person_column(session, column, primary, secondaries)
+            for key, column in REPOINTED_PERSON_COLUMNS.items()
+        }
         users_updated = merge_user_links(session, primary, secondaries, user_id)
 
         stats = {
-            "tidbits_moved": merge_tidbits(session, primary, secondaries),
+            **repointed,
             "team_memberships_moved": merge_team_memberships(session, primary, secondaries),
             "source_items_moved": merge_source_items(session, primary, secondaries),
-            "discord_users_moved": discord_users_moved,
-            "github_users_moved": merge_github_users(session, primary, secondaries),
-            "poll_responses_moved": merge_poll_responses(session, primary, secondaries),
-            "projects_moved": merge_project_ownership(session, primary, secondaries),
-            "teams_moved": merge_team_ownership(session, primary, secondaries),
             "users_updated": users_updated,
         }
 
