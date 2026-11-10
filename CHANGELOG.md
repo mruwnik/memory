@@ -37,7 +37,7 @@ a new, empty `## Unreleased` above it.
 - MCP `core_list_items` and `core_count_items` take `item_types`, `embed_statuses` (default still indexed items only), `contains` and `connection_id`. List rows carry `type` and `embed_status`; `include_total=false` skips the total count; pages sort by id within equal timestamps so they never overlap. `core_count_items` adds `by_type` and, for types that share a kind of connection, `by_connection`.
 - Discord `send_message` to a channel now posts only with one of your own bots in that channel's server (by default the server's owning bot if it is yours, else another of yours there), and accepts any of your bots that has joined the server. It no longer falls back to another user's bot; with none of yours in the server it says so.
 - `POST /meetings` external ids are now per user: another user's identical id no longer returns their job or suppresses your meeting, and ids may start with `push:`. `GET /api/jobs/external/{id}` finds only your own jobs.
-- Forecast market search, history and resolved-market results keep a probability of exactly 0 instead of dropping it or showing the pre-resolution probability, and ExUrbe blog posts store their published date (they failed to ingest when the page gave one).
+- Forecast market search and resolved-market results (Manifold, Polymarket) keep a probability of exactly 0 instead of dropping it or showing the pre-resolution probability. ExUrbe blog posts get their published date as a date, read from the visible date when the page has no machine-readable one.
 
 ### Required env vars
 None
