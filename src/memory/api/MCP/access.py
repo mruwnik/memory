@@ -69,19 +69,17 @@ def get_project_roles_by_user_id(
     if user_id is None:
         return {}
 
-    if session is not None:
-        user = session.query(User).filter(User.id == user_id).first()
-        if user is None:
-            logger.warning("get_project_roles_by_user_id: user %s not found", user_id)
-            return {}
-        return get_user_project_roles(session, user)
-
-    with make_session() as db:
+    def lookup(db: "Session | scoped_session[Session]") -> dict[int, str]:
         user = db.query(User).filter(User.id == user_id).first()
         if user is None:
             logger.warning("get_project_roles_by_user_id: user %s not found", user_id)
             return {}
         return get_user_project_roles(db, user)
+
+    if session is not None:
+        return lookup(session)
+    with make_session() as db:
+        return lookup(db)
 
 
 def build_mcp_user_access_filter(
