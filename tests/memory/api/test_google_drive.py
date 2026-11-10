@@ -364,7 +364,7 @@ def test_google_callback_logged_out_keeps_state(
 
     assert response.status_code == 401
     assert google_exchange.call_count == 0
-    assert GoogleOAuthState.validate(state) == regular_user.id
+    assert GoogleOAuthState.owner(state) == regular_user.id
     assert accounts_for(db_session, "drive@example.com") == []
 
 
@@ -377,7 +377,20 @@ def test_google_callback_rejects_state_of_another_user(
 
     assert response.status_code == 403
     assert google_exchange.call_count == 0
+    assert GoogleOAuthState.owner(state) == admin_user.id
     assert accounts_for(db_session, "drive@example.com") == []
+
+
+def test_google_callback_state_is_single_use(
+    db_session, regular_user, user_session, google_exchange
+):
+    state = GoogleOAuthState.create(regular_user.id)
+    run_callback("test-session-token", state)
+
+    response = run_callback("test-session-token", state)
+
+    assert response.status_code == 400
+    assert google_exchange.call_count == 1
 
 
 def test_google_callback_refuses_account_owned_by_another_user(

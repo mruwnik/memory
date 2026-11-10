@@ -6,6 +6,8 @@ import os
 import secrets
 from typing import cast
 
+import redis
+
 # Allow Google to return additional scopes (like 'openid') without raising an error
 os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
 
@@ -149,9 +151,7 @@ class GoogleOAuthState:
     KEY_PREFIX = "google_oauth_state:"
 
     @classmethod
-    def _get_redis(cls):
-        import redis
-        from memory.common import settings
+    def _get_redis(cls) -> redis.Redis:
         return redis.from_url(settings.REDIS_URL)
 
     @classmethod
@@ -162,17 +162,15 @@ class GoogleOAuthState:
         return state
 
     @classmethod
-    def validate(cls, state: str) -> int | None:
-        key = f"{cls.KEY_PREFIX}{state}"
-        redis_client = cls._get_redis()
-        # Get and delete atomically using pipeline
-        pipe = redis_client.pipeline()
-        pipe.get(key)
-        pipe.delete(key)
-        result, _ = pipe.execute()
-        if result is None:
-            return None
-        return int(result)
+    def owner(cls, state: str) -> int | None:
+        """The user a live state was issued to, without consuming it."""
+        result = cls._get_redis().get(f"{cls.KEY_PREFIX}{state}")
+        return int(cast(bytes, result)) if result is not None else None
+
+    @classmethod
+    def consume(cls, state: str) -> bool:
+        """Use up a state; only one of two racing callbacks gets True."""
+        return bool(cls._get_redis().delete(f"{cls.KEY_PREFIX}{state}"))
 
 
 class OAuthConfigResponse(BaseModel):
@@ -495,15 +493,19 @@ def google_callback(
             )
         user_id = cast(int, user.id)
 
-        state_user_id = GoogleOAuthState.validate(state)
-        if not state_user_id:
+        # Another user's state is refused without consuming it, so whoever
+        # holds a state value can't burn someone else's authorization.
+        state_user_id = GoogleOAuthState.owner(state)
+        if state_user_id is None:
             return callback_page("Invalid or Expired State", "", 400)
         if state_user_id != user_id:
             return callback_page(
                 "Wrong account",
-                "This authorization was started by a different memory user.",
+                "Log in to memory as the user who started this authorization, then retry it.",
                 403,
             )
+        if not GoogleOAuthState.consume(state):
+            return callback_page("Invalid or Expired State", "", 400)
 
         credentials, user_info = exchange_google_code(session, code)
 
