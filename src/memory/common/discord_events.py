@@ -12,6 +12,7 @@ from typing import Any, Callable, Sequence
 
 from sqlalchemy import select, update
 
+from memory.common import discord_attachments
 from memory.common.celery_app import VERIFY_DISCORD_MESSAGES, app
 from memory.common.content_processing import clear_item_chunks
 from memory.common.db.connection import DBSession
@@ -116,10 +117,6 @@ def well_formed(data: Any) -> bool:
     )
 
 
-def is_image(attachment: dict) -> bool:
-    return (attachment.get("content_type") or "").startswith("image/")
-
-
 def message_type(data: dict) -> str:
     if data.get("message_reference"):
         return "reply"
@@ -133,16 +130,10 @@ def message_type(data: dict) -> str:
 def message_task_kwargs(data: dict, bot_id: int, is_edit: bool = False) -> dict:
     """A full gateway/REST message object as ``ADD_DISCORD_MESSAGE`` kwargs."""
     attachments = data.get("attachments") or []
-    images = [a["url"] for a in attachments if is_image(a) and a.get("url")]
+    images = [a["url"] for a in attachments if discord_attachments.is_image(a.get("content_type")) and a.get("url")]
     files = [
-        {
-            "filename": a.get("filename"),
-            "content_type": a.get("content_type"),
-            "size": a.get("size"),
-            "url": a.get("url"),
-        }
+        discord_attachments.record(a.get("filename"), a.get("content_type"), a.get("size"), a.get("url"))
         for a in attachments
-        if not is_image(a)
     ]
     reference = data.get("message_reference") or {}
     return {

@@ -343,7 +343,7 @@ class Subscription(Base):
     order_by: Mapped[str] = mapped_column(
         Text, nullable=False, default="none", server_default="none"
     )
-    # Unset: AGENT_MAX_RUNS_PER_HOUR.
+    # Unset: AGENT_MAX_RUNS_PER_HOUR. Unset backlog_max: no limit, DEFAULT_RAW_BACKLOG for raw.
     max_per_hour: Mapped[int | None] = mapped_column(Integer)
     backlog_max: Mapped[int | None] = mapped_column(Integer)
     kind: Mapped[str] = mapped_column(String(20), nullable=False)

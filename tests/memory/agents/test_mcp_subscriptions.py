@@ -275,6 +275,10 @@ async def test_an_agent_runs_on_a_cron_with_its_input(
         ({"handler": {"agent": "echo"}, "source": FILTER, "order_by": "item"}, "order_by applies to queue handlers"),
         ({"handler": {"queue": "q"}, "source": FILTER, "max_per_hour": -1}, "max_per_hour must be at least 0"),
         ({"handler": {"queue": "q"}, "source": FILTER, "backlog_max": -1}, "backlog_max must be at least 0"),
+        (
+            {"handler": {"queue": "q"}, "source": FILTER, "max_per_hour": 3601},
+            r"max_per_hour can be at most 3600 \(AGENT_MAX_DELIVERIES_PER_HOUR\)",
+        ),
         ({"handler": {"queue": "q"}, "source": FILTER, "name": " "}, "name must not be empty"),
         ({"handler": {"queue": "q"}, "source": FILTER, "name": "subscription-12"}, "reserved for default names"),
         ({"handler": {"queue": "q"}, "source": {"filter": {}}}, "set at least one of"),
@@ -1150,6 +1154,35 @@ async def test_caps_and_a_subject_are_cleared_with_their_empty_values(db_session
 
     assert (cleared["max_per_hour"], cleared["backlog_max"]) == (None, None)
     assert unsubjected["handler"] == {"notify": {k: v for k, v in NOTIFY["notify"].items() if k != "subject"}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "caps,limits",
+    [
+        ({}, {"max_per_hour": 7, "backlog_max": None}),
+        ({"max_per_hour": 3600, "backlog_max": 10}, {"max_per_hour": 3600, "backlog_max": 10}),
+        ({"max_per_hour": 0, "backlog_max": 0}, {"max_per_hour": 7, "backlog_max": None}),
+    ],
+)
+async def test_a_filter_subscription_reports_the_limits_in_effect(
+    db_session, regular_user, user_session, monkeypatch, caps, limits
+):
+    monkeypatch.setattr(settings, "AGENT_MAX_RUNS_PER_HOUR", 7)
+    with mcp_auth_context(user_session.token):
+        saved = await upsert(name="limited", handler={"queue": "q"}, source=FILTER, **caps)
+        listed = await list_all(queue="q")
+
+    assert saved["limits"] == limits
+    assert listed["subscriptions"][0]["limits"] == limits
+
+
+@pytest.mark.asyncio
+async def test_a_cron_subscription_has_no_limits(db_session, regular_user, user_session):
+    with mcp_auth_context(user_session.token):
+        saved = await upsert(name="ping", handler=NOTIFY, source=CRON)
+
+    assert "limits" not in saved
 
 
 def queued_run(db, user, subscription_id, item_id, status="done"):

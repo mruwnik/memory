@@ -27,7 +27,7 @@ from memory.common.access_control import user_can_access
 from memory.common.celery_app import UPDATE_SOURCE_ACCESS_CONTROL, VERIFY_DISCORD_MESSAGES
 from memory.common.db.connection import make_session
 from memory.common.db.models.events import record_raw_event
-from memory.common import discord_events, paths, settings
+from memory.common import discord_attachments, discord_events, settings
 from memory.common.discord_events import ensure_listed_channel, message_task_kwargs
 from memory.discord import rest
 from memory.workers.tasks import discord
@@ -136,21 +136,24 @@ def test_message_task_kwargs(overrides, expected):
     )
 
 
-def test_message_task_kwargs_splits_images_from_attachments():
+def test_message_task_kwargs_downloads_images_and_records_every_attachment():
     kwargs = message_task_kwargs(
         message_create(
             attachments=[
-                {"filename": "a.png", "content_type": "image/png", "size": 1, "url": "https://cdn.example.com/a.png"},
+                {"filename": "a.png", "content_type": "image/png", "size": 1, "url": "https://cdn.example.com/a.png?ex=1&hm=sig"},
                 {"filename": "b.pdf", "content_type": "application/pdf", "size": 2, "url": "https://cdn.example.com/b.pdf"},
             ]
         ),
         bot_id=3,
     )
 
-    assert kwargs["images"] == ["https://cdn.example.com/a.png"]
-    assert kwargs["attachments"] == [
-        {"filename": "b.pdf", "content_type": "application/pdf", "size": 2, "url": "https://cdn.example.com/b.pdf"}
-    ]
+    assert (kwargs["images"], kwargs["attachments"]) == (
+        ["https://cdn.example.com/a.png?ex=1&hm=sig"],
+        [
+            {"filename": "a.png", "content_type": "image/png", "size": 1, "url": "https://cdn.example.com/a.png"},
+            {"filename": "b.pdf", "content_type": "application/pdf", "size": 2, "url": "https://cdn.example.com/b.pdf"},
+        ],
+    )
 
 
 def test_message_create_stores_message_with_placeholder_server_and_listed_channel(
@@ -1294,7 +1297,7 @@ def image_attachment(url: str) -> dict:
 
 
 def stored_images(urls: list[str]) -> list[str] | None:
-    return [paths.to_db_filename(discord.image_path(url, int(MESSAGE))) for url in urls] or None
+    return [discord_attachments.stored_image_name(url, int(MESSAGE)) for url in urls] or None
 
 
 FIRE = {"🔥": ["11"]}
