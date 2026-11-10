@@ -37,6 +37,20 @@ beforeEach(() => {
 })
 
 describe('Tasks page', () => {
+  it('shows the newest filter when an older load finishes after it', async () => {
+    let finishActive: (tasks: TodoTask[]) => void = () => {}
+    listTasks.mockImplementation((filters: TodoTaskFilters) => filters.status === 'done'
+      ? Promise.resolve([makeTask({ id: 2, task_title: 'Done task', status: 'done' })])
+      : new Promise<TodoTask[]>(resolve => { finishActive = resolve }))
+    renderWithRouter(<Tasks />)
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Completed' }))
+    expect(await screen.findByText('Done task')).toBeInTheDocument()
+    finishActive([makeTask({ task_title: 'Stale task' })])
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(screen.queryByText('Stale task')).not.toBeInTheDocument()
+    expect(screen.getByText('Done task')).toBeInTheDocument()
+  })
+
   it('shows the loading state then empty state', async () => {
     renderWithRouter(<Tasks />)
     expect(screen.getByText('Loading tasks...')).toBeInTheDocument()

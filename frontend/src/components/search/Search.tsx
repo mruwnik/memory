@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useMCP } from '@/hooks/useMCP'
+import { useNewestRequest } from '@/hooks/useNewestRequest'
 import { SearchResult } from './results'
 import SearchForm, { SearchParams } from './SearchForm'
 import { EmptyState, List, LoadingState, Notice, Page } from '@/components/shared/ui'
@@ -32,25 +33,33 @@ const Search = () => {
     const [isLoading, setIsLoading] = useState(false)
     const [error, setError] = useState<string | null>(null)
     const { searchKnowledgeBase } = useMCP()
+    // Only the newest search may write state, so a slow older one can't overwrite it.
+    const beginSearch = useNewestRequest()
 
     useEffect(() => {
-        if (!urlQuery) setResults(null)
-    }, [urlQuery])
+        if (urlQuery) return
+        beginSearch()
+        setResults(null)
+        setIsLoading(false)
+    }, [urlQuery, beginSearch])
 
     const handleSearch = async (params: SearchParams) => {
         if (!params.query.trim()) return
         if (params.query !== urlQuery) setSearchParams({ q: params.query })
 
+        const isStale = beginSearch()
         setIsLoading(true)
         setError(null)
         try {
             const searchResults = await searchKnowledgeBase(params.query, params.modalities, params.filters, params.config)
+            if (isStale()) return
             setResults(searchResults || [])
         } catch (e) {
+            if (isStale()) return
             setError(e instanceof Error ? e.message : 'Search failed')
             setResults(null)
         } finally {
-            setIsLoading(false)
+            if (!isStale()) setIsLoading(false)
         }
     }
 

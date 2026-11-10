@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
   useUsage,
@@ -12,6 +12,7 @@ import {
   UsageResponse,
 } from '@/hooks/useUsage'
 import { useAuth } from '@/hooks/useAuth'
+import { useNewestRequest } from '@/hooks/useNewestRequest'
 import { TokenUsageChart } from './TokenUsageChart'
 import { SessionActivityChart } from './SessionActivityChart'
 import { UsageSummaryCards } from './UsageSummaryCards'
@@ -121,11 +122,10 @@ const UsageView = ({ isAdmin }: { isAdmin: boolean }) => {
     setInterval(current => (allowed.includes(current) ? current : allowed[0]))
   }
 
-  const latestUsage = useRef(0)
+  const beginUsage = useNewestRequest()
   const loadUsage = useCallback(async () => {
     if (!userReady) return
-    const load = ++latestUsage.current
-    const isStale = () => load !== latestUsage.current
+    const isStale = beginUsage()
     setUsageLoading(true)
     setUsageError(null)
     const to = new Date()
@@ -142,13 +142,12 @@ const UsageView = ({ isAdmin }: { isAdmin: boolean }) => {
     } finally {
       if (!isStale()) setUsageLoading(false)
     }
-  }, [getUsage, groupBy, interval, rangeSpec.hours, userId, userReady])
+  }, [getUsage, groupBy, interval, rangeSpec.hours, userId, userReady, beginUsage])
 
-  const latestTelemetry = useRef(0)
+  const beginTelemetry = useNewestRequest()
   const loadTelemetry = useCallback(async () => {
     if (!userReady) return
-    const load = ++latestTelemetry.current
-    const isStale = () => load !== latestTelemetry.current
+    const isStale = beginTelemetry()
     setTelemetryLoading(true)
     setTelemetryError(null)
     const to = new Date()
@@ -179,7 +178,7 @@ const UsageView = ({ isAdmin }: { isAdmin: boolean }) => {
     } finally {
       if (!isStale()) setTelemetryLoading(false)
     }
-  }, [getMetrics, getRawEvents, getToolUsage, getSessionStats, rangeSpec, userId, apiKeyId, userReady])
+  }, [getMetrics, getRawEvents, getToolUsage, getSessionStats, rangeSpec, userId, apiKeyId, userReady, beginTelemetry])
 
   useEffect(() => { loadUsage() }, [loadUsage])
   useEffect(() => { loadTelemetry() }, [loadTelemetry])
