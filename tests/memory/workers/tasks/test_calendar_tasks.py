@@ -396,6 +396,75 @@ def test_sync_calendar_event_new(mock_event_data, caldav_account, db_session, qd
     assert event.calendar_account_id == caldav_account.id
 
 
+RECURRENCE_EXPANDABLE_CASES = [
+    (None, None),
+    ("FREQ=WEEKLY;BYDAY=MO", True),
+    ("RRULE:FREQ=DAILY;COUNT=3", True),
+    # No date satisfies these, or the series ends before it starts
+    ("FREQ=DAILY;BYMONTH=2;BYMONTHDAY=30", False),
+    ("FREQ=DAILY;UNTIL=20200101T000000Z", False),
+    # Malformed or unbounded
+    ("FREQ=BOGUS", False),
+    ("FREQ=DAILY;INTERVAL=0", False),
+]
+
+
+def store_without_embedding(item, session):
+    session.add(item)
+    session.commit()
+    return {"status": "processed"}
+
+
+@pytest.fixture
+def no_embedding():
+    """Stores synced events without embedding them, so no Qdrant is needed."""
+    with patch.object(calendar, "process_content_item", side_effect=store_without_embedding):
+        yield
+
+
+@pytest.mark.parametrize("rule, expandable", RECURRENCE_EXPANDABLE_CASES)
+def test_sync_calendar_event_records_whether_rule_expands(
+    mock_event_data, caldav_account, db_session, no_embedding, rule, expandable
+):
+    mock_event_data["recurrence_rule"] = rule
+
+    calendar.sync_calendar_event(caldav_account.id, _serialize_event_data(mock_event_data))
+
+    event = db_session.query(CalendarEvent).filter_by(external_id="event-123").one()
+    assert event.recurrence_expandable is expandable
+
+
+@pytest.mark.parametrize(
+    "stored_rule, stored_expandable, new_rule, expandable",
+    [
+        # A row synced before the check existed is checked on its next sync
+        ("FREQ=DAILY;BYMONTH=2;BYMONTHDAY=30", None, "FREQ=DAILY;BYMONTH=2;BYMONTHDAY=30", False),
+        ("FREQ=WEEKLY;BYDAY=MO", None, "FREQ=WEEKLY;BYDAY=MO", True),
+        # A changed rule is checked again
+        ("FREQ=DAILY;BYMONTH=2;BYMONTHDAY=30", False, "FREQ=WEEKLY;BYDAY=MO", True),
+        ("FREQ=WEEKLY;BYDAY=MO", True, "FREQ=DAILY;BYMONTH=2;BYMONTHDAY=30", False),
+        ("FREQ=WEEKLY;BYDAY=MO", True, None, None),
+    ],
+)
+def test_sync_calendar_event_rechecks_rule_on_update(
+    mock_event_data, caldav_account, db_session, no_embedding,
+    stored_rule, stored_expandable, new_rule, expandable,
+):
+    mock_event_data["recurrence_rule"] = stored_rule
+    calendar.sync_calendar_event(caldav_account.id, _serialize_event_data(mock_event_data))
+    db_session.query(CalendarEvent).filter_by(external_id="event-123").update(
+        {"recurrence_expandable": stored_expandable}
+    )
+    db_session.commit()
+
+    mock_event_data["recurrence_rule"] = new_rule
+    calendar.sync_calendar_event(caldav_account.id, _serialize_event_data(mock_event_data))
+
+    event = db_session.query(CalendarEvent).filter_by(external_id="event-123").one()
+    db_session.refresh(event)
+    assert event.recurrence_expandable is expandable
+
+
 def test_sync_calendar_event_account_not_found(mock_event_data, db_session):
     """Test syncing with non-existent account."""
     serialized = _serialize_event_data(mock_event_data)

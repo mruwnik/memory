@@ -53,6 +53,7 @@ a new, empty `## Unreleased` above it.
 - Connecting a Google account finishes only in a browser logged in as the memory user who started it: a logged-out browser is asked to log in and reload, another user's authorization link is refused, and a Google account already connected to another memory user is refused instead of having its tokens replaced.
 - On https, the login cookies the web app sets carry the Secure flag, so the browser never sends them over plain http.
 - Web UI: a slow earlier search, month or Tasks/Polls filter load no longer replaces newer results; the calendar loads a month once, works with browser storage blocked, and shows a tappable event count per day on phones; People says when a person's teams or tidbits failed to load, with Retry, instead of showing none.
+- Calendar syncs check once whether each recurring event's rule yields any occurrence at all; `organizer_upcoming` skips the events whose rule no date satisfies (e.g. 30 February), which took seconds each to expand.
 
 ### Required env vars
 None
@@ -63,11 +64,13 @@ None
 ### Other changes for operators
 - New beat task `notify-finished-runs` (every 30s, `scheduler` queue) sends `agent_run(notify=true)` notifications.
 - A repo synced before this release while GitHub refused queries may have had its `last_sync_at` moved past items it never stored. After granting the missing permissions, run Sync on the repo with `force_full=true` (`POST /github/accounts/{account_id}/repos/{repo_id}/sync?force_full=true`), or clear `last_sync_at` for it. Later incidents catch up by themselves.
+- Recurring calendar events synced before this release are checked on their next scheduled sync if it still returns them; until then they expand as before. `POST /calendar-accounts/{id}/sync` checks an account's events now and is safe to repeat.
 
 ### Migrations
 - `20261220_github_incomplete_since` adds a nullable `github_repos.incomplete_since` column and a `github_repos.sync_incomplete` boolean defaulting to false (instant).
 - `20261221_agent_run_notify_seen` adds `agent_runs.notify_on_finish`, `notified_at` and `seen_at` with two partial indexes, and backfills `seen_at = finished_at` for ended runs started through MCP or by hand that aren't sub-runs (an `UPDATE` scanning all of `agent_runs`: slow on a large table, and the indexes are built without `CONCURRENTLY`).
 - `20261222_item_inserted_idx` builds two indexes on `source_item`, `(inserted_at, id)` and `(type, inserted_at, id)`, with `CREATE INDEX CONCURRENTLY`: writes continue while they build, but the upgrade's time grows with the number of stored items. If it is interrupted, drop any invalid `source_inserted_at_idx` or `source_type_inserted_at_idx` before re-running it: Postgres keeps a half-built concurrent index, and `IF NOT EXISTS` would skip it.
+- `20261224_recurrence_expandable` adds a nullable `calendar_event.recurrence_expandable` boolean (instant).
 
 ### Post-deploy commands
 None

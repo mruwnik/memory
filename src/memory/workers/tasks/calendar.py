@@ -9,7 +9,7 @@ from caldav.collection import Calendar
 from caldav.davclient import DAVClient
 from googleapiclient.discovery import build
 
-from memory.common.calendar import strip_rrule_prefix
+from memory.common.calendar import recurrence_expandable, strip_rrule_prefix
 from memory.common.celery_app import (
     SYNC_CALENDAR_ACCOUNT,
     SYNC_CALENDAR_EVENT,
@@ -154,6 +154,9 @@ def _create_calendar_event(
         all_day=event_data.get("all_day", False),
         location=event_data.get("location"),
         recurrence_rule=event_data.get("recurrence_rule"),
+        recurrence_expandable=recurrence_expandable(
+            event_data.get("recurrence_rule"), event_data["start_time"]
+        ),
         calendar_account_id=account.id,
         calendar_name=event_data.get("calendar_name"),
         external_id=event_data.get("external_id"),
@@ -164,6 +167,13 @@ def _create_calendar_event(
 
 def _update_existing_event(existing: CalendarEvent, event_data: EventData) -> None:
     """Update an existing CalendarEvent with new data."""
+    rule = event_data.get("recurrence_rule")
+    if (
+        rule != existing.recurrence_rule
+        or event_data["start_time"] != existing.start_time
+        or (rule and existing.recurrence_expandable is None)
+    ):
+        existing.recurrence_expandable = recurrence_expandable(rule, event_data["start_time"])
     existing.event_title = event_data["title"]
     existing.start_time = event_data["start_time"]
     existing.end_time = event_data.get("end_time")

@@ -111,6 +111,38 @@ def occurrences_within(
     return starts
 
 
+def build_rule(recurrence_rule: str, start_time: datetime) -> rrule | rruleset | None:
+    """The parsed rule starting at ``start_time``, or None if it is malformed
+    or can't be expanded in bounded time."""
+    parts = rule_parts(strip_rrule_prefix(recurrence_rule))
+    if parts is None or not is_bounded_rule(parts):
+        return None
+    rule_text = ";".join(f"{k}={v}" for k, v in with_utc_until(parts).items())
+    try:
+        return rrulestr(f"RRULE:{rule_text}", dtstart=start_time)
+    except RRULE_ERRORS:
+        return None
+
+
+def recurrence_expandable(recurrence_rule: str | None, start_time: datetime) -> bool | None:
+    """Whether the rule yields any occurrence at all, or None without a rule.
+
+    A rule no date satisfies (e.g. 30 February) makes dateutil walk to year
+    9999 before giving up, which takes seconds. The calendar sync pays that
+    once and stores the answer, so queries can skip such events.
+    """
+    if not recurrence_rule:
+        return None
+    start = start_time if start_time.tzinfo else start_time.replace(tzinfo=timezone.utc)
+    rule = build_rule(recurrence_rule, start)
+    if rule is None:
+        return False
+    try:
+        return rule.after(start, inc=True) is not None
+    except RRULE_ERRORS:
+        return False
+
+
 def occurrence_starts(
     event: CalendarEvent, start_range: datetime, end_range: datetime
 ) -> list[datetime]:
@@ -119,14 +151,11 @@ def occurrence_starts(
     A rule that is malformed or too costly to expand yields nothing, with a
     warning naming only the event id.
     """
-    rule_text = strip_rrule_prefix(event.recurrence_rule or "")
-    parts = rule_parts(rule_text)
-    if parts is None or not is_bounded_rule(parts):
+    rule = build_rule(event.recurrence_rule or "", event.start_time)
+    if rule is None:
         logger.warning("Skipping unsupported recurrence rule on calendar event %s", event.id)
         return []
-    rule_text = ";".join(f"{k}={v}" for k, v in with_utc_until(parts).items())
     try:
-        rule = rrulestr(f"RRULE:{rule_text}", dtstart=event.start_time)
         return occurrences_within(rule, start_range, end_range, event.id)
     except RRULE_ERRORS:
         logger.warning("Skipping malformed recurrence rule on calendar event %s", event.id)
@@ -140,9 +169,12 @@ def expand_recurring_event(
 ) -> list[tuple[datetime, datetime | None]]:
     """Expand a recurring event into occurrences within the given range.
 
-    Returns list of (start_time, end_time) tuples for each occurrence.
+    Returns list of (start_time, end_time) tuples for each occurrence. An
+    event the sync found to have no occurrences at all is skipped unexpanded.
     """
     if not event.recurrence_rule or not event.start_time:
+        return []
+    if event.recurrence_expandable is False:
         return []
 
     duration = event.end_time - event.start_time if event.end_time else None

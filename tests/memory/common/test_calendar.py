@@ -310,18 +310,81 @@ class DeadlineExceeded(BaseException):
     """A BaseException, so no ``except Exception`` in the code under test hides it."""
 
 
-@pytest.fixture
-def deadline():
-    """Fail the test, rather than hang, if it runs past five seconds."""
+def run_with_deadline(seconds: int):
+    """Fail the test, rather than hang, if it runs past ``seconds``."""
 
     def expire(signum, frame):
         raise DeadlineExceeded("recurrence expansion did not finish")
 
     previous = signal.signal(signal.SIGALRM, expire)
-    signal.alarm(5)
+    signal.alarm(seconds)
     yield
     signal.alarm(0)
     signal.signal(signal.SIGALRM, previous)
+
+
+@pytest.fixture
+def deadline():
+    yield from run_with_deadline(5)
+
+
+@pytest.fixture
+def short_deadline():
+    """One second: far above a skipped event's cost, below one expanded to year 9999."""
+    yield from run_with_deadline(1)
+
+
+NEVER_MATCHING_RULES = [
+    "FREQ=DAILY;BYMONTH=2;BYMONTHDAY=30",
+    "FREQ=MINUTELY;BYMONTH=4;BYMONTHDAY=31",
+]
+
+
+@pytest.mark.parametrize("rule", NEVER_MATCHING_RULES)
+def test_get_events_in_range_skips_unexpandable_event_quickly(
+    db_session, calendar_account, recurring_event, rule, short_deadline
+):
+    for n in range(3):
+        db_session.add(
+            CalendarEvent(
+                modality="calendar",
+                sha256=bytes([n]) * 32,
+                event_title="Never",
+                start_time=datetime(2020, 1, 1, 9, 0, 0, tzinfo=timezone.utc),
+                calendar_account_id=calendar_account.id,
+                recurrence_rule=rule,
+                recurrence_expandable=False,
+            )
+        )
+    db_session.commit()
+    start = datetime(2024, 1, 15, tzinfo=timezone.utc)
+    end = datetime(2024, 1, 17, tzinfo=timezone.utc)
+
+    events = get_events_in_range(db_session, start, end, access_filter=None)
+
+    assert [e["event_title"] for e in events] == ["Daily Standup", "Daily Standup"]
+
+
+@pytest.mark.parametrize(
+    "rule, expandable",
+    [
+        (None, None),
+        ("FREQ=DAILY;BYDAY=MO", True),
+        ("FREQ=DAILY;UNTIL=20240101", True),
+        *((rule, False) for rule in NEVER_MATCHING_RULES),
+        ("FREQ=DAILY;INTERVAL=0", False),
+        ("FREQ=BOGUS", False),
+    ],
+)
+def test_recurrence_expandable(rule, expandable):
+    start = datetime(2024, 1, 1, 9, 0, 0, tzinfo=timezone.utc)
+    assert calendar.recurrence_expandable(rule, start) is expandable
+
+
+def test_recurrence_expandable_reads_naive_start_as_utc():
+    assert calendar.recurrence_expandable(
+        "FREQ=DAILY;UNTIL=20240105T000000Z", datetime(2024, 1, 1, 9, 0, 0)
+    ) is True
 
 
 MALFORMED_RULES = [

@@ -2236,6 +2236,9 @@ class CalendarEvent(SourceItem):
     all_day: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     location: Mapped[str | None] = mapped_column(Text, nullable=True)
     recurrence_rule: Mapped[str | None] = mapped_column(Text, nullable=True)  # RRULE format
+    # Whether recurrence_rule yields any occurrence, checked by the sync (see
+    # common.calendar.recurrence_expandable). NULL: no rule, or not checked yet.
+    recurrence_expandable: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
     # Sync metadata
     calendar_account_id: Mapped[int | None] = mapped_column(
