@@ -1,6 +1,12 @@
 import email
+import re
 from datetime import datetime
 from typing import Any, List
+
+from memory.workers.email import decode_imap_utf7, encode_imap_utf7
+
+# Characters an unquoted IMAP atom may not hold (RFC 3501 §9 atom-specials)
+ATOM_SPECIALS = re.compile(r'[(){ %*"\\\]\x00-\x1f\x7f]')
 
 
 class MockEmailProvider:
@@ -87,9 +93,14 @@ class MockEmailProvider:
         Returns:
             IMAP-style response with message count
         """
-        folder_name = folder.decode() if isinstance(folder, bytes) else folder
-        # Mailbox names arrive on the wire as LIST printed them, quotes included
-        folder_name = folder_name.removeprefix('"').removesuffix('"')
+        wire = folder.decode() if isinstance(folder, bytes) else folder
+        # imaplib sends str arguments ASCII-encoded, unquoted
+        wire.encode("ascii")
+        if len(wire) >= 2 and wire.startswith('"') and wire.endswith('"'):
+            wire = re.sub(r"\\(.)", r"\1", wire[1:-1])
+        elif ATOM_SPECIALS.search(wire):
+            return ("BAD", [b"Invalid mailbox name"])
+        folder_name = decode_imap_utf7(wire)
         self.current_folder = folder_name
         message_count = len(self.emails_by_folder.get(folder_name, []))
         return ("OK", [str(message_count).encode()])
@@ -99,7 +110,8 @@ class MockEmailProvider:
         folders = []
         for folder in self.emails_by_folder.keys():
             flags = " ".join(["\\HasNoChildren", self.folder_flags.get(folder, "")]).strip()
-            folders.append(f'({flags}) "/" "{folder}"'.encode())
+            name = encode_imap_utf7(folder).replace("\\", "\\\\").replace('"', '\\"')
+            folders.append(f'({flags}) "/" "{name}"'.encode())
         return ("OK", folders)
 
     def _current_emails(self) -> List[dict[str, Any]]:

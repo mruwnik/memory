@@ -22,6 +22,7 @@ from memory.workers.email import (
     ImapFolder,
     create_mail_message,
     decode_imap_utf7,
+    encode_imap_utf7,
     delete_emails,
     delete_removed_emails,
     extract_email_uid,
@@ -34,6 +35,7 @@ from memory.workers.email import (
     get_gmail_label_ids,
     get_gmail_service,
     gmail_gone_message_ids,
+    imap_mailbox,
     imap_connection,
     list_gmail_message_ids,
     list_imap_folders,
@@ -901,6 +903,54 @@ def test_parse_folder_line_ignores_non_list_lines(line):
 )
 def test_decode_imap_utf7(encoded, decoded):
     assert decode_imap_utf7(encoded) == decoded
+
+
+@pytest.mark.parametrize(
+    "decoded,encoded",
+    [
+        ("INBOX", "INBOX"),
+        ("Sent & Received", "Sent &- Received"),
+        ("Ärger", "&AMQ-rger"),
+        ("Drafts ö test", "Drafts &APY- test"),
+        ("日本語", "&ZeVnLIqe-"),
+        ("~peter/mail/台北/日本語", "~peter/mail/&U,BTFw-/&ZeVnLIqe-"),
+    ],
+)
+def test_encode_imap_utf7(decoded, encoded):
+    assert encode_imap_utf7(decoded) == encoded
+    assert decode_imap_utf7(encoded) == decoded
+
+
+@pytest.mark.parametrize(
+    "name,wire",
+    [
+        ("INBOX", '"INBOX"'),
+        ("AI orgs", '"AI orgs"'),
+        ("Ärger", '"&AMQ-rger"'),
+        ('say "hi"', '"say \\"hi\\""'),
+    ],
+)
+def test_imap_mailbox(name, wire):
+    assert imap_mailbox(name) == wire
+
+
+SPECIAL_FOLDERS = ["AI orgs", "Ärger", "Projects (old)"]
+
+
+@pytest.mark.parametrize("folder", SPECIAL_FOLDERS)
+def test_fetch_email_since_selects_folder_with_special_name(folder):
+    provider = cast(imaplib.IMAP4, MockEmailProvider({folder: [{"uid": 5}]}))
+
+    emails = fetch_email_since(provider, folder, datetime(1970, 1, 1))
+
+    assert [uid for uid, _, _ in emails] == ["5"]
+
+
+@pytest.mark.parametrize("folder", SPECIAL_FOLDERS)
+def test_get_folder_uids_selects_folder_with_special_name(folder):
+    provider = cast(imaplib.IMAP4, MockEmailProvider({folder: [{"uid": 5}]}))
+
+    assert get_folder_uids(provider, folder) == {"5"}
 
 
 def test_decode_imap_utf7_malformed_falls_back_to_raw():

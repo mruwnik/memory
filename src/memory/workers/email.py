@@ -232,7 +232,7 @@ def fetch_email_since(
         List of (uid, raw_email, received_at) tuples
     """
     try:
-        status, counts = conn.select(folder)
+        status, counts = conn.select(imap_mailbox(folder))
         if status != "OK":
             logger.error(f"Error selecting folder {folder}: {counts}")
             return []
@@ -410,7 +410,7 @@ def get_folder_uids(conn: imaplib.IMAP4, folder: str) -> set[str]:
             empty set so callers don't confuse it with an empty folder.
     """
     try:
-        status, _ = conn.select(folder)
+        status, _ = conn.select(imap_mailbox(folder))
         if status != "OK":
             raise FolderUidsError(f"Error selecting folder {folder}")
 
@@ -475,6 +475,42 @@ def decode_imap_utf7(value: str) -> str:
                 return value
         i = end + 1
     return "".join(result)
+
+
+def encode_imap_utf7(value: str) -> str:
+    """Encode a folder name as IMAP modified UTF-7 (RFC 3501 §5.1.3).
+
+    Printable ASCII stays as is, ``&`` becomes ``&-``, and every other run of
+    characters becomes ``&`` + modified BASE64 of its UTF-16BE bytes + ``-``.
+    """
+    result: list[str] = []
+    pending: list[str] = []
+
+    def flush() -> None:
+        if not pending:
+            return
+        payload = base64.b64encode("".join(pending).encode("utf-16-be"))
+        result.append("&" + payload.decode("ascii").rstrip("=").replace("/", ",") + "-")
+        pending.clear()
+
+    for char in value:
+        if not 0x20 <= ord(char) <= 0x7E:
+            pending.append(char)
+            continue
+        flush()
+        result.append("&-" if char == "&" else char)
+    flush()
+    return "".join(result)
+
+
+def imap_quote(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def imap_mailbox(name: str) -> str:
+    """A decoded folder name in the form a command must send it: modified
+    UTF-7, as a quoted string, so spaces and non-ASCII names select."""
+    return imap_quote(encode_imap_utf7(name))
 
 
 # (flags) "<delimiter>" <name>  — delimiter may be NIL; name may be quoted.
@@ -634,10 +670,6 @@ def is_discard_folder(folder: ImapFolder) -> bool:
     return leaf in IMAP_DISCARD_NAMES or any(
         flag.casefold() in IMAP_DISCARD_FLAGS for flag in folder.flags
     )
-
-
-def imap_quote(value: str) -> str:
-    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def locate_imap_messages(
