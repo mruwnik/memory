@@ -8,14 +8,17 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
+from memory.common import paths, settings
 from memory.common.access_control import credential_scopes
 from memory.common.db.models import (
     ForumComment,
     ForumPost,
     ForumSyncConfig,
+    HumanUser,
     JobType,
     Person,
     Project,
+    Report,
     Team,
 )
 from memory.common.db.models.sources import project_teams, team_members
@@ -273,6 +276,69 @@ def test_upload_report_into_a_permitted_project(
 
     assert response.status_code == 200
     assert mock_dispatch_job.call_args.kwargs["task_kwargs"]["project_id"] == projects[project]
+
+
+# ====== Reports upload — overwriting needs edit rights ======
+
+REPORT_HTML = b"<p>quarterly numbers</p>"
+
+
+def report_stored_as(db_session, creator_id: int, name: str) -> Report:
+    """A public report occupying the filename an upload of REPORT_HTML as `name` gets."""
+    content_hash = hashlib.sha256(REPORT_HTML).hexdigest()[:12]
+    report = Report(
+        modality="doc",
+        mime_type="text/html",
+        report_format="html",
+        sha256=b"stored".ljust(32, b"\0"),
+        filename=paths.to_db_filename(settings.REPORT_STORAGE_DIR / f"{content_hash}_{name}"),
+        creator_id=creator_id,
+        sensitivity="public",
+    )
+    db_session.add(report)
+    db_session.commit()
+    return report
+
+
+@pytest.fixture
+def other_user(db_session):
+    other = HumanUser(id=999, email="other@example.com", name="O", password_hash="x")
+    db_session.add(other)
+    db_session.commit()
+    return other
+
+
+def upload_report_html(client: TestClient, name: str):
+    return client.post(
+        "/reports/upload", files={"file": (name, BytesIO(REPORT_HTML), "text/html")}
+    )
+
+
+def test_upload_report_refuses_to_overwrite_a_readable_report_of_someone_else(
+    member_client: TestClient, mock_dispatch_job, db_session, other_user
+):
+    report_stored_as(db_session, other_user.id, "q3.html")
+
+    response = upload_report_html(member_client, "q3.html")
+
+    assert response.status_code == 403
+    mock_dispatch_job.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "client_fixture, owner",
+    [("member_client", "user"), ("client", "user"), ("client", "other_user")],
+)
+def test_upload_report_overwrite_names_the_checked_report(
+    request, mock_dispatch_job, db_session, client_fixture, owner
+):
+    client = request.getfixturevalue(client_fixture)
+    report = report_stored_as(db_session, request.getfixturevalue(owner).id, "q3.html")
+
+    response = upload_report_html(client, "q3.html")
+
+    assert response.status_code == 200
+    assert mock_dispatch_job.call_args.kwargs["task_kwargs"]["existing_report_id"] == report.id
 
 
 # ====== Forum sync — admin-gated, rate-limited, max_items capped ======
