@@ -230,24 +230,6 @@ class TestSearchBm25:
         assert mock_query.filter.called
 
     @patch("memory.api.search.bm25.make_session")
-    async def test_filters_observation_types(self, mock_make_session):
-        mock_db = MagicMock()
-        mock_make_session.return_value.__enter__.return_value = mock_db
-        mock_query = mock_db.query.return_value
-        # Chain: filter (initial) → filter (observation_types)
-        mock_query.filter.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = (
-            []
-        )
-
-        filters: SearchFilters = {
-            "observation_types": ["preference", "fact"],
-            "access_filter": None,
-        }
-        await bm25.search_bm25("test", {"text"}, filters=filters)
-
-        assert mock_query.filter.called
-
-    @patch("memory.api.search.bm25.make_session")
     async def test_limit_parameter(self, mock_make_session):
         mock_db = MagicMock()
         mock_make_session.return_value.__enter__.return_value = mock_db

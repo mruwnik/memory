@@ -107,7 +107,6 @@ class MCPSearchFilters(TypedDict):
     exclude_tags: NotRequired[list[str]]
     recipients: NotRequired[list[str]]
     authors: NotRequired[list[str]]
-    observation_types: NotRequired[list[str] | None]
 
     # String match filters (exact match)
     folder_path: NotRequired[str]
@@ -126,7 +125,7 @@ class MCPSearchFilters(TypedDict):
     # Confidence filters
     min_confidences: NotRequired[dict[str, float]]
 
-    # Subject filter (for observations)
+    # Mail subject, case-insensitive substring
     subject: NotRequired[str]
 
     # Person filter - only return items associated with this person

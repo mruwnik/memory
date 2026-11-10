@@ -19,8 +19,8 @@ covered by a pure-Python test) forces every new ``MCPSearchFilters`` key to be
 wired here or explicitly marked special.
 
 Filters that are genuinely backend-specific and hand-coded (access control,
-person association, source-id prefiltering, confidence scores, observation
-collection routing, and created_at, described below) live in
+person association, source-id prefiltering, confidence scores and
+created_at, described below) live in
 :data:`SPECIAL_FILTER_KEYS` rather than the registry.
 """
 
@@ -228,7 +228,6 @@ SPECIAL_FILTER_KEYS: frozenset[str] = frozenset(
         "chat",
         "source_ids",
         "min_confidences",
-        "observation_types",
         "min_created_at",
         "max_created_at",
     }

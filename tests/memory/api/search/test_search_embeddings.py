@@ -103,13 +103,6 @@ def test_special_source_ids_maps_to_singular_payload_key():
     assert result == [{"key": "source_id", "match": {"any": [11, 22]}}]
 
 
-def test_special_observation_types():
-    result = build_qdrant_special_filters({"observation_types": ["belief", "preference"]})
-    assert result == [
-        {"key": "observation_types", "match": {"any": ["belief", "preference"]}}
-    ]
-
-
 def test_registry_empty_min_confidences_is_special_not_registry():
     # min_confidences is a special key; the registry never emits it.
     assert build_registry_qdrant_filters({"min_confidences": {}}) == []

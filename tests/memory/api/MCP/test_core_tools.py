@@ -31,6 +31,7 @@ from memory.api.MCP.servers.core import (
 from memory.api.search.types import SearchFilters, SearchResult
 from memory.common.access_control import AccessFilter, has_admin_scope
 from memory.common.db.models import (
+    AgentObservation,
     APIKey,
     JournalEntry,
     MailMessage,
@@ -42,7 +43,14 @@ from memory.common.db.models import (
     UserSession,
 )
 from memory.common.db.models.source_item import Chunk, SourceItem
-from tests.conftest import make_source_item, mcp_auth_context, shown, untrusted_tag, unwrapped
+from tests.conftest import (
+    make_source_item,
+    mcp_auth_context,
+    shown,
+    unique_sha256,
+    untrusted_tag,
+    unwrapped,
+)
 
 
 # ====== search tests ======
@@ -493,64 +501,40 @@ async def test_search_observations_basic_query(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kwargs, expected",
+    [
+        ({"subject": "humans"}, {"belief", "behavior"}),
+        ({"tags": ["design"]}, {"preference"}),
+        ({"observation_types": ["belief", "preference"]}, {"belief", "preference"}),
+        ({"subject": "humans", "observation_types": ["behavior"]}, {"behavior"}),
+    ],
+)
 @patch("memory.api.MCP.servers.core.search_base")
-@patch("memory.api.MCP.servers.core.observation")
-@patch("memory.api.MCP.servers.core.filter_observation_source_ids")
-async def test_search_observations_with_subject_filter(
-    mock_filter_ids, mock_obs_formatter, mock_search_base
+async def test_search_observations_narrows_to_matching_observations(
+    mock_search_base, observations, kwargs, expected
 ):
-    """Search observations filters by subject."""
-    mock_obs_formatter.generate_semantic_text.return_value = "semantic text"
-    mock_obs_formatter.generate_temporal_text.return_value = "temporal text"
-    mock_filter_ids.return_value = None
+    """Subject, tags and types are observation columns: the search runs over
+    the matching observations' ids, not payload or mail filters."""
     mock_search_base.return_value = []
 
-    await search_observations.fn(query="test", subject="user_preferences")
+    await search_observations.fn(query="test", **kwargs)
 
-    call_kwargs = mock_search_base.call_args[1]
-    assert call_kwargs["filters"]["subject"] == "user_preferences"
+    filters = mock_search_base.call_args.kwargs["filters"]
+    assert sorted(filters["source_ids"]) == sorted(observations[name] for name in expected)
+    assert {"subject", "observation_types", "tags"} & filters.keys() == set()
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"subject": "nobody"}, {"observation_types": ["contradiction"]}, {"tags": ["unused"]}],
+)
 @patch("memory.api.MCP.servers.core.search_base")
-@patch("memory.api.MCP.servers.core.observation")
-@patch("memory.api.MCP.servers.core.filter_observation_source_ids")
-async def test_search_observations_with_tags_filter(
-    mock_filter_ids, mock_obs_formatter, mock_search_base
-):
-    """Search observations filters by tags."""
-    mock_obs_formatter.generate_semantic_text.return_value = "semantic text"
-    mock_obs_formatter.generate_temporal_text.return_value = "temporal text"
-    mock_filter_ids.return_value = [1, 2, 3]
-    mock_search_base.return_value = []
-
-    await search_observations.fn(query="test", tags=["programming", "typescript"])
-
-    call_kwargs = mock_search_base.call_args[1]
-    assert call_kwargs["filters"]["tags"] == ["programming", "typescript"]
-    assert call_kwargs["filters"]["source_ids"] == [1, 2, 3]
-    mock_filter_ids.assert_called_once_with(tags=["programming", "typescript"])
-
-
-@pytest.mark.asyncio
-@patch("memory.api.MCP.servers.core.search_base")
-@patch("memory.api.MCP.servers.core.observation")
-@patch("memory.api.MCP.servers.core.filter_observation_source_ids")
-async def test_search_observations_with_observation_types(
-    mock_filter_ids, mock_obs_formatter, mock_search_base
-):
-    """Search observations filters by observation types."""
-    mock_obs_formatter.generate_semantic_text.return_value = "semantic text"
-    mock_obs_formatter.generate_temporal_text.return_value = "temporal text"
-    mock_filter_ids.return_value = None
-    mock_search_base.return_value = []
-
-    await search_observations.fn(
-        query="test", observation_types=["belief", "preference"]
-    )
-
-    call_kwargs = mock_search_base.call_args[1]
-    assert call_kwargs["filters"]["observation_types"] == ["belief", "preference"]
+async def test_search_observations_no_matching_observations(mock_search_base, observations, kwargs):
+    """Filters no observation matches return nothing rather than searching unfiltered."""
+    assert await search_observations.fn(query="test", **kwargs) == []
+    mock_search_base.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -995,65 +979,53 @@ def test_fetch_file_unknown_file_not_found(db_session, admin_session):
 # ====== filter_observation_source_ids tests ======
 
 
-@patch("memory.api.MCP.servers.core.make_session")
-def test_filter_observation_source_ids_no_filters(mock_make_session):
-    """Returns None when no filters provided."""
-    result = filter_observation_source_ids(tags=None, observation_types=None)
-    assert result is None
-
-
-@patch("memory.api.MCP.servers.core.make_session")
-def test_filter_observation_source_ids_by_tags(mock_make_session):
-    """Filters observations by tags."""
-    mock_session = MagicMock()
-    mock_make_session.return_value.__enter__.return_value = mock_session
-
-    mock_obs1 = MagicMock()
-    mock_obs1.id = 1
-    mock_obs2 = MagicMock()
-    mock_obs2.id = 2
-    mock_session.query.return_value.filter.return_value.all.return_value = [
-        mock_obs1,
-        mock_obs2,
-    ]
-
-    result = filter_observation_source_ids(tags=["programming"])
-
-    assert result == [1, 2]
-
-
-@patch("memory.api.MCP.servers.core.make_session")
-def test_filter_observation_source_ids_by_observation_types(mock_make_session):
-    """Filters observations by observation types."""
-    mock_session = MagicMock()
-    mock_make_session.return_value.__enter__.return_value = mock_session
-
-    mock_obs = MagicMock()
-    mock_obs.id = 1
-    mock_session.query.return_value.filter.return_value.all.return_value = [mock_obs]
-
-    result = filter_observation_source_ids(observation_types=["belief", "preference"])
-
-    assert result == [1]
-
-
-@patch("memory.api.MCP.servers.core.make_session")
-def test_filter_observation_source_ids_by_both(mock_make_session):
-    """Filters observations by both tags and types."""
-    mock_session = MagicMock()
-    mock_make_session.return_value.__enter__.return_value = mock_session
-
-    mock_obs = MagicMock()
-    mock_obs.id = 1
-    mock_session.query.return_value.filter.return_value.filter.return_value.all.return_value = [
-        mock_obs
-    ]
-
-    result = filter_observation_source_ids(
-        tags=["programming"], observation_types=["belief"]
+def make_observation(db_session, n: int, **overrides) -> AgentObservation:
+    observation = AgentObservation(
+        **{
+            "sha256": unique_sha256(f"observation-{n}"),
+            "content": f"Observation {n}",
+            "mime_type": "text/plain",
+            "tags": [],
+            "observation_type": "belief",
+            "subject": "humans",
+            "agent_model": "test-model",
+            **overrides,
+        }
     )
+    db_session.add(observation)
+    db_session.commit()
+    return observation
 
-    assert result == [1]
+
+@pytest.fixture
+def observations(db_session):
+    """Three observations differing in type, subject and tags, by name."""
+    specs = {
+        "belief": {"observation_type": "belief", "subject": "humans", "tags": ["programming"]},
+        "preference": {"observation_type": "preference", "subject": "ui", "tags": ["design"]},
+        "behavior": {"observation_type": "behavior", "subject": "humans", "tags": []},
+    }
+    return {name: make_observation(db_session, i, **spec).id for i, (name, spec) in enumerate(specs.items())}
+
+
+def test_filter_observation_source_ids_no_filters(db_session):
+    assert filter_observation_source_ids() is None
+
+
+@pytest.mark.parametrize(
+    "kwargs, expected",
+    [
+        ({"tags": ["programming"]}, {"belief"}),
+        ({"observation_types": ["belief", "preference"]}, {"belief", "preference"}),
+        ({"subject": "humans"}, {"belief", "behavior"}),
+        ({"subject": "hum"}, set()),
+        ({"tags": ["programming"], "observation_types": ["behavior"]}, set()),
+        ({"observation_types": ["behavior", "belief"], "subject": "humans"}, {"belief", "behavior"}),
+    ],
+)
+def test_filter_observation_source_ids(observations, kwargs, expected):
+    result = filter_observation_source_ids(**kwargs) or []
+    assert sorted(result) == sorted(observations[name] for name in expected)
 
 
 # ====== filter_source_ids tests ======
@@ -2193,7 +2165,7 @@ async def test_unsupported_filter_raises_value_error(db_session, admin_session, 
     """A filter key only meaningful for observation search is rejected, not ignored."""
     with mcp_auth_context(admin_session.token):
         with pytest.raises(ValueError, match="Unsupported filter"):
-            await tool.fn(filters={"observation_types": ["belief"]})
+            await tool.fn(filters={"min_confidences": {"accuracy": 0.8}})
 
 
 @pytest.mark.asyncio

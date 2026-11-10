@@ -28,8 +28,7 @@ from memory.common.db.models import Chunk, ConfidenceScore, SourceItem
 from memory.common.db.models.source_item import source_item_people
 
 # BM25 accepts every logical filter: the declarative registry plus the
-# hand-coded special keys (access/person/source_ids/confidence/observation/
-# created_at). Anything else is a programming error.
+# hand-coded special keys (access/person/source_ids/confidence/created_at). Anything else is a programming error.
 BM25_ALLOWED_FILTER_KEYS = set(FILTER_REGISTRY) | SPECIAL_FILTER_KEYS
 
 logger = logging.getLogger(__name__)
@@ -189,12 +188,6 @@ def run_bm25_query(
 
         if source_ids := filters.get("source_ids"):
             items_query = items_query.filter(Chunk.source_id.in_(source_ids))
-
-        # Observation type filter - restricts to specific collection types
-        if observation_types := filters.get("observation_types"):
-            items_query = items_query.filter(
-                Chunk.collection_name.in_(observation_types)
-            )
 
         # Add confidence filtering if specified
         if min_confidences := filters.get("min_confidences"):
