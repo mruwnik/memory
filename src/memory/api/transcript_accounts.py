@@ -2,6 +2,7 @@
 
 import logging
 import secrets
+from collections.abc import Sequence
 from typing import Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -120,12 +121,15 @@ def owner_person(db: Session, owner_id: int) -> Person | None:
     return db.query(Person).filter(Person.user_id == owner_id).first()
 
 
-def resolve_task_people(db: Session, user: User, owner_id: int, person_ids: list[int]) -> list[Person]:
+def resolve_task_people(
+    db: Session, user: User, owner_id: int, person_ids: list[int], current: Sequence[Person] = ()
+) -> list[Person]:
     """The Persons `person_ids` name, checked as ones `user` may pick.
 
-    Callers without the people scope can't list People, so they may only pick
-    the account owner's own Person. They get the same error for an id that
-    doesn't exist as for someone else's, so it can't be used to probe ids.
+    Callers without the people scope can't list People, so besides the people
+    already `current`ly picked they may only add the account owner's own Person.
+    They get the same error for an id that doesn't exist as for someone else's,
+    so it can't be used to probe ids.
     """
     ids = set(person_ids)
     if not ids:
@@ -135,12 +139,14 @@ def resolve_task_people(db: Session, user: User, owner_id: int, person_ids: list
         if len(people) != len(ids):
             raise HTTPException(status_code=400, detail="Unknown person in task_person_ids")
         return people
-    people = db.query(Person).filter(Person.id.in_(ids), Person.user_id == owner_id).all()
-    if len(people) != len(ids):
+    kept = [p for p in current if p.id in ids]
+    added = ids - {p.id for p in kept}
+    people = db.query(Person).filter(Person.id.in_(added), Person.user_id == owner_id).all()
+    if len(people) != len(added):
         raise HTTPException(
             status_code=403, detail="Without the people scope you can only pick yourself"
         )
-    return people
+    return kept + people
 
 
 def account_to_response(
@@ -308,7 +314,9 @@ def update_account(
     if updates.create_tasks is not None:
         account.create_tasks = updates.create_tasks
     if updates.task_person_ids is not None:
-        account.task_people = resolve_task_people(db, user, account.user_id, updates.task_person_ids)
+        account.task_people = resolve_task_people(
+            db, user, account.user_id, updates.task_person_ids, account.task_people
+        )
     apply_llm_key(db, user, account, updates.llm_key)
 
     access_changed = mark_access_control_changed_if_needed(

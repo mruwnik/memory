@@ -798,3 +798,38 @@ def test_task_people_of_an_account_you_dont_own_cant_be_set(regular_client, user
 
     assert response.status_code == 404
     assert db_session.get(TranscriptAccount, account.id).task_people == []
+
+
+@pytest.mark.parametrize("update", [{"name": "Renamed"}, {"create_tasks": False}])
+def test_without_people_scope_people_already_picked_can_be_kept(regular_client, user, db_session, update):
+    ann = make_person(db_session, "Ann Lee")
+    mine = make_person(db_session, "Test User", user_id=user.id)
+    account = make_account(db_session, user.id)
+    account.task_people = [ann]
+    db_session.commit()
+
+    response = regular_client.patch(
+        f"/transcript-accounts/{account.id}", json={**update, "task_person_ids": [ann.id, mine.id]}
+    )
+
+    assert response.status_code == 200
+    assert sorted(p.display_name for p in db_session.get(TranscriptAccount, account.id).task_people) == [
+        "Ann Lee",
+        "Test User",
+    ]
+
+
+def test_without_people_scope_people_already_picked_dont_let_others_in(regular_client, user, db_session):
+    ann = make_person(db_session, "Ann Lee")
+    bob = make_person(db_session, "Bob Ray")
+    account = make_account(db_session, user.id)
+    account.task_people = [ann]
+    db_session.commit()
+
+    response = regular_client.patch(f"/transcript-accounts/{account.id}", json={"task_person_ids": [ann.id, bob.id]})
+
+    assert (response.status_code, response.json()) == (
+        403,
+        {"detail": "Without the people scope you can only pick yourself"},
+    )
+    assert [p.display_name for p in db_session.get(TranscriptAccount, account.id).task_people] == ["Ann Lee"]
