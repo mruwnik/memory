@@ -50,6 +50,8 @@ a new, empty `## Unreleased` above it.
 - Recurring all-day calendar series that end on a date (a date-only `UNTIL`, as CalDAV and Google send them) show in `organizer_upcoming` again, through the end of that day; a floating `UNTIL` time is read as UTC.
 - Calendar syncs remove events deleted or cancelled in CalDAV or Google Calendar. A sync that read every calendar deletes the account's stored events starting inside the sync window (less a day at each end) that the calendar no longer returns; a sync that skipped a calendar or event, or found no calendar, deletes nothing. The sync result reports `events_deleted`.
 - Gmail syncs no longer re-download, on every run, messages they never store (a copy already stored, password-reset mail, a message that keeps killing its worker). The account remembers their ids (new column `email_accounts.gmail_declined_ids`) until they leave the mailbox; messages that failed to queue are retried.
+- Connecting a Google account finishes only in a browser logged in as the memory user who started it: a logged-out browser is asked to log in and reload, another user's authorization link is refused, and a Google account already connected to another memory user is refused instead of having its tokens replaced.
+- On https, the login cookies the web app sets carry the Secure flag, so the browser never sends them over plain http.
 
 ### Required env vars
 None

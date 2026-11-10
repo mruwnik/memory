@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react'
 import { CLIENT_ID_KEY, LEGACY_CLIENT_ID_KEY, REDIRECT_URI } from '@/hooks/useAuth'
+import { setCookie } from '@/utils/cookies'
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || ''
 const SESSION_COOKIE_NAME = import.meta.env.VITE_SESSION_COOKIE_NAME || 'session_id'
@@ -30,13 +31,6 @@ const generateState = () => {
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
     .replace(/=/g, '')
-}
-
-// Storage utilities
-const setCookie = (name: string, value: string, days = 30) => {
-  const expires = new Date()
-  expires.setTime(expires.getTime() + days * 24 * 60 * 60 * 1000)
-  document.cookie = `${name}=${value};expires=${expires.toUTCString()};path=/;SameSite=Lax`
 }
 
 const getClientId = () => localStorage.getItem(CLIENT_ID_KEY)

@@ -4,15 +4,21 @@ from datetime import datetime, timezone
 from unittest.mock import Mock, patch
 
 import pytest
+from starlette.requests import Request
 
+from memory.api import google_drive
 from memory.api.google_drive import (
     AVAILABLE_GOOGLE_SCOPES,
     BASE_GOOGLE_SCOPES,
+    GoogleOAuthState,
     google_authorize,
+    google_callback,
     get_available_scopes,
     reauthorize_account,
     ReauthorizeRequest,
 )
+from memory.common import settings
+from memory.common.db.models.sources import GoogleAccount
 
 
 def test_get_available_scopes_returns_all_scopes():
@@ -286,67 +292,143 @@ def test_google_authorize_ignores_invalid_scope_keys():
     assert AVAILABLE_GOOGLE_SCOPES["gmail_send"]["scope"] in requested_scopes
 
 
-@patch("memory.api.google_drive.make_session")
-@patch("memory.api.google_drive.get_oauth_config")
-@patch("google_auth_oauthlib.flow.Flow")
-@patch("memory.api.google_drive.GoogleOAuthState")
-@patch("googleapiclient.discovery.build")
-def test_google_callback_parses_scopes_from_url(
-    mock_build, mock_state, mock_flow_class, mock_get_config, mock_make_session
-):
-    """Test that callback parses granted scopes from URL parameter."""
-    from memory.api.google_drive import google_callback
+GRANTED_SCOPES = (
+    "email profile https://www.googleapis.com/auth/drive.readonly "
+    "https://www.googleapis.com/auth/gmail.send openid"
+)
 
-    # Setup mocks
-    mock_state.validate.return_value = 1  # user_id
 
-    mock_config = Mock()
-    mock_config.redirect_uris = ["http://localhost/callback"]
-    mock_config.to_client_config.return_value = {"web": {}}
-    mock_get_config.return_value = mock_config
+def callback_request(token: str | None) -> Request:
+    cookie = f"{settings.SESSION_COOKIE_NAME}={token}".encode() if token else b""
+    headers = [(b"cookie", cookie)] if token else []
+    return Request({"type": "http", "method": "GET", "path": "/", "headers": headers})
 
-    mock_credentials = Mock()
-    mock_credentials.token = "access_token"
-    mock_credentials.refresh_token = "refresh_token"
-    mock_credentials.expiry = None
 
-    mock_flow = Mock()
-    mock_flow.credentials = mock_credentials
-    mock_flow_class.from_client_config.return_value = mock_flow
-
-    mock_service = Mock()
-    mock_service.userinfo().get().execute.return_value = {
-        "email": "test@example.com",
-        "name": "Test User",
+@pytest.fixture
+def google_exchange(monkeypatch):
+    """Stand in for Google's token endpoint and userinfo API; yields the token fetch."""
+    config = Mock(redirect_uris=["https://example.com/callback"])
+    monkeypatch.setattr(google_drive, "get_oauth_config", Mock(return_value=config))
+    flow = Mock()
+    flow.credentials = Mock(token="new-access", refresh_token="new-refresh", expiry=None)
+    service = Mock()
+    service.userinfo().get().execute.return_value = {
+        "email": "drive@example.com",
+        "name": "Drive Owner",
     }
-    mock_build.return_value = mock_service
+    with patch("google_auth_oauthlib.flow.Flow") as flow_class, patch(
+        "googleapiclient.discovery.build", return_value=service
+    ):
+        flow_class.from_client_config.return_value = flow
+        yield flow.fetch_token
 
-    mock_session = Mock()
-    mock_account = Mock()
-    mock_session.query().filter().first.return_value = mock_account
-    mock_make_session.return_value.__enter__ = Mock(return_value=mock_session)
-    mock_make_session.return_value.__exit__ = Mock(return_value=False)
 
-    mock_request = Mock()
-
-    # Call callback with scope parameter (as Google would send it)
-    scope_string = "email profile https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/gmail.send openid"
-
-    response = google_callback(
-        request=mock_request,
+def run_callback(token: str | None, state: str):
+    return google_callback(
+        request=callback_request(token),
         code="auth_code",
-        state="valid_state",
+        state=state,
         error=None,
-        scope=scope_string,
+        scope=GRANTED_SCOPES,
     )
 
-    assert 'new BroadcastChannel("google-oauth-1")' in bytes(response.body).decode()
 
-    # Verify scopes were parsed and saved correctly
-    expected_scopes = scope_string.split()
-    assert mock_account.scopes == expected_scopes
-    assert "https://www.googleapis.com/auth/gmail.send" in mock_account.scopes
-    assert "https://www.googleapis.com/auth/drive.readonly" in mock_account.scopes
+def accounts_for(db_session, email: str) -> list[GoogleAccount]:
+    db_session.expire_all()
+    return db_session.query(GoogleAccount).filter(GoogleAccount.email == email).all()
+
+
+def test_google_callback_connects_account_for_session_user(
+    db_session, regular_user, user_session, google_exchange
+):
+    state = GoogleOAuthState.create(regular_user.id)
+
+    response = run_callback("test-session-token", state)
+
+    assert response.status_code == 200
+    assert f'new BroadcastChannel("google-oauth-{regular_user.id}")' in bytes(
+        response.body
+    ).decode()
+    [account] = accounts_for(db_session, "drive@example.com")
+    assert account.user_id == regular_user.id
+    assert account.scopes == GRANTED_SCOPES.split()
+    assert account.access_token == "new-access"
+
+
+def test_google_callback_logged_out_keeps_state(
+    db_session, regular_user, google_exchange
+):
+    state = GoogleOAuthState.create(regular_user.id)
+
+    response = run_callback(None, state)
+
+    assert response.status_code == 401
+    assert google_exchange.call_count == 0
+    assert GoogleOAuthState.owner(state) == regular_user.id
+    assert accounts_for(db_session, "drive@example.com") == []
+
+
+def test_google_callback_rejects_state_of_another_user(
+    db_session, admin_user, regular_user, user_session, google_exchange
+):
+    state = GoogleOAuthState.create(admin_user.id)
+
+    response = run_callback("test-session-token", state)
+
+    assert response.status_code == 403
+    assert google_exchange.call_count == 0
+    assert GoogleOAuthState.owner(state) == admin_user.id
+    assert accounts_for(db_session, "drive@example.com") == []
+
+
+def test_google_callback_state_is_single_use(
+    db_session, regular_user, user_session, google_exchange
+):
+    state = GoogleOAuthState.create(regular_user.id)
+    run_callback("test-session-token", state)
+
+    response = run_callback("test-session-token", state)
+
+    assert response.status_code == 400
+    assert google_exchange.call_count == 1
+
+
+def test_google_callback_refuses_account_owned_by_another_user(
+    db_session, admin_user, regular_user, user_session, google_exchange
+):
+    owned = GoogleAccount(
+        user_id=admin_user.id, name="Admin Drive", email="drive@example.com"
+    )
+    owned.access_token = "admin-access"
+    db_session.add(owned)
+    db_session.commit()
+    state = GoogleOAuthState.create(regular_user.id)
+
+    response = run_callback("test-session-token", state)
+
+    assert response.status_code == 409
+    [account] = accounts_for(db_session, "drive@example.com")
+    assert account.user_id == admin_user.id
+    assert account.access_token == "admin-access"
+
+
+def test_google_callback_updates_own_account(
+    db_session, regular_user, user_session, google_exchange
+):
+    own = GoogleAccount(
+        user_id=regular_user.id, name="My Drive", email="drive@example.com"
+    )
+    own.access_token = "old-access"
+    db_session.add(own)
+    db_session.commit()
+    state = GoogleOAuthState.create(regular_user.id)
+
+    response = run_callback("test-session-token", state)
+
+    assert response.status_code == 200
+    [account] = accounts_for(db_session, "drive@example.com")
+    assert account.access_token == "new-access"
+    assert account.scopes == GRANTED_SCOPES.split()
 
 
 def test_callback_scope_parsing_handles_empty_scope():

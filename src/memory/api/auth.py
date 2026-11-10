@@ -43,24 +43,22 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 AUTH_REQUIRED_BODY = "Authentication required"
 
 # Endpoints that don't require authentication (prefix matching).
-# `/register` and `/revoke` are the OAuth Dynamic Client Registration
-# (RFC 7591) and Token Revocation (RFC 7009) endpoints exposed by the
-# MCP SDK at root. DCR clients have no credentials at registration time
-# by definition, so the middleware cannot demand them; otherwise new
-# MCP clients can't enroll and POST /register returns 401 before the
-# OAuth provider's handler runs.
+# `/register` is the OAuth Dynamic Client Registration (RFC 7591) endpoint
+# exposed by the MCP SDK at root. DCR clients have no credentials at
+# registration time by definition, so the middleware cannot demand them;
+# otherwise new MCP clients can't enroll and POST /register returns 401
+# before the OAuth provider's handler runs.
 WHITELIST = {
     "/health",
     "/authorize",
     "/token",
     "/register",
-    "/revoke",
     "/mcp",
     "/oauth/",
     "/.well-known/",
-    "/google-drive/callback",  # Google OAuth callback
-    # External MCP server OAuth callback: authenticates the session itself
-    # so a logged-out user gets a page to act on instead of a bare 401.
+    # Google and external MCP server OAuth callbacks authenticate the session
+    # themselves so a logged-out user gets a page to act on, not a bare 401.
+    "/google-drive/callback",
     "/auth/mcp/callback",
     "/api/polls/respond",  # Public poll response endpoints
     # Generic content upload. The endpoint authenticates the request itself
