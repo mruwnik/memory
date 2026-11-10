@@ -391,8 +391,8 @@ def process_email_batch(
                 new_messages += 1
             else:
                 declined_ids.append(message_id)
-        except Exception as e:
-            logger.error(f"Error queuing message {message_id}: {e}")
+        except Exception:
+            logger.exception(f"Error queuing message {message_id}")
             errors += 1
 
     return {
@@ -618,7 +618,7 @@ def sync_account(account_id: int, since_date: str | None = None) -> dict:
                 finalize_sync(account, db, started_at, sync_failures(stats))
 
             except Exception as e:
-                logger.error(f"Error syncing account {account.email_address}: {e}")
+                logger.exception(f"Error syncing account {account_id}")
                 finalize_sync(account, db, started_at, error=e)
                 return {"status": "error", "error": str(e)}
 
