@@ -33,6 +33,7 @@ from memory.common.access_control import AccessFilter, has_admin_scope
 from memory.common import settings
 from memory.common.db.models import (
     APIKey,
+    BlogPost,
     DiscordChannel,
     DiscordMessage,
     DiscordUser,
@@ -1054,6 +1055,25 @@ def test_fetch_file_refuses_a_discord_image_of_a_message_the_caller_cannot_read(
     with mcp_auth_context(session.token):
         with pytest.raises(PermissionError, match="Access denied"):
             fetch_file.fn(filename=discord_image[0])
+
+
+@pytest.mark.parametrize("name", ["discord/702/cat.png", "blog/cat.png"])
+def test_fetch_file_serves_only_discord_images_from_their_own_message(db_session, admin_session, discord_image, name):
+    """Another message's directory, or another type's images column, doesn't serve the file."""
+    path = settings.FILE_STORAGE_DIR / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"png")
+    db_session.add(
+        BlogPost(
+            modality="blog", sha256=unique_sha256("blog"), url="https://example.com/cat",
+            content="cat", images=[name, "discord/702/cat.png"],
+        )
+    )
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.token):
+        with pytest.raises(FileNotFoundError, match="File not found"):
+            fetch_file.fn(filename=name)
 
 
 # ====== filter_observation_source_ids tests ======

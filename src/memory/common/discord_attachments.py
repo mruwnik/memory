@@ -33,6 +33,12 @@ def stored_image_name(url: str, message_id: int) -> str:
     return paths.to_db_filename(image_path(url, message_id))
 
 
+def message_id_of(name: str) -> int | None:
+    """The message id a stored image's directory is named after, None when it names none."""
+    directory = pathlib.PurePath(name).parent.name
+    return int(directory) if directory.isdigit() else None
+
+
 def record(filename: str | None, content_type: str | None, size: int | None, url: str | None) -> dict[str, Any]:
     """An attachment as stored on its message. The URL is kept unsigned, so a
     re-read of the message records the same attachment the same way."""
