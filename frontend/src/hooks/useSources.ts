@@ -1,6 +1,7 @@
 import { useCallback } from 'react'
 import { useAuth, PersonRef } from './useAuth'
 import { apiError } from './apiError'
+import { getCookie } from '@/utils/cookies'
 
 export type { PersonRef }
 
@@ -968,10 +969,7 @@ export const useSources = () => {
     const formData = new FormData()
     formData.append('file', file)
 
-    const accessToken = document.cookie
-      .split('; ')
-      .find(row => row.startsWith('access_token='))
-      ?.split('=')[1]
+    const accessToken = getCookie('access_token')
 
     const response = await fetch('/google-drive/config', {
       method: 'POST',

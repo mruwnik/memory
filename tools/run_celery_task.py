@@ -253,7 +253,7 @@ def email_process_message(ctx, account_id, message_id, folder, raw_email):
     from memory.parsers.email import parse_email_message
     from memory.workers.tasks.email import spool_raw_email
 
-    parsed = parse_email_message(raw_email, message_id)
+    parsed = parse_email_message(raw_email)
     spool_name = spool_raw_email(account_id, message_id, raw_email, parsed["hash"].hex())
     execute_task(
         ctx,

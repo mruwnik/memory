@@ -210,8 +210,8 @@ def fetch_email(conn: imaplib.IMAP4, uid: str) -> RawEmailResponse | None:
             return None
 
         return extract_email_uid(msg_data)
-    except Exception as e:
-        logger.error(f"Error processing message {uid!r}: {str(e)}")
+    except Exception:
+        logger.exception(f"Error processing message {uid!r}")
         return None
 
 
@@ -219,42 +219,77 @@ def fetch_email_since(
     conn: imaplib.IMAP4,
     folder: str,
     since_date: datetime = datetime(1970, 1, 1),
-) -> list[RawEmailResponse]:
+) -> tuple[list[RawEmailResponse], int]:
     """
-    Fetch emails from a folder since a given date and time.
+    Fetch the emails a folder received on or after ``since_date``'s day.
 
     Args:
         conn: IMAP connection
         folder: Folder name to select
-        since_date: Fetch emails since this date and time
+        since_date: Fetch emails since this date (IMAP SEARCH ignores the time)
 
     Returns:
-        List of (uid, raw_email, received_at) tuples
+        The (uid, raw_email, received_at) tuples fetched, and how many found
+        messages couldn't be fetched.
+
+    Raises:
+        FolderUidsError: if the folder can't be selected or searched.
+    """
+    uids = search_folder(conn, folder, f'(SINCE "{since_date.strftime("%d-%b-%Y")}")')
+    fetched = [fetch_email(conn, uid) for uid in uids]
+    emails = [email for email in fetched if email]
+    return emails, len(fetched) - len(emails)
+
+
+# The response code at the start of a tagged NO, e.g. b"[NONEXISTENT] No such mailbox"
+RESPONSE_CODE = re.compile(rb"^\[([\w-]+)")
+
+
+def folder_is_gone(conn: imaplib.IMAP4, folder: str, response: Sequence) -> bool:
+    """Whether the server refused to SELECT ``folder`` because it doesn't exist,
+    rather than for a passing reason (throttling, a lock, a busy server).
+
+    A response code decides when there is one: only RFC 5530 NONEXISTENT means
+    gone. Without one, the folder is gone if LIST doesn't show it as selectable.
+    An unreadable LIST counts as passing, the side that keeps the mail.
+    """
+    first = response[0] if response else b""
+    code = RESPONSE_CODE.match(first) if isinstance(first, bytes) else None
+    if code:
+        return code.group(1).upper() == b"NONEXISTENT"
+    try:
+        listed = list_imap_folders(conn)
+    except Exception:
+        logger.warning("IMAP LIST failed while checking a refused folder")
+        return False
+    return not any(f.name == folder and f.selectable for f in listed)
+
+
+def search_folder(conn: imaplib.IMAP4, folder: str, criteria: str) -> list[str]:
+    """UIDs of the messages in ``folder`` matching ``criteria``.
+
+    Raises FolderUidsError if the folder can't be selected or searched, so a
+    read failure is never mistaken for a folder with nothing in it.
     """
     try:
-        status, counts = conn.select(folder)
-        if status != "OK":
-            logger.error(f"Error selecting folder {folder}: {counts}")
-            return []
-
-        date_str = since_date.strftime("%d-%b-%Y")
-
-        status, data = conn.uid("SEARCH", f'(SINCE "{date_str}")')
-        if status != "OK":
-            logger.error(f"Error searching folder {folder}: {data}")
-            return []
+        status, response = conn.select(imap_mailbox(folder))
     except Exception as e:
-        logger.error(f"Error in fetch_email_since for folder {folder}: {str(e)}")
-        return []
+        raise FolderUidsError(f"Error selecting folder {folder}: {e}") from e
+    if status != "OK" and folder_is_gone(conn, folder, response):
+        raise FolderUnavailableError(f"Error selecting folder {folder}")
+    if status != "OK":
+        raise FolderUidsError(f"Error selecting folder {folder}")
+
+    try:
+        status, data = conn.uid("SEARCH", criteria)
+    except Exception as e:
+        raise FolderUidsError(f"Error searching folder {folder}: {e}") from e
+    if status != "OK":
+        raise FolderUidsError(f"Error searching folder {folder}")
 
     if not data or not data[0]:
         return []
-
-    return [
-        email
-        for raw_uid in data[0].split()
-        if (email := fetch_email(conn, raw_uid.decode()))
-    ]
+    return [uid.decode() for uid in data[0].split()]
 
 
 def process_folder(
@@ -275,37 +310,41 @@ def process_folder(
         processor: Function to process each message
 
     Returns:
-        Stats dictionary for the folder
+        Stats dictionary for the folder. ``errors`` counts every message that
+        was not fetched or queued, plus one for a folder that couldn't be read.
+        ``unavailable`` is True when the server refused to open the folder,
+        which is not counted in ``errors``.
     """
-    new_messages, errors = 0, 0
-    emails = []
-
     try:
-        emails = fetch_email_since(conn, folder, since_date)
+        emails, unfetched = fetch_email_since(conn, folder, since_date)
+    except FolderUnavailableError:
+        logger.warning(f"Account {account.id} lists a folder the server won't open")
+        return {"messages_found": 0, "new_messages": 0, "errors": 0, "unavailable": True}
+    except FolderUidsError:
+        logger.exception(f"Could not read a folder of account {account.id}")
+        return {"messages_found": 0, "new_messages": 0, "errors": 1, "unavailable": False}
 
-        for uid, raw_email, received_at in emails:
-            try:
-                task = processor(
-                    account_id=account.id,  # type: ignore
-                    message_id=uid,
-                    folder=folder,
-                    raw_email=raw_email.decode("utf-8", errors="replace"),
-                    received_at=received_at,
-                )
-                if task:
-                    new_messages += 1
-            except Exception as e:
-                logger.error(f"Error queuing message {uid}: {str(e)}")
-                errors += 1
-
-    except Exception as e:
-        logger.error(f"Error processing folder {folder}: {str(e)}")
-        errors += 1
+    new_messages, errors = 0, unfetched
+    for uid, raw_email, received_at in emails:
+        try:
+            task = processor(
+                account_id=account.id,  # type: ignore
+                message_id=uid,
+                folder=folder,
+                raw_email=raw_email.decode("utf-8", errors="replace"),
+                received_at=received_at,
+            )
+            if task:
+                new_messages += 1
+        except Exception:
+            logger.exception(f"Error queuing message {uid}")
+            errors += 1
 
     return {
-        "messages_found": len(emails),
+        "messages_found": len(emails) + unfetched,
         "new_messages": new_messages,
         "errors": errors,
+        "unavailable": False,
     }
 
 
@@ -328,8 +367,8 @@ def imap_connection(account: EmailAccount) -> Generator[imaplib.IMAP4, None, Non
         # Always try to logout and close the connection
         try:
             conn.logout()
-        except Exception as e:
-            logger.error(f"Error logging out from {account.imap_server}: {str(e)}")
+        except Exception:
+            logger.exception(f"Error logging out of IMAP for account {account.id}")
             # If logout fails, explicitly close the socket to prevent resource leak
             try:
                 conn.shutdown()
@@ -393,41 +432,23 @@ class FolderUidsError(Exception):
     """
 
 
+class FolderUnavailableError(FolderUidsError):
+    """The server refused to open a folder that doesn't exist (renamed or
+    deleted): the account's folder list is wrong."""
+
+
 def get_folder_uids(conn: imaplib.IMAP4, folder: str) -> set[str]:
     """
     Get all message UIDs in a folder.
-
-    Args:
-        conn: IMAP connection
-        folder: Folder name to get UIDs from
 
     Returns:
         Set of UID strings. Empty set means the folder is genuinely empty.
 
     Raises:
-        FolderUidsError: if SELECT or SEARCH fails, or the connection errors.
-            A read failure is signalled by raising rather than returning an
-            empty set so callers don't confuse it with an empty folder.
+        FolderUidsError: if SELECT or SEARCH fails, or the connection errors,
+            so callers don't confuse a read failure with an empty folder.
     """
-    try:
-        status, _ = conn.select(folder)
-        if status != "OK":
-            raise FolderUidsError(f"Error selecting folder {folder}")
-
-        status, data = conn.uid("SEARCH", "ALL")
-        if status != "OK":
-            raise FolderUidsError(f"Error searching folder {folder}")
-    except FolderUidsError:
-        raise
-    except Exception as e:
-        raise FolderUidsError(
-            f"Error getting UIDs from folder {folder}: {str(e)}"
-        ) from e
-
-    if not data or not data[0]:
-        return set()
-
-    return {uid.decode() for uid in data[0].split()}
+    return set(search_folder(conn, folder, "ALL"))
 
 
 @dataclass
@@ -475,6 +496,42 @@ def decode_imap_utf7(value: str) -> str:
                 return value
         i = end + 1
     return "".join(result)
+
+
+def encode_imap_utf7(value: str) -> str:
+    """Encode a folder name as IMAP modified UTF-7 (RFC 3501 §5.1.3).
+
+    Printable ASCII stays as is, ``&`` becomes ``&-``, and every other run of
+    characters becomes ``&`` + modified BASE64 of its UTF-16BE bytes + ``-``.
+    """
+    result: list[str] = []
+    pending: list[str] = []
+
+    def flush() -> None:
+        if not pending:
+            return
+        payload = base64.b64encode("".join(pending).encode("utf-16-be"))
+        result.append("&" + payload.decode("ascii").rstrip("=").replace("/", ",") + "-")
+        pending.clear()
+
+    for char in value:
+        if not 0x20 <= ord(char) <= 0x7E:
+            pending.append(char)
+            continue
+        flush()
+        result.append("&-" if char == "&" else char)
+    flush()
+    return "".join(result)
+
+
+def imap_quote(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def imap_mailbox(name: str) -> str:
+    """A decoded folder name in the form a command must send it: modified
+    UTF-7, as a quoted string, so spaces and non-ASCII names select."""
+    return imap_quote(encode_imap_utf7(name))
 
 
 # (flags) "<delimiter>" <name>  — delimiter may be NIL; name may be quoted.
@@ -586,10 +643,10 @@ def delete_removed_emails(
     """
     try:
         server_uids = get_folder_uids(conn, folder)
-    except FolderUidsError as e:
+    except FolderUidsError:
         # Could not read the folder. Skip reconciliation rather than risk
         # mass-deleting local mail on a transient SELECT/SEARCH failure.
-        logger.error(f"Skipping deletion for folder {folder}: {str(e)}")
+        logger.exception(f"Skipping deletion for a folder of account {account_id}")
         return 0
 
     # Intentional safety asymmetry: a genuinely-empty folder (empty set) also
@@ -634,10 +691,6 @@ def is_discard_folder(folder: ImapFolder) -> bool:
     return leaf in IMAP_DISCARD_NAMES or any(
         flag.casefold() in IMAP_DISCARD_FLAGS for flag in folder.flags
     )
-
-
-def imap_quote(value: str) -> str:
-    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def locate_imap_messages(
@@ -761,8 +814,8 @@ def fetch_gmail_message(service, message_id: str) -> tuple[str, datetime | None]
         raw_email = base64.urlsafe_b64decode(message.get("raw", "")).decode("utf-8", errors="replace")
         internal_date = message.get("internalDate")
         received_at = internal_date and datetime.fromtimestamp(int(internal_date) / 1000, timezone.utc)
-    except Exception as e:
-        logger.error(f"Error fetching Gmail message {message_id}: {e}")
+    except Exception:
+        logger.exception(f"Error fetching Gmail message {message_id}")
         return None
     return raw_email, received_at or None
 

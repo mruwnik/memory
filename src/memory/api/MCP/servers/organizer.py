@@ -2,6 +2,7 @@
 MCP subserver for organizational tools: calendar, todos, reminders.
 """
 
+import asyncio
 import hashlib
 import logging
 from datetime import datetime, timezone
@@ -58,7 +59,7 @@ async def upcoming(
         days: Number of days from start_date if end_date not specified (default 7, max 365)
         limit: Maximum number of events to return (default 50, max 1000)
         user_ids: If provided, only return events from calendars owned by these users.
-                  Admin-only feature for viewing other users' calendars.
+                  Only admins may name users other than themselves.
 
     Returns: List of events with id, event_title, start_time, end_time, all_day,
              location, calendar_name, recurrence_rule. Sorted by start_time.
@@ -66,10 +67,45 @@ async def upcoming(
     days = min(max(days, 1), 365)
     limit = min(max(limit, 1), 1000)
 
-    range_start, range_end = parse_date_range(start_date, end_date, days)
+    user = get_mcp_current_user()
+    if user is None or user.id is None:
+        return []
 
+    is_admin = has_admin_scope(user)
+    if not is_admin and any(uid != user.id for uid in user_ids or []):
+        raise PermissionError("Only admins can view other users' calendars")
+
+    range_start, range_end = parse_date_range(start_date, end_date, days)
+    # Expanding recurring events is CPU-bound and can take a while, so it runs
+    # in a thread rather than stalling every other request on this server.
+    return await asyncio.to_thread(
+        events_in_range_for, user, is_admin, range_start, range_end, limit, user_ids
+    )
+
+
+def events_in_range_for(
+    user: Any,
+    is_admin: bool,
+    range_start: datetime,
+    range_end: datetime,
+    limit: int,
+    user_ids: list[int] | None,
+) -> list[EventDict]:
+    """The calendar events in the range that ``user`` may see."""
     with make_session() as session:
-        return get_events_in_range(session, range_start, range_end, limit, user_ids)
+        access_filter = None
+        if not is_admin:
+            project_roles = get_project_roles_by_user_id(user.id, session)
+            access_filter = build_access_filter(user, project_roles)
+
+        return get_events_in_range(
+            session,
+            range_start,
+            range_end,
+            limit,
+            user_ids,
+            access_filter=access_filter,
+        )
 
 
 # =============================================================================

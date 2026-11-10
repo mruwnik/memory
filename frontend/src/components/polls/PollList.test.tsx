@@ -198,6 +198,30 @@ describe('PollList - header', () => {
   })
 })
 
+describe('PollList - status filter', () => {
+  beforeEach(() => setAuthCookies())
+
+  it('shows the newest filter when an older load finishes after it', async () => {
+    let finishAll: (r: Response) => void = () => {}
+    mockFetch(async (input, init) => {
+      const tool = mcpToolFromRequest(input, init)
+      if (tool !== 'polling_list_polls') return mockResponse({ json: { user_id: 1, scopes: ['*'] } })
+      if (String(init?.body).includes('"closed"')) {
+        return mockResponse({ json: mcpEnvelopeJson([makePoll({ id: 2, title: 'Closed poll', status: 'closed' })]) })
+      }
+      return new Promise<Response>(resolve => { finishAll = resolve })
+    })
+    const user = userEvent.setup()
+    renderWithRouter(<PollList />)
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Status' }), 'closed')
+    expect(await screen.findByText('Closed poll')).toBeInTheDocument()
+    finishAll(mockResponse({ json: mcpEnvelopeJson([makePoll({ title: 'Stale poll' })]) }))
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(screen.queryByText('Stale poll')).not.toBeInTheDocument()
+    expect(screen.getByText('Closed poll')).toBeInTheDocument()
+  })
+})
+
 afterEach(() => {
   clearCookies()
 })

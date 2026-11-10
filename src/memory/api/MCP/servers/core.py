@@ -11,7 +11,7 @@ from typing import Any
 
 from fastmcp import FastMCP
 from pydantic import BaseModel
-from sqlalchemy import Text, exists, func, or_, select
+from sqlalchemy import Text, func, select
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import selectinload
@@ -37,9 +37,7 @@ from memory.common.scopes import (
 )
 from memory.api.search.filters import (
     FILTER_REGISTRY,
-    account_match_sql,
-    beeper_match_sql,
-    apply_registry_filters_sql,
+    apply_content_filters_sql,
     reject_unknown_filter_keys,
 )
 from memory.api.search.item_browse import (
@@ -64,7 +62,6 @@ from memory.common.collections import (
 )
 from memory.common.db.connection import make_session
 from memory.common.db.models import AgentObservation, SourceItem
-from memory.common.db.models.source_item import source_item_people
 from memory.common.db.models.journal import JournalEntry, build_journal_access_filter
 from memory.common.formatters import observation
 
@@ -107,8 +104,8 @@ SEARCH_FILTERS: list[tuple[str, str, str | None]] = [
     ("max_created_at", "latest time the item was stored in memory, ISO format", None),
     ("min_sent_at", "minimum email sent date, ISO format", "mail"),
     ("max_sent_at", "maximum email sent date, ISO format", "mail"),
-    ("min_published", "minimum publication date, ISO format", "blog, forum"),
-    ("max_published", "maximum publication date, ISO format", "blog, forum"),
+    ("min_published", "minimum publication date, ISO format", "blog, forum, comic"),
+    ("max_published", "maximum publication date, ISO format", "blog, forum, comic"),
     ("folder_path", "Google Drive folder path filter", "doc"),
     ("folder", "exact match on email folder name, e.g. INBOX", "mail"),
     (
@@ -118,7 +115,7 @@ SEARCH_FILTERS: list[tuple[str, str, str | None]] = [
         "mail",
     ),
     ("domain", "exact match on website domain", "blog"),
-    ("author", "exact match on author name", None),
+    ("author", "exact match on an author name (blog, comic, forum, GitHub, book)", None),
     (
         "recipients",
         "match email recipients by address substring, case-insensitive "
@@ -131,7 +128,7 @@ SEARCH_FILTERS: list[tuple[str, str, str | None]] = [
         "(groups all aliases the account handled, incoming and sent)",
         "mail",
     ),
-    ("authors", "list of authors to match", None),
+    ("authors", "list of author names; items by any of them match", None),
     ("network", "chat network, e.g. whatsapp, signal, slack (case-insensitive)", "beeper"),
     ("chat", "chat title or Beeper chat id (case-insensitive)", "beeper"),
 ]
@@ -233,8 +230,8 @@ def _build_list_items_description() -> str:
             modalities: Filter by type: mail, blog, book, forum, photo, comic, etc. (empty = all)
             {browse_section}
             {filters_section}
-            Observation-only filters (observation_types, min_confidences) are
-            rejected here - use core_search_observations for those.
+            The observation-only min_confidences filter is rejected here - use
+            core_search_observations for it.
             {scope_section}
             limit: Max results per page (default 50, max 200)
             offset: Skip first N results for pagination
@@ -271,8 +268,8 @@ def _build_count_items_description() -> str:
             modalities: Filter by type (empty = all)
             {browse_section}
             {filters_section}
-            Observation-only filters (observation_types, min_confidences) are
-            rejected here - use core_search_observations for those. count_items and
+            The observation-only min_confidences filter is rejected here - use
+            core_search_observations for it. count_items and
             list_items apply the identical filter set, so their totals always agree.
             {scope_section}
 
@@ -350,25 +347,26 @@ def wrapped_item(tag: str, item: dict) -> dict:
 
 
 def filter_observation_source_ids(
-    tags: list[str] | None = None, observation_types: list[str] | None = None
-):
-    if not tags and not observation_types:
+    tags: list[str] | None = None,
+    observation_types: list[str] | None = None,
+    subject: str | None = None,
+) -> list[int] | None:
+    """Ids of the observations with any of ``tags``, one of ``observation_types``
+    and exactly ``subject``, or None when none of them is set.
+
+    These are AgentObservation columns, which neither the chunk payload nor the
+    shared search filters carry, so they reach both search arms as source ids.
+    """
+    conditions = [
+        *([AgentObservation.tags.op("&&")(sql_cast(tags, ARRAY(Text)))] if tags else []),
+        *([AgentObservation.observation_type.in_(observation_types)] if observation_types else []),
+        *([AgentObservation.subject == subject] if subject else []),
+    ]
+    if not conditions:
         return None
 
     with make_session() as session:
-        items_query = session.query(AgentObservation.id)
-
-        if tags:
-            items_query = items_query.filter(
-                AgentObservation.tags.op("&&")(sql_cast(tags, ARRAY(Text))),
-            )
-        if observation_types:
-            items_query = items_query.filter(
-                AgentObservation.observation_type.in_(observation_types)
-            )
-        source_ids = [item.id for item in items_query.all()]
-
-    return source_ids
+        return list(session.scalars(select(AgentObservation.id).where(*conditions)))
 
 
 def max_created_at_condition(max_created_at: str):
@@ -625,23 +623,27 @@ async def search_observations(
     )
     # Apply access control filter for observations
     access_filter = get_current_user_access_filter()
-
-    results = await search_base(
-        [
-            extract.DataChunk(data=[query]),
-            extract.DataChunk(data=[semantic_text]),
-            extract.DataChunk(data=[temporal]),
-        ],
-        modalities={"semantic", "temporal"},
-        filters=SearchFilters(
-            subject=subject,
-            min_confidences=min_confidences,
-            tags=tags or [],
-            observation_types=observation_types,
-            source_ids=filter_observation_source_ids(tags=tags),
-            access_filter=access_filter,
-        ),
-        config=config,
+    source_ids = filter_observation_source_ids(
+        tags=tags, observation_types=observation_types, subject=subject
+    )
+    # An empty id list reads as "no restriction" downstream.
+    results = (
+        []
+        if source_ids == []
+        else await search_base(
+            [
+                extract.DataChunk(data=[query]),
+                extract.DataChunk(data=[semantic_text]),
+                extract.DataChunk(data=[temporal]),
+            ],
+            modalities={"semantic", "temporal"},
+            filters=SearchFilters(
+                min_confidences=min_confidences,
+                source_ids=source_ids,
+                access_filter=access_filter,
+            ),
+            config=config,
+        )
     )
 
     # Audit-log the observation search. Best-effort.
@@ -923,11 +925,10 @@ ITEM_SPECIAL_FILTER_KEYS = frozenset(
 )
 
 # Keys accepted by item enumeration: the declarative registry plus the special
-# keys handled inline below. observation_types/min_confidences are observation-
-# search concepts (AgentObservation columns / ConfidenceScore), handled by
-# filter_observation_source_ids on its own query — they have no meaning for a
-# SourceItem enumeration, so they are NOT accepted here and reject loudly rather
-# than silently returning an unfiltered count. Any other non-empty key is
+# keys handled inline below. min_confidences is an observation-search concept
+# (ConfidenceScore) with no meaning for a SourceItem enumeration, so it is NOT
+# accepted here and rejects loudly rather than silently returning an unfiltered
+# count. Any other non-empty key is
 # likewise rejected so list_items and count_items can never disagree about a
 # filter one of them forgot.
 ITEM_ALLOWED_FILTER_KEYS = set(FILTER_REGISTRY) | ITEM_SPECIAL_FILTER_KEYS
@@ -936,12 +937,11 @@ ITEM_ALLOWED_FILTER_KEYS = set(FILTER_REGISTRY) | ITEM_SPECIAL_FILTER_KEYS
 def apply_item_filters(query, modalities: set[str], filters: MCPSearchFilters):
     """Apply modality + MCPSearchFilters constraints to a SourceItem query.
 
-    Shared by list_items and count_items so the two can never drift. Registry
-    filters (mail/blog/doc metadata) are folded on via
-    :func:`apply_registry_filters_sql`, which joins each joined-inheritance
-    subclass table on ``SourceItem.id``. A query that combines filters from two
-    different subclasses can never match a row (an item is exactly one
-    subclass); that is the correct outcome.
+    Shared by list_items and count_items so the two can never drift. Content
+    filters are folded on via :func:`apply_content_filters_sql`, the same
+    clauses search applies. A query that combines filters only different item
+    types can satisfy can never match a row (an item is exactly one type); that
+    is the correct outcome.
 
     Any provided filter key not in :data:`ITEM_ALLOWED_FILTER_KEYS` raises
     ValueError instead of being silently dropped.
@@ -958,33 +958,8 @@ def apply_item_filters(query, modalities: set[str], filters: MCPSearchFilters):
     if modalities:
         query = query.filter(SourceItem.modality.in_(modalities))
 
-    # Special keys scoped to SourceItem itself.
-    if source_ids := filters.get("source_ids"):
-        query = query.filter(SourceItem.id.in_(source_ids))
     query = query.filter(*created_at_conditions(filters))
-
-    # Declarative content-metadata filters (tags/size/mail/blog/doc).
-    query = apply_registry_filters_sql(query, filters)
-
-    if (person_id := filters.get("person_id")) is not None:
-        person_associated = exists(
-            select(source_item_people.c.source_item_id)
-            .where(source_item_people.c.source_item_id == SourceItem.id)
-            .where(source_item_people.c.person_id == person_id)
-        )
-        no_people = ~exists(
-            select(source_item_people.c.source_item_id).where(
-                source_item_people.c.source_item_id == SourceItem.id
-            )
-        )
-        query = query.filter(or_(no_people, person_associated))
-
-    if account := filters.get("account"):
-        query = query.filter(account_match_sql(account))
-    if (beeper_clause := beeper_match_sql(filters)) is not None:
-        query = query.filter(beeper_clause)
-
-    return query
+    return apply_content_filters_sql(query, filters)
 
 
 def apply_browse_filters(

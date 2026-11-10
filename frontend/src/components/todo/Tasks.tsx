@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useTasks, TodoTask, TodoTaskFilters, TodoTaskUpdate, TaskPriority } from '@/hooks/useTasks'
+import { useNewestRequest } from '@/hooks/useNewestRequest'
 import { PRIORITY_ORDER, PRIORITY_TONES, dueLabel } from '@/constants/priority'
 import { Badge, Button, Card, ConfirmButton, EmptyState, Field, FieldRow, FormActions, Input, List, LoadingState, Modal, Page, Row, Select, ToggleGroup, Toolbar, cx, useActionNotice } from '@/components/shared/ui'
 
@@ -69,7 +70,10 @@ const Tasks = () => {
   const [editingTask, setEditingTask] = useState<TodoTask | null>(null)
   const { run, notice } = useActionNotice()
 
+  const beginLoad = useNewestRequest()
+
   const loadTasks = useCallback(async () => {
+    const isStale = beginLoad()
     setLoading(true)
     try {
       const filters: TodoTaskFilters = {
@@ -83,6 +87,7 @@ const Tasks = () => {
       }
 
       const data = await listTasks(filters)
+      if (isStale()) return
       const sorted = [...data].sort((a, b) => {
         if (a.status === 'done' && b.status !== 'done') return 1
         if (a.status !== 'done' && b.status === 'done') return -1
@@ -99,11 +104,12 @@ const Tasks = () => {
       setTasks(sorted)
       setError(null)
     } catch (e) {
+      if (isStale()) return
       setError(e instanceof Error ? e.message : 'Failed to load tasks')
     } finally {
-      setLoading(false)
+      if (!isStale()) setLoading(false)
     }
-  }, [listTasks, statusFilter])
+  }, [listTasks, statusFilter, beginLoad])
 
   useEffect(() => {
     loadTasks()

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import type { ComponentProps } from 'react'
+import { useState, type ComponentProps } from 'react'
 import { render, renderWithUser, screen, within, fireEvent } from '@/test/utils'
 import PollGrid from './PollGrid'
 import type { AvailabilitySlot, SlotAggregation } from '@/hooks/usePolls'
@@ -98,7 +98,7 @@ describe('PollGrid - mouse selection', () => {
   it('selects a slot on mouse down when not already selected', async () => {
     const { onSlotsChange } = renderGrid()
     const cell = screen.getByLabelText(/9:00 AM on .*: not selected/)
-    fireEvent.mouseDown(cell)
+    fireEvent.pointerDown(cell, { pointerType: 'mouse', button: 0 })
     expect(onSlotsChange).toHaveBeenCalledWith([
       expect.objectContaining({ slot_start: SLOT_09, availability_level: 1 }),
     ])
@@ -107,7 +107,7 @@ describe('PollGrid - mouse selection', () => {
   it('uses availabilityLevel 2 ("if needed") when painting that level', () => {
     const { onSlotsChange } = renderGrid({ availabilityLevel: 2 })
     const cell = screen.getByLabelText(/9:00 AM on .*: not selected/)
-    fireEvent.mouseDown(cell)
+    fireEvent.pointerDown(cell, { pointerType: 'mouse', button: 0 })
     expect(onSlotsChange).toHaveBeenCalledWith([
       expect.objectContaining({ slot_start: SLOT_09, availability_level: 2 }),
     ])
@@ -119,17 +119,17 @@ describe('PollGrid - mouse selection', () => {
     ]
     const { onSlotsChange } = renderGrid({ selectedSlots: selected })
     const cell = screen.getByLabelText(/9:00 AM on .*: selected as available/)
-    fireEvent.mouseDown(cell)
+    fireEvent.pointerDown(cell, { pointerType: 'mouse', button: 0 })
     expect(onSlotsChange).toHaveBeenCalledWith([])
   })
 
   it('continues painting onto a new cell once a drag is in progress', () => {
-    // After mousedown sets isDragging, a mouseenter on another cell paints it.
+    // After pointerdown sets isDragging, a pointerenter on another cell paints it.
     // (selectedSlots is controlled by the parent; here both adds start from the
     // same empty baseline since the mock does not feed state back.)
     const { onSlotsChange, rerender } = renderGrid()
     const first = screen.getByLabelText(/9:00 AM on .*: not selected/)
-    fireEvent.mouseDown(first)
+    fireEvent.pointerDown(first, { pointerType: 'mouse', button: 0 })
     // Force a re-render so the isDragging state update is committed.
     rerender(
       <PollGrid
@@ -142,7 +142,7 @@ describe('PollGrid - mouse selection', () => {
       />,
     )
     const second = screen.getByLabelText(/10:00 AM on .*: not selected/)
-    fireEvent.mouseEnter(second)
+    fireEvent.pointerEnter(second, { pointerType: 'mouse' })
     expect(onSlotsChange).toHaveBeenLastCalledWith([
       expect.objectContaining({ slot_start: SLOT_10 }),
     ])
@@ -151,7 +151,7 @@ describe('PollGrid - mouse selection', () => {
   it('does not paint on mouse enter when no drag is in progress', () => {
     const { onSlotsChange } = renderGrid()
     const cell = screen.getByLabelText(/9:00 AM on .*: not selected/)
-    fireEvent.mouseEnter(cell)
+    fireEvent.pointerEnter(cell, { pointerType: 'mouse' })
     expect(onSlotsChange).not.toHaveBeenCalled()
   })
 
@@ -174,12 +174,103 @@ describe('PollGrid - mouse selection', () => {
   })
 })
 
+// Feeds selections back like PollRespond does, so a second event sees the first one's result.
+function StatefulGrid({ initial = [] }: { initial?: AvailabilitySlot[] }) {
+  const [slots, setSlots] = useState<AvailabilitySlot[]>(initial)
+  return (
+    <PollGrid
+      datetimeStart={START}
+      datetimeEnd={END}
+      slotDurationMinutes={60}
+      displayTimezone={TZ}
+      selectedSlots={slots}
+      onSlotsChange={setSlots}
+    />
+  )
+}
+
+// What a browser dispatches for one finger tap on a cell, compatibility mouse events included.
+function tap(cell: HTMLElement) {
+  fireEvent.pointerDown(cell, { pointerType: 'touch', pointerId: 7 })
+  fireEvent.touchStart(cell)
+  fireEvent.pointerUp(cell, { pointerType: 'touch', pointerId: 7 })
+  fireEvent.touchEnd(cell)
+  fireEvent.mouseDown(cell)
+  fireEvent.mouseUp(cell)
+  fireEvent.click(cell, { detail: 1 })
+}
+
+describe('PollGrid - touch selection', () => {
+  it('a tap selects the slot once rather than selecting and deselecting it', () => {
+    render(<StatefulGrid />)
+    tap(screen.getByLabelText(/9:00 AM on .*: not selected/))
+    expect(screen.getByLabelText(/9:00 AM on .*: selected as available/)).toBeInTheDocument()
+  })
+
+  it('a tap on a selected slot deselects it', () => {
+    render(<StatefulGrid initial={[{ slot_start: SLOT_09, slot_end: SLOT_10, availability_level: 1 }]} />)
+    tap(screen.getByLabelText(/9:00 AM on .*: selected as available/))
+    expect(screen.getByLabelText(/9:00 AM on .*: not selected/)).toBeInTheDocument()
+  })
+
+  it('a touch drag paints every cell it crosses', () => {
+    render(<StatefulGrid />)
+    const first = screen.getByLabelText(/9:00 AM on .*: not selected/)
+    const release = vi.fn()
+    first.releasePointerCapture = release
+    fireEvent.pointerDown(first, { pointerType: 'touch', pointerId: 7 })
+    fireEvent.pointerEnter(screen.getByLabelText(/10:00 AM on .*: not selected/), { pointerType: 'touch', pointerId: 7 })
+    expect(release).toHaveBeenCalledWith(7)
+    expect(screen.getAllByLabelText(/selected as available/)).toHaveLength(2)
+  })
+
+  it('stops painting once the touch ends', () => {
+    render(<StatefulGrid />)
+    fireEvent.pointerDown(screen.getByLabelText(/9:00 AM on .*: not selected/), { pointerType: 'touch', pointerId: 7 })
+    fireEvent.pointerUp(window, { pointerType: 'touch', pointerId: 7 })
+    fireEvent.pointerEnter(screen.getByLabelText(/10:00 AM on .*: not selected/), { pointerType: 'touch', pointerId: 7 })
+    expect(screen.getAllByLabelText(/selected as available/)).toHaveLength(1)
+  })
+
+  it('cells take touch drags instead of scrolling the page', () => {
+    renderGrid()
+    expect(screen.getByLabelText(/9:00 AM on .*: not selected/)).toHaveClass('touch-none')
+  })
+
+  it('a mouse click selects the slot once', () => {
+    render(<StatefulGrid />)
+    const cell = screen.getByLabelText(/9:00 AM on .*: not selected/)
+    fireEvent.pointerDown(cell, { pointerType: 'mouse', button: 0 })
+    fireEvent.mouseDown(cell)
+    fireEvent.pointerUp(cell, { pointerType: 'mouse', button: 0 })
+    fireEvent.mouseUp(cell)
+    fireEvent.click(cell, { detail: 1 })
+    expect(screen.getByLabelText(/9:00 AM on .*: selected as available/)).toBeInTheDocument()
+  })
+
+  it('ignores a right-button press', () => {
+    const { onSlotsChange } = renderGrid()
+    fireEvent.pointerDown(screen.getByLabelText(/9:00 AM on .*: not selected/), { pointerType: 'mouse', button: 2 })
+    expect(onSlotsChange).not.toHaveBeenCalled()
+  })
+})
+
 describe('PollGrid - keyboard selection', () => {
+  it('a screen-reader activation (click with no pointer press) toggles the slot', () => {
+    const { onSlotsChange } = renderGrid()
+    fireEvent.click(screen.getByLabelText(/9:00 AM on .*: not selected/), { detail: 0 })
+    expect(onSlotsChange).toHaveBeenCalledWith([
+      expect.objectContaining({ slot_start: SLOT_09 }),
+    ])
+  })
+
+
   it('toggles the focused slot on Enter', async () => {
     const { user, onSlotsChange } = renderGrid()
     const cell = screen.getByLabelText(/9:00 AM on .*: not selected/)
     cell.focus()
     await user.keyboard('{Enter}')
+    expect(onSlotsChange).toHaveBeenCalledTimes(1)
     expect(onSlotsChange).toHaveBeenCalledWith([
       expect.objectContaining({ slot_start: SLOT_09 }),
     ])
@@ -190,6 +281,7 @@ describe('PollGrid - keyboard selection', () => {
     const cell = screen.getByLabelText(/9:00 AM on .*: not selected/)
     cell.focus()
     await user.keyboard(' ')
+    expect(onSlotsChange).toHaveBeenCalledTimes(1)
     expect(onSlotsChange).toHaveBeenCalledWith([
       expect.objectContaining({ slot_start: SLOT_09 }),
     ])
@@ -231,7 +323,7 @@ describe('PollGrid - readonly mode', () => {
     )
     expect(screen.queryAllByRole('button')).toHaveLength(0)
     const cell = screen.getByLabelText(/9:00 AM on .*: selected as available/)
-    fireEvent.mouseDown(cell)
+    fireEvent.pointerDown(cell, { pointerType: 'mouse', button: 0 })
     expect(onSlotsChange).not.toHaveBeenCalled()
   })
 })

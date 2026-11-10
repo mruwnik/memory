@@ -125,7 +125,7 @@ def test_sync_report_dedup(mock_make_session):
 
 def test_sync_report_update_in_place(mock_make_session):
     """Test that a report with same filename gets updated."""
-    reports.sync_report(
+    first = reports.sync_report(
         file_path=str(settings.REPORT_STORAGE_DIR / "update_me.html"),
         title="Version 1",
         content="<h1>V1</h1>",
@@ -138,6 +138,7 @@ def test_sync_report_update_in_place(mock_make_session):
         title="Version 2",
         content="<h1>V2</h1>",
         report_format="html",
+        existing_report_id=first["report_id"],
     )
     mock_make_session.commit()
 
@@ -169,18 +170,53 @@ def test_sync_report_sets_creator(mock_make_session, admin_user):
 def test_sync_report_update_keeps_first_creator(
     mock_make_session, admin_user, regular_user
 ):
-    for creator, body in [(admin_user, "<h1>V1</h1>"), (regular_user, "<h1>V2</h1>")]:
-        reports.sync_report(
-            file_path=str(settings.REPORT_STORAGE_DIR / "shared.html"),
-            title="Shared",
-            content=body,
-            report_format="html",
-            creator_id=creator.id,
-        )
-        mock_make_session.commit()
+    first = reports.sync_report(
+        file_path=str(settings.REPORT_STORAGE_DIR / "shared.html"),
+        title="Shared",
+        content="<h1>V1</h1>",
+        report_format="html",
+        creator_id=admin_user.id,
+    )
+    mock_make_session.commit()
+    reports.sync_report(
+        file_path=str(settings.REPORT_STORAGE_DIR / "shared.html"),
+        title="Shared",
+        content="<h1>V2</h1>",
+        report_format="html",
+        creator_id=regular_user.id,
+        existing_report_id=first["report_id"],
+    )
+    mock_make_session.commit()
 
     report = mock_make_session.query(Report).filter_by(filename="reports/shared.html").one()
     assert report.creator_id == admin_user.id
+
+
+@pytest.mark.parametrize("checked_id_offset", [None, 1000])
+def test_sync_report_refuses_a_report_it_was_not_cleared_for(
+    mock_make_session, checked_id_offset
+):
+    """Only the report the dispatching door checked may be overwritten, and the
+    file on disk is left alone when the overwrite is refused."""
+    path = settings.REPORT_STORAGE_DIR / "guarded.html"
+    first = reports.sync_report(
+        file_path=str(path), title="Mine", content="<h1>Mine</h1>", report_format="html"
+    )
+    mock_make_session.commit()
+    checked_id = checked_id_offset and first["report_id"] + checked_id_offset
+
+    with pytest.raises(PermissionError):
+        reports.sync_report(
+            file_path=str(path),
+            title="Theirs",
+            content="<h1>Theirs</h1>",
+            report_format="html",
+            existing_report_id=checked_id,
+        )
+
+    assert path.read_text() == "<h1>Mine</h1>"
+    report = mock_make_session.query(Report).filter_by(filename="reports/guarded.html").one()
+    assert report.report_title == "Mine"
 
 
 def test_sync_report_file_not_found(mock_make_session):

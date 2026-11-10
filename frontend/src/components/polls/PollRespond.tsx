@@ -118,20 +118,30 @@ export const PollRespond: React.FC = () => {
           respondent_name: respondentName.trim(),
           availabilities: selectedSlots,
         })
+        // Later saves from this page update the response just created
+        setExistingResponseId(response.response_id)
         setResponseEditToken(response.edit_token)
+        setIsEditMode(true)
         // Store token so returning users auto-edit their response
         storeToken(slug, response.edit_token)
       }
-
       setSubmitted(true)
-
-      // Refresh results
-      const results = await getPollResults(slug)
-      setAggregation(results.aggregated || [])
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to submit response')
+      return
     } finally {
       setIsSubmitting(false)
+    }
+    await refreshResults(slug)
+  }
+
+  // The response is saved by now, so a failed refresh only leaves the counts stale
+  const refreshResults = async (pollSlug: string) => {
+    try {
+      const results = await getPollResults(pollSlug)
+      setAggregation(results.aggregated || [])
+    } catch {
+      console.warn('Failed to refresh poll results')
     }
   }
 
