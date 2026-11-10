@@ -3,7 +3,7 @@
 import pytest
 from datetime import datetime, timedelta, timezone
 from typing import cast
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 from memory.common.db.models import CalendarEvent, HumanUser, Person
 from memory.common.db.models.sources import CalendarAccount, GoogleAccount
@@ -1005,3 +1005,39 @@ def test_fetch_google_events_without_calendars_is_incomplete(
         )
 
     assert fetched == FetchedEvents([], False)
+
+
+def google_events_request(calendarId: str, **kwargs) -> Mock:
+    request = Mock()
+    request.execute.return_value = {"items": [{
+        "id": f"event-{calendarId}", "summary": "Event",
+        "start": {"dateTime": "2026-10-26T10:00:00Z"},
+        "end": {"dateTime": "2026-10-26T11:00:00Z"},
+    }]}
+    return request
+
+
+def test_fetch_google_events_reads_every_page_of_the_calendar_list(
+    google_calendar_account, db_session
+):
+    service = Mock()
+    calendar_list = service.calendarList.return_value.list
+    calendar_list.return_value.execute.side_effect = [
+        {"items": [{"id": "cal-1"}], "nextPageToken": "page-2"},
+        {"items": [{"id": "cal-2"}]},
+    ]
+    service.calendars.return_value.get.return_value.execute.return_value = {"summary": "Calendar"}
+    service.events.return_value.list.side_effect = google_events_request
+    now = datetime.now(timezone.utc)
+
+    with (
+        patch("memory.workers.tasks.calendar.refresh_credentials"),
+        patch("memory.workers.tasks.calendar.build", return_value=service),
+    ):
+        fetched = calendar._fetch_google_calendar_events(
+            google_calendar_account, [], now, now, db_session
+        )
+
+    assert [e.get("external_id") for e in fetched.events] == ["event-cal-1", "event-cal-2"]
+    assert fetched.complete is True
+    assert calendar_list.call_args_list == [call(pageToken=None), call(pageToken="page-2")]

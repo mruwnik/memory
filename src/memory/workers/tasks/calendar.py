@@ -361,6 +361,18 @@ def _parse_google_event(event: dict[str, Any], calendar_name: str) -> EventData:
     )
 
 
+def list_google_calendar_ids(service: Any) -> list[str]:
+    """Ids of every calendar on the account's calendar list, across all pages."""
+    ids: list[str] = []
+    page_token = None
+    while True:
+        page = service.calendarList().list(pageToken=page_token).execute()
+        ids += [cal["id"] for cal in page.get("items", [])]
+        page_token = page.get("nextPageToken")
+        if not page_token:
+            return ids
+
+
 def _fetch_google_calendar_events(
     account: CalendarAccount,
     calendar_ids: list[str],
@@ -389,8 +401,7 @@ def _fetch_google_calendar_events(
     calendars_to_sync = calendar_ids
     if not calendars_to_sync:
         try:
-            calendar_list = service.calendarList().list().execute()
-            calendars_to_sync = [cal["id"] for cal in calendar_list.get("items", [])]
+            calendars_to_sync = list_google_calendar_ids(service)
         except Exception:
             logger.exception("Unable to list calendars for account %s", account.id)
             raise
