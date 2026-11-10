@@ -25,6 +25,7 @@ const PeopleManagement = () => {
   // Teams cache per person identifier
   const [personTeams, setPersonTeams] = useState<Record<string, Team[]>>({})
   const [teamsLoading, setTeamsLoading] = useState<Record<string, boolean>>({})
+  const [teamsFailed, setTeamsFailed] = useState<Record<string, boolean>>({})
 
   // Search/filter state
   const [searchTerm, setSearchTerm] = useState('')
@@ -37,6 +38,7 @@ const PeopleManagement = () => {
   // Person details with tidbits (keyed by identifier)
   const [personDetails, setPersonDetails] = useState<Record<string, Person>>({})
   const [detailsLoading, setDetailsLoading] = useState<Record<string, boolean>>({})
+  const [detailsFailed, setDetailsFailed] = useState<Record<string, boolean>>({})
 
   // Debounce search term to avoid excessive API calls on every keystroke
   const debouncedSearchTerm = useDebounce(searchTerm, 300)
@@ -259,40 +261,41 @@ const PeopleManagement = () => {
     }
   }
 
-  const toggleExpanded = async (identifier: string) => {
+  // A failed load is not cached, so expanding the card again (or Retry) refetches it.
+  const loadTeams = async (identifier: string) => {
+    setTeamsLoading(prev => ({ ...prev, [identifier]: true }))
+    setTeamsFailed(prev => ({ ...prev, [identifier]: false }))
+    try {
+      const teams = await getPersonTeams(identifier)
+      setPersonTeams(prev => ({ ...prev, [identifier]: teams }))
+    } catch (e) {
+      console.error('Failed to load teams for person:', e)
+      setTeamsFailed(prev => ({ ...prev, [identifier]: true }))
+    } finally {
+      setTeamsLoading(prev => ({ ...prev, [identifier]: false }))
+    }
+  }
+
+  const loadDetails = async (identifier: string) => {
+    setDetailsLoading(prev => ({ ...prev, [identifier]: true }))
+    setDetailsFailed(prev => ({ ...prev, [identifier]: false }))
+    try {
+      const details = await getPerson(identifier, true)
+      if (details) setPersonDetails(prev => ({ ...prev, [identifier]: details }))
+    } catch (e) {
+      console.error('Failed to load person details:', e)
+      setDetailsFailed(prev => ({ ...prev, [identifier]: true }))
+    } finally {
+      setDetailsLoading(prev => ({ ...prev, [identifier]: false }))
+    }
+  }
+
+  const toggleExpanded = (identifier: string) => {
     const isExpanding = expandedIdentifier !== identifier
     setExpandedIdentifier(prev => prev === identifier ? null : identifier)
-
     if (!isExpanding) return
-
-    // Fetch teams when expanding, if not already loaded
-    if (teamsOn && !personTeams[identifier] && !teamsLoading[identifier]) {
-      setTeamsLoading(prev => ({ ...prev, [identifier]: true }))
-      try {
-        const teams = await getPersonTeams(identifier)
-        setPersonTeams(prev => ({ ...prev, [identifier]: teams }))
-      } catch (e) {
-        console.error('Failed to load teams for person:', e)
-        setPersonTeams(prev => ({ ...prev, [identifier]: [] }))
-      } finally {
-        setTeamsLoading(prev => ({ ...prev, [identifier]: false }))
-      }
-    }
-
-    // Fetch person details with tidbits when expanding, if not already loaded
-    if (!personDetails[identifier] && !detailsLoading[identifier]) {
-      setDetailsLoading(prev => ({ ...prev, [identifier]: true }))
-      try {
-        const details = await getPerson(identifier, true)
-        if (details) {
-          setPersonDetails(prev => ({ ...prev, [identifier]: details }))
-        }
-      } catch (e) {
-        console.error('Failed to load person details:', e)
-      } finally {
-        setDetailsLoading(prev => ({ ...prev, [identifier]: false }))
-      }
-    }
+    if (teamsOn && !personTeams[identifier] && !teamsLoading[identifier]) void loadTeams(identifier)
+    if (!personDetails[identifier] && !detailsLoading[identifier]) void loadDetails(identifier)
   }
 
   return (
@@ -359,8 +362,12 @@ const PeopleManagement = () => {
                 onDelete={() => handleDelete(person)}
                 teams={personTeams[person.identifier]}
                 teamsLoading={teamsLoading[person.identifier]}
+                teamsFailed={teamsFailed[person.identifier]}
+                onRetryTeams={() => loadTeams(person.identifier)}
                 tidbits={personDetails[person.identifier]?.tidbits}
                 tidbitsLoading={detailsLoading[person.identifier]}
+                tidbitsFailed={detailsFailed[person.identifier]}
+                onRetryTidbits={() => loadDetails(person.identifier)}
                 onAddTidbit={() => { clearNotice(); setTidbitError(null); setTidbitForm({ identifier: person.identifier }) }}
                 canEditTidbit={canEditTidbit}
                 onEditTidbit={tidbit => { clearNotice(); setTidbitError(null); setTidbitForm({ identifier: person.identifier, tidbit }) }}
