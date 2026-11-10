@@ -1355,7 +1355,7 @@ def test_cleanup_stuck_meetings_reruns_a_lost_meeting_under_its_job(
     scripted_llm.script = [submitted(EXTRACTED)]
     meeting = meeting_for(mock_make_session, regular_user.id)
     meeting.external_id, meeting.extraction_status = "ff-1", "processing"
-    job = open_job(mock_make_session, "ff-1")
+    job = open_job(mock_make_session, "ff-1", regular_user.id)
     backdate(mock_make_session, meeting, 2)
 
     meetings.cleanup_stuck_meetings()
@@ -1371,7 +1371,7 @@ def test_cleanup_stuck_meetings_fails_the_job_of_a_meeting_it_gives_up_on(
 ):
     meeting = meeting_for(db_session, regular_user.id)
     meeting.external_id, meeting.extraction_status = "ff-1", "retrying"
-    job = open_job(db_session, "ff-1")
+    job = open_job(db_session, "ff-1", regular_user.id)
     backdate(db_session, meeting, 2)
 
     meetings.cleanup_stuck_meetings()
@@ -1393,6 +1393,34 @@ def test_cleanup_stuck_meetings_fails_the_job_of_a_submitted_meeting(regular_use
     db_session.refresh(job)
     db_session.refresh(decoy)
     assert (job.status, decoy.status) == ("failed", "processing")
+
+
+def push_account(meeting, user):
+    account = TranscriptAccount(user_id=user.id, name="Push", provider="generic")
+    meeting.transcript_account = account
+    return account
+
+
+def no_account(meeting, user):
+    return None
+
+
+@pytest.mark.parametrize("attach", [push_account, no_account])
+def test_cleanup_stuck_meetings_leaves_another_users_job_with_the_same_id(
+    attach, regular_user, admin_user, db_session, no_celery_dispatch
+):
+    meeting = meeting_for(db_session, regular_user.id)
+    attach(meeting, regular_user)
+    meeting.external_id, meeting.extraction_status = "push:3:x", "retrying"
+    job = open_job(db_session, "push:3:x", regular_user.id)
+    squatter = open_job(db_session, "push:3:x", admin_user.id)
+    backdate(db_session, meeting, 2)
+
+    meetings.cleanup_stuck_meetings()
+
+    db_session.refresh(job)
+    db_session.refresh(squatter)
+    assert (job.status, squatter.status) == ("failed", "processing")
 
 
 def test_process_meeting_replace_updates_the_stored_meeting(

@@ -1039,16 +1039,17 @@ def reprocess_meeting(
 
 
 def job_key(meeting: Meeting) -> ColumnElement[bool]:
-    """Matches the jobs whose idempotency key brought the meeting in.
+    """Matches the meeting's owner's jobs whose idempotency key brought it in.
 
-    A meeting submitted to POST /meetings stores a namespaced id, while its
-    job keeps the submitter's own id under the submitter's user.
+    The owner is the transcript account's user, else the meeting's creator. A
+    meeting submitted to POST /meetings stores a namespaced id, while its job
+    keeps the submitter's own id.
     """
+    account = meeting.transcript_account
+    owner = account.user_id if account else meeting.creator_id
     stored = meeting.external_id or ""
-    submitted = meeting.creator_id and submitted_external_id(meeting.creator_id, stored)
-    if not submitted:
-        return PendingJob.external_id == stored
-    return and_(PendingJob.external_id == submitted, PendingJob.user_id == meeting.creator_id)
+    key = (owner and submitted_external_id(owner, stored)) or stored
+    return and_(PendingJob.external_id == key, PendingJob.user_id == owner)
 
 
 def open_job(session: DBSession, meeting: Meeting) -> PendingJob | None:
