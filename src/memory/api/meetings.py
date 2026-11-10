@@ -11,6 +11,7 @@ from memory.common.celery_app import PROCESS_MEETING
 from memory.common.db.connection import get_session
 from memory.common.db.models import User, JobType
 from memory.common.jobs import dispatch_job
+from memory.common.transcripts import meeting_external_id
 
 router = APIRouter(prefix="/meetings", tags=["meetings"])
 
@@ -38,16 +39,6 @@ class MeetingQueued(BaseModel):
 
 
 MAX_TRANSCRIPT_SIZE = 500_000  # 500KB limit for transcripts
-
-
-def meeting_external_id(user_id: int, external_id: str | None) -> str | None:
-    """The stored Meeting.external_id for a submitter's id.
-
-    Stored meeting ids are unique across all users and sources, so a
-    submitter's ids are namespaced to them: they can't collide with (or
-    squat) another user's submissions or a transcript account's sync.
-    """
-    return external_id and f"api:{user_id}:{external_id}"
 
 
 @router.post("")
