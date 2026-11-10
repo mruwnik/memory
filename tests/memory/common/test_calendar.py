@@ -404,6 +404,28 @@ def test_expand_recurring_event_logs_only_event_id(
     assert not any(rule in m or "Secret" in m for m in messages)
 
 
+@pytest.mark.parametrize(
+    "rule", ["RRULE:FREQ=DAILY", "rrule:FREQ=DAILY", " RRULE :FREQ=DAILY"]
+)
+def test_expand_recurring_event_accepts_rrule_prefix(rule):
+    event = CalendarEvent(
+        modality="calendar",
+        sha256=b"g" * 32,
+        event_title="Google series",
+        start_time=datetime(2024, 1, 1, 9, 0, 0, tzinfo=timezone.utc),
+        recurrence_rule=rule,
+    )
+    start = datetime(2024, 1, 10, tzinfo=timezone.utc)
+    end = datetime(2024, 1, 12, tzinfo=timezone.utc)
+
+    starts = [s for s, _ in expand_recurring_event(event, start, end)]
+
+    assert starts == [
+        datetime(2024, 1, 10, 9, 0, 0, tzinfo=timezone.utc),
+        datetime(2024, 1, 11, 9, 0, 0, tzinfo=timezone.utc),
+    ]
+
+
 def test_expand_recurring_event_huge_count_is_valid(deadline):
     event = CalendarEvent(
         modality="calendar",

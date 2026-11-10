@@ -9,6 +9,7 @@ from caldav.collection import Calendar
 from caldav.davclient import DAVClient
 from googleapiclient.discovery import build
 
+from memory.common.calendar import strip_rrule_prefix
 from memory.common.celery_app import (
     SYNC_CALENDAR_ACCOUNT,
     SYNC_CALENDAR_EVENT,
@@ -273,6 +274,19 @@ def fetch_caldav_events(
 # -----------------------------------------------------------------------------
 
 
+def google_rrule(recurrence: list[str]) -> str | None:
+    """The first RRULE value among a Google event's recurrence lines.
+
+    The list may also hold EXRULE, RDATE and EXDATE lines, in any order.
+    """
+    rules = (
+        strip_rrule_prefix(line)
+        for line in recurrence
+        if line.upper().startswith("RRULE:")
+    )
+    return next(rules, None)
+
+
 def _parse_google_event(event: dict[str, Any], calendar_name: str) -> EventData:
     """Parse a Google Calendar event into EventData format."""
     start = event.get("start", {})
@@ -305,9 +319,7 @@ def _parse_google_event(event: dict[str, Any], calendar_name: str) -> EventData:
                 meeting_link = ep.get("uri")
                 break
 
-    # Extract recurrence rule (first one if multiple)
-    recurrence = event.get("recurrence", [])
-    recurrence_rule = recurrence[0] if recurrence else None
+    recurrence_rule = google_rrule(event.get("recurrence", []))
 
     return EventData(
         title=event.get("summary", "Untitled Event"),

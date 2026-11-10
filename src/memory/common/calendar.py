@@ -40,6 +40,16 @@ RRULE_ERRORS = (ValueError, TypeError, OverflowError, KeyError)
 UNBOUNDED_FREQS = frozenset({"SECONDLY", "MINUTELY"})
 
 
+def strip_rrule_prefix(rule: str) -> str:
+    """The RRULE value without a leading ``RRULE:`` property name.
+
+    Google Calendar lists recurrence as full ``RRULE:...`` lines; CalDAV
+    gives the bare value.
+    """
+    head, sep, rest = rule.partition(":")
+    return rest if sep and head.strip().upper() == "RRULE" else rule
+
+
 def rule_parts(rule: str) -> dict[str, str] | None:
     """Split an RRULE value into upper-cased KEY -> value, or None if malformed.
 
@@ -73,7 +83,7 @@ def occurrence_starts(
     A rule that is malformed or too costly to expand yields nothing, with a
     warning naming only the event id.
     """
-    rule_text = event.recurrence_rule or ""
+    rule_text = strip_rrule_prefix(event.recurrence_rule or "")
     parts = rule_parts(rule_text)
     if parts is None or not is_bounded_rule(parts):
         logger.warning("Skipping unsupported recurrence rule on calendar event %s", event.id)

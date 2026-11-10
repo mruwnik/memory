@@ -309,7 +309,28 @@ def test_parse_google_event_with_recurrence():
 
     result = _parse_google_event(google_event, "Work")
 
-    assert result.get("recurrence_rule") == "RRULE:FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR"
+    assert result.get("recurrence_rule") == "FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR"
+
+
+@pytest.mark.parametrize(
+    "recurrence, expected",
+    [
+        ([], None),
+        (["RRULE:FREQ=WEEKLY"], "FREQ=WEEKLY"),
+        (["EXDATE;VALUE=DATE:20240122", "RRULE:FREQ=WEEKLY"], "FREQ=WEEKLY"),
+        (["RDATE;VALUE=DATE:20240122"], None),
+        (["rrule:FREQ=DAILY", "RRULE:FREQ=WEEKLY"], "FREQ=DAILY"),
+    ],
+)
+def test_parse_google_event_picks_the_rrule_line(recurrence, expected):
+    google_event = {
+        "id": "recurring-event",
+        "summary": "Standup",
+        "start": {"dateTime": "2024-01-15T09:00:00Z"},
+        "recurrence": recurrence,
+    }
+
+    assert _parse_google_event(google_event, "Work").get("recurrence_rule") == expected
 
 
 # =============================================================================
