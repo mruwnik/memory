@@ -7,6 +7,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, NamedTuple, cast
 
 import requests
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session as DBSession
 
 from memory.common.celery_app import (
     app,
@@ -850,6 +852,13 @@ def push_missed(repo: GithubRepo, data: GithubIssueData, changes: list[str]) -> 
     return push_overdue(data["github_updated_at"], repo.webhook_checked_at)
 
 
+def lock_github_item(session: DBSession, repo_path: str, kind: str, number: int) -> None:
+    """Hold this item's lock until the transaction ends, so a poll and a webhook
+    syncing it at once can't both find it missing and insert it twice."""
+    key = func.hashtextextended(f"github_item:{repo_path}:{kind}:{number}", 0)
+    session.execute(select(func.pg_advisory_xact_lock(key)))
+
+
 def sync_item(
     repo_id: int, issue_data: GithubIssueData, logins: Collection[str], polled: bool = False
 ) -> dict[str, Any]:
@@ -877,7 +886,7 @@ def sync_item(
         else:
             project_id = _lookup_repo_project_id(session, repo)
 
-        # Check for existing item
+        lock_github_item(session, repo.repo_path, issue_data["kind"], issue_data["number"])
         existing = (
             session.query(GithubItem)
             .filter(
