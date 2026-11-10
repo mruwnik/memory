@@ -12,7 +12,7 @@ from memory.agents.subscription_input import (
     render_input,
     untrusted,
 )
-from tests.conftest import shown
+from tests.conftest import discord_image_name, shown
 from memory.common.db.models import (
     BlogPost,
     DiscordChannel,
@@ -103,6 +103,7 @@ def discord_message():
         author_id=100,
         author=DiscordUser(id=100, username="carol"),
         content="hello",
+        attachments=[{"filename": "cat.png", "content_type": "image/png", "size": 5, "url": "https://cdn.example.com/cat.png"}],
         inserted_at=WHEN,
     )
 
@@ -407,3 +408,39 @@ def test_good_placeholders_pass(template, source_types, per_item):
 
 def test_removed_items_are_named_by_id_in_order():
     assert shown(render_input("{items}", [], 10_000, removed={3, 1})) == "- [item #1] removed\n- [item #3] removed"
+
+
+CAT_URL = "https://cdn.discordapp.com/attachments/20/1/cat.png"
+
+
+def image_only_discord_message():
+    return DiscordMessage(
+        id=4,
+        type="discord_message",
+        server_id=10,
+        channel_id=20,
+        message_id=31,
+        author_id=100,
+        author=DiscordUser(id=100, username="carol"),
+        content="",
+        attachments=[{"filename": "cat.png", "content_type": "image/png", "size": 5, "url": CAT_URL}],
+        images=[discord_image_name(CAT_URL, 31)],
+        inserted_at=WHEN,
+    )
+
+
+@pytest.mark.parametrize(
+    "template, expected",
+    [
+        ("{item.content}", "<T id=4 field=content>[image attachment: cat.png]</T>"),
+        (
+            "{item.attachments}",
+            "<T id=4 field=attachments>- filename: cat.png; content_type: image/png; size: 5; "
+            f"file: {discord_image_name(CAT_URL, 31)}</T>",
+        ),
+    ],
+)
+def test_an_image_only_discord_message_names_its_image(template, expected):
+    rendered = render_input(template, [image_only_discord_message()], max_chars=10_000)
+
+    assert shown(rendered) == expected

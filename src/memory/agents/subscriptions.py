@@ -390,6 +390,10 @@ def item_title(item: SourceItem) -> str | None:
 
 
 def item_body(item: SourceItem) -> str:
+    """The item's text; a Discord message's names its attachments, so one
+    holding only an image doesn't arrive empty."""
+    if isinstance(item, DiscordMessage):
+        return item.readable_content
     resolved = item.resolved_content if isinstance(item, SlackMessage) else None
     return resolved or item.content or ""
 

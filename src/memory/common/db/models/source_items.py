@@ -34,7 +34,7 @@ from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from uuid import UUID as PyUUID
 
-from memory.common import paths, settings
+from memory.common import discord_attachments, paths, settings
 import memory.common.extract as extract
 import memory.common.summarizer as summarizer
 import memory.common.formatters.observation as observation
@@ -403,6 +403,24 @@ def said_in(author: str, channel: DiscordChannel | SlackChannel | None) -> str:
     return f"{author} in #{channel.name}"
 
 
+class DiscordMessagePayload(SourceItemPayload):
+    attachments: Annotated[
+        list[dict[str, Any]],
+        "Attached files: filename, content_type, size and file (the stored copy, "
+        "for core_fetch_file; null when not downloaded, as only images are)",
+    ]
+
+
+def openable_image(path: pathlib.Path) -> Image.Image | None:
+    """The image at ``path``, or None when it is missing, unreadable or too large to decode."""
+    if not path.is_file():
+        return None
+    try:
+        return extract.safe_image_open(path)
+    except (Image.DecompressionBombError, OSError):
+        return None
+
+
 class DiscordMessage(SourceItem):
     """Discord message collected from a channel or DM.
 
@@ -458,7 +476,7 @@ class DiscordMessage(SourceItem):
     reactions: Mapped[dict[str, list[str]] | None] = mapped_column(JSONB, nullable=True)
     # embeds: Discord embed objects (link previews, etc.)
     embeds: Mapped[list[dict] | None] = mapped_column(JSONB, nullable=True)
-    # attachments: Non-image attachments metadata
+    # attachments: filename, content_type, size and unsigned url of every attachment
     attachments: Mapped[list[dict] | None] = mapped_column(JSONB, nullable=True)
 
     # Relationships
@@ -484,19 +502,32 @@ class DiscordMessage(SourceItem):
         return truncate_preview(self.title)
 
     @property
+    def attachment_files(self) -> list[dict[str, Any]]:
+        return discord_attachments.attachment_files(self.attachments, self.images, self.message_id)
+
+    @property
+    def readable_content(self) -> str:
+        """The text, then a placeholder line per attachment."""
+        lines = [self.content or "", *map(discord_attachments.placeholder, self.attachment_files)]
+        return "\n".join(line for line in lines if line)
+
+    @property
     def title(self) -> str:
         """Format message for display."""
         author_name = self.author.username if self.author else "unknown"
-        return f"{author_name}: {self.content or ''}"
+        return f"{author_name}: {self.readable_content}"
 
     @property
     def display_title(self) -> str:
         return said_in(self.author.username if self.author else "unknown", self.channel)
 
+    def as_payload(self) -> DiscordMessagePayload:
+        return DiscordMessagePayload(**super().as_payload(), attachments=self.attachment_files)
+
     @property
     def should_embed(self) -> bool:
-        """Skip embedding for very short messages (< 20 chars)."""
-        return bool(self.content) and len(self.content) >= 20
+        """Skip embedding for very short messages (< 20 chars) with nothing attached."""
+        return bool(self.attachments or self.images) or len(self.content or "") >= 20
 
     @property
     def embedding_text(self) -> str:
@@ -504,6 +535,12 @@ class DiscordMessage(SourceItem):
         if not self.should_embed:
             return ""
         return self.title
+
+    def stored_images(self) -> list[Image.Image]:
+        """The downloaded images that can still be read: a missing or broken
+        one leaves the message to be found by its text."""
+        opened = (openable_image(settings.FILE_STORAGE_DIR / name) for name in self.images or [])
+        return [image for image in opened if image is not None]
 
     def as_content(self) -> dict[str, Any]:
         """Return message content ready for LLM (text + images from disk)."""
@@ -519,11 +556,16 @@ class DiscordMessage(SourceItem):
         return content
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
-        """Generate chunks for embedding."""
+        """The text, attachment placeholders included, and the images with
+        the message's preview, so an image-only message is found by its image."""
         text = self.embedding_text
         if not text:
             return []  # Don't embed short messages
-        return extract.extract_text(text, modality="message")
+        chunks = extract.extract_text(text, modality="message")
+        images = self.stored_images()
+        if not images:
+            return chunks
+        return [*chunks, extract.DataChunk(data=[self.preview_text or "", *images], modality="message")]
 
     def get_data_source_chain(self) -> list[Any]:
         """Return [channel, server] (filtered for None) for access-control resolution.
