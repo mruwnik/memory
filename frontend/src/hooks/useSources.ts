@@ -1,6 +1,7 @@
 import { useCallback } from 'react'
 import { useAuth } from './useAuth'
 import { apiError } from './apiError'
+import { getCookie } from '@/utils/cookies'
 
 /** Outcome of a source's latest sync; a failing streak keeps its start time until a sync succeeds. */
 export interface SyncStatus {
@@ -956,10 +957,7 @@ export const useSources = () => {
     const formData = new FormData()
     formData.append('file', file)
 
-    const accessToken = document.cookie
-      .split('; ')
-      .find(row => row.startsWith('access_token='))
-      ?.split('=')[1]
+    const accessToken = getCookie('access_token')
 
     const response = await fetch('/google-drive/config', {
       method: 'POST',
