@@ -112,20 +112,38 @@ def person_summary(person: Person) -> dict[str, Any]:
 # ============== Team CRUD ==============
 
 
-def make_slug(name: str) -> str:
-    """Create a URL-safe slug from a team name. Accented letters fold to
-    ASCII (Équipe → equipe); characters with no ASCII form are dropped, so
-    the slug can be empty."""
-    ascii_name = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
-    slug = re.sub(r"\s+", "-", ascii_name.lower().strip())
+def unfolded_slug(name: str) -> str:
+    """Slug of a name with every non-ASCII character dropped (Équipe → quipe)."""
+    slug = re.sub(r"\s+", "-", name.lower().strip())
     slug = re.sub(r"[^a-z0-9-]", "", slug)
     slug = re.sub(r"-+", "-", slug).strip("-")
     return slug
 
 
+def make_slug(name: str) -> str:
+    """Create a URL-safe slug from a team name. Accented letters fold to
+    ASCII (Équipe → equipe); characters with no ASCII form are dropped, so
+    the slug can be empty."""
+    return unfolded_slug(unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode())
+
+
 def same_team_name(a: str, b: str) -> bool:
     """Whether two team names match, ignoring case and surrounding whitespace."""
     return a.strip().casefold() == b.strip().casefold()
+
+
+def find_team_by_unfolded_slug(
+    session: Session | scoped_session[Session], name: str
+) -> Team | None:
+    """The team of this name stored under its unfolded slug. Teams created
+    before accents were folded into slugs keep that slug."""
+    slug = unfolded_slug(name)
+    if not slug or slug == make_slug(name):
+        return None
+    team = session.query(Team).filter(Team.slug == slug).first()
+    if team and same_team_name(team.name, name):
+        return team
+    return None
 
 
 def upsert_team_record(
@@ -233,6 +251,9 @@ async def upsert(
         # For existing teams, require lead/admin to prevent arbitrary modification.
         # (Creating a new team is allowed for any teams:write user.)
         existing_team = session.query(Team).filter(Team.slug == slug).first()
+        if not existing_team and derived_slug:
+            existing_team = find_team_by_unfolded_slug(session, name)
+            slug = existing_team.slug if existing_team else slug
         if existing_team and derived_slug and not same_team_name(existing_team.name, name):
             return {
                 "error": f"The slug '{slug}' derived from this name belongs to a team with "

@@ -610,6 +610,42 @@ async def test_upsert_updates_team_by_explicit_or_same_name_slug(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "existing_name, legacy_slug, name",
+    [
+        ("Équipe", "quipe", "Équipe"),
+        ("Équipe Café", "quipe-caf", "équipe café"),
+    ],
+)
+async def test_upsert_updates_team_stored_under_pre_folding_slug(
+    db_session, admin_session, existing_name, legacy_slug, name
+):
+    """A team saved before accents were folded keeps the slug that dropped
+    them; upserting it by name updates it instead of adding a second team."""
+    db_session.add(Team(name=existing_name, slug=legacy_slug))
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.token):
+        result = await get_fn(upsert)(name=name, description="Updated")
+
+    assert (result["action"], result["team"]["slug"]) == ("updated", legacy_slug)
+    assert db_session.query(Team).count() == 1
+
+
+@pytest.mark.asyncio
+async def test_upsert_ignores_pre_folding_slug_of_another_team(db_session, admin_session):
+    db_session.add(Team(name="Quipe", slug="quipe"))
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.token):
+        result = await get_fn(upsert)(name="Équipe")
+
+    db_session.expire_all()
+    assert (result["action"], result["team"]["slug"]) == ("created", "equipe")
+    assert db_session.query(Team).filter(Team.slug == "quipe").one().name == "Quipe"
+
+
+@pytest.mark.asyncio
 async def test_upsert_with_members_list(db_session, admin_session):
     """Test upsert with explicit members list."""
 
