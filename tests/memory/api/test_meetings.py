@@ -2,9 +2,11 @@
 
 from unittest.mock import patch
 
+import pytest
 from fastapi.testclient import TestClient
 
-from memory.common.db.models import JobType
+from memory.common import jobs
+from memory.common.db.models import HumanUser, JobType, PendingJob
 
 
 def test_create_meeting_queues_job(client: TestClient, user):
@@ -56,15 +58,36 @@ def test_create_meeting_queues_job(client: TestClient, user):
     assert call_kwargs["task_kwargs"]["transcript"] == "Speaker 1: Hello\nSpeaker 2: Hi there"
 
 
-def test_create_meeting_rejects_push_namespace(client: TestClient, user):
-    """push: ids belong to transcript push ingest; claiming one would block that push."""
-    with patch("memory.api.meetings.dispatch_job") as mock_dispatch:
-        response = client.post(
-            "/meetings", json={"transcript": "Hi", "external_id": "push:5:rec-42"}
-        )
+@pytest.fixture
+def squatter(db_session):
+    """Another user who already submitted meeting "shared-1"."""
+    other = HumanUser(name="Squatter", email="squatter@example.com", password_hash="x")
+    db_session.add(other)
+    db_session.flush()
+    job = PendingJob(job_type=JobType.MEETING.value, external_id="shared-1", params={}, user_id=other.id)
+    db_session.add(job)
+    db_session.commit()
+    return job
 
-    assert response.status_code == 422
-    mock_dispatch.assert_not_called()
+
+@pytest.mark.parametrize("external_id", ["shared-1", "push:5:rec-42", "01HXYZFIREFLIES"])
+def test_create_meeting_ids_are_namespaced_to_the_submitter(
+    client: TestClient, user, squatter, external_id
+):
+    with patch.object(jobs.celery_app, "send_task", return_value=type("Task", (), {"id": "t"})()) as send:
+        response = client.post("/meetings", json={"transcript": "Hi", "external_id": external_id})
+
+    assert (response.status_code, response.json()["status"]) == (200, "queued")
+    assert response.json()["job_id"] != squatter.id
+    assert send.call_args.kwargs["kwargs"]["external_id"] == f"api:{user.id}:{external_id}"
+
+
+def test_create_meeting_resubmission_returns_the_submitters_job(client: TestClient, user, squatter):
+    with patch.object(jobs.celery_app, "send_task", return_value=type("Task", (), {"id": "t"})()) as send:
+        first = client.post("/meetings", json={"transcript": "Hi", "external_id": "shared-1"}).json()
+        again = client.post("/meetings", json={"transcript": "Hi", "external_id": "shared-1"}).json()
+
+    assert (again["job_id"], again["status"], send.call_count) == (first["job_id"], "pending", 1)
 
 
 def test_create_meeting_minimal_request(client: TestClient, user):

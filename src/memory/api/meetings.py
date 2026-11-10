@@ -3,7 +3,7 @@
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel
 from sqlalchemy.orm import Session as DBSession
 
 from memory.api.auth import require_rest_access
@@ -27,15 +27,6 @@ class MeetingCreate(BaseModel):
     external_id: str | None = None
     tags: list[str] | None = None
 
-    @field_validator("external_id")
-    @classmethod
-    def not_push_namespace(cls, value: str | None) -> str | None:
-        # Meeting dedupe is global: claiming a push id would silently drop
-        # that account's later push.
-        if value and value.startswith("push:"):
-            raise ValueError("external_id may not start with 'push:'")
-        return value
-
 
 class MeetingQueued(BaseModel):
     """Response when a meeting is queued for processing."""
@@ -47,6 +38,16 @@ class MeetingQueued(BaseModel):
 
 
 MAX_TRANSCRIPT_SIZE = 500_000  # 500KB limit for transcripts
+
+
+def meeting_external_id(user_id: int, external_id: str | None) -> str | None:
+    """The stored Meeting.external_id for a submitter's id.
+
+    Stored meeting ids are unique across all users and sources, so a
+    submitter's ids are namespaced to them: they can't collide with (or
+    squat) another user's submissions or a transcript account's sync.
+    """
+    return external_id and f"api:{user_id}:{external_id}"
 
 
 @router.post("")
@@ -65,7 +66,8 @@ def create_meeting(
     4. Match attendee names to existing Person records
 
     Use external_id for idempotency - resubmitting with the same external_id
-    will skip creation if the meeting already exists.
+    will skip creation if you already submitted that meeting. Ids are yours
+    alone: another user's identical id is a different meeting.
 
     Returns a job_id that can be used to track processing status via GET /api/jobs/{job_id}
     """
@@ -91,7 +93,7 @@ def create_meeting(
             "duration_minutes": data.duration_minutes,
             "attendee_names": data.attendees or [],
             "source_tool": data.source_tool,
-            "external_id": data.external_id,
+            "external_id": meeting_external_id(user.id, data.external_id),
             "tags": data.tags or [],
             "creator_id": user.id,
         },

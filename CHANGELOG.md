@@ -35,8 +35,9 @@ a new, empty `## Unreleased` above it.
 - `meta_notify_user` says why it can't use a channel: for Discord, whether no Discord account is linked to your Person or you have no Discord bot of your own (notifications go out through a bot you registered). Results list `skipped_channels`, why each channel ahead of the one used was passed over. A Discord user id in the Person's `contact_info.discord` counts as a linked account when no Discord account is linked.
 - Browse what has been ingested: each content type on the Ingestion overview opens its items, newest first, a page at a time, and the overview page can show each type's latest five items inline. The list can be narrowed to one connection (email account, Discord or Slack channel, Beeper chat, feed, GitHub repo, Google Drive folder, calendar or transcript account, book), filtered by indexing status, and searched by title, subject, sender, author or filename (not the item text). Only items you can access are listed.
 - MCP `core_list_items` and `core_count_items` take `item_types`, `embed_statuses` (default still indexed items only), `contains` and `connection_id`. List rows carry `type` and `embed_status`; `include_total=false` skips the total count; pages sort by id within equal timestamps so they never overlap. `core_count_items` adds `by_type` and, for types that share a kind of connection, `by_connection`.
-
 - Discord `send_message` to a channel now posts only with one of your own bots in that channel's server (by default the server's owning bot if it is yours, else another of yours there), and accepts any of your bots that has joined the server. It no longer falls back to another user's bot; with none of yours in the server it says so.
+- `POST /meetings` external ids are now per user: another user's identical id no longer returns their job or suppresses your meeting, and ids may start with `push:`. `GET /api/jobs/external/{id}` finds only your own jobs.
+
 ### Required env vars
 None
 
@@ -51,6 +52,7 @@ None
 - `20261220_github_incomplete_since` adds a nullable `github_repos.incomplete_since` column and a `github_repos.sync_incomplete` boolean defaulting to false (instant).
 - `20261221_agent_run_notify_seen` adds `agent_runs.notify_on_finish`, `notified_at` and `seen_at` with two partial indexes, and backfills `seen_at = finished_at` for ended runs started through MCP or by hand that aren't sub-runs (an `UPDATE` scanning all of `agent_runs`: slow on a large table, and the indexes are built without `CONCURRENTLY`).
 - `20261222_item_inserted_idx` builds two indexes on `source_item`, `(inserted_at, id)` and `(type, inserted_at, id)`, with `CREATE INDEX CONCURRENTLY`: writes continue while they build, but the upgrade's time grows with the number of stored items. If it is interrupted, drop any invalid `source_inserted_at_idx` or `source_type_inserted_at_idx` before re-running it: Postgres keeps a half-built concurrent index, and `IF NOT EXISTS` would skip it.
+- `20261223_meeting_api_ext_ids` renames the `external_id` of meetings submitted through `POST /meetings` (no transcript account, not a push, with a creator) to `api:<user id>:<id>`; one UPDATE over `meeting`. Meetings of deleted transcript accounts match the same rule and are renamed too.
 
 ### Post-deploy commands
 None
