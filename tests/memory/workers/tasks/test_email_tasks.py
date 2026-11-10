@@ -1099,6 +1099,8 @@ def test_imap_sync_moves_cutoff_to_its_start(db_session, test_email_account):
 @pytest.mark.parametrize(
     "provider_kwargs, queue_error",
     [
+        # The server refuses a folder LIST still shows
+        ({"unselectable": {"Sent"}}, None),
         ({"unfetchable": {1}}, None),
         ({}, RuntimeError("broker down")),
     ],

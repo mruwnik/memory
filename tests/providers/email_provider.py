@@ -21,6 +21,7 @@ class MockEmailProvider:
         folder_flags: dict[str, str] | None = None,
         unselectable: set[str] | None = None,
         unfetchable: set[int] | None = None,
+        select_code: str | None = None,
     ):
         """
         Initialize with a dictionary of emails organized by folder.
@@ -32,9 +33,11 @@ class MockEmailProvider:
             folder_flags: Extra LIST attributes per folder, e.g. ``{"Bin": "\\Trash"}``.
             unselectable: Folders whose SELECT the server answers NO.
             unfetchable: UIDs whose FETCH the server answers NO.
+            select_code: Response code of that NO (e.g. "NONEXISTENT"), if any.
         """
         self.unselectable = unselectable or set()
         self.unfetchable = unfetchable or set()
+        self.select_code = select_code
         # When the latest UID SEARCH ran
         self.searched_at: datetime | None = None
         self.folder_flags = folder_flags or {}
@@ -110,7 +113,8 @@ class MockEmailProvider:
             return ("BAD", [b"Invalid mailbox name"])
         folder_name = decode_imap_utf7(wire)
         if folder_name in self.unselectable:
-            return ("NO", [b"Mailbox unavailable"])
+            code = f"[{self.select_code}] " if self.select_code else ""
+            return ("NO", [f"{code}Mailbox unavailable".encode()])
         self.current_folder = folder_name
         message_count = len(self.emails_by_folder.get(folder_name, []))
         return ("OK", [str(message_count).encode()])

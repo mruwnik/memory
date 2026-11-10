@@ -19,6 +19,7 @@ from memory.common.db.models import (
 from memory.parsers.email import Attachment, parse_email_message
 from memory.workers.email import (
     FolderUidsError,
+    FolderUnavailableError,
     ImapFolder,
     create_mail_message,
     decode_imap_utf7,
@@ -43,6 +44,7 @@ from memory.workers.email import (
     process_attachment,
     process_attachments,
     process_folder,
+    search_folder,
     should_delete_email,
     vectorize_email,
 )
@@ -483,6 +485,11 @@ def test_process_folder_error(email_provider):
     [
         (
             {"unselectable": {"INBOX"}},
+            None,
+            {"messages_found": 0, "new_messages": 0, "errors": 1, "unavailable": False},
+        ),
+        (
+            {"unselectable": {"INBOX"}, "select_code": "NONEXISTENT"},
             None,
             {"messages_found": 0, "new_messages": 0, "errors": 0, "unavailable": True},
         ),
@@ -1490,3 +1497,34 @@ def test_imap_starttls_failure_never_sends_password(connect):
     assert context.verify_mode == ssl.CERT_REQUIRED
     assert context.check_hostname
     connect.return_value.logout.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "folder, code, flags, gone",
+    [
+        # Still listed, no code: a passing refusal (throttling, a lock)
+        ("INBOX", None, {}, False),
+        ("Gone", None, {}, True),
+        ("Parent", None, {"Parent": "\\Noselect"}, True),
+        ("INBOX", "NONEXISTENT", {}, True),
+        ("Gone", "UNAVAILABLE", {}, False),
+        ("Gone", "INUSE", {}, False),
+    ],
+)
+def test_search_folder_tells_a_missing_folder_from_a_passing_refusal(
+    folder, code, flags, gone
+):
+    provider = cast(
+        imaplib.IMAP4,
+        MockEmailProvider(
+            {"INBOX": [], "Parent": []},
+            unselectable={folder},
+            select_code=code,
+            folder_flags=flags,
+        ),
+    )
+
+    with pytest.raises(FolderUidsError) as raised:
+        search_folder(provider, folder, "ALL")
+
+    assert isinstance(raised.value, FolderUnavailableError) is gone

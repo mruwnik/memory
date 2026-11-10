@@ -241,6 +241,30 @@ def fetch_email_since(
     return emails, len(fetched) - len(emails)
 
 
+# The response code at the start of a tagged NO, e.g. b"[NONEXISTENT] No such mailbox"
+RESPONSE_CODE = re.compile(rb"^\[([\w-]+)")
+
+
+def folder_is_gone(conn: imaplib.IMAP4, folder: str, response: Sequence) -> bool:
+    """Whether the server refused to SELECT ``folder`` because it doesn't exist,
+    rather than for a passing reason (throttling, a lock, a busy server).
+
+    A response code decides when there is one: only RFC 5530 NONEXISTENT means
+    gone. Without one, the folder is gone if LIST doesn't show it as selectable.
+    An unreadable LIST counts as passing, the side that keeps the mail.
+    """
+    first = response[0] if response else b""
+    code = RESPONSE_CODE.match(first) if isinstance(first, bytes) else None
+    if code:
+        return code.group(1).upper() == b"NONEXISTENT"
+    try:
+        listed = list_imap_folders(conn)
+    except Exception:
+        logger.warning("IMAP LIST failed while checking a refused folder")
+        return False
+    return not any(f.name == folder and f.selectable for f in listed)
+
+
 def search_folder(conn: imaplib.IMAP4, folder: str, criteria: str) -> list[str]:
     """UIDs of the messages in ``folder`` matching ``criteria``.
 
@@ -248,11 +272,13 @@ def search_folder(conn: imaplib.IMAP4, folder: str, criteria: str) -> list[str]:
     read failure is never mistaken for a folder with nothing in it.
     """
     try:
-        status, _ = conn.select(imap_mailbox(folder))
+        status, response = conn.select(imap_mailbox(folder))
     except Exception as e:
         raise FolderUidsError(f"Error selecting folder {folder}: {e}") from e
-    if status != "OK":
+    if status != "OK" and folder_is_gone(conn, folder, response):
         raise FolderUnavailableError(f"Error selecting folder {folder}")
+    if status != "OK":
+        raise FolderUidsError(f"Error selecting folder {folder}")
 
     try:
         status, data = conn.uid("SEARCH", criteria)
@@ -407,8 +433,8 @@ class FolderUidsError(Exception):
 
 
 class FolderUnavailableError(FolderUidsError):
-    """The server refused to open a folder (SELECT answered NO), as it does
-    for one that was renamed or deleted: the account's folder list is wrong."""
+    """The server refused to open a folder that doesn't exist (renamed or
+    deleted): the account's folder list is wrong."""
 
 
 def get_folder_uids(conn: imaplib.IMAP4, folder: str) -> set[str]:
