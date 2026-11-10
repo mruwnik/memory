@@ -346,6 +346,37 @@ def test_dispatch_event_callback_rejects_malformed_channel_id(
     assert label == expected_dispatch
 
 
+def malformed_ts_message(**fields) -> dict:
+    return {"type": "message", "ts": "1704067200.000100", "user": "U1", "channel": GOOD_CHANNEL_ID} | fields
+
+
+def malformed_ts_reaction(ts: str) -> dict:
+    return {"type": "reaction_added", "user": "U1", "reaction": "tada",
+            "item": {"type": "message", "channel": GOOD_CHANNEL_ID, "ts": ts}}
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        malformed_ts_message(ts="/var/tmp/x"),
+        malformed_ts_message(ts=None),
+        malformed_ts_message(ts="1704067200"),
+        malformed_ts_message(ts="1704067200.000100\n"),
+        malformed_ts_message(ts="1704067200.000100/../x"),
+        malformed_ts_message(thread_ts="/srv/x"),
+        malformed_ts_message(edited={"ts": "../x"}),
+        malformed_ts_message(subtype="message_changed", message={"ts": "/var/tmp/x", "user": "U1"}),
+        malformed_ts_message(subtype="message_deleted", ts=None, deleted_ts="/var/tmp/x"),
+        malformed_ts_reaction("abc"),
+    ],
+)
+def test_dispatch_event_callback_rejects_malformed_ts(event):
+    """A message timestamp names a directory on disk, so only Slack's digits.digits form is dispatched."""
+    label, task, kwargs = plan({"event": event, "team_id": GOOD_TEAM_ID}, slack_app_id=1)
+
+    assert (label, task, kwargs) == ("rejected_ts", None, {})
+
+
 def test_dispatch_event_callback_accepts_dict_channel_with_valid_id():
     """channel_* events deliver `event.channel` as a full channel object
     (dict). The dispatcher must extract `id` and validate that, not the
@@ -539,7 +570,7 @@ def test_a_signed_event_for_an_unconnected_workspace_verifies_the_signing_secret
     db_session.commit()
 
     with _capture_send_task():
-        post_signed(client, f"/slack/events/{events_app.id}", message_event(GOOD_TEAM_ID, f"8.{state}"))
+        post_signed(client, f"/slack/events/{events_app.id}", message_event(GOOD_TEAM_ID, "8.1"))
 
     db_session.refresh(events_app)
     assert events_app.setup_state == after
@@ -557,22 +588,22 @@ def event_callback(event: dict) -> dict:
 
 
 @pytest.mark.parametrize(
-    "state, after",
+    "state, after, ts",
     [
-        ("draft", "live"),
-        ("signing_verified", "live"),
-        ("live", "live"),
-        ("degraded", "degraded"),
+        ("draft", "live", "9.1"),
+        ("signing_verified", "live", "9.2"),
+        ("live", "live", "9.3"),
+        ("degraded", "degraded", "9.4"),
     ],
 )
 # A fresh workspace collects nothing, yet its first message shows push works.
 @pytest.mark.parametrize("collect", [True, False])
-def test_a_pushed_message_makes_the_app_live(client, db_session, events_app, user, state, after, collect):
+def test_a_pushed_message_makes_the_app_live(client, db_session, events_app, user, state, after, ts, collect):
     events_app.setup_state = state
     connect_workspace(db_session, events_app, user, collect=collect)
 
     with _capture_send_task():
-        post_signed(client, f"/slack/events/{events_app.id}", message_event(GOOD_TEAM_ID, f"9.{state}"))
+        post_signed(client, f"/slack/events/{events_app.id}", message_event(GOOD_TEAM_ID, ts))
 
     db_session.refresh(events_app)
     assert events_app.setup_state == after

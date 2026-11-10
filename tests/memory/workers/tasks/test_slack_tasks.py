@@ -1672,6 +1672,31 @@ def test_a_pushed_reply_under_a_thread_slack_does_not_have_is_dropped(db_session
     assert stored_rows(db_session) == []
 
 
+@pytest.mark.parametrize(
+    "message_ts, thread_ts",
+    [("/var/tmp/x", None), ("1704067200_000100", None), ("1704067200.000100", "/srv/x"), ("", None)],
+)
+def test_a_message_with_a_malformed_timestamp_is_not_stored(
+    db_session, sample_message_data, slack_credentials, message_ts, thread_ts
+):
+    with patch.object(slack, "stream_download_to_path", return_value=True) as download:
+        result = slack.store_slack_message(
+            **sample_message_data | {"message_ts": message_ts, "thread_ts": thread_ts}
+        )
+
+    assert (result, download.call_count, db_session.query(SlackMessage).count()) == (
+        {"status": "skipped", "reason": "malformed_ts"}, 0, 0,
+    )
+
+
+@pytest.mark.parametrize("message_ts", ["/var/tmp/x", "/1704067200.000100", "1704067200.000100/x"])
+def test_slack_files_are_never_written_outside_the_storage_dir(message_ts):
+    with patch.object(slack, "stream_download_to_path", return_value=True) as download:
+        path = slack.download_slack_file("https://files.slack.com/a.png", {}, message_ts, "T12345678")
+
+    assert (path, download.call_count) == (None, 0)
+
+
 def history_message(ts: str, **fields) -> dict:
     return {"ts": ts, "user": "U1", "text": f"message {ts}", **fields}
 

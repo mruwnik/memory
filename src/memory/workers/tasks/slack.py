@@ -59,6 +59,7 @@ from memory.common.slack import (
     iter_channels,
     iter_messages,
     iter_thread_replies,
+    is_slack_ts,
     iter_users,
     slack_api_base_url,
     slack_client_for,
@@ -213,6 +214,8 @@ def download_slack_file(
     1 GB max) can't OOM the worker. Pre-fix the call buffered the entire
     body in RAM and held a second copy via ``response.content``.
     """
+    if not is_slack_ts(message_ts):
+        return None
     file_dir = (
         settings.SLACK_STORAGE_DIR / workspace_id / message_ts.replace(".", "_")
     )
@@ -1163,6 +1166,9 @@ def store_slack_message(
     if not author_id:
         # Skip messages without an author (system messages, etc.)
         return {"status": "skipped", "reason": "no_author"}
+    if not is_slack_ts(message_ts) or (thread_ts is not None and not is_slack_ts(thread_ts)):
+        logger.info(f"Slack message in channel {channel_id} has a malformed timestamp; ignored")
+        return {"status": "skipped", "reason": "malformed_ts"}
 
     # Channel auto-create commits independently so it survives a later
     # IntegrityError race on the message insert (B-pre-1).
