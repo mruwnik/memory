@@ -33,6 +33,7 @@ a new, empty `## Unreleased` above it.
 - `agent_run` and `agent_upsert` advertise the inline spec's fields in their parameter schema, and a spec with an unknown top-level field is refused with the list of accepted fields.
 - `agent_run(notify=true)` notifies you when the run ends, on the same channel `meta_notify_user` picks (Discord, Slack or email); it is refused, with why each channel can't be used, when none can reach you, and runs started by runs can't ask to. `agent_wait(result_only=true)` returns the run's status, result and error without its spec. `agent_list_runs(unseen=true)` lists the runs you started with `agent_run` that ended since `agent_wait` or an unseen listing last handed them to you.
 - `meta_notify_user` says why it can't use a channel: for Discord, whether no Discord account is linked to your Person or you have no Discord bot of your own (notifications go out through a bot you registered). Results list `skipped_channels`, why each channel ahead of the one used was passed over. A Discord user id in the Person's `contact_info.discord` counts as a linked account when no Discord account is linked.
+- `people_upsert` links only the Discord ids its `contact_info` names, and removes a linked id from the Person it moves from, listing each move in `moved_discord_users`. Editing the `discord_<id>` Person that ingest made for an account no longer takes back the account after an admin linked it to your own Person, which left `meta_notify_user` without a Discord account (#118). Accounts already taken back are fixed by naming the id in your Person's `contact_info.discord` again. `discord_send_message` suggests a Person by the Discord id in their `contact_info.discord`.
 - Browse what has been ingested: each content type on the Ingestion overview opens its items, newest first, a page at a time, and the overview page can show each type's latest five items inline. The list can be narrowed to one connection (email account, Discord or Slack channel, Beeper chat, feed, GitHub repo, Google Drive folder, calendar or transcript account, book), filtered by indexing status, and searched by title, subject, sender, author or filename (not the item text). Only items you can access are listed.
 - MCP `core_list_items` and `core_count_items` take `item_types`, `embed_statuses` (default still indexed items only), `contains` and `connection_id`. List rows carry `type` and `embed_status`; `include_total=false` skips the total count; pages sort by id within equal timestamps so they never overlap. `core_count_items` adds `by_type` and, for types that share a kind of connection, `by_connection`.
 - IMAP folders whose names contain spaces, parentheses or non-ASCII characters (e.g. `AI orgs`, `Ärger`) sync. Before, the server refused to open them and their mail was never fetched.
@@ -54,6 +55,8 @@ a new, empty `## Unreleased` above it.
 - On https, the login cookies the web app sets carry the Secure flag, so the browser never sends them over plain http.
 - Web UI: a slow earlier search, month or Tasks/Polls filter load no longer replaces newer results; the calendar loads a month once, works with browser storage blocked, and shows a tappable event count per day on phones; People says when a person's teams or tidbits failed to load, with Retry, instead of showing none.
 - Calendar syncs check once whether each recurring event's rule yields any occurrence at all; `organizer_upcoming` skips the events whose rule no date satisfies (e.g. 30 February), which took seconds each to expand. The expansion runs off the MCP server's event loop, so a slow event no longer holds up other requests.
+- A subscription's `max_per_hour` sets its hourly delivery limit, above `AGENT_MAX_RUNS_PER_HOUR` as well as below, up to `AGENT_MAX_DELIVERIES_PER_HOUR`: it was held to that setting, so deliveries over 60 an hour were throttled whatever it said. Runs an agent handler starts are still held to that agent's own hourly limit, which `AGENT_MAX_RUNS_PER_HOUR` caps. Rate refusals name the limit that fired (`max_per_hour`, `max_runs_per_hour`, or `AGENT_MAX_RUNS_PER_HOUR` as default or ceiling). Filter and raw subscriptions are returned with `limits`, their own `max_per_hour` and `backlog_max` in effect (null: no limit).
+- Discord messages holding only an image or file are no longer empty to agents (#121): their text names each attachment (`[image attachment: cat.png]`), `discord_*` results, `core_fetch`/search metadata and subscription deliveries list the attachments, image-only messages are indexed with their images embedded, and `core_fetch_file` serves a message's stored images.
 
 ### Required env vars
 None
@@ -62,6 +65,8 @@ None
 None
 
 ### Other changes for operators
+- `AGENT_MAX_RUNS_PER_HOUR` is the ceiling on runs an agent definition or prebuilt agent starts an hour, and only the default for a subscription's `max_per_hour`.
+- New optional `AGENT_MAX_DELIVERIES_PER_HOUR` (default 3600) caps the deliveries one subscription makes an hour; `subscription_upsert` refuses a `max_per_hour` above it, and a subscription saved with more is held to it.
 - New beat task `notify-finished-runs` (every 30s, `scheduler` queue) sends `agent_run(notify=true)` notifications.
 - A repo synced before this release while GitHub refused queries may have had its `last_sync_at` moved past items it never stored. After granting the missing permissions, run Sync on the repo with `force_full=true` (`POST /github/accounts/{account_id}/repos/{repo_id}/sync?force_full=true`), or clear `last_sync_at` for it. Later incidents catch up by themselves.
 - Recurring calendar events synced before this release are checked on their next scheduled sync if it still returns them; until then they expand as before. `POST /calendar-accounts/{id}/sync` checks an account's events now and is safe to repeat.
@@ -74,7 +79,7 @@ None
 - `20261224_recurrence_expandable` adds a nullable `calendar_event.recurrence_expandable` boolean (instant).
 
 ### Post-deploy commands
-None
+- Optional, re-runnable: Discord messages stored before this release that hold only an attachment stay unindexed until re-embedded. To catch up, run `UPDATE source_item SET embed_status='RAW' WHERE embed_status='SKIPPED' AND id IN (SELECT id FROM discord_message WHERE cardinality(images) > 0 OR attachments @> '[{}]');` and the hourly `process_raw_items` job embeds them (300 an hour). Re-processing records a change, so `on_edit` subscriptions may receive those messages once more.
 
 ## v0.5.2 (2026-11-08)
 

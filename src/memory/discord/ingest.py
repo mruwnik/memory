@@ -19,6 +19,7 @@ from discord import (
     abc,
 )
 
+from memory.common import discord_attachments
 from memory.common.celery_app import ADD_DISCORD_MESSAGE
 from memory.common.db.connection import DBSession
 from memory.common.db.models import DiscordBot, DiscordBotServer, DiscordChannel, DiscordServer, DiscordUser
@@ -187,21 +188,11 @@ def build_message_task_kwargs(message: Message, bot_id: int, is_edit: bool = Fal
     Shared by the live collector (``on_message``) and the history backfill so the
     two paths can never drift in how a Message maps to a stored row.
     """
-    images = [
-        a.url
-        for a in message.attachments
-        if a.content_type and a.content_type.startswith("image/")
-    ]
+    images = [a.url for a in message.attachments if discord_attachments.is_image(a.content_type)]
     embeds = [embed.to_dict() for embed in message.embeds] if message.embeds else None
     attachments = [
-        {
-            "filename": a.filename,
-            "content_type": a.content_type,
-            "size": a.size,
-            "url": a.url,
-        }
+        discord_attachments.record(a.filename, a.content_type, a.size, a.url)
         for a in message.attachments
-        if not (a.content_type and a.content_type.startswith("image/"))
     ]
     return {
         "bot_id": bot_id,

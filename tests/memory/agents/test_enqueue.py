@@ -311,6 +311,7 @@ def fire(db, user, t, d, dedupe_key=None):
         input="hi",
         trigger=TriggerInfo(kind="ingest", subscription_id=t.id, dedupe_key=dedupe_key),
         definition=d,
+        agent=None if d else t.handler["agent"],
     )
 
 
@@ -339,6 +340,24 @@ def test_a_subscription_starts_at_most_its_hourly_limit_of_runs(
 
     with pytest.raises(CapExceeded, match="subscription rate: 2 runs in the last hour, limit 2"):
         fire(db_session, regular_user, t, d)
+
+
+@pytest.mark.parametrize("handler,what", [("definition", "definition"), ("fact-check", "agent")])
+def test_an_agent_subscription_above_the_ceiling_is_held_to_its_agents_limit(
+    db_session, regular_user, fake_providers, monkeypatch, handler, what
+):
+    monkeypatch.setattr(settings, "AGENT_MAX_RUNS_PER_HOUR", 2)
+    t, d = subscription(db_session, regular_user, handler, max_per_hour=100)
+    fire(db_session, regular_user, t, d)
+    fire(db_session, regular_user, t, d)
+
+    with pytest.raises(CapExceeded) as refused:
+        fire(db_session, regular_user, t, d)
+
+    assert str(refused.value) == (
+        f"{what} rate: 2 runs in the last hour, limit 2 "
+        "(AGENT_MAX_RUNS_PER_HOUR, the server's ceiling); try again later or raise it"
+    )
 
 
 def test_a_subscriptions_limit_counts_only_its_own_runs(db_session, regular_user, fake_providers):
@@ -400,6 +419,26 @@ def test_runs_beyond_the_hourly_limit_are_refused(
 
     with pytest.raises(CapExceeded, match=f"{earlier} runs in the last hour.*limit {limit}"):
         start_definition(db_session, regular_user, d)
+
+
+@pytest.mark.parametrize(
+    "spec_rate,ceiling,source",
+    [
+        (2, 3, "max_runs_per_hour"),
+        (3, 3, "max_runs_per_hour"),
+        (None, 3, "AGENT_MAX_RUNS_PER_HOUR, the server's ceiling"),
+    ],
+)
+def test_an_hourly_refusal_credits_the_setting_that_set_the_limit(
+    db_session, regular_user, fake_providers, monkeypatch, spec_rate, ceiling, source
+):
+    limit = spec_rate or ceiling
+    d = rated_definition(db_session, regular_user, monkeypatch, spec_rate, ceiling, limit)
+
+    with pytest.raises(CapExceeded) as refused:
+        start_definition(db_session, regular_user, d)
+
+    assert f"limit {limit} ({source})" in str(refused.value)
 
 
 # --- user provider keys ---------------------------------------------------------

@@ -55,7 +55,7 @@ class FakeSession:
     [None, {"email": "x@y.com"}, {"discord": {"weird": "shape"}}, {"discord": ["", "   "]}],
 )
 def test_link_discord_ignores_missing_or_malformed_entries(contact_info):
-    assert link_discord_from_contact_info(FakeSession(), make_person(), contact_info) == []
+    assert link_discord_from_contact_info(FakeSession(), make_person(), contact_info).linked == []
 
 
 def test_link_discord_already_attached_to_target_person():
@@ -63,7 +63,7 @@ def test_link_discord_already_attached_to_target_person():
     person = make_person(person_id=10)
     discord = make_discord_user(discord_id=100, person_id=10)
     session = FakeSession(discord_by_id={100: discord})
-    assert link_discord_from_contact_info(session, person, {"discord": "100"}) == [100]
+    assert link_discord_from_contact_info(session, person, {"discord": "100"}).linked == [100]
     assert discord.person_id == 10
 
 
@@ -71,10 +71,10 @@ def test_link_discord_reattributes_from_another_person():
     person = make_person(person_id=10, user_id=99)
     discord = make_discord_user(discord_id=100, person_id=20)
     session = FakeSession(discord_by_id={100: discord})
-    assert link_discord_from_contact_info(session, person, {"discord": "100"}) == [100]
+    assert link_discord_from_contact_info(session, person, {"discord": "100"}).linked == [100]
     assert discord.person_id == 10
 
 
 def test_link_discord_skips_missing_user():
     session = FakeSession()
-    assert link_discord_from_contact_info(session, make_person(), {"discord": ["999"]}) == []
+    assert link_discord_from_contact_info(session, make_person(), {"discord": ["999"]}).linked == []
