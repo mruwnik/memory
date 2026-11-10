@@ -1139,7 +1139,7 @@ export const ConfirmDialog = ({ message, onConfirm, onCancel, title, confirmLabe
         {title && <h2 id={titleId} className="text-lg font-semibold text-slate-900 mb-2">{title}</h2>}
         <p id={title ? undefined : titleId} className="text-slate-800 mb-4">{message}</p>
         <div className="flex justify-end gap-2">
-          <button ref={cancelRef} className={buttonClass('secondary')} onClick={onCancel}>{cancelLabel}</button>
+          <button ref={cancelRef} type="button" className={buttonClass('secondary')} onClick={onCancel}>{cancelLabel}</button>
           <Button variant="dangerSolid" onClick={onConfirm}>{confirmLabel}</Button>
         </div>
       </div>
