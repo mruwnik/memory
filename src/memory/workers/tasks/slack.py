@@ -1219,11 +1219,24 @@ def find_message(client: SlackClient, channel_id: str, message_ts: str, thread_t
     return next((m for m in listing.get("messages", []) if m.get("ts") == message_ts), None)
 
 
+# Slack errors that say "not now" rather than "this app can't read that".
+TRANSIENT_SLACK_ERRORS = frozenset(
+    {"ratelimited", "internal_error", "fatal_error", "service_unavailable", "request_timeout"}
+)
+PUSH_READ_BACK_RETRIES = 5
+PUSH_READ_BACK_DELAY = 60  # seconds, times the attempt number
+
+
+class PushedMessageUnread(Exception):
+    """Slack couldn't serve the read-back of a pushed message just now."""
+
+
 def read_pushed_message(
     workspace_id: str, channel_id: str, message_ts: str, thread_ts: str | None, slack_app_id: int
 ) -> dict | None:
     """The pushed message read back with the pushing app's own token; None
-    when that app can't read it."""
+    when that app can't read it. PushedMessageUnread when Slack is rate
+    limiting or failing, so the push is retried instead of dropped."""
     with make_session() as session:
         credentials = get_workspace_credentials(session, workspace_id, slack_app_id)
         if not credentials or not credentials.access_token:
@@ -1235,7 +1248,11 @@ def read_pushed_message(
     try:
         with client:
             return find_message(client, channel_id, message_ts, thread_ts)
+    except httpx.TransportError as e:
+        raise PushedMessageUnread(type(e).__name__) from e
     except SlackAPIError as e:
+        if e.error in TRANSIENT_SLACK_ERRORS:
+            raise PushedMessageUnread(e.error) from e
         logger.info(f"Slack app {slack_app_id} can't read pushed message {message_ts} in {channel_id}: {e.error}")
         return None
 
@@ -1288,9 +1305,14 @@ def store_pushed_slack_message(
     return store_slack_message(workspace_id=workspace_id, channel_id=channel_id, slack_app_id=slack_app_id, **fields)
 
 
-add_slack_message = app.task(name=ADD_SLACK_MESSAGE)(
-    tracked_task(job_type="add_slack_message")(store_pushed_slack_message)
-)
+@app.task(name=ADD_SLACK_MESSAGE, bind=True, max_retries=PUSH_READ_BACK_RETRIES)
+@tracked_task(job_type="add_slack_message")
+def add_slack_message(self, **message: Any) -> dict[str, Any]:
+    """Apply a pushed message event, retrying while Slack can't serve its read-back."""
+    try:
+        return store_pushed_slack_message(**message)
+    except PushedMessageUnread as e:
+        raise self.retry(exc=e, countdown=PUSH_READ_BACK_DELAY * (self.request.retries + 1))
 
 
 # ---------------------------------------------------------------------------

@@ -1551,8 +1551,13 @@ class FakeSlack:
     def __init__(self, messages: dict[str, list[dict]], readable: dict[str, set[str]]):
         self.messages = messages
         self.readable = readable
+        self.outage: str | Exception | None = None
 
     def handle(self, request: httpx.Request) -> httpx.Response:
+        if isinstance(self.outage, Exception):
+            raise self.outage
+        if self.outage:
+            return httpx.Response(200, json={"ok": False, "error": self.outage}, headers={"Retry-After": "120"})
         token = request.headers["Authorization"].removeprefix("Bearer ")
         form = dict(httpx.QueryParams(request.content.decode()))
         channel = form["channel"]
@@ -1663,6 +1668,18 @@ def test_a_pushed_new_message_is_stored_as_slack_has_it(
     push_message(two_tenants["A"], SHARED_CHANNEL, message_ts, thread_ts=thread_ts)
 
     assert stored_rows(db_session) == [expected + (two_tenants["A"],)]
+
+
+@pytest.mark.parametrize(
+    "outage", ["ratelimited", "internal_error", httpx.ConnectError("connection refused")]
+)
+def test_a_pushed_message_slack_cannot_serve_yet_is_retried_not_dropped(db_session, two_tenants, fake_slack, outage):
+    fake_slack.outage = outage
+
+    with pytest.raises(slack.PushedMessageUnread):
+        push_message(two_tenants["A"], SHARED_CHANNEL, REAL_TS)
+
+    assert stored_rows(db_session) == []
 
 
 @pytest.mark.parametrize("thread_ts", ["1704067000.000100", REPLY_TS])
