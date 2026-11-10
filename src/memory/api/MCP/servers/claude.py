@@ -20,6 +20,7 @@ from memory.api.MCP.access import (
     log_search_access,
 )
 from memory.api.MCP.visibility import READ_ONLY, require_scopes, visible_when
+from memory.api.search.filters import escape_like
 from memory.api.search.search import search as search_base
 from memory.api.search.types import SearchConfig, SearchFilters
 from memory.common import extract, settings
@@ -34,11 +35,6 @@ logger = logging.getLogger(__name__)
 MAX_FETCH_MESSAGES = 100
 
 claude_mcp = FastMCP("memory-claude")
-
-
-def like_escape(value: str) -> str:
-    """Backslash-escape LIKE metacharacters (%, _, \\) for use in a pattern."""
-    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def owned_segment_ids(
@@ -65,7 +61,7 @@ def owned_segment_ids(
                 CodingProject, Session.coding_project_id == CodingProject.id
             ).filter(
                 CodingProject.directory.ilike(
-                    f"%{like_escape(project)}%", escape="\\"
+                    f"%{escape_like(project)}%", escape="\\"
                 )
             )
         # Timestamp-less segments (transcripts whose events carry no

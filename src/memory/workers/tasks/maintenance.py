@@ -142,7 +142,7 @@ def clean_collection(collection: str) -> dict[str, int]:
 def clean_all_collections():
     logger.info("Cleaning all collections")
     for collection in collections.ALL_COLLECTIONS:
-        clean_collection.delay(collection)  # type: ignore
+        clean_collection.delay(collection)
     return {"status": "dispatched", "collections": len(collections.ALL_COLLECTIONS)}
 
 
@@ -283,7 +283,7 @@ def reingest_empty_source_items(item_type: str):
         logger.info(f"Found {len(item_ids)} items to reingest")
 
         for item_id in item_ids:
-            reingest_item.delay(item_id.id, item_type)  # type: ignore
+            reingest_item.delay(item_id.id, item_type)
 
         return {"status": "success", "items": len(item_ids)}
 
@@ -312,7 +312,7 @@ def reingest_all_empty_source_items():
         if key != key.lower():
             continue
         seen_classes.add(cls)
-        reingest_empty_source_items.delay(key)  # type: ignore
+        reingest_empty_source_items.delay(key)
 
 
 @app.task(name=PROCESS_RAW_ITEM)
@@ -417,7 +417,7 @@ def process_raw_items(
         for item_id, type_name, embed_status in items:
             # reingest_item also clears chunks a failed Qdrant push left behind.
             task = process_raw_item if embed_status == "RAW" else reingest_item
-            task.delay(item_id, type_name)  # type: ignore
+            task.delay(item_id, type_name)
 
         return {"status": "success", "queued": len(items)}
 
@@ -439,7 +439,7 @@ def check_batch(batch: Sequence[Chunk]) -> dict:
             # on the next hourly run while it's still waiting in the queue.
             chunk.checked_at = datetime.now()
             if str(chunk.id) in missing:
-                reingest_chunk.delay(str(chunk.id), collection)  # type: ignore
+                reingest_chunk.delay(str(chunk.id), collection)
 
         stats[collection] = {
             "missing": len(missing),
@@ -681,7 +681,7 @@ def update_metadata_for_source_items(item_type: str):
         logger.info(f"Found {len(item_ids)} items to update metadata for")
 
         for item_id in item_ids:
-            update_metadata_for_item.delay(item_id.id, item_type)  # type: ignore
+            update_metadata_for_item.delay(item_id.id, item_type)
 
         return {"status": "success", "items": len(item_ids)}
 

@@ -1033,7 +1033,7 @@ def sync_repo(repo_id: int, force_full: bool) -> dict[str, Any]:
                         issue_data["project_fields"] = client.fetch_project_fields(
                             owner, name, issue_data["number"]
                         )
-                    task_ids.append(sync_github_item.delay(repo.id, serialize_issue_data(issue_data), logins).id)  # type: ignore[attr-defined]
+                    task_ids.append(sync_github_item.delay(repo.id, serialize_issue_data(issue_data), logins).id)
                     issues += 1
             if cast(bool, repo.track_prs):
                 for pr_data in client.fetch_prs(owner, name, since, state, with_diff=repo.stores_content):
@@ -1041,7 +1041,7 @@ def sync_repo(repo_id: int, force_full: bool) -> dict[str, Any]:
                         pr_data["project_fields"] = client.fetch_pr_project_fields(
                             owner, name, pr_data["number"]
                         )
-                    task_ids.append(sync_github_item.delay(repo.id, serialize_issue_data(pr_data), logins).id)  # type: ignore[attr-defined]
+                    task_ids.append(sync_github_item.delay(repo.id, serialize_issue_data(pr_data), logins).id)
                     prs += 1
             return issues, prs
 

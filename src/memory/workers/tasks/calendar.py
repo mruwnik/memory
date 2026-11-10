@@ -510,7 +510,7 @@ def sync_calendar_account(account_id: int, force_full: bool = False) -> dict[str
             for event_data in events:
                 try:
                     serialized = _serialize_event_data(event_data)
-                    task = sync_calendar_event.delay(account.id, serialized)  # type: ignore[attr-defined]
+                    task = sync_calendar_event.delay(account.id, serialized)
                     task_ids.append(task.id)
                 except Exception:
                     logger.exception("Unable to queue a calendar event for account %s", account.id)

@@ -1645,7 +1645,7 @@ def test_a_message_that_keeps_failing_is_skipped_after_three_attempts(
 def test_a_message_whose_store_was_killed_three_times_is_skipped(db_session, slack_channel, slack_app, slack_history):
     slack_history["messages"] = [history_message("2.0"), history_message("1.0")]
     for _ in range(slack.MESSAGE_FAILURE_LIMIT):
-        slack.get_redis_client().incr(slack.message_failures_key(slack_channel.id, "2.0"))
+        slack.get_redis().incr(slack.message_failures_key(slack_channel.id, "2.0"))
 
     slack.sync_slack_channel(slack_channel.id, slack_app.id)
 
@@ -1839,7 +1839,7 @@ def test_a_sync_that_lost_its_lock_leaves_the_cursor(db_session, slack_channel, 
 def test_a_sync_whose_lock_expires_in_the_first_thread_stops(db_session, slack_channel, slack_app, slack_history):
     def replies_while_the_lock_expires():
         yield history_message("1.1")
-        slack.get_redis_client().delete(slack.channel_sync_lock_key(slack_channel.id))
+        slack.get_redis().delete(slack.channel_sync_lock_key(slack_channel.id))
         yield history_message("1.2")
 
     slack_history["messages"] = [history_message("2.0"), history_message("1.0", thread_ts="1.0", reply_count=2)]
