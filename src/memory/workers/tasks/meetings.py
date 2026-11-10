@@ -3,6 +3,7 @@
 import hashlib
 import itertools
 import logging
+import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -49,6 +50,10 @@ logger = logging.getLogger(__name__)
 # A meeting whose processing was lost once and is being run again; losing it
 # again marks it failed, so a meeting that kills its worker isn't rerun forever.
 RETRYING = "retrying"
+# The line meeting_content puts before the transcript, listing who attended.
+ATTENDEES_PREFIX = "Attendees: "
+# A transcript line's "Speaker: " prefix.
+SPEAKER_LABEL = re.compile(r"^([^:\n]{1,100}):[ \t]", re.MULTILINE)
 
 
 def mark_in_flight(meeting: Meeting, status: str) -> None:
@@ -365,9 +370,16 @@ def action_item_key(description: str) -> str:
 
 
 def apply_action_item(session, task: Task, item: dict, held_at: datetime) -> list[str]:
-    """Set the task's fields from its action item; returns the change tags of those that changed."""
-    assignee_name = item.get("assignee")
-    assignee = find_person_by_name(session, assignee_name) if assignee_name else None
+    """Set the task's fields from its action item; returns the change tags of those that changed.
+
+    The assignee is the item's `assignee_id` when the account's filter matched
+    one of its chosen people, else the one Person the assignee name resolves to.
+    """
+    assignee = (
+        session.get(Person, item["assignee_id"])
+        if "assignee_id" in item
+        else find_person_by_name(session, item.get("assignee"))
+    )
     priority = item.get("priority")
     fields = {
         "title": ("task_title", item["description"]),
@@ -444,6 +456,89 @@ def sync_action_item_tasks(session, meeting: Meeting, action_items: list[dict]) 
     return created
 
 
+def name_key(value: str) -> str:
+    """Names that differ only in case or spacing compare equal."""
+    return " ".join(value.casefold().split())
+
+
+def person_names(person: Person) -> set[str]:
+    """Everything an action item may call `person` by: display name, aliases and emails."""
+    emails = contact_values((person.contact_info or {}).get("email"))
+    return {name_key(str(v)) for v in [person.display_name, *(person.aliases or []), *emails] if v}
+
+
+def with_first_names(names: set[str]) -> set[str]:
+    """`names` plus the first word of each name that isn't an email."""
+    return names | {name.split(" ")[0] for name in names if "@" not in name}
+
+
+def transcript_names(content: str) -> set[str]:
+    """The attendee list and speaker labels written in a meeting's transcript.
+
+    The list splits on commas, so "Smith, Daniel" reads as two names, and only
+    labels at the start of a line count. Both only ever add names, which can
+    block a match but never make one.
+    """
+    listed: list[str] = []
+    if content.startswith(ATTENDEES_PREFIX):
+        header, _, content = content.partition("\n")
+        listed = header.removeprefix(ATTENDEES_PREFIX).split(",")
+    return {name_key(name) for name in [*listed, *SPEAKER_LABEL.findall(content)] if name.strip()}
+
+
+def other_attendee_names(meeting: Meeting, chosen: Sequence[Person]) -> set[str]:
+    """Every name an action item may call an attendee who isn't one of the `chosen` people.
+
+    Attendees are the meeting's linked Persons, its listed attendees and its
+    speaker labels; a listed name or label that names a chosen person is theirs.
+    Each attendee's full names, aliases and emails count, and their first names.
+    """
+    chosen_ids = {p.id for p in chosen}
+    chosen_names = set().union(*(person_names(p) for p in chosen))
+    linked = [person_names(p) for p in meeting.people if p.id not in chosen_ids]
+    unlinked = transcript_names(meeting.content or "") - chosen_names
+    return set().union(*(with_first_names(names) for names in [*linked, unlinked]))
+
+
+def chosen_assignee(
+    assignee: str | None, chosen: Sequence[Person], others: set[str]
+) -> Person | None:
+    """The one `chosen` person the action item `assignee` names, if any.
+
+    Matches a chosen person's display name, alias or email case-insensitively,
+    but never a name in `others`, the names of the meeting's other attendees,
+    nor a name two chosen people share: a task for the wrong person is worse
+    than a missed one.
+    """
+    key = name_key(assignee or "")
+    if not key or key in others:
+        return None
+    matches = [p for p in chosen if key in person_names(p)]
+    return matches[0] if len(matches) == 1 else None
+
+
+def task_action_items(meeting: Meeting, action_items: list[dict]) -> list[dict]:
+    """The action items the meeting's transcript account makes Tasks for.
+
+    An account can turn tasks off, or limit them to action items assigned to
+    its chosen people; those items carry the matched person's `assignee_id`.
+    Meetings without an account make Tasks for every item.
+    """
+    account = meeting.transcript_account
+    if account is None:
+        return action_items
+    if not account.create_tasks:
+        return []
+    if not account.task_people:
+        return action_items
+    others = other_attendee_names(meeting, account.task_people)
+    matched = [
+        (item, chosen_assignee(item.get("assignee"), account.task_people, others))
+        for item in action_items
+    ]
+    return [{**item, "assignee_id": person.id} for item, person in matched if person]
+
+
 def detach_meeting_tasks(session: DBSession, meeting: Meeting) -> None:
     """Detach action item tasks from a meeting about to be deleted.
 
@@ -483,7 +578,8 @@ def extract_and_update_meeting(session: DBSession, meeting: Meeting) -> dict:
 
     meeting.summary = extracted.get("summary", "")
     meeting.notes = extracted.get("notes", "")
-    created = sync_action_item_tasks(session, meeting, extracted.get("action_items", []))
+    action_items = task_action_items(meeting, extracted.get("action_items", []))
+    created = sync_action_item_tasks(session, meeting, action_items)
     logger.info(f"Created {len(created)} tasks from meeting {meeting.id}")
 
     return {
@@ -508,7 +604,7 @@ def meeting_content(
         v for v in (pair_labels + (attendee_names or []) + (attendee_emails or [])) if v
     )
     if attendee_label:
-        return f"Attendees: {attendee_label}\n\n{transcript}"
+        return f"{ATTENDEES_PREFIX}{attendee_label}\n\n{transcript}"
     return transcript
 
 

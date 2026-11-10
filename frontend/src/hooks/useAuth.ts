@@ -117,6 +117,11 @@ const refreshOnce = (staleAccessToken: string) => {
   return refreshInFlight
 }
 
+export interface PersonRef {
+  id: number
+  display_name: string
+}
+
 export interface AuthUser {
   id: number
   name: string
@@ -125,6 +130,8 @@ export interface AuthUser {
   scopes: string[]
   timezone: string
   modules: string[]
+  // The Person linked to this user.
+  person: PersonRef | null
 }
 
 export const useAuth = () => {
@@ -195,6 +202,7 @@ export const useAuth = () => {
       scopes: userData.scopes || [],
       timezone: userData.timezone,
       modules: userData.modules || [],
+      person: userData.person ?? null,
     })
     setIsAuthenticated(true)
     setIsLoading(false)

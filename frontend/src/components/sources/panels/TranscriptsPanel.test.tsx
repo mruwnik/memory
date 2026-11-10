@@ -26,6 +26,16 @@ vi.mock('@/hooks/useSources', () => ({
   }),
 }))
 
+vi.mock('@/hooks/usePeople', () => ({
+  usePeople: () => ({ listPeople: async () => [] }),
+}))
+
+vi.mock('@/hooks/useAuth', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/hooks/useAuth')>()
+  const person = { id: 5, display_name: 'Test User' }
+  return { ...actual, useAuth: () => ({ ...actual.useAuth(), user: { id: 7, person } }) }
+})
+
 vi.mock('@/hooks/useProjects', () => ({
   useProjects: () => ({ listProjects }),
 }))
@@ -55,6 +65,9 @@ const account = (over: Record<string, unknown> = {}) => ({
   updated_at: '2024-01-01T00:00:00Z',
   project_id: null,
   sensitivity: 'basic',
+  create_tasks: true,
+  task_people: [],
+  owner_person: { id: 5, display_name: 'Test User' },
   ...over,
 })
 
@@ -140,6 +153,8 @@ describe('TranscriptsPanel - create flow', () => {
           provider: 'fireflies',
           api_key: 'secret-key',
           sensitivity: 'basic',
+          create_tasks: true,
+          task_person_ids: [],
         }),
       ),
     )
@@ -235,6 +250,83 @@ describe('TranscriptsPanel - edit flow', () => {
 
     await waitFor(() =>
       expect(updateTranscriptAccount.mock.calls[0][1]).toMatchObject({ api_key: 'rotated' }),
+    )
+  })
+})
+
+describe('TranscriptsPanel - action item tasks', () => {
+  it.each([
+    [{}, 'Tasks: everyone'],
+    [{ create_tasks: false }, 'Tasks: off'],
+    [{ task_people: [{ id: 5, display_name: 'Test User' }, { id: 8, display_name: 'Ann Lee' }] }, 'Tasks: Test User, Ann Lee'],
+  ])('shows who an account makes tasks for (%o)', async (over, label) => {
+    listTranscriptAccounts.mockResolvedValue([account(over)])
+    renderWithRouter(<TranscriptsPanel />)
+    expect(await screen.findByText(label)).toBeInTheDocument()
+  })
+
+  it('limits tasks to the owner with "Only me"', async () => {
+    listTranscriptAccounts.mockResolvedValue([account()])
+    const { user } = renderWithRouter(<TranscriptsPanel />)
+    await screen.findByText('My Fireflies')
+
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
+    await user.click(screen.getByRole('button', { name: 'Only me (Test User)' }))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(updateTranscriptAccount.mock.calls[0][1]).toMatchObject({ create_tasks: true, task_person_ids: [5] }),
+    )
+  })
+
+  it('offers "Only me" when creating an account', async () => {
+    const { user } = renderWithRouter(<TranscriptsPanel />)
+    await screen.findByText(/No transcript accounts configured/)
+
+    await user.click(screen.getByRole('button', { name: 'Add account' }))
+    await user.type(screen.getByPlaceholderText('My Fireflies'), 'Acct')
+    await user.type(passwordInputs()[0], 'secret-key')
+    await user.click(screen.getByRole('button', { name: 'Only me (Test User)' }))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(createTranscriptAccount.mock.calls[0][0]).toMatchObject({ create_tasks: true, task_person_ids: [5] }),
+    )
+  })
+
+  it('offers "Only the owner" on an account someone else owns', async () => {
+    listTranscriptAccounts.mockResolvedValue([account({ owner_person: { id: 9, display_name: 'Other Owner' } })])
+    const { user } = renderWithRouter(<TranscriptsPanel />)
+    await screen.findByText('My Fireflies')
+
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
+
+    expect(screen.getByRole('button', { name: 'Only the owner (Other Owner)' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Only me/ })).not.toBeInTheDocument()
+  })
+
+  it("doesn't offer your own Person as \"Only me\" on an account whose owner has none", async () => {
+    listTranscriptAccounts.mockResolvedValue([account({ owner_person: null })])
+    const { user } = renderWithRouter(<TranscriptsPanel />)
+    await screen.findByText('My Fireflies')
+
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
+
+    expect(screen.getByRole('checkbox', { name: 'Create tasks from action items' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Only me/ })).not.toBeInTheDocument()
+  })
+
+  it('turns tasks off', async () => {
+    listTranscriptAccounts.mockResolvedValue([account({ task_people: [{ id: 8, display_name: 'Ann Lee' }] })])
+    const { user } = renderWithRouter(<TranscriptsPanel />)
+    await screen.findByText('My Fireflies')
+
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
+    await user.click(screen.getByRole('checkbox', { name: 'Create tasks from action items' }))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(updateTranscriptAccount.mock.calls[0][1]).toMatchObject({ create_tasks: false, task_person_ids: [8] }),
     )
   })
 })

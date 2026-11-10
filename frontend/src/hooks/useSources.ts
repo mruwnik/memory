@@ -1,6 +1,8 @@
 import { useCallback } from 'react'
-import { useAuth } from './useAuth'
+import { useAuth, PersonRef } from './useAuth'
 import { apiError } from './apiError'
+
+export type { PersonRef }
 
 /** Outcome of a source's latest sync; a failing streak keeps its start time until a sync succeeds. */
 export interface SyncStatus {
@@ -506,6 +508,11 @@ export interface TranscriptAccount extends SyncStatus {
   project_id: number | null
   sensitivity: 'public' | 'basic' | 'internal' | 'confidential'
   llm_key: LLMKeyView
+  create_tasks: boolean
+  // Action items become tasks only for these people; empty means everyone.
+  task_people: PersonRef[]
+  // The Person linked to the account's owner.
+  owner_person: PersonRef | null
 }
 
 export interface TranscriptAccountCreate {
@@ -517,6 +524,8 @@ export interface TranscriptAccountCreate {
   project_id?: number
   sensitivity?: 'public' | 'basic' | 'internal' | 'confidential'
   llm_key?: LLMKeyChoice
+  create_tasks?: boolean
+  task_person_ids?: number[]
 }
 
 export interface TranscriptAccountUpdate {
@@ -528,6 +537,9 @@ export interface TranscriptAccountUpdate {
   project_id?: number
   sensitivity?: 'public' | 'basic' | 'internal' | 'confidential'
   llm_key?: LLMKeyChoice
+  create_tasks?: boolean
+  // Omit to keep current; [] makes tasks for every action item.
+  task_person_ids?: number[]
 }
 
 export interface GithubWebhookSecret {
