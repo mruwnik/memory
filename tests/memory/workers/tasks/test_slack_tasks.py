@@ -120,14 +120,14 @@ def sample_message_data(slack_workspace, slack_channel, slack_app):
 
 @patch("memory.workers.tasks.slack.get_workspace_credentials")
 @patch("memory.workers.tasks.slack.build_user_cache")
-def test_add_slack_message_success(
+def test_store_slack_message_success(
     mock_build_cache, mock_get_creds, db_session, sample_message_data, slack_credentials, qdrant
 ):
-    """Test successful Slack message addition."""
+    """Test successful Slack message storage."""
     mock_get_creds.return_value = slack_credentials
     mock_build_cache.return_value = {"U12345678": "Test User"}
 
-    result = slack.add_slack_message(**sample_message_data)
+    result = slack.store_slack_message(**sample_message_data)
 
     assert result["status"] == "processed"
     assert "slackmessage_id" in result
@@ -180,7 +180,7 @@ def test_dm_synced_through_another_users_authorization_gets_no_creator(
     db_session.add(dm)
     db_session.commit()
 
-    slack.add_slack_message(**sample_message_data | {"channel_id": dm.id})
+    slack.store_slack_message(**sample_message_data | {"channel_id": dm.id})
 
     message = (
         db_session.query(SlackMessage)
@@ -192,7 +192,7 @@ def test_dm_synced_through_another_users_authorization_gets_no_creator(
 
 @patch("memory.workers.tasks.slack.get_workspace_credentials")
 @patch("memory.workers.tasks.slack.build_user_cache")
-def test_add_slack_message_already_exists(
+def test_store_slack_message_already_exists(
     mock_build_cache, mock_get_creds, db_session, sample_message_data, slack_credentials, qdrant
 ):
     """Test adding a message that already exists."""
@@ -200,10 +200,10 @@ def test_add_slack_message_already_exists(
     mock_build_cache.return_value = {"U12345678": "Test User"}
 
     # Add the message once
-    slack.add_slack_message(**sample_message_data)
+    slack.store_slack_message(**sample_message_data)
 
     # Try to add it again
-    result = slack.add_slack_message(**sample_message_data)
+    result = slack.store_slack_message(**sample_message_data)
 
     assert result["status"] == "already_exists"
     assert result["message_ts"] == sample_message_data["message_ts"]
@@ -219,7 +219,7 @@ def test_add_slack_message_already_exists(
 
 @patch("memory.workers.tasks.slack.get_workspace_credentials")
 @patch("memory.workers.tasks.slack.build_user_cache")
-def test_add_slack_message_with_thread(
+def test_store_slack_message_with_thread(
     mock_build_cache, mock_get_creds, db_session, sample_message_data, slack_credentials, qdrant
 ):
     """Test adding a Slack message that is part of a thread."""
@@ -229,7 +229,7 @@ def test_add_slack_message_with_thread(
     sample_message_data["thread_ts"] = "1704067100.000000"
     sample_message_data["reply_count"] = 5
 
-    slack.add_slack_message(**sample_message_data)
+    slack.store_slack_message(**sample_message_data)
 
     message = (
         db_session.query(SlackMessage)
@@ -242,7 +242,7 @@ def test_add_slack_message_with_thread(
 
 @patch("memory.workers.tasks.slack.get_workspace_credentials")
 @patch("memory.workers.tasks.slack.build_user_cache")
-def test_add_slack_message_with_reactions(
+def test_store_slack_message_with_reactions(
     mock_build_cache, mock_get_creds, db_session, sample_message_data, slack_credentials, qdrant
 ):
     """Test adding a Slack message with reactions."""
@@ -254,7 +254,7 @@ def test_add_slack_message_with_reactions(
         {"name": "heart", "count": 3, "users": ["U3"]},
     ]
 
-    slack.add_slack_message(**sample_message_data)
+    slack.store_slack_message(**sample_message_data)
 
     message = (
         db_session.query(SlackMessage)
@@ -266,7 +266,7 @@ def test_add_slack_message_with_reactions(
 
 @patch("memory.workers.tasks.slack.get_workspace_credentials")
 @patch("memory.workers.tasks.slack.build_user_cache")
-def test_add_slack_message_update_on_edit(
+def test_store_slack_message_update_on_edit(
     mock_build_cache, mock_get_creds, db_session, sample_message_data, slack_credentials, qdrant
 ):
     """Test updating an existing message when edited."""
@@ -274,13 +274,13 @@ def test_add_slack_message_update_on_edit(
     mock_build_cache.return_value = {}
 
     # Add the message first
-    slack.add_slack_message(**sample_message_data)
+    slack.store_slack_message(**sample_message_data)
 
     # Update with edit
     sample_message_data["content"] = "Edited content with enough text to be meaningful."
     sample_message_data["edited_ts"] = "1704067300.000000"
 
-    result = slack.add_slack_message(**sample_message_data)
+    result = slack.store_slack_message(**sample_message_data)
 
     assert result["status"] == "updated"
 
@@ -323,7 +323,7 @@ def test_polled_messages_last_changed_long_before_they_are_stored_are_backfill(
     mock_build_cache.return_value = {}
     edited_ts = None if edited_days_ago is None else ts_days_ago(edited_days_ago)
 
-    slack.add_slack_message(
+    slack.store_slack_message(
         **sample_message_data | {"message_ts": ts_days_ago(days_ago), "edited_ts": edited_ts, "polled": polled}
     )
 
@@ -343,23 +343,23 @@ def test_an_edit_is_backfill_only_when_a_poll_finds_it_old(
     mock_get_creds.return_value = slack_credentials
     mock_build_cache.return_value = {}
     old = sample_message_data | {"message_ts": ts_days_ago(10), "polled": True}
-    slack.add_slack_message(**old)
+    slack.store_slack_message(**old)
 
     edit = {
         "content": "Edited content with enough text to be meaningful.",
         "edited_ts": ts_days_ago(edited_days_ago),
         "polled": polled,
     }
-    slack.add_slack_message(**old | edit)
+    slack.store_slack_message(**old | edit)
 
     assert item_event_backfills(db_session) == [True, backfill]
 
 
-def test_add_slack_message_no_author_skipped(db_session, sample_message_data, qdrant):
+def test_store_slack_message_no_author_skipped(db_session, sample_message_data, qdrant):
     """Test that messages without an author are skipped."""
     sample_message_data["author_id"] = None
 
-    result = slack.add_slack_message(**sample_message_data)
+    result = slack.store_slack_message(**sample_message_data)
 
     assert result["status"] == "skipped"
     assert result["reason"] == "no_author"
@@ -368,7 +368,7 @@ def test_add_slack_message_no_author_skipped(db_session, sample_message_data, qd
 @pytest.mark.transactional_db
 @patch("memory.workers.tasks.slack.get_workspace_credentials")
 @patch("memory.workers.tasks.slack.build_user_cache")
-def test_add_slack_message_unique_per_channel(
+def test_store_slack_message_unique_per_channel(
     mock_build_cache, mock_get_creds, db_session, sample_message_data, slack_workspace, slack_credentials, qdrant
 ):
     """Test that same message_ts in different channels creates separate messages."""
@@ -376,7 +376,7 @@ def test_add_slack_message_unique_per_channel(
     mock_build_cache.return_value = {}
 
     # Add first message
-    slack.add_slack_message(**sample_message_data)
+    slack.store_slack_message(**sample_message_data)
 
     # Create another channel
     channel2 = SlackChannel(
@@ -393,7 +393,7 @@ def test_add_slack_message_unique_per_channel(
     # Add message with same ts but different channel
     sample_message_data["channel_id"] = channel2.id
 
-    result = slack.add_slack_message(**sample_message_data)
+    result = slack.store_slack_message(**sample_message_data)
 
     assert result["status"] == "processed"
 
@@ -408,7 +408,7 @@ def test_add_slack_message_unique_per_channel(
 
 @patch("memory.workers.tasks.slack.get_workspace_credentials")
 @patch("memory.workers.tasks.slack.build_user_cache")
-def test_add_slack_message_with_subtype(
+def test_store_slack_message_with_subtype(
     mock_build_cache, mock_get_creds, db_session, sample_message_data, slack_credentials, qdrant
 ):
     """Test adding a Slack message with a subtype."""
@@ -417,7 +417,7 @@ def test_add_slack_message_with_subtype(
 
     sample_message_data["subtype"] = "channel_join"
 
-    slack.add_slack_message(**sample_message_data)
+    slack.store_slack_message(**sample_message_data)
 
     message = (
         db_session.query(SlackMessage)
@@ -562,19 +562,19 @@ def test_sync_slack_workspace_unexpected_error(
 )
 @patch("memory.workers.tasks.slack.get_workspace_credentials")
 @patch("memory.workers.tasks.slack.build_user_cache")
-def test_add_slack_message_creates_channel_if_missing(
+def test_store_slack_message_creates_channel_if_missing(
     mock_build_cache, mock_get_creds,
     db_session, sample_message_data, slack_workspace, slack_credentials,
     channel_type, expected_type, qdrant
 ):
-    """Test that add_slack_message creates channel if it doesn't exist."""
+    """Test that store_slack_message creates channel if it doesn't exist."""
     mock_get_creds.return_value = slack_credentials
     mock_build_cache.return_value = {}
 
     # Use a channel ID that doesn't exist
     sample_message_data["channel_id"] = f"C_NEW_{channel_type}"
 
-    result = slack.add_slack_message(**sample_message_data)
+    result = slack.store_slack_message(**sample_message_data)
 
     assert result["status"] == "processed"
 
@@ -587,7 +587,7 @@ def test_add_slack_message_creates_channel_if_missing(
 @pytest.mark.transactional_db
 @patch("memory.workers.tasks.slack.get_workspace_credentials")
 @patch("memory.workers.tasks.slack.build_user_cache")
-def test_add_slack_message_race_merges_into_existing(
+def test_store_slack_message_race_merges_into_existing(
     mock_build_cache,
     mock_get_creds,
     db_session,
@@ -605,7 +605,7 @@ def test_add_slack_message_race_merges_into_existing(
     mock_build_cache.return_value = {"U12345678": "Test User"}
 
     # Insert the winner row normally.
-    slack.add_slack_message(**sample_message_data)
+    slack.store_slack_message(**sample_message_data)
 
     # Loser arrives with extra reactions/files and a different channel that
     # didn't exist beforehand — this exercises both the race path AND the
@@ -654,7 +654,7 @@ def test_add_slack_message_race_merges_into_existing(
         return real_get(session, kwargs)
 
     with patch.object(slack, "_get_existing_slack_message", side_effect=fake_get):
-        result = slack.add_slack_message(**loser_data)
+        result = slack.store_slack_message(**loser_data)
 
     # Should not blow up the session — must report the merge cleanly.
     assert result["status"] in {"already_exists", "updated"}, result
@@ -1156,7 +1156,7 @@ def test_history_routing_is_isolated_from_events():
 
 
 @pytest.mark.parametrize("pushing_app_has_credentials, author_name", [(True, "xoxp-test-token"), (False, None)])
-def test_add_slack_message_uses_only_the_pushing_apps_credentials(
+def test_stored_messages_use_only_the_ingesting_apps_credentials(
     db_session, sample_message_data, slack_credentials, pushing_app_has_credentials, author_name, qdrant
 ):
     pusher = SlackApp(client_id="pusher.app", name="Pusher", setup_state="live")
@@ -1168,7 +1168,7 @@ def test_add_slack_message_uses_only_the_pushing_apps_credentials(
         "memory.workers.tasks.slack.get_cached_user_mapping",
         side_effect=lambda workspace_id, token, base_url: {"U12345678": token},
     ):
-        slack.add_slack_message(**sample_message_data | {"slack_app_id": app_id})
+        slack.store_slack_message(**sample_message_data | {"slack_app_id": app_id})
 
     message = db_session.query(SlackMessage).filter_by(
         message_ts=sample_message_data["message_ts"]
@@ -1184,7 +1184,7 @@ def test_a_message_is_stored_when_its_mentions_cannot_be_resolved(
     db_session, sample_message_data, slack_credentials, error, qdrant
 ):
     with patch("memory.workers.tasks.slack.build_user_cache", side_effect=error):
-        result = slack.add_slack_message(**sample_message_data | {"content": "hi <@U1> " * 10})
+        result = slack.store_slack_message(**sample_message_data | {"content": "hi <@U1> " * 10})
 
     message = db_session.query(SlackMessage).filter_by(
         message_ts=sample_message_data["message_ts"]
@@ -1394,7 +1394,7 @@ def test_a_channel_event_from_another_workspace_is_ignored(db_session, slack_wor
 def test_a_message_for_another_workspaces_channel_is_ignored(
     _mapping, db_session, sample_message_data, other_workspace_channel, qdrant
 ):
-    result = slack.add_slack_message(**sample_message_data | {"channel_id": other_workspace_channel.id})
+    result = slack.store_slack_message(**sample_message_data | {"channel_id": other_workspace_channel.id})
 
     assert result["status"] == "skipped"
     assert db_session.query(SlackMessage).count() == 0
@@ -1460,7 +1460,7 @@ def test_pushed_edits_only_touch_the_owners_messages(_mapping, db_session, store
 
 def test_new_messages_record_the_app_that_ingested_them(db_session, sample_message_data, slack_credentials, qdrant):
     with patch("memory.workers.tasks.slack.get_cached_user_mapping", return_value={}):
-        slack.add_slack_message(**sample_message_data)
+        slack.store_slack_message(**sample_message_data)
 
     message = db_session.query(SlackMessage).one()
     assert message.slack_app_id == sample_message_data["slack_app_id"]
@@ -1477,7 +1477,7 @@ def test_images_are_not_fetched_from_an_api_url_no_longer_allowed(
         patch.object(slack, "download_slack_file") as download,
         patch("memory.workers.tasks.slack.get_cached_user_mapping", return_value={}),
     ):
-        result = slack.add_slack_message(**sample_message_data | {"files": files})
+        result = slack.store_slack_message(**sample_message_data | {"files": files})
 
     assert result["status"] == "processed"
     download.assert_not_called()
@@ -1501,7 +1501,7 @@ def unclaimed_message(db_session, stored_message):
 
 @patch("memory.workers.tasks.slack.get_cached_user_mapping", return_value={})
 def test_a_poll_claims_an_unclaimed_message(_mapping, db_session, unclaimed_message, slack_app, qdrant):
-    slack.add_slack_message(
+    slack.store_slack_message(
         workspace_id=unclaimed_message.workspace_id,
         channel_id=unclaimed_message.channel_id,
         message_ts=unclaimed_message.message_ts,
@@ -1533,6 +1533,168 @@ def test_a_push_cannot_change_an_unclaimed_message(db_session, unclaimed_message
     assert (unclaimed_message.reactions, unclaimed_message.slack_app_id) == ({"fire": ["U1"]}, None)
 
 
+
+
+# =============================================================================
+# Pushed new messages are read back with the pushing app's token
+# =============================================================================
+
+
+SHARED_CHANNEL = "C0SHARED01"
+REAL_TS = "1704067500.000100"
+REPLY_TS = "1704067600.000100"
+
+
+class FakeSlack:
+    """Slack's conversations.history/replies, answering only for channels each token can read."""
+
+    def __init__(self, messages: dict[str, list[dict]], readable: dict[str, set[str]]):
+        self.messages = messages
+        self.readable = readable
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        token = request.headers["Authorization"].removeprefix("Bearer ")
+        form = dict(httpx.QueryParams(request.content.decode()))
+        channel = form["channel"]
+        if channel not in self.readable.get(token, set()):
+            return httpx.Response(200, json={"ok": False, "error": "channel_not_found"})
+        window = [
+            m for m in self.messages.get(channel, [])
+            if float(form["oldest"]) <= float(m["ts"]) <= float(form["latest"])
+        ]
+        method = request.url.path.rsplit("/", 1)[-1]
+        if method == "conversations.history":
+            found = [m for m in window if m.get("thread_ts", m["ts"]) == m["ts"]]
+        else:
+            thread = [m for m in self.messages.get(channel, []) if m.get("thread_ts") == form["ts"]]
+            if not thread:
+                return httpx.Response(200, json={"ok": False, "error": "thread_not_found"})
+            found = thread[:1] + [m for m in window if m.get("thread_ts") == form["ts"] and m["ts"] != form["ts"]]
+        return httpx.Response(200, json={"ok": True, "messages": found[: int(form["limit"])], "has_more": False})
+
+
+@pytest.fixture
+def two_tenants(db_session, slack_app, slack_credentials, slack_channel, slack_user):
+    """Users B (slack_app, token xoxp-test-token) and A (their own app, token xoxp-a) in one workspace.
+
+    B's token reads the private channel C12345678; both read SHARED_CHANNEL.
+    """
+    slack_app.created_by_user_id = slack_user.id
+    user_a = User(name="A", email="a@example.com", password_hash="x")
+    db_session.add(user_a)
+    db_session.flush()
+    app_a = SlackApp(client_id="a.app", name="A's app", setup_state="live", created_by_user_id=user_a.id)
+    db_session.add(app_a)
+    db_session.flush()
+    creds_a = SlackUserCredentials(
+        slack_app_id=app_a.id, workspace_id=slack_credentials.workspace_id, user_id=user_a.id,
+        scopes=["channels:history"], slack_user_id="U_A",
+    )
+    creds_a.access_token = "xoxp-a"
+    db_session.add(creds_a)
+    db_session.commit()
+    return {"B": slack_app.id, "A": app_a.id}
+
+
+@pytest.fixture
+def fake_slack(slack_channel):
+    real = {"ts": REAL_TS, "user": "U_A", "text": "what U_A actually wrote"}
+    reply = {"ts": REPLY_TS, "thread_ts": REAL_TS, "user": "U_A", "text": "U_A's actual reply"}
+    slack_side = FakeSlack(
+        messages={SHARED_CHANNEL: [real | {"thread_ts": REAL_TS}, reply], slack_channel.id: [real]},
+        readable={"xoxp-test-token": {slack_channel.id, SHARED_CHANNEL}, "xoxp-a": {SHARED_CHANNEL}},
+    )
+    transport = httpx.MockTransport(slack_side.handle)
+    with patch("memory.common.slack.public_sync_http_client", lambda **kw: httpx.Client(transport=transport, **kw)):
+        yield slack_side
+
+
+def store_without_embedding(item, session, **_kwargs) -> dict[str, Any]:
+    """process_content_item minus embedding: the sandbox has no Qdrant."""
+    session.add(item)
+    session.commit()
+    return {"status": "processed", "slackmessage_id": item.id}
+
+
+def push_message(app_id: int, channel_id: str, message_ts: str, **fields) -> dict:
+    forged = {"author_id": "U_CEO", "content": "wire the money today", "thread_ts": None} | fields
+    with (
+        patch.object(slack, "process_content_item", side_effect=store_without_embedding),
+        patch.object(slack, "get_cached_user_mapping", return_value={}),
+    ):
+        return slack.add_slack_message(
+            workspace_id="T12345678", channel_id=channel_id, message_ts=message_ts, slack_app_id=app_id, **forged
+        )
+
+
+def stored_rows(db_session) -> list[tuple]:
+    db_session.expire_all()
+    rows = db_session.query(SlackMessage).order_by(SlackMessage.message_ts)
+    return [(m.channel_id, m.message_ts, m.author_id, m.content, m.slack_app_id) for m in rows]
+
+
+@pytest.mark.parametrize(
+    "pusher, message_ts, expected",
+    [
+        ("A", REAL_TS, []),
+        ("A", "1704067999.000100", []),
+        ("B", "1704067999.000100", []),
+        ("B", REAL_TS, [("C12345678", REAL_TS, "U_A", "what U_A actually wrote", "B")]),
+    ],
+)
+def test_a_pushed_new_message_lands_only_where_the_pushing_app_reads_it(
+    db_session, two_tenants, fake_slack, slack_channel, pusher, message_ts, expected
+):
+    push_message(two_tenants[pusher], slack_channel.id, message_ts)
+
+    assert stored_rows(db_session) == [row[:4] + (two_tenants[row[4]],) for row in expected]
+
+
+@pytest.mark.parametrize(
+    "message_ts, thread_ts, expected",
+    [
+        (REAL_TS, None, (SHARED_CHANNEL, REAL_TS, "U_A", "what U_A actually wrote")),
+        (REPLY_TS, REAL_TS, (SHARED_CHANNEL, REPLY_TS, "U_A", "U_A's actual reply")),
+    ],
+)
+def test_a_pushed_new_message_is_stored_as_slack_has_it(
+    db_session, two_tenants, fake_slack, message_ts, thread_ts, expected
+):
+    push_message(two_tenants["A"], SHARED_CHANNEL, message_ts, thread_ts=thread_ts)
+
+    assert stored_rows(db_session) == [expected + (two_tenants["A"],)]
+
+
+@pytest.mark.parametrize("thread_ts", ["1704067000.000100", REPLY_TS])
+def test_a_pushed_reply_under_a_thread_slack_does_not_have_is_dropped(db_session, two_tenants, fake_slack, thread_ts):
+    push_message(two_tenants["A"], SHARED_CHANNEL, "1704067650.000100", thread_ts=thread_ts)
+
+    assert stored_rows(db_session) == []
+
+
+@pytest.mark.parametrize(
+    "message_ts, thread_ts",
+    [("/var/tmp/x", None), ("1704067200_000100", None), ("1704067200.000100", "/srv/x"), ("", None)],
+)
+def test_a_message_with_a_malformed_timestamp_is_not_stored(
+    db_session, sample_message_data, slack_credentials, message_ts, thread_ts
+):
+    with patch.object(slack, "stream_download_to_path", return_value=True) as download:
+        result = slack.store_slack_message(
+            **sample_message_data | {"message_ts": message_ts, "thread_ts": thread_ts}
+        )
+
+    assert (result, download.call_count, db_session.query(SlackMessage).count()) == (
+        {"status": "skipped", "reason": "malformed_ts"}, 0, 0,
+    )
+
+
+@pytest.mark.parametrize("message_ts", ["/var/tmp/x", "/1704067200.000100", "1704067200.000100/x"])
+def test_slack_files_are_never_written_outside_the_storage_dir(message_ts):
+    with patch.object(slack, "stream_download_to_path", return_value=True) as download:
+        path = slack.download_slack_file("https://files.slack.com/a.png", {}, message_ts, "T12345678")
+
+    assert (path, download.call_count) == (None, 0)
 
 
 def history_message(ts: str, **fields) -> dict:
