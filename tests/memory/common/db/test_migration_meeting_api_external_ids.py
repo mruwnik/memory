@@ -38,3 +38,24 @@ def test_meeting_api_external_ids_namespaces_rest_submissions_only(db_session):
         (1, "api:7:rest-1"), (2, "ff-1"), (3, "push:3:x"), (4, "legacy"), (5, "rest-2"), (6, "rest-1"),
     ]
     db_session.rollback()
+
+
+def test_meeting_api_external_ids_upgrade_after_downgrade_keeps_one_prefix(db_session):
+    spec = importlib.util.spec_from_file_location("meeting_ids_migration", MIGRATION)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    db = db_session.connection()
+    db.execute(text("CREATE SCHEMA meeting_ids_redo_test"))
+    db.execute(text("SET LOCAL search_path TO meeting_ids_redo_test"))
+    db.execute(text("CREATE TABLE source_item (id bigint PRIMARY KEY, creator_id integer)"))
+    db.execute(text("CREATE TABLE meeting (id bigint PRIMARY KEY, external_id text, transcript_account_id bigint)"))
+    db.execute(text("INSERT INTO source_item VALUES (1, 7), (2, 8), (3, 9)"))
+    db.execute(text("INSERT INTO meeting VALUES (1, 'shared', NULL), (2, 'shared', NULL), (3, 'own', NULL)"))
+    for step in (module.upgrade, module.downgrade, module.upgrade):
+        with Operations.context(MigrationContext.configure(db)):
+            step()
+    assert db.execute(text("SELECT id, external_id FROM meeting ORDER BY id")).all() == [
+        (1, "api:7:shared"), (2, "api:8:shared"), (3, "api:9:own"),
+    ]
+    db_session.rollback()

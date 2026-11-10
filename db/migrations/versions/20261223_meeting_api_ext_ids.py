@@ -2,7 +2,8 @@
 
 POST /meetings now stores a submitted ``external_id`` as ``api:<user id>:<id>``.
 Rename the meetings already stored that way (no transcript account, not a
-transcript push, with a creator) so resubmitting their ids still dedupes.
+transcript push, with a creator, not already in that creator's namespace)
+so resubmitting their ids still dedupes.
 Meetings whose transcript account was deleted look the same and are renamed
 too; a re-added account's sync then finds them as another recording of the
 same call rather than by id.
@@ -31,6 +32,7 @@ def upgrade() -> None:
           AND m.transcript_account_id IS NULL
           AND m.external_id NOT LIKE 'push:%'
           AND s.creator_id IS NOT NULL
+          AND m.external_id NOT LIKE 'api:' || s.creator_id || ':%'
         """
     )
 
