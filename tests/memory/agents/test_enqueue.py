@@ -421,6 +421,26 @@ def test_runs_beyond_the_hourly_limit_are_refused(
         start_definition(db_session, regular_user, d)
 
 
+@pytest.mark.parametrize(
+    "spec_rate,ceiling,source",
+    [
+        (2, 3, "max_runs_per_hour"),
+        (3, 3, "max_runs_per_hour"),
+        (None, 3, "AGENT_MAX_RUNS_PER_HOUR, the server's ceiling"),
+    ],
+)
+def test_an_hourly_refusal_credits_the_setting_that_set_the_limit(
+    db_session, regular_user, fake_providers, monkeypatch, spec_rate, ceiling, source
+):
+    limit = spec_rate or ceiling
+    d = rated_definition(db_session, regular_user, monkeypatch, spec_rate, ceiling, limit)
+
+    with pytest.raises(CapExceeded) as refused:
+        start_definition(db_session, regular_user, d)
+
+    assert f"limit {limit} ({source})" in str(refused.value)
+
+
 # --- user provider keys ---------------------------------------------------------
 
 

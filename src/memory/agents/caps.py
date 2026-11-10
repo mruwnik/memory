@@ -252,7 +252,7 @@ def ceilinged_limit(rate: int | None, knob: str) -> HourlyLimit:
     """`rate` held to the AGENT_MAX_RUNS_PER_HOUR ceiling, which also applies when it is unset:
     the limit of runs an agent definition or a prebuilt agent starts."""
     ceiling = settings.AGENT_MAX_RUNS_PER_HOUR
-    if rate and rate < ceiling:
+    if rate and rate <= ceiling:
         return HourlyLimit(rate, knob)
     return HourlyLimit(ceiling, "AGENT_MAX_RUNS_PER_HOUR, the server's ceiling")
 
