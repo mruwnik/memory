@@ -44,6 +44,12 @@ a new, empty `## Unreleased` above it.
 - Uploading a report (`POST /reports/upload`) into a project you aren't a member of is refused with 403 (admins excepted).
 - Only a report's creator or an admin can overwrite it (MCP `reports_upsert` with its filename, or re-uploading it through `POST /reports/upload`) or delete it (`reports_delete`); being able to read it is no longer enough. The report worker writes an MCP report's file only after checking it may overwrite the report stored under that filename.
 - Only a photo's creator or an admin can delete it (`DELETE /photos/{id}`); others who can see it get 403.
+- MCP `organizer_upcoming` only returns calendar events the caller can access, as `list_tasks` does (admins see all). Before, every user saw everyone's events. Non-admins naming other users in `user_ids` are refused.
+- MCP `organizer_upcoming` with a date-only `start_date` or `end_date` (e.g. "2024-01-15") includes recurring events again; dates and times without an offset are read as UTC.
+- Recurring calendar events whose rule has `INTERVAL=0`, whitespace or a `:` (which could smuggle in another property) are skipped with a warning; an `INTERVAL=0` rule from a synced calendar hung `organizer_upcoming` forever. Expanding a rule stops after 50,000 occurrences from the series start, so dense or decades-old series can no longer stall the query, and an event that fails to expand no longer fails the whole query.
+- Recurring all-day calendar series that end on a date (a date-only `UNTIL`, as CalDAV and Google send them) show in `organizer_upcoming` again, through the end of that day; a floating `UNTIL` time is read as UTC.
+- Calendar syncs remove events deleted or cancelled in CalDAV or Google Calendar. A sync that read every calendar deletes the account's stored events starting inside the sync window (less a day at each end) that the calendar no longer returns; a sync that skipped a calendar or event, or found no calendar, deletes nothing. The sync result reports `events_deleted`.
+- Gmail syncs no longer re-download, on every run, messages they never store (a copy already stored, password-reset mail, a message that keeps killing its worker). The account remembers their ids (new column `email_accounts.gmail_declined_ids`) until they leave the mailbox; messages that failed to queue are retried.
 
 ### Required env vars
 None

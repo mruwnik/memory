@@ -1230,3 +1230,115 @@ async def test_create_task_sets_creator_id(db_session, access_users):
     task = db_session.query(Task).filter_by(id=result["id"]).first()
     assert task is not None
     assert task.creator_id == caller_id
+
+
+# =============================================================================
+# upcoming access control
+# =============================================================================
+
+
+@pytest.fixture
+def owned_events(db_session, access_users):
+    """One synced event in each of two users' calendars, inside the next day.
+
+    Returns ``(owner_event, caller_event)``. Each event inherits its creator
+    from the owning calendar account, as synced events do.
+    """
+    from memory.common.db.models.sources import CalendarAccount
+
+    owner, caller = access_users
+    start = datetime.now(timezone.utc) + timedelta(hours=1)
+
+    def make_event(user, title):
+        account = CalendarAccount(
+            name=f"{title} calendar",
+            calendar_type="caldav",
+            caldav_url="https://caldav.example.com",
+            caldav_username=title,
+            caldav_password="pw",
+            user_id=user.id,
+        )
+        db_session.add(account)
+        db_session.flush()
+        event = CalendarEvent(
+            event_title=title,
+            start_time=start,
+            end_time=start + timedelta(hours=1),
+            calendar_account_id=account.id,
+            sha256=hashlib.sha256(title.encode()).digest(),
+            modality="calendar",
+            size=0,
+        )
+        db_session.add(event)
+        db_session.flush()
+        event.apply_inherited_access_control()
+        return event
+
+    events = make_event(owner, "Owner event"), make_event(caller, "Caller event")
+    db_session.commit()
+    return events
+
+
+async def call_upcoming(db_session, user, **kwargs):
+    from memory.api.MCP.servers.organizer import upcoming
+
+    with (
+        patch(
+            "memory.api.MCP.servers.organizer.make_session",
+            return_value=db_session.__enter__(),
+        ),
+        patch(
+            "memory.api.MCP.servers.organizer.get_mcp_current_user",
+            return_value=user,
+        ),
+        patch(
+            "memory.api.MCP.servers.organizer.get_project_roles_by_user_id",
+            return_value={},
+        ),
+    ):
+        return await get_fn(upcoming)(days=2, **kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("user_ids", [None, "caller"])
+async def test_upcoming_non_admin_sees_only_own_events(
+    db_session, access_users, owned_events, user_ids
+):
+    _owner, caller = access_users
+    ids = {"caller": [caller.id], None: None}[user_ids]
+
+    results = await call_upcoming(
+        db_session, _NonAdminUserStub(user_id=caller.id), user_ids=ids
+    )
+
+    assert [r["event_title"] for r in results] == ["Caller event"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("who", [["owner"], ["owner", "caller"]])
+async def test_upcoming_non_admin_cannot_name_other_users(
+    db_session, access_users, owned_events, who
+):
+    owner, caller = access_users
+    ids = [{"owner": owner.id, "caller": caller.id}[w] for w in who]
+
+    with pytest.raises(PermissionError):
+        await call_upcoming(
+            db_session, _NonAdminUserStub(user_id=caller.id), user_ids=ids
+        )
+
+
+@pytest.mark.asyncio
+async def test_upcoming_without_user_returns_nothing(db_session, owned_events):
+    assert await call_upcoming(db_session, None) == []
+
+
+@pytest.mark.asyncio
+async def test_upcoming_admin_can_view_another_users_calendar(
+    db_session, access_users, owned_events, _mock_admin_user
+):
+    owner, _caller = access_users
+
+    results = await call_upcoming(db_session, _mock_admin_user, user_ids=[owner.id])
+
+    assert [r["event_title"] for r in results] == ["Owner event"]

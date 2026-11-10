@@ -352,11 +352,14 @@ def process_email_batch(
         lock: Optional lock to extend during long-running operations
 
     Returns:
-        Stats dict with messages_found, new_messages, errors
+        Stats dict with messages_found, new_messages, errors, and declined_ids:
+        the ids of messages not queued because they were already stored or
+        are never stored (failures are not among them)
     """
     messages_found = 0
     new_messages = 0
     errors = 0
+    declined_ids: list[str] = []
 
     for message_id, raw_email, received_at in messages:
         messages_found += 1
@@ -376,6 +379,7 @@ def process_email_batch(
                     "messages_found": messages_found,
                     "new_messages": new_messages,
                     "errors": errors,
+                    "declined_ids": declined_ids,
                     "aborted": True,
                     "abort_reason": "lock_extension_failed",
                 }
@@ -385,6 +389,8 @@ def process_email_batch(
                 db, cast(int, account.id), message_id, folder, raw_email, received_at
             ):
                 new_messages += 1
+            else:
+                declined_ids.append(message_id)
         except Exception as e:
             logger.error(f"Error queuing message {message_id}: {e}")
             errors += 1
@@ -393,6 +399,7 @@ def process_email_batch(
         "messages_found": messages_found,
         "new_messages": new_messages,
         "errors": errors,
+        "declined_ids": declined_ids,
     }
 
 
@@ -490,7 +497,8 @@ def sync_gmail_messages(
 
     Syncs the account's selected labels, or with none selected all mail outside
     Spam and Trash. Every sync lists the ids and fetches only those not stored
-    yet, so it needs no date cutoff and picks up mail archived before it ran.
+    yet and not declined by an earlier sync, so it needs no date cutoff and
+    picks up mail archived before it ran.
     """
     service = get_gmail_service(account, db)
     mailbox_ids = list_gmail_message_ids(service)
@@ -508,7 +516,8 @@ def sync_gmail_messages(
             MailMessage.imap_uid.isnot(None),
         )
     }
-    new_message_ids = synced_ids - stored_ids
+    declined_ids = set(account.gmail_declined_ids or [])
+    new_message_ids = synced_ids - stored_ids - declined_ids
 
     # Release the read transaction from the existing-UID query before the
     # Gmail body fetch, which is network-bound and can exceed the 60s
@@ -518,8 +527,10 @@ def sync_gmail_messages(
     # Fetch content only for new messages
     messages = fetch_gmail_messages_by_ids(service, new_message_ids)
     stats = process_email_batch(account, db, messages, folder="INBOX", lock=lock)
+    newly_declined = set(stats.pop("declined_ids"))
     if stats.get("aborted"):
         return stats
+    account.gmail_declined_ids = sorted((declined_ids & mailbox_ids) | newly_declined)
 
     # Losing a synced label (archiving, relabelling) keeps a message; only one
     # missing from the whole mailbox might be gone, and Gmail confirms which.

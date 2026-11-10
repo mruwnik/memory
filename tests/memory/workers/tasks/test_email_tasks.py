@@ -806,6 +806,65 @@ def test_sync_gmail_fetches_only_unstored_mail_in_the_synced_labels(
     assert {c.kwargs["message_id"] for c in mock_process.delay.call_args_list} == fetched
 
 
+def test_sync_gmail_remembers_and_skips_declined_mail(
+    db_session, gmail_email_account
+):
+    # A copy of "dup" is already stored under another Gmail id.
+    add_gmail_mail(db_session, gmail_email_account, "dup")
+    db_session.query(MailMessage).filter_by(imap_uid="dup").update(
+        {"imap_uid": "earlier-copy"}
+    )
+    db_session.commit()
+    mailbox = {"earlier-copy": ["INBOX"], "dup": ["INBOX"]}
+
+    first = FakeGmailService(mailbox)
+    run_gmail_sync(db_session, gmail_email_account, first)
+    second = FakeGmailService(mailbox)
+    run_gmail_sync(db_session, gmail_email_account, second)
+
+    assert (first.raw_fetches, second.raw_fetches) == (["dup"], [])
+    assert gmail_email_account.gmail_declined_ids == ["dup"]
+
+
+@pytest.mark.parametrize(
+    "mailbox, remembered",
+    [
+        ({"a": ["INBOX"], "b": ["INBOX"]}, ["a", "b"]),
+        # Out of the synced label but still in the mailbox
+        ({"a": ["SENT"]}, ["a"]),
+        ({"a": ["TRASH"]}, []),
+        ({}, []),
+    ],
+)
+def test_sync_gmail_forgets_declined_mail_that_left_the_mailbox(
+    db_session, gmail_email_account, mailbox, remembered
+):
+    gmail_email_account.gmail_declined_ids = ["a", "b"]
+    db_session.commit()
+    service = FakeGmailService(mailbox)
+
+    run_gmail_sync(db_session, gmail_email_account, service)
+
+    assert service.raw_fetches == []
+    assert gmail_email_account.gmail_declined_ids == remembered
+
+
+def test_sync_gmail_does_not_remember_failed_mail(
+    db_session, gmail_email_account
+):
+    service = FakeGmailService({"new": ["INBOX"]})
+
+    with (
+        patch("memory.workers.tasks.email.get_gmail_service", return_value=service),
+        patch("memory.workers.tasks.email.process_message") as mock_process,
+    ):
+        mock_process.delay.side_effect = RuntimeError("broker down")
+        stats = sync_gmail_messages(gmail_email_account, db_session, datetime(1970, 1, 1))
+
+    assert stats["errors"] == 1
+    assert gmail_email_account.gmail_declined_ids == []
+
+
 class PoisonableSession:
     """Minimal fake session that reproduces SQLAlchemy's poisoned-transaction
     behaviour: once a statement fails, every later statement raises
