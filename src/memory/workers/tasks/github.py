@@ -7,6 +7,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, NamedTuple, cast
 
 import requests
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session as DBSession
 
 from memory.common.celery_app import (
     app,
@@ -49,6 +51,7 @@ from memory.common.github import (
     not_found_message,
     org_hooks,
     parse_github_date,
+    parse_required_github_date,
     repo_hooks,
     serialize_issue_data,
     webhook_url,
@@ -542,9 +545,9 @@ def _update_existing_item(
                 existing.pr_data.changed_files_count = pr_data_dict.get(
                     "changed_files_count"
                 )
-                existing.pr_data.files = pr_data_dict.get("files")  # type: ignore[assignment]
-                existing.pr_data.reviews = pr_data_dict.get("reviews")  # type: ignore[assignment]
-                existing.pr_data.review_comments = pr_data_dict.get("review_comments")  # type: ignore[assignment]
+                existing.pr_data.files = pr_data_dict.get("files")
+                existing.pr_data.reviews = pr_data_dict.get("reviews")
+                existing.pr_data.review_comments = pr_data_dict.get("review_comments")
                 existing.pr_data.diff = pr_data_dict.get("diff")
             else:
                 # Create new pr_data
@@ -601,8 +604,8 @@ def update_metadata(
         existing.pr_data.additions = pr["additions"]
         existing.pr_data.deletions = pr["deletions"]
         existing.pr_data.changed_files_count = pr["changed_files_count"]
-        existing.pr_data.reviews = pr["reviews"]  # type: ignore[assignment]
-        existing.pr_data.review_comments = pr["review_comments"]  # type: ignore[assignment]
+        existing.pr_data.reviews = pr["reviews"]
+        existing.pr_data.review_comments = pr["review_comments"]
     elif pr:
         existing.pr_data = _create_pr_data(issue_data)
     if changes:
@@ -629,10 +632,10 @@ def _deserialize_issue_data(data: dict[str, Any]) -> GithubIssueData:
         labels=data["labels"],
         assignees=data["assignees"],
         milestone_number=data.get("milestone_number"),
-        created_at=parse_github_date(data["created_at"]),  # type: ignore
+        created_at=parse_required_github_date(data["created_at"]),
         closed_at=parse_github_date(data.get("closed_at")),
         merged_at=parse_github_date(data.get("merged_at")),
-        github_updated_at=parse_github_date(data["github_updated_at"]),  # type: ignore
+        github_updated_at=parse_required_github_date(data["github_updated_at"]),
         comment_count=data["comment_count"],
         comments=data["comments"],
         diff_summary=data.get("diff_summary"),
@@ -849,6 +852,13 @@ def push_missed(repo: GithubRepo, data: GithubIssueData, changes: list[str]) -> 
     return push_overdue(data["github_updated_at"], repo.webhook_checked_at)
 
 
+def lock_github_item(session: DBSession, repo_path: str, kind: str, number: int) -> None:
+    """Hold this item's lock until the transaction ends, so a poll and a webhook
+    syncing it at once can't both find it missing and insert it twice."""
+    key = func.hashtextextended(f"github_item:{repo_path}:{kind}:{number}", 0)
+    session.execute(select(func.pg_advisory_xact_lock(key)))
+
+
 def sync_item(
     repo_id: int, issue_data: GithubIssueData, logins: Collection[str], polled: bool = False
 ) -> dict[str, Any]:
@@ -876,7 +886,7 @@ def sync_item(
         else:
             project_id = _lookup_repo_project_id(session, repo)
 
-        # Check for existing item
+        lock_github_item(session, repo.repo_path, issue_data["kind"], issue_data["number"])
         existing = (
             session.query(GithubItem)
             .filter(

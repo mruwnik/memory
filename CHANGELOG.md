@@ -39,6 +39,7 @@ a new, empty `## Unreleased` above it.
 - `POST /meetings` external ids are now per user: another user's identical id no longer returns their job or suppresses your meeting, and ids may start with `push:`. `GET /api/jobs/external/{id}` finds only your own jobs.
 - `people_merge` moves deadline ownership, Beeper participant links and GitHub item authorship to the kept person, and reports `deadlines_moved`, `beeper_participants_moved` and `github_items_moved`. Before, these were cleared when the merged-away person was deleted.
 - `teams_upsert` without a `slug` folds accented letters into the derived slug (Équipe → `equipe`). It refuses a name with no usable slug characters, and a derived slug that belongs to a team with a different name (e.g. "C++" and "C" both give `c`), instead of overwriting that team. Pass `slug` to choose one.
+- Forecast market search and resolved-market results (Manifold, Polymarket) keep a probability of exactly 0 instead of dropping it or showing the pre-resolution probability. ExUrbe blog posts get their published date as a date, read from the visible date when the page has no machine-readable one.
 
 ### Required env vars
 None

@@ -18,6 +18,7 @@ from memory.common.project.client import (
 )
 from memory.common.project.creation import (
     ProjectCreationResult,
+    ProjectState,
     create_milestone_project,
     create_project_with_retry,
     create_repo_project,
@@ -60,6 +61,7 @@ __all__ = [
     "get_github_client",
     # creation
     "ProjectCreationResult",
+    "ProjectState",
     "create_milestone_project",
     "create_project_with_retry",
     "create_repo_project",
