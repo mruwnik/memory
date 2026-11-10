@@ -113,15 +113,37 @@ def test_revoke_user_credentials_ends_oauth_sessions(db_session, keep_current):
 
 @pytest.mark.asyncio
 async def test_revoke_token_ends_access_session(db_session):
+    """The SDK's revocation handler loads the token, then revokes the loaded object."""
     user = create_test_user(db_session)
     create_oauth_client(db_session)
     token = issue_token(db_session, user)
+    provider = SimpleOAuthProvider()
+    loaded = await provider.load_access_token(token.access_token)
 
-    await SimpleOAuthProvider().revoke_token(token.access_token, "access_token")
+    assert loaded is not None
+    await provider.revoke_token(loaded)
 
     db_session.expire_all()
     assert db_session.get(UserSession, hash_token(token.access_token)) is None
     assert refresh_row(db_session, token).access_token_session_id is None
+
+
+@pytest.mark.asyncio
+async def test_revoke_token_revokes_refresh_token_and_its_session(db_session):
+    user = create_test_user(db_session)
+    client = create_oauth_client(db_session)
+    token = issue_token(db_session, user)
+    provider = SimpleOAuthProvider()
+    client_info = OAuthClientInformationFull.model_validate(
+        {"client_id": client.client_id, "redirect_uris": ["http://localhost/callback"]}
+    )
+    loaded = await provider.load_refresh_token(client_info, cast(str, token.refresh_token))
+
+    assert loaded is not None
+    await provider.revoke_token(loaded)
+
+    assert refresh_row(db_session, token).revoked is True
+    assert db_session.get(UserSession, hash_token(token.access_token)) is None
 
 
 # --- make_token tests ---

@@ -334,6 +334,30 @@ def make_token(
     )
 
 
+def revoke_access_token(session: Session, token: str) -> bool:
+    user_session = session.get(UserSession, hash_token(token))
+    if not user_session:
+        return False
+    session.delete(user_session)
+    return True
+
+
+def revoke_refresh_token(session: Session, token: str) -> bool:
+    refresh_token = (
+        session.query(OAuthRefreshToken)
+        .filter(OAuthRefreshToken.token_hash == hash_token(token))
+        .first()
+    )
+    if not refresh_token:
+        return False
+    refresh_token.revoked = True
+    if refresh_token.access_token_session_id is not None:
+        session.query(UserSession).filter(
+            UserSession.id == refresh_token.access_token_session_id
+        ).delete(synchronize_session=False)
+    return True
+
+
 class SimpleOAuthProvider(OAuthProvider):
     """OAuth provider that extends fastmcp's OAuthProvider with custom login flow."""
 
@@ -751,7 +775,7 @@ class SimpleOAuthProvider(OAuthProvider):
 
             # Extract data needed for token creation
             auth_code_id = auth_code.id
-            user_id = auth_code.user_id
+            user_id = auth_code.user.id
             client_id = auth_code.client_id
             scopes = authorization_code.scopes
 
@@ -786,7 +810,7 @@ class SimpleOAuthProvider(OAuthProvider):
             token = make_token_from_data(
                 session,
                 oauth_state_id=auth_code_id,
-                user_id=user_id,  # type: ignore[arg-type]
+                user_id=user_id,
                 client_id=client_id,
                 scopes=scopes,
             )
@@ -994,39 +1018,21 @@ class SimpleOAuthProvider(OAuthProvider):
 
             return make_token(session, db_refresh_token, scopes)
 
-    async def revoke_token(  # type: ignore[override]
-        self, token: str, token_type_hint: Optional[str] = None
-    ) -> None:
-        """Revoke a token (access token or refresh token)."""
+    async def revoke_token(self, token: FastMCPAccessToken | RefreshToken) -> None:
+        """Revoke a token the SDK's revocation handler has already loaded.
+
+        Revoking a refresh token also ends the access session it was paired with.
+        """
         with make_session() as session:
-            revoked = False
-
-            # Try to revoke as access token (UserSession)
-            if not token_type_hint or token_type_hint == "access_token":
-                user_session = session.get(UserSession, hash_token(token))
-                if user_session:
-                    session.delete(user_session)
-                    revoked = True
-                    logger.info(f"Revoked access token: id={token_id(token)}")
-
-            # Try to revoke as refresh token
-            if not revoked and (
-                not token_type_hint or token_type_hint == "refresh_token"
-            ):
-                refresh_token = (
-                    session.query(OAuthRefreshToken)
-                    .filter(OAuthRefreshToken.token_hash == hash_token(token))
-                    .first()
-                )
-                if refresh_token:
-                    refresh_token.revoked = True  # type: ignore
-                    revoked = True
-                    logger.info(f"Revoked refresh token: id={token_id(token)}")
-
-            if revoked:
-                session.commit()
+            if isinstance(token, RefreshToken):
+                revoked = revoke_refresh_token(session, token.token)
             else:
-                logger.warning(f"Token not found for revocation: id={token_id(token)}")
+                revoked = revoke_access_token(session, token.token)
+            if not revoked:
+                logger.warning(f"Token not found for revocation: id={token_id(token.token)}")
+                return
+            session.commit()
+            logger.info(f"Revoked token: id={token_id(token.token)}")
 
     def get_protected_resource_metadata(self) -> dict[str, Any]:
         """Return metadata about the protected resource."""

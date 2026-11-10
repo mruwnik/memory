@@ -43,18 +43,16 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 AUTH_REQUIRED_BODY = "Authentication required"
 
 # Endpoints that don't require authentication (prefix matching).
-# `/register` and `/revoke` are the OAuth Dynamic Client Registration
-# (RFC 7591) and Token Revocation (RFC 7009) endpoints exposed by the
-# MCP SDK at root. DCR clients have no credentials at registration time
-# by definition, so the middleware cannot demand them; otherwise new
-# MCP clients can't enroll and POST /register returns 401 before the
-# OAuth provider's handler runs.
+# `/register` is the OAuth Dynamic Client Registration (RFC 7591) endpoint
+# exposed by the MCP SDK at root. DCR clients have no credentials at
+# registration time by definition, so the middleware cannot demand them;
+# otherwise new MCP clients can't enroll and POST /register returns 401
+# before the OAuth provider's handler runs.
 WHITELIST = {
     "/health",
     "/authorize",
     "/token",
     "/register",
-    "/revoke",
     "/mcp",
     "/oauth/",
     "/.well-known/",
