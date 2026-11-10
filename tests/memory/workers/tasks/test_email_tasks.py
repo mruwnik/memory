@@ -32,6 +32,7 @@ from memory.common.email_sender import (
 from memory.parsers.email import parse_email_message
 from memory.workers.tasks.email import (
     SYNC_OVERLAP,
+    QueueOutcome,
     get_cutoff_date,
     process_email_batch,
     process_message,
@@ -320,7 +321,28 @@ def test_queue_message_skips_stored_message_id(
             db_session, test_email_account.id, uid, "INBOX", raw_email
         )
 
-    assert queued is False
+    assert queued is QueueOutcome.STORED_HERE
+    mock_proc.delay.assert_not_called()
+
+
+def test_queue_message_tells_apart_a_copy_stored_by_another_account(
+    db_session, test_email_account, test_user
+):
+    other = EmailAccount(
+        name="Other", email_address="other@example.com", imap_server="imap.example.com",
+        imap_port=993, username="other", password="pw", user_id=test_user.id,
+    )
+    db_session.add(other)
+    db_session.commit()
+    with patch("memory.workers.tasks.email.vectorize_email"):
+        store_email_message(other.id, "101", "INBOX", SIMPLE_EMAIL_RAW)
+
+    with patch("memory.workers.tasks.email.process_message") as mock_proc:
+        outcome = queue_message(
+            db_session, test_email_account.id, "101", "INBOX", SIMPLE_EMAIL_RAW
+        )
+
+    assert outcome is QueueOutcome.STORED_ELSEWHERE
     mock_proc.delay.assert_not_called()
 
 
@@ -434,7 +456,7 @@ def test_queue_message_spools_body_and_passes_only_filename(
             datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc),
         )
 
-    assert queued is True
+    assert queued is QueueOutcome.QUEUED
     mock_proc.delay.assert_called_once()
     # Enqueued by keyword so the args land in the PendingJob params (retry).
     call = mock_proc.delay.call_args
@@ -453,18 +475,18 @@ def test_queue_message_spools_body_and_passes_only_filename(
 
 
 @pytest.mark.parametrize(
-    "previous_jobs, queued",
+    "previous_jobs, expected",
     [
-        ([("777", WORKER_LOST_ERROR, MAX_TASK_STARTS)], False),
-        ([("777", LOST_JOB_ERROR, 1)] * MAX_TASK_STARTS, False),
+        ([("777", WORKER_LOST_ERROR, MAX_TASK_STARTS)], QueueOutcome.KILLS_WORKER),
+        ([("777", LOST_JOB_ERROR, 1)] * MAX_TASK_STARTS, QueueOutcome.KILLS_WORKER),
         # One lost start is as likely a deploy as a poison message
-        ([("777", LOST_JOB_ERROR, 1)], True),
-        ([("777", "boom", MAX_TASK_STARTS)], True),
-        ([("778", WORKER_LOST_ERROR, MAX_TASK_STARTS)], True),
+        ([("777", LOST_JOB_ERROR, 1)], QueueOutcome.QUEUED),
+        ([("777", "boom", MAX_TASK_STARTS)], QueueOutcome.QUEUED),
+        ([("778", WORKER_LOST_ERROR, MAX_TASK_STARTS)], QueueOutcome.QUEUED),
     ],
 )
 def test_queue_message_skips_message_that_keeps_killing_its_worker(
-    db_session, test_email_account, previous_jobs, queued
+    db_session, test_email_account, previous_jobs, expected
 ):
     db_session.add_all(
         PendingJob(
@@ -483,25 +505,25 @@ def test_queue_message_skips_message_that_keeps_killing_its_worker(
             db_session, test_email_account.id, "777", "INBOX", SIMPLE_EMAIL_RAW
         )
 
-    assert result is queued
-    assert mock_proc.delay.called is queued
+    assert result is expected
+    assert mock_proc.delay.called is (expected is QueueOutcome.QUEUED)
 
 
 RESET_SENDER = "noreply@example.com"
 
 
 @pytest.mark.parametrize(
-    "from_addr, subject, headers, skipped",
+    "from_addr, subject, headers, expected",
     [
-        (RESET_SENDER, PASSWORD_RESET_SUBJECT, None, True),
-        (f"Memory <{RESET_SENDER}>", PASSWORD_RESET_SUBJECT, None, True),
-        ("someone@example.com", "Anything", {PASSWORD_RESET_HEADER: "1"}, True),
-        (RESET_SENDER, "Weekly digest", None, False),
-        ("someone@example.com", PASSWORD_RESET_SUBJECT, None, False),
+        (RESET_SENDER, PASSWORD_RESET_SUBJECT, None, QueueOutcome.PASSWORD_RESET),
+        (f"Memory <{RESET_SENDER}>", PASSWORD_RESET_SUBJECT, None, QueueOutcome.PASSWORD_RESET),
+        ("someone@example.com", "Anything", {PASSWORD_RESET_HEADER: "1"}, QueueOutcome.PASSWORD_RESET),
+        (RESET_SENDER, "Weekly digest", None, QueueOutcome.QUEUED),
+        ("someone@example.com", PASSWORD_RESET_SUBJECT, None, QueueOutcome.QUEUED),
     ],
 )
 def test_queue_message_never_ingests_password_reset_mail(
-    db_session, test_email_account, monkeypatch, from_addr, subject, headers, skipped
+    db_session, test_email_account, monkeypatch, from_addr, subject, headers, expected
 ):
     monkeypatch.setattr(settings, "PASSWORD_RESET_FROM_EMAIL", RESET_SENDER)
     raw = _build_mime_message(
@@ -513,10 +535,10 @@ def test_queue_message_never_ingests_password_reset_mail(
     ).as_string()
 
     with patch("memory.workers.tasks.email.process_message") as mock_proc:
-        queued = queue_message(db_session, test_email_account.id, "888", "Sent", raw)
+        outcome = queue_message(db_session, test_email_account.id, "888", "Sent", raw)
 
-    assert queued is not skipped
-    assert mock_proc.delay.called is not skipped
+    assert outcome is expected
+    assert mock_proc.delay.called is (expected is QueueOutcome.QUEUED)
 
 
 def test_spool_file_kept_when_processing_raises(db_session, test_email_account):
@@ -849,6 +871,33 @@ def test_sync_gmail_forgets_declined_mail_that_left_the_mailbox(
     assert gmail_email_account.gmail_declined_ids == remembered
 
 
+def test_sync_gmail_stores_mail_once_another_accounts_copy_is_gone(
+    db_session, gmail_email_account, test_user
+):
+    other = EmailAccount(
+        name="Other Gmail", email_address="other@gmail.com", account_type="gmail",
+        imap_server="imap.gmail.com", imap_port=993, username="other", password="pw",
+        user_id=test_user.id,
+    )
+    db_session.add(other)
+    db_session.commit()
+    add_gmail_mail(db_session, other, "dup")
+    mailbox = {"dup": ["INBOX"]}
+
+    _, first_queue = run_gmail_sync(db_session, gmail_email_account, FakeGmailService(mailbox))
+    remembered = list(gmail_email_account.gmail_declined_ids)
+    for copy in db_session.query(MailMessage).filter_by(email_account_id=other.id):
+        db_session.delete(copy)
+    db_session.commit()
+    second = FakeGmailService(mailbox)
+    _, second_queue = run_gmail_sync(db_session, gmail_email_account, second)
+
+    assert remembered == []
+    assert first_queue.delay.call_count == 0
+    assert second.raw_fetches == ["dup"]
+    assert [c.kwargs["message_id"] for c in second_queue.delay.call_args_list] == ["dup"]
+
+
 def test_sync_gmail_does_not_remember_failed_mail(
     db_session, gmail_email_account
 ):
@@ -1119,16 +1168,16 @@ No Message-ID header here"""
 
 
 @pytest.mark.parametrize(
-    "folder, subject, queued",
+    "folder, subject, expected",
     [
         # Another message with the same UID in another folder is new mail
-        ("Sent", "A different message", True),
+        ("Sent", "A different message", QueueOutcome.QUEUED),
         # The same message fetched again is not
-        ("INBOX", "Stored first", False),
+        ("INBOX", "Stored first", QueueOutcome.STORED_HERE),
     ],
 )
 def test_mail_without_message_id_is_told_apart_by_content(
-    db_session, test_email_account, folder, subject, queued
+    db_session, test_email_account, folder, subject, expected
 ):
     with patch("memory.workers.tasks.email.vectorize_email"):
         store_email_message(
@@ -1144,4 +1193,4 @@ def test_mail_without_message_id_is_told_apart_by_content(
             NO_MESSAGE_ID_RAW.format(subject=subject),
         )
 
-    assert result is queued
+    assert result is expected

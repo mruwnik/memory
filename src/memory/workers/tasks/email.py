@@ -1,4 +1,5 @@
 import contextlib
+import enum
 import logging
 import pathlib
 from datetime import datetime, timedelta, timezone
@@ -257,6 +258,24 @@ def is_password_reset_mail(raw_email: str) -> bool:
     )
 
 
+class QueueOutcome(enum.Enum):
+    """What ``queue_message`` did with a message."""
+
+    QUEUED = "queued"
+    STORED_HERE = "stored_here"
+    STORED_ELSEWHERE = "stored_elsewhere"
+    PASSWORD_RESET = "password_reset"
+    KILLS_WORKER = "kills_worker"
+
+
+# Declines a later sync would repeat for as long as the message exists. A copy
+# stored by another account is not among them: deleting that copy (or that
+# account) makes this account's own copy needed.
+LASTING_DECLINES = frozenset(
+    {QueueOutcome.STORED_HERE, QueueOutcome.PASSWORD_RESET, QueueOutcome.KILLS_WORKER}
+)
+
+
 def queue_message(
     db: DBSession,
     account_id: int,
@@ -264,11 +283,12 @@ def queue_message(
     folder: str,
     raw_email: str,
     received_at: datetime | None = None,
-) -> bool:
+) -> QueueOutcome:
     """Parse, dedup, spool, and queue a single message for async processing.
 
-    Returns True if the message was newly queued, False if it already
-    exists (dedup hit), is password-reset mail, or killed its worker before. On any failure the shared session is rolled back
+    Returns QUEUED if the message was newly queued, else why it was not: a
+    copy is already stored (by this account or another), it is password-reset
+    mail, or it killed its worker before. On any failure the shared session is rolled back
     before the exception propagates: a dropped connection (e.g. Postgres'
     idle-in-transaction timeout firing mid-sync) otherwise poisons the
     transaction and every subsequent statement cascades into
@@ -276,19 +296,21 @@ def queue_message(
     on the next statement.
     """
     if is_password_reset_mail(raw_email):
-        return False
+        return QueueOutcome.PASSWORD_RESET
     spooled: str | None = None
     try:
         parsed_email = parse_email_message(raw_email, with_attachments=False)
-        if find_stored_message(db, account_id, parsed_email):
-            return False
+        if stored := find_stored_message(db, account_id, parsed_email):
+            if stored.email_account_id == account_id:
+                return QueueOutcome.STORED_HERE
+            return QueueOutcome.STORED_ELSEWHERE
         if killed_its_worker(db, "process_message", account_id=account_id, message_id=message_id):
             logger.warning(
                 "Not queueing message %s of account %s: it keeps killing its worker",
                 message_id,
                 account_id,
             )
-            return False
+            return QueueOutcome.KILLS_WORKER
         spooled = spool_raw_email(
             account_id, message_id, raw_email, parsed_email["hash"].hex()
         )
@@ -302,7 +324,7 @@ def queue_message(
             spool_name=spooled,
             received_at=received_at and received_at.isoformat(),
         )
-        return True
+        return QueueOutcome.QUEUED
     except Exception:
         # If we spooled the body but never got it onto the queue (e.g. the
         # broker is unreachable — the exact failure this change guards against),
@@ -353,8 +375,8 @@ def process_email_batch(
 
     Returns:
         Stats dict with messages_found, new_messages, errors, and declined_ids:
-        the ids of messages not queued because they were already stored or
-        are never stored (failures are not among them)
+        the ids of messages a later sync would decline again (see
+        ``LASTING_DECLINES``; failures are not among them)
     """
     messages_found = 0
     new_messages = 0
@@ -385,15 +407,17 @@ def process_email_batch(
                 }
 
         try:
-            if queue_message(
+            outcome = queue_message(
                 db, cast(int, account.id), message_id, folder, raw_email, received_at
-            ):
-                new_messages += 1
-            else:
-                declined_ids.append(message_id)
+            )
         except Exception:
             logger.exception(f"Error queuing message {message_id}")
             errors += 1
+            continue
+        if outcome is QueueOutcome.QUEUED:
+            new_messages += 1
+        elif outcome in LASTING_DECLINES:
+            declined_ids.append(message_id)
 
     return {
         "messages_found": messages_found,
@@ -447,7 +471,8 @@ def sync_imap_messages(
     def message_processor(
         account_id: int, message_id: str, folder: str, raw_email: str, received_at: datetime | None
     ) -> bool:
-        return queue_message(db, account_id, message_id, folder, raw_email, received_at)
+        outcome = queue_message(db, account_id, message_id, folder, raw_email, received_at)
+        return outcome is QueueOutcome.QUEUED
 
     with imap_connection(account) as conn:
         for folder in folders_to_process:
