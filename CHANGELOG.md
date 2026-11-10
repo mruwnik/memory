@@ -40,6 +40,7 @@ a new, empty `## Unreleased` above it.
 - Emails without a Message-ID header are no longer dropped when another such email has the same IMAP UID in a different folder or account. Their generated id now comes from the message's content; such mail received within a day before upgrading may be stored a second time on the first sync.
 - Uploading a report (`POST /reports/upload`) into a project you aren't a member of is refused with 403 (admins excepted).
 - Only a report's creator or an admin can overwrite it (MCP `reports_upsert` with its filename, or re-uploading it through `POST /reports/upload`) or delete it (`reports_delete`); being able to read it is no longer enough. The report worker writes an MCP report's file only after checking it may overwrite the report stored under that filename.
+- Only a photo's creator or an admin can delete it (`DELETE /photos/{id}`); others who can see it get 403.
 
 ### Required env vars
 None

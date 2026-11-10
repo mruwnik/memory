@@ -21,6 +21,7 @@ from memory.common.db.models import (
     Report,
     Team,
 )
+from memory.common.db.models.source_items import Photo
 from memory.common.db.models.sources import project_teams, team_members
 
 
@@ -339,6 +340,47 @@ def test_upload_report_overwrite_names_the_checked_report(
 
     assert response.status_code == 200
     assert mock_dispatch_job.call_args.kwargs["task_kwargs"]["existing_report_id"] == report.id
+
+
+# ====== Photo delete needs delete rights ======
+
+
+def stored_photo(db_session, creator_id: int) -> int:
+    photo = Photo(
+        sha256=f"photo-{creator_id}".encode(),
+        modality="photo",
+        filename="photos/p.jpg",
+        creator_id=creator_id,
+        sensitivity="public",
+    )
+    db_session.add(photo)
+    db_session.commit()
+    return photo.id
+
+
+def test_delete_photo_refuses_a_readable_photo_of_someone_else(
+    member_client: TestClient, db_session, other_user
+):
+    photo_id = stored_photo(db_session, other_user.id)
+
+    response = member_client.delete(f"/photos/{photo_id}")
+
+    assert response.status_code == 403
+    assert db_session.get(Photo, photo_id) is not None
+
+
+@pytest.mark.parametrize(
+    "client_fixture, owner",
+    [("member_client", "user"), ("client", "user"), ("client", "other_user")],
+)
+def test_delete_photo_by_creator_or_admin(request, db_session, client_fixture, owner):
+    photo_id = stored_photo(db_session, request.getfixturevalue(owner).id)
+
+    response = request.getfixturevalue(client_fixture).delete(f"/photos/{photo_id}")
+
+    assert response.status_code == 200
+    db_session.expire_all()
+    assert db_session.get(Photo, photo_id) is None
 
 
 # ====== Forum sync — admin-gated, rate-limited, max_items capped ======

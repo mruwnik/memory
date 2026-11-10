@@ -18,6 +18,7 @@ from memory.common.access_control import (
     get_user_project_roles,
     has_admin_scope,
     user_can_access,
+    user_can_delete,
     user_can_edit,
 )
 from memory.common.db.connection import get_session
@@ -178,6 +179,11 @@ def delete_photo(
     project_roles = get_user_project_roles(db, user)
     if not user_can_access(user, photo, project_roles):
         raise HTTPException(status_code=404, detail="Photo not found")
+    if not user_can_delete(user, photo):
+        raise HTTPException(
+            status_code=403,
+            detail="Only the photo's creator or an admin can delete it",
+        )
 
     # Delete chunks from Qdrant and PostgreSQL
     try:
