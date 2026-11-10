@@ -1,6 +1,7 @@
 """MCP subserver for tracking people."""
 
 import logging
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from functools import reduce
 from typing import Any, Literal
@@ -237,21 +238,28 @@ def drop_discord_contact(person: Person, discord_id: int) -> None:
     person.contact_info = {**rest, "discord": remaining if len(remaining) > 1 else remaining[0]}
 
 
+@dataclass
+class DiscordLinks:
+    """The Discord ids linked to a Person, and those moved to it from another Person
+    (id, that Person's identifier)."""
+
+    linked: list[int] = field(default_factory=list)
+    moved: list[tuple[int, str]] = field(default_factory=list)
+
+
 def link_discord_from_contact_info(
     session: DBSession, person: Person, contact_info: dict | None
-) -> list[int]:
+) -> DiscordLinks:
     """Attach the Discord users whose ids are in contact_info to ``person``.
     Admin only: a Discord account's messages follow its Person. A Person the
     account moves from loses the id from its contact_info.
-
-    Returns list of Discord user IDs that were linked.
     """
     if not contact_info:
-        return []
+        return DiscordLinks()
 
     discord_info = contact_info.get("discord")
     if not discord_info:
-        return []
+        return DiscordLinks()
 
     # Normalize to list
     if isinstance(discord_info, (str, int)):
@@ -260,9 +268,9 @@ def link_discord_from_contact_info(
         discord_identifiers = discord_info
     else:
         logger.warning(f"Unexpected discord contact_info type: {type(discord_info)}")
-        return []
+        return DiscordLinks()
 
-    linked_ids = []
+    links = DiscordLinks()
 
     for identifier in discord_identifiers:
         identifier = str(identifier).strip()
@@ -278,20 +286,22 @@ def link_discord_from_contact_info(
 
         # Already attached to this Person — nothing to do, just report it.
         if discord_user.person_id == person.id:
-            linked_ids.append(discord_user.id)
+            links.linked.append(discord_user.id)
             continue
 
         previous = session.get(Person, discord_user.person_id) if discord_user.person_id else None
         if previous is not None:
             drop_discord_contact(previous, discord_user.id)
+            links.moved.append((discord_user.id, previous.identifier))
+            logger.info(f"Moved Discord user {discord_user.id} from person {previous.id} to person {person.id}")
         discord_user.person_id = person.id
         logger.info(
             f"Linked Discord user {discord_user.username} ({discord_user.id}) "
             f"to person {person.identifier}"
         )
-        linked_ids.append(discord_user.id)
+        links.linked.append(discord_user.id)
 
-    return linked_ids
+    return links
 
 
 @people_mcp.tool()
@@ -360,7 +370,9 @@ async def upsert(
     A person is linked to a user only through user_id.
 
     Returns:
-        Person data with status "created" or "updated"
+        Person data with status "created" or "updated"; `linked_discord_users`, the
+        Discord ids attached, and `moved_discord_users` ({id, from}), those taken
+        from another Person, whose contact_info loses the id.
     """
     # Get current user for creator_id
     user = get_mcp_current_user()
@@ -443,7 +455,7 @@ async def upsert(
                 {"discord": [i for i in discord_ids(person.contact_info) if i in named]},
             )
             if caller_is_admin
-            else []
+            else DiscordLinks()
         )
 
         session.commit()
@@ -456,11 +468,15 @@ async def upsert(
 
         if linked_user:
             result["linked_user_id"] = linked_user
-        if linked_discord:
-            # Discord snowflakes are 64-bit and exceed JS's 2**53 safe-integer
-            # range; serialize as strings so double-based JSON parsers don't
-            # silently round them.
-            result["linked_discord_users"] = [str(d) for d in linked_discord]
+        # Discord snowflakes are 64-bit and exceed JS's 2**53 safe-integer
+        # range; serialize as strings so double-based JSON parsers don't
+        # silently round them.
+        if linked_discord.linked:
+            result["linked_discord_users"] = [str(d) for d in linked_discord.linked]
+        if linked_discord.moved:
+            result["moved_discord_users"] = [
+                {"id": str(d), "from": previous} for d, previous in linked_discord.moved
+            ]
 
     # If content provided, queue a tidbit creation task
     if content:

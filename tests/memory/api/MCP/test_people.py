@@ -1981,8 +1981,21 @@ async def test_linking_a_discord_account_drops_it_from_the_previous_persons_cont
     result = await link_own_discord_account(admin_session)
 
     assert result["linked_discord_users"] == [str(OWN_DISCORD_ID)]
+    assert result["moved_discord_users"] == [{"id": str(OWN_DISCORD_ID), "from": ingested.identifier}]
     db_session.expire_all()
     assert db_session.get(Person, ingested.id).contact_info == {"phone": "555"}
+
+
+@pytest.mark.asyncio
+async def test_linking_an_already_linked_discord_account_moves_nothing(
+    db_session, admin_session, ingested_own_discord_account
+):
+    await link_own_discord_account(admin_session)
+
+    result = await link_own_discord_account(admin_session)
+
+    assert result["linked_discord_users"] == [str(OWN_DISCORD_ID)]
+    assert "moved_discord_users" not in result
 
 
 @pytest.mark.parametrize(
