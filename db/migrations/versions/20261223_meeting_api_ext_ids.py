@@ -7,6 +7,8 @@ so resubmitting their ids still dedupes.
 Meetings whose transcript account was deleted look the same and are renamed
 too; a re-added account's sync then finds them as another recording of the
 same call rather than by id.
+The stored params of those submissions' jobs are renamed too, since a retry
+rebuilds the task's arguments from them.
 
 Revision ID: 20261223_meeting_api_ext_ids
 Revises: 20261222_item_inserted_idx
@@ -21,7 +23,28 @@ branch_labels = None
 depends_on = None
 
 
+# Jobs dispatched by POST /meetings: the submitter is both the job's user and
+# the task's creator, and there is no transcript account.
+REST_MEETING_JOB = """
+    job_type = 'meeting'
+    AND params->>'creator_id' = CAST(user_id AS text)
+    AND NOT params ? 'transcript_account_id'
+    AND params->>'external_id' IS NOT NULL
+"""
+JOB_PREFIX = "'api:' || (params->>'creator_id') || ':'"
+
+
 def upgrade() -> None:
+    op.execute(
+        f"""
+        UPDATE pending_jobs
+        SET params = jsonb_set(
+            params, '{{external_id}}', to_jsonb({JOB_PREFIX} || (params->>'external_id'))
+        )
+        WHERE {REST_MEETING_JOB}
+          AND params->>'external_id' NOT LIKE {JOB_PREFIX} || '%'
+        """
+    )
     op.execute(
         """
         UPDATE meeting AS m
@@ -38,6 +61,17 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute(
+        f"""
+        UPDATE pending_jobs
+        SET params = jsonb_set(
+            params, '{{external_id}}',
+            to_jsonb(substr(params->>'external_id', length({JOB_PREFIX}) + 1))
+        )
+        WHERE {REST_MEETING_JOB}
+          AND params->>'external_id' LIKE {JOB_PREFIX} || '%'
+        """
+    )
     # Two users may now hold the same id; the later one keeps its prefix.
     op.execute(
         """
