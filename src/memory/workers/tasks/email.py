@@ -1,7 +1,7 @@
 import contextlib
 import logging
 import pathlib
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from email.parser import HeaderParser
 from email.utils import parseaddr
 from typing import Generator, cast
@@ -314,11 +314,20 @@ def queue_message(
         raise
 
 
+# IMAP SEARCH SINCE compares days in the server's timezone, which can be a day
+# behind ours; mail fetched twice is dropped by Message-ID.
+SYNC_OVERLAP = timedelta(days=1)
+
+
 def get_cutoff_date(account: EmailAccount, since_date: str | None) -> datetime:
-    """Get the cutoff date for syncing emails."""
+    """The date to sync from: ``since_date`` if given, else a day before the
+    start of the last clean sync."""
     if since_date:
         return datetime.fromisoformat(since_date)
-    return cast(datetime, account.last_sync_at) or datetime(1970, 1, 1)
+    last_sync_at = cast(datetime | None, account.last_sync_at)
+    if not last_sync_at:
+        return datetime(1970, 1, 1)
+    return last_sync_at - SYNC_OVERLAP
 
 
 # Extend lock every N messages during batch processing
@@ -390,9 +399,14 @@ def process_email_batch(
 def finalize_sync(
     account: EmailAccount,
     db: DBSession,
-    error: Exception | None = None,
+    started_at: datetime,
+    error: Exception | str | None = None,
 ) -> None:
-    """Update account sync status after sync completes."""
+    """Record how the sync that began at ``started_at`` ended.
+
+    Only a clean sync moves ``last_sync_at``, to its start: mail that arrived
+    while it ran, or that it failed to fetch or queue, is fetched again next time.
+    """
     if error:
         # The failing sync may have left the session in a poisoned
         # transaction (e.g. a dropped connection mid-query). Roll back
@@ -401,7 +415,7 @@ def finalize_sync(
         db.rollback()
         account.record_sync(error)
     else:
-        account.last_sync_at = datetime.now()  # type: ignore
+        account.last_sync_at = started_at  # type: ignore
         account.record_sync(None)
     db.commit()
 
@@ -427,8 +441,17 @@ def sync_imap_messages(
     with imap_connection(account) as conn:
         for folder in folders_to_process:
             # Extend lock before each folder (folders can be large)
-            if lock:
-                lock.extend()
+            if lock and not lock.extend():
+                logger.warning(
+                    "Failed to extend lock, another sync may have started - aborting"
+                )
+                return {
+                    "messages_found": messages_found,
+                    "new_messages": new_messages,
+                    "errors": errors,
+                    "aborted": True,
+                    "abort_reason": "lock_extension_failed",
+                }
 
             # Close any transaction left open by the previous folder's
             # delete pass before fetching this folder. fetch_email_since
@@ -519,6 +542,16 @@ def sync_gmail_messages(
     }
 
 
+def sync_failures(stats: dict) -> str | None:
+    """What a sync that finished with failures tells the user, else None."""
+    if not (errors := stats.get("errors")):
+        return None
+    return (
+        f"{errors} messages or folders could not be fetched or queued; "
+        "the next sync tries them again"
+    )
+
+
 @app.task(name=SYNC_ACCOUNT)
 @tracked_task
 def sync_account(account_id: int, since_date: str | None = None) -> dict:
@@ -533,6 +566,7 @@ def sync_account(account_id: int, since_date: str | None = None) -> dict:
         dict with stats about the sync operation
     """
     logger.info(f"Syncing account {account_id} since {since_date}")
+    started_at = datetime.now(timezone.utc)
 
     # Use distributed lock to prevent concurrent syncs of the same account
     with email_sync_lock(account_id) as lock:
@@ -566,11 +600,11 @@ def sync_account(account_id: int, since_date: str | None = None) -> dict:
                 if stats.get("aborted"):
                     return {"status": "aborted", **stats}
 
-                finalize_sync(account, db)
+                finalize_sync(account, db, started_at, sync_failures(stats))
 
             except Exception as e:
                 logger.error(f"Error syncing account {account.email_address}: {e}")
-                finalize_sync(account, db, error=e)
+                finalize_sync(account, db, started_at, error=e)
                 return {"status": "error", "error": str(e)}
 
             return {

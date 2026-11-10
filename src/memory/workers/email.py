@@ -219,42 +219,49 @@ def fetch_email_since(
     conn: imaplib.IMAP4,
     folder: str,
     since_date: datetime = datetime(1970, 1, 1),
-) -> list[RawEmailResponse]:
+) -> tuple[list[RawEmailResponse], int]:
     """
-    Fetch emails from a folder since a given date and time.
+    Fetch the emails a folder received on or after ``since_date``'s day.
 
     Args:
         conn: IMAP connection
         folder: Folder name to select
-        since_date: Fetch emails since this date and time
+        since_date: Fetch emails since this date (IMAP SEARCH ignores the time)
 
     Returns:
-        List of (uid, raw_email, received_at) tuples
+        The (uid, raw_email, received_at) tuples fetched, and how many found
+        messages couldn't be fetched.
+
+    Raises:
+        FolderUidsError: if the folder can't be selected or searched.
+    """
+    uids = search_folder(conn, folder, f'(SINCE "{since_date.strftime("%d-%b-%Y")}")')
+    fetched = [fetch_email(conn, uid) for uid in uids]
+    emails = [email for email in fetched if email]
+    return emails, len(fetched) - len(emails)
+
+
+def search_folder(conn: imaplib.IMAP4, folder: str, criteria: str) -> list[str]:
+    """UIDs of the messages in ``folder`` matching ``criteria``.
+
+    Raises FolderUidsError if the folder can't be selected or searched, so a
+    read failure is never mistaken for a folder with nothing in it.
     """
     try:
-        status, counts = conn.select(imap_mailbox(folder))
+        status, _ = conn.select(imap_mailbox(folder))
         if status != "OK":
-            logger.error(f"Error selecting folder {folder}: {counts}")
-            return []
-
-        date_str = since_date.strftime("%d-%b-%Y")
-
-        status, data = conn.uid("SEARCH", f'(SINCE "{date_str}")')
+            raise FolderUidsError(f"Error selecting folder {folder}")
+        status, data = conn.uid("SEARCH", criteria)
         if status != "OK":
-            logger.error(f"Error searching folder {folder}: {data}")
-            return []
+            raise FolderUidsError(f"Error searching folder {folder}")
+    except FolderUidsError:
+        raise
     except Exception as e:
-        logger.error(f"Error in fetch_email_since for folder {folder}: {str(e)}")
-        return []
+        raise FolderUidsError(f"Error reading folder {folder}: {e}") from e
 
     if not data or not data[0]:
         return []
-
-    return [
-        email
-        for raw_uid in data[0].split()
-        if (email := fetch_email(conn, raw_uid.decode()))
-    ]
+    return [uid.decode() for uid in data[0].split()]
 
 
 def process_folder(
@@ -275,35 +282,33 @@ def process_folder(
         processor: Function to process each message
 
     Returns:
-        Stats dictionary for the folder
+        Stats dictionary for the folder. ``errors`` counts every message that
+        was not fetched or queued, plus one for a folder that couldn't be read.
     """
-    new_messages, errors = 0, 0
-    emails = []
-
     try:
-        emails = fetch_email_since(conn, folder, since_date)
+        emails, unfetched = fetch_email_since(conn, folder, since_date)
+    except FolderUidsError:
+        logger.exception(f"Could not read a folder of account {account.id}")
+        return {"messages_found": 0, "new_messages": 0, "errors": 1}
 
-        for uid, raw_email, received_at in emails:
-            try:
-                task = processor(
-                    account_id=account.id,  # type: ignore
-                    message_id=uid,
-                    folder=folder,
-                    raw_email=raw_email.decode("utf-8", errors="replace"),
-                    received_at=received_at,
-                )
-                if task:
-                    new_messages += 1
-            except Exception as e:
-                logger.error(f"Error queuing message {uid}: {str(e)}")
-                errors += 1
-
-    except Exception as e:
-        logger.error(f"Error processing folder {folder}: {str(e)}")
-        errors += 1
+    new_messages, errors = 0, unfetched
+    for uid, raw_email, received_at in emails:
+        try:
+            task = processor(
+                account_id=account.id,  # type: ignore
+                message_id=uid,
+                folder=folder,
+                raw_email=raw_email.decode("utf-8", errors="replace"),
+                received_at=received_at,
+            )
+            if task:
+                new_messages += 1
+        except Exception as e:
+            logger.error(f"Error queuing message {uid}: {str(e)}")
+            errors += 1
 
     return {
-        "messages_found": len(emails),
+        "messages_found": len(emails) + unfetched,
         "new_messages": new_messages,
         "errors": errors,
     }
@@ -397,37 +402,14 @@ def get_folder_uids(conn: imaplib.IMAP4, folder: str) -> set[str]:
     """
     Get all message UIDs in a folder.
 
-    Args:
-        conn: IMAP connection
-        folder: Folder name to get UIDs from
-
     Returns:
         Set of UID strings. Empty set means the folder is genuinely empty.
 
     Raises:
-        FolderUidsError: if SELECT or SEARCH fails, or the connection errors.
-            A read failure is signalled by raising rather than returning an
-            empty set so callers don't confuse it with an empty folder.
+        FolderUidsError: if SELECT or SEARCH fails, or the connection errors,
+            so callers don't confuse a read failure with an empty folder.
     """
-    try:
-        status, _ = conn.select(imap_mailbox(folder))
-        if status != "OK":
-            raise FolderUidsError(f"Error selecting folder {folder}")
-
-        status, data = conn.uid("SEARCH", "ALL")
-        if status != "OK":
-            raise FolderUidsError(f"Error searching folder {folder}")
-    except FolderUidsError:
-        raise
-    except Exception as e:
-        raise FolderUidsError(
-            f"Error getting UIDs from folder {folder}: {str(e)}"
-        ) from e
-
-    if not data or not data[0]:
-        return set()
-
-    return {uid.decode() for uid in data[0].split()}
+    return set(search_folder(conn, folder, "ALL"))
 
 
 @dataclass

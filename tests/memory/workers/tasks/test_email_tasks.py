@@ -1,4 +1,5 @@
 import base64
+import contextlib
 import io
 import pathlib
 from datetime import datetime, timedelta, timezone
@@ -30,6 +31,8 @@ from memory.common.email_sender import (
 )
 from memory.parsers.email import parse_email_message
 from memory.workers.tasks.email import (
+    SYNC_OVERLAP,
+    get_cutoff_date,
     process_email_batch,
     process_message,
     queue_message,
@@ -37,10 +40,13 @@ from memory.workers.tasks.email import (
     spool_raw_email,
     sync_account,
     sync_gmail_messages,
+    sync_imap_messages,
 )
 from tests.conftest import item_events
+from tests.providers.email_provider import MockEmailProvider
 from tests.providers.gmail_provider import FakeGmailService
 from sqlalchemy.exc import OperationalError, PendingRollbackError
+from memory.common.redis_lock import Lock
 
 
 # Test email constants
@@ -874,7 +880,7 @@ def test_finalize_sync_error_rolls_back_before_commit():
     db.commit.side_effect = lambda: order.append("commit")
     account = EmailAccount()
 
-    finalize_sync(account, db, error=Exception("boom"))
+    finalize_sync(account, db, datetime.now(timezone.utc), error=Exception("boom"))
 
     assert order == ["rollback", "commit"]
     assert account.sync_error == "boom"
@@ -920,3 +926,95 @@ def test_repeated_attachment_leaves_no_unreferenced_chunk_images(
     on_disk = {p.name for p in settings.CHUNK_STORAGE_DIR.iterdir()}
     assert len(on_disk) == 1
     assert on_disk == referenced
+
+
+# -----------------------------------------------------------------------------
+# IMAP sync cutoff
+# -----------------------------------------------------------------------------
+
+PREVIOUS_SYNC = datetime(2024, 5, 1, 12, 0, tzinfo=timezone.utc)
+
+
+def run_imap_sync(account_id, provider, queue_error=None):
+    with (
+        patch(
+            "memory.workers.tasks.email.imap_connection",
+            new=lambda account: contextlib.nullcontext(provider),
+        ),
+        patch("memory.workers.tasks.email.process_message") as task,
+    ):
+        task.delay.side_effect = queue_error
+        return sync_account(account_id)
+
+
+def test_imap_sync_moves_cutoff_to_its_start(db_session, test_email_account):
+    provider = MockEmailProvider({"INBOX": [{"uid": 1}]})
+    before = datetime.now(timezone.utc)
+
+    result = run_imap_sync(test_email_account.id, provider)
+
+    db_session.refresh(test_email_account)
+    assert result["status"] == "completed"
+    assert test_email_account.sync_error is None
+    assert before <= test_email_account.last_sync_at <= cast(datetime, provider.searched_at)
+
+
+@pytest.mark.parametrize(
+    "provider_kwargs, queue_error",
+    [
+        ({"unselectable": {"Sent"}}, None),
+        ({"unfetchable": {1}}, None),
+        ({}, RuntimeError("broker down")),
+    ],
+)
+def test_imap_sync_with_failures_keeps_cutoff(
+    db_session, test_email_account, provider_kwargs, queue_error
+):
+    test_email_account.last_sync_at = PREVIOUS_SYNC
+    db_session.commit()
+    provider = MockEmailProvider({"INBOX": [{"uid": 1}], "Sent": []}, **provider_kwargs)
+
+    run_imap_sync(test_email_account.id, provider, queue_error)
+
+    db_session.refresh(test_email_account)
+    assert test_email_account.last_sync_at == PREVIOUS_SYNC
+    assert "1 messages or folders could not be fetched or queued" in (
+        test_email_account.sync_error or ""
+    )
+
+
+@pytest.mark.parametrize(
+    "last_sync_at, since_date, expected",
+    [
+        (None, None, datetime(1970, 1, 1)),
+        (PREVIOUS_SYNC, None, PREVIOUS_SYNC - SYNC_OVERLAP),
+        (PREVIOUS_SYNC, "2024-04-01T00:00:00", datetime(2024, 4, 1)),
+    ],
+)
+def test_get_cutoff_date(last_sync_at, since_date, expected):
+    account = EmailAccount(last_sync_at=last_sync_at)
+
+    assert get_cutoff_date(account, since_date) == expected
+
+
+class LostLock:
+    def extend(self) -> bool:
+        return False
+
+
+def test_imap_sync_aborts_when_lock_is_lost(db_session, test_email_account):
+    provider = MockEmailProvider({"INBOX": [{"uid": 1}]})
+
+    with (
+        patch(
+            "memory.workers.tasks.email.imap_connection",
+            new=lambda account: contextlib.nullcontext(provider),
+        ),
+        patch("memory.workers.tasks.email.process_message") as task,
+    ):
+        stats = sync_imap_messages(
+            test_email_account, db_session, datetime(1970, 1, 1), cast(Lock, LostLock())
+        )
+
+    assert stats["aborted"] is True
+    task.delay.assert_not_called()

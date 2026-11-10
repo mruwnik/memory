@@ -402,10 +402,10 @@ def test_fetch_email(email_provider):
 
 def test_fetch_email_since(email_provider):
     # Fetch emails from INBOX folder
-    result = fetch_email_since(email_provider, "INBOX", datetime(1970, 1, 1))
+    result, unfetched = fetch_email_since(email_provider, "INBOX", datetime(1970, 1, 1))
 
     # Verify we got the expected number of emails
-    assert len(result) == 2
+    assert (len(result), unfetched) == (2, 0)
 
     # Verify content of fetched emails
     uids = sorted([uid or "" for uid, _, _ in result])
@@ -415,7 +415,27 @@ def test_fetch_email_since(email_provider):
     result = fetch_email_since(
         email_provider, "NonExistentFolder", datetime(1970, 1, 1)
     )
-    assert result == []
+    assert result == ([], 0)
+
+
+def test_fetch_email_since_counts_messages_it_could_not_fetch():
+    provider = cast(
+        imaplib.IMAP4,
+        MockEmailProvider({"INBOX": [{"uid": 1}, {"uid": 2}]}, unfetchable={2}),
+    )
+
+    emails, unfetched = fetch_email_since(provider, "INBOX", datetime(1970, 1, 1))
+
+    assert ([uid for uid, _, _ in emails], unfetched) == (["1"], 1)
+
+
+def test_fetch_email_since_raises_when_folder_unreadable():
+    provider = cast(
+        imaplib.IMAP4, MockEmailProvider({"INBOX": [{"uid": 1}]}, unselectable={"INBOX"})
+    )
+
+    with pytest.raises(FolderUidsError):
+        fetch_email_since(provider, "INBOX", datetime(1970, 1, 1))
 
 
 def test_process_folder(email_provider):
@@ -455,7 +475,31 @@ def test_process_folder_error(email_provider):
     result = process_folder(
         email_provider, "INBOX", account, datetime(1970, 1, 1), mock_processor
     )
-    assert result == {"messages_found": 0, "new_messages": 0, "errors": 0}
+    assert result == {"messages_found": 0, "new_messages": 0, "errors": 1}
+
+
+@pytest.mark.parametrize(
+    "provider_kwargs, processor_error, expected",
+    [
+        ({"unselectable": {"INBOX"}}, None, {"messages_found": 0, "new_messages": 0, "errors": 1}),
+        ({"unfetchable": {2}}, None, {"messages_found": 2, "new_messages": 1, "errors": 1}),
+        ({}, RuntimeError("broker down"), {"messages_found": 2, "new_messages": 0, "errors": 2}),
+    ],
+)
+def test_process_folder_counts_every_failure(provider_kwargs, processor_error, expected):
+    provider = cast(
+        imaplib.IMAP4,
+        MockEmailProvider({"INBOX": [{"uid": 1}, {"uid": 2}]}, **provider_kwargs),
+    )
+    account = MagicMock(spec=EmailAccount)
+    account.id = 123
+
+    result = process_folder(
+        provider, "INBOX", account, datetime(1970, 1, 1),
+        MagicMock(side_effect=processor_error),
+    )
+
+    assert result == expected
 
 
 def test_vectorize_email_basic(db_session, qdrant, mock_uuid4):
@@ -941,7 +985,7 @@ SPECIAL_FOLDERS = ["AI orgs", "Ärger", "Projects (old)"]
 def test_fetch_email_since_selects_folder_with_special_name(folder):
     provider = cast(imaplib.IMAP4, MockEmailProvider({folder: [{"uid": 5}]}))
 
-    emails = fetch_email_since(provider, folder, datetime(1970, 1, 1))
+    emails, _ = fetch_email_since(provider, folder, datetime(1970, 1, 1))
 
     assert [uid for uid, _, _ in emails] == ["5"]
 

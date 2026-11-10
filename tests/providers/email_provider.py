@@ -1,6 +1,6 @@
 import email
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, List
 
 from memory.workers.email import decode_imap_utf7, encode_imap_utf7
@@ -19,6 +19,8 @@ class MockEmailProvider:
         self,
         emails_by_folder: dict[str, list[dict[str, Any]]] | None = None,
         folder_flags: dict[str, str] | None = None,
+        unselectable: set[str] | None = None,
+        unfetchable: set[int] | None = None,
     ):
         """
         Initialize with a dictionary of emails organized by folder.
@@ -28,7 +30,13 @@ class MockEmailProvider:
                 Each email dict should have: 'uid', 'flags', 'date', 'from', 'to', 'subject',
                 'message_id', 'body', and optionally 'attachments'.
             folder_flags: Extra LIST attributes per folder, e.g. ``{"Bin": "\\Trash"}``.
+            unselectable: Folders whose SELECT the server answers NO.
+            unfetchable: UIDs whose FETCH the server answers NO.
         """
+        self.unselectable = unselectable or set()
+        self.unfetchable = unfetchable or set()
+        # When the latest UID SEARCH ran
+        self.searched_at: datetime | None = None
         self.folder_flags = folder_flags or {}
         self.emails_by_folder = emails_by_folder or {
             "INBOX": [],
@@ -101,6 +109,8 @@ class MockEmailProvider:
         elif ATOM_SPECIALS.search(wire):
             return ("BAD", [b"Invalid mailbox name"])
         folder_name = decode_imap_utf7(wire)
+        if folder_name in self.unselectable:
+            return ("NO", [b"Mailbox unavailable"])
         self.current_folder = folder_name
         message_count = len(self.emails_by_folder.get(folder_name, []))
         return ("OK", [str(message_count).encode()])
@@ -168,10 +178,13 @@ class MockEmailProvider:
                 if e.get("message_id", f"<test-{e['uid']}@example.com>") == wanted
             ]
         if cmd == "SEARCH":
+            self.searched_at = datetime.now(timezone.utc)
             uids = [str(e["uid"]).encode() for e in emails]
             return ("OK", [b" ".join(uids) if uids else b""])
         if cmd == "FETCH":
             target = int(args[0].decode() if isinstance(args[0], bytes) else args[0])
+            if target in self.unfetchable:
+                return ("NO", [b"Server busy"])
             for seqno, email_data in enumerate(emails, start=1):
                 if email_data["uid"] == target:
                     return self._fetch_response(email_data, seqno)
