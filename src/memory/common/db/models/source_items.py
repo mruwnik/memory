@@ -557,16 +557,17 @@ class DiscordMessage(SourceItem):
         return content
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
-        """The text, attachment placeholders included, and the images with
-        the message's preview, so an image-only message is found by its image."""
+        """The text, attachment placeholders included, then each image in its
+        own chunk with the message's preview: an image-only message is found by
+        its image, and every input stays within one shrunk image's tokens."""
         text = self.embedding_text
         if not text:
             return []  # Don't embed short messages
-        chunks = extract.extract_text(text, modality="message")
-        images = self.stored_images()
-        if not images:
-            return chunks
-        return [*chunks, extract.DataChunk(data=[self.preview_text or "", *images], modality="message")]
+        preview = self.preview_text or ""
+        image_chunks = [
+            extract.DataChunk(data=[preview, image], modality="message") for image in self.stored_images()
+        ]
+        return [*extract.extract_text(text, modality="message"), *image_chunks]
 
     def get_data_source_chain(self) -> list[Any]:
         """Return [channel, server] (filtered for None) for access-control resolution.

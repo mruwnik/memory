@@ -30,6 +30,7 @@ from memory.common.collections import ALL_COLLECTIONS
 from memory.common.db.models.source_item import SourceItem, truncate_preview
 from memory.common.db.models import DiscordChannel, DiscordUser, Person
 from memory.common.content_processing import embed_source_item
+from memory.common.embedding import estimated_tokens
 from tests.conftest import discord_image_name, unique_sha256
 from tests.data.contents import SAMPLE_MARKDOWN
 
@@ -1216,6 +1217,30 @@ def test_an_image_only_discord_message_is_embedded_with_its_image(stored_cat):
     ]
 
 
+# Voyage's multimodal models read at most 32k tokens per input.
+VOYAGE_INPUT_TOKENS = 32_000
+
+
+@pytest.fixture
+def ten_large_images():
+    names = [discord_image_name(f"https://cdn.discordapp.com/attachments/5/{i}/big.png", 801) for i in range(10)]
+    for name in names:
+        path = settings.FILE_STORAGE_DIR / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (2000, 1500), "orange").save(path)
+    return names
+
+
+def test_each_discord_image_is_its_own_input_within_voyages_limit(ten_large_images):
+    msg = discord_message_with("", None, ten_large_images)
+
+    embed_source_item(msg)
+
+    image_chunks = msg.chunks[1:]
+    assert [len(c.images) for c in image_chunks] == [1] * 10
+    assert max(estimated_tokens([c.content or "", *c.images]) for c in image_chunks) < VOYAGE_INPUT_TOKENS
+
+
 def test_a_discord_image_that_cannot_be_read_leaves_the_message_to_its_text(stored_cat):
     (settings.FILE_STORAGE_DIR / stored_cat).write_bytes(b"not an image")
     msg = discord_message_with("", [CAT], [stored_cat])
@@ -1245,6 +1270,8 @@ def test_changelog_documents_the_discord_catch_up_sql():
         ([CAT], [discord_image_name(CAT_URL, 801)], True),
         # Stored before attachments recorded images.
         (None, [discord_image_name(CAT_URL, 801)], True),
+        # An edit without images stores an empty array: nothing to gain.
+        (None, [], False),
     ],
 )
 def test_discord_catch_up_sql_reindexes_only_messages_with_attachments(db_session, attachments, images, caught_up):
@@ -1270,8 +1297,6 @@ def test_discord_catch_up_sql_reindexes_only_messages_with_attachments(db_sessio
 
     assert (msg.embed_status == "RAW") is caught_up
 
-        # An edit without images stores an empty array: nothing to gain.
-        (None, [], False),
 
 # ====== SlackMessage.preview_text tests ======
 
