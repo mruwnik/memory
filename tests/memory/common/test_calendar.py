@@ -5,7 +5,9 @@ import signal
 import pytest
 from datetime import datetime, timedelta, timezone
 
+from memory.common import calendar
 from memory.common.calendar import (
+    MAX_OCCURRENCES_VISITED,
     expand_recurring_event,
     event_to_dict,
     get_events_in_range,
@@ -335,8 +337,14 @@ MALFORMED_RULES = [
     "FREQ=DAILY;INTERVAL=0",
     "FREQ=DAILY;INTERVAL=-1",
     "FREQ=DAILY;INTERVAL=x",
-    "FREQ=SECONDLY",
-    "FREQ=MINUTELY",
+    "FREQ=DAILY DTSTART:20200101T000000",
+    "FREQ=DAILY\tDTSTART:20200101T000000",
+    "FREQ=DAILY DTSTART:20240102T090000Z",
+    "FREQ=DAILY\tDTSTART:20240102T090000Z",
+    "FREQ=DAILY;BYDAY=MO TU",
+    "FREQ=DAILY;X:DTSTART=20200101T000000",
+    "FREQ=DAILY;EXRULE:FREQ=WEEKLY",
+    "FREQ=DAILY;RDATE:20240102T090000Z",
 ]
 
 
@@ -451,6 +459,82 @@ def test_expand_recurring_event_until_without_utc(until, expected_days):
     starts = [s for s, _ in expand_recurring_event(event, start, end)]
 
     assert starts == [datetime(2024, 1, d, tzinfo=timezone.utc) for d in expected_days]
+
+
+EVERY = ",".join(str(n) for n in range(60))
+
+
+@pytest.mark.parametrize(
+    "rule, series_start, expected",
+    [
+        # Millions of occurrences inside the range
+        (
+            f"FREQ=HOURLY;BYMINUTE={EVERY};BYSECOND={EVERY}",
+            datetime(2024, 1, 1, tzinfo=timezone.utc),
+            MAX_OCCURRENCES_VISITED,
+        ),
+        # Millions of occurrences before the range
+        ("FREQ=SECONDLY", datetime(2000, 1, 1, tzinfo=timezone.utc), 0),
+        (
+            f"FREQ=DAILY;BYHOUR=0,6,12,18;BYMINUTE={EVERY}",
+            datetime(1990, 1, 1, tzinfo=timezone.utc),
+            0,
+        ),
+    ],
+)
+def test_expand_recurring_event_caps_occurrences_visited(
+    rule, series_start, expected, deadline, caplog
+):
+    event = CalendarEvent(
+        modality="calendar",
+        sha256=b"d" * 32,
+        event_title="Dense series",
+        start_time=series_start,
+        recurrence_rule=rule,
+    )
+    start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    end = datetime(2024, 2, 1, tzinfo=timezone.utc)
+
+    occurrences = expand_recurring_event(event, start, end)
+
+    assert len(occurrences) == expected
+    assert [r.levelname for r in caplog.records] == ["WARNING"]
+
+
+def test_get_events_in_range_unexpected_error_spares_siblings(
+    db_session, calendar_account, recurring_event, monkeypatch, caplog
+):
+    broken = CalendarEvent(
+        modality="calendar",
+        sha256=b"b" * 32,
+        event_title="Broken",
+        start_time=datetime(2024, 1, 1, 9, 0, 0, tzinfo=timezone.utc),
+        calendar_account_id=calendar_account.id,
+        recurrence_rule="FREQ=WEEKLY",
+    )
+    db_session.add(broken)
+    db_session.commit()
+    real_expand = calendar.expand_recurring_event
+
+    def explode(*args):
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr(
+        calendar,
+        "expand_recurring_event",
+        lambda event, *rng: {broken.id: explode}.get(event.id, real_expand)(
+            event, *rng
+        ),
+    )
+    start = datetime(2024, 1, 15, tzinfo=timezone.utc)
+    end = datetime(2024, 1, 17, tzinfo=timezone.utc)
+
+    events = get_events_in_range(db_session, start, end, access_filter=None)
+
+    assert [e["event_title"] for e in events] == ["Daily Standup", "Daily Standup"]
+    assert [r.getMessage() for r in caplog.records] == [
+        f"Unable to expand recurring calendar event {broken.id}"
+    ]
 
 
 def test_expand_recurring_event_huge_count_is_valid(deadline):

@@ -4,9 +4,10 @@ Common calendar utilities for event expansion and querying.
 
 import logging
 from datetime import datetime, timedelta, timezone
+from itertools import islice
 from typing import TypedDict
 
-from dateutil.rrule import rrulestr
+from dateutil.rrule import rrule, rruleset, rrulestr
 
 from memory.common.access_control import AccessFilter, apply_access_filter_to_query
 from memory.common.dates import parse_iso_datetime_utc
@@ -35,9 +36,10 @@ class EventDict(TypedDict):
 # lose its own event. These are what dateutil raises on bad rule text.
 RRULE_ERRORS = (ValueError, TypeError, OverflowError, KeyError)
 
-# dateutil walks every occurrence from DTSTART, so sub-hourly rules on an old
-# series take minutes. No calendar app creates them.
-UNBOUNDED_FREQS = frozenset({"SECONDLY", "MINUTELY"})
+# dateutil walks every occurrence from DTSTART, so a dense rule or an old series
+# can mean millions of steps. Each visit costs a few microseconds; this cap keeps
+# an event under a quarter second and still covers a daily series 130 years old.
+MAX_OCCURRENCES_VISITED = 50_000
 
 
 def strip_rrule_prefix(rule: str) -> str:
@@ -53,10 +55,12 @@ def strip_rrule_prefix(rule: str) -> str:
 def rule_parts(rule: str) -> dict[str, str] | None:
     """Split an RRULE value into upper-cased KEY -> value, or None if malformed.
 
-    Multi-line text is refused: it could smuggle in a DTSTART or other
-    properties that rrulestr would honour.
+    Whitespace and ``:`` are refused: rrulestr splits its input on whitespace
+    and reads ``NAME:`` as a property, so either could smuggle in a DTSTART,
+    EXRULE or RDATE that it would honour.
     """
-    if "\n" in rule or "\r" in rule:
+    rule = rule.strip()
+    if ":" in rule or any(c.isspace() for c in rule):
         return None
     pairs = [part.partition("=") for part in rule.split(";") if part]
     if not pairs or any(not sep for _, sep, _ in pairs):
@@ -67,10 +71,9 @@ def rule_parts(rule: str) -> dict[str, str] | None:
 def is_bounded_rule(parts: dict[str, str]) -> bool:
     """Whether dateutil can expand this rule in bounded time.
 
-    INTERVAL=0 makes dateutil loop forever.
+    INTERVAL=0 makes dateutil loop forever without yielding, which the visit
+    cap cannot stop.
     """
-    if parts.get("FREQ", "").upper() in UNBOUNDED_FREQS:
-        return False
     interval = parts.get("INTERVAL", "1")
     return interval.isdigit() and int(interval) >= 1
 
@@ -90,6 +93,24 @@ def with_utc_until(parts: dict[str, str]) -> dict[str, str]:
     return parts
 
 
+def occurrences_within(
+    rule: rrule | rruleset, start_range: datetime, end_range: datetime, event_id: int
+) -> list[datetime]:
+    """Occurrences of the rule within the range, visiting at most
+    MAX_OCCURRENCES_VISITED from its start."""
+    starts: list[datetime] = []
+    visited = 0
+    for occurrence in islice(rule, MAX_OCCURRENCES_VISITED):
+        visited += 1
+        if occurrence > end_range:
+            return starts
+        if occurrence >= start_range:
+            starts.append(occurrence)
+    if visited == MAX_OCCURRENCES_VISITED:
+        logger.warning("Recurrence of calendar event %s hit the expansion cap", event_id)
+    return starts
+
+
 def occurrence_starts(
     event: CalendarEvent, start_range: datetime, end_range: datetime
 ) -> list[datetime]:
@@ -106,7 +127,7 @@ def occurrence_starts(
     rule_text = ";".join(f"{k}={v}" for k, v in with_utc_until(parts).items())
     try:
         rule = rrulestr(f"RRULE:{rule_text}", dtstart=event.start_time)
-        return list(rule.between(start_range, end_range, inc=True))
+        return occurrences_within(rule, start_range, end_range, event.id)
     except RRULE_ERRORS:
         logger.warning("Skipping malformed recurrence rule on calendar event %s", event.id)
         return []
@@ -129,6 +150,21 @@ def expand_recurring_event(
         (occ_start, occ_start + duration if duration else None)
         for occ_start in occurrence_starts(event, start_range, end_range)
     ]
+
+
+def expand_or_skip(
+    event: CalendarEvent, start_range: datetime, end_range: datetime
+) -> list[tuple[datetime, datetime | None]]:
+    """expand_recurring_event, where an unexpected error loses only this event.
+
+    The rule is external input, so dateutil may fail in ways RRULE_ERRORS
+    does not list.
+    """
+    try:
+        return expand_recurring_event(event, start_range, end_range)
+    except Exception:
+        logger.exception("Unable to expand recurring calendar event %s", event.id)
+        return []
 
 
 def event_to_dict(
@@ -232,7 +268,7 @@ def get_events_in_range(
 
     # Expand recurring events
     for e in recurring:
-        for occ_start, occ_end in expand_recurring_event(e, start_date, end_date):
+        for occ_start, occ_end in expand_or_skip(e, start_date, end_date):
             results.append((occ_start, event_to_dict(e, occ_start, occ_end)))
 
     # Sort by start time and apply limit
