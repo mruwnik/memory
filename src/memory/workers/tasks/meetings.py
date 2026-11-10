@@ -3,6 +3,7 @@
 import hashlib
 import itertools
 import logging
+import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -49,6 +50,10 @@ logger = logging.getLogger(__name__)
 # A meeting whose processing was lost once and is being run again; losing it
 # again marks it failed, so a meeting that kills its worker isn't rerun forever.
 RETRYING = "retrying"
+# The line meeting_content puts before the transcript, listing who attended.
+ATTENDEES_PREFIX = "Attendees: "
+# A transcript line's "Speaker: " prefix.
+SPEAKER_LABEL = re.compile(r"^([^:\n]{1,100}):[ \t]", re.MULTILINE)
 
 
 def mark_in_flight(meeting: Meeting, status: str) -> None:
@@ -455,35 +460,46 @@ def person_names(person: Person) -> set[str]:
     return {name_key(str(v)) for v in [person.display_name, *(person.aliases or []), *emails] if v}
 
 
-def first_names(person: Person) -> set[str]:
-    return {name.split(" ")[0] for name in person_names(person) if "@" not in name}
+def with_first_names(names: set[str]) -> set[str]:
+    """`names` plus the first word of each name that isn't an email."""
+    return names | {name.split(" ")[0] for name in names if "@" not in name}
 
 
-def assigned_to(
-    session: DBSession, assignee: str | None, chosen: Sequence[Person], attendees: Sequence[Person]
-) -> bool:
+def transcript_names(content: str) -> set[str]:
+    """The attendee list and speaker labels written in a meeting's transcript."""
+    listed: list[str] = []
+    if content.startswith(ATTENDEES_PREFIX):
+        header, _, content = content.partition("\n")
+        listed = header.removeprefix(ATTENDEES_PREFIX).split(",")
+    return {name_key(name) for name in [*listed, *SPEAKER_LABEL.findall(content)] if name.strip()}
+
+
+def other_attendee_names(meeting: Meeting, chosen: Sequence[Person]) -> set[str]:
+    """Every name an action item may call an attendee who isn't one of the `chosen` people.
+
+    Attendees are the meeting's linked Persons, its listed attendees and its
+    speaker labels; a listed name or label that names a chosen person is theirs.
+    Each attendee's full names, aliases and emails count, and their first names.
+    """
+    chosen_ids = {p.id for p in chosen}
+    chosen_names = set().union(*(person_names(p) for p in chosen))
+    linked = [person_names(p) for p in meeting.people if p.id not in chosen_ids]
+    unlinked = transcript_names(meeting.content or "") - chosen_names
+    return set().union(*(with_first_names(names) for names in [*linked, unlinked]))
+
+
+def assigned_to(assignee: str | None, chosen: Sequence[Person], others: set[str]) -> bool:
     """Whether the action item `assignee` names one of the `chosen` people.
 
     Matches a chosen person's display name, alias or email case-insensitively,
-    else the one Person the name resolves to. A bare first name matches when
-    every chosen person and attendee with that first name is a chosen one.
+    but never a name in `others`, the names of the meeting's other attendees: a
+    task for the wrong person is worse than a missed one.
     """
     key = name_key(assignee or "")
-    if not key:
-        return False
-    chosen_ids = {p.id for p in chosen}
-    if any(key in person_names(p) for p in chosen):
-        return True
-    resolved = find_person_by_name(session, key)
-    if resolved is not None:
-        return resolved.id in chosen_ids
-    if " " in key:
-        return False
-    namesakes = {p.id for p in [*chosen, *attendees] if key in first_names(p)}
-    return bool(namesakes) and namesakes <= chosen_ids
+    return bool(key) and key not in others and any(key in person_names(p) for p in chosen)
 
 
-def task_action_items(session: DBSession, meeting: Meeting, action_items: list[dict]) -> list[dict]:
+def task_action_items(meeting: Meeting, action_items: list[dict]) -> list[dict]:
     """The action items the meeting's transcript account makes Tasks for.
 
     An account can turn tasks off, or limit them to action items assigned to
@@ -496,9 +512,10 @@ def task_action_items(session: DBSession, meeting: Meeting, action_items: list[d
         return []
     if not account.task_people:
         return action_items
+    others = other_attendee_names(meeting, account.task_people)
     return [
         item for item in action_items
-        if assigned_to(session, item.get("assignee"), account.task_people, meeting.people)
+        if assigned_to(item.get("assignee"), account.task_people, others)
     ]
 
 
@@ -541,7 +558,7 @@ def extract_and_update_meeting(session: DBSession, meeting: Meeting) -> dict:
 
     meeting.summary = extracted.get("summary", "")
     meeting.notes = extracted.get("notes", "")
-    action_items = task_action_items(session, meeting, extracted.get("action_items", []))
+    action_items = task_action_items(meeting, extracted.get("action_items", []))
     created = sync_action_item_tasks(session, meeting, action_items)
     logger.info(f"Created {len(created)} tasks from meeting {meeting.id}")
 
@@ -567,7 +584,7 @@ def meeting_content(
         v for v in (pair_labels + (attendee_names or []) + (attendee_emails or [])) if v
     )
     if attendee_label:
-        return f"Attendees: {attendee_label}\n\n{transcript}"
+        return f"{ATTENDEES_PREFIX}{attendee_label}\n\n{transcript}"
     return transcript
 
 

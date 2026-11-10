@@ -48,7 +48,7 @@ export const TaskPeopleField = ({ createTasks, people, me, onChange }: TaskPeopl
       {createTasks && (
         <Field
           label="Only for these people"
-          hint="Leave empty to make a task for every action item. Once anyone is picked, action items assigned to someone else or to nobody make no task."
+          hint="Leave empty to make a task for every action item. Once anyone is picked, action items assigned to someone else or to nobody make no task. An assignee matches by full name, alias or email, so add the name you go by in meetings as an alias."
         >
           <MultiSelect
             options={options}
