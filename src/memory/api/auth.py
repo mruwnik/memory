@@ -58,9 +58,9 @@ WHITELIST = {
     "/mcp",
     "/oauth/",
     "/.well-known/",
-    "/google-drive/callback",  # Google OAuth callback
-    # External MCP server OAuth callback: authenticates the session itself
-    # so a logged-out user gets a page to act on instead of a bare 401.
+    # Google and external MCP server OAuth callbacks authenticate the session
+    # themselves so a logged-out user gets a page to act on, not a bare 401.
+    "/google-drive/callback",
     "/auth/mcp/callback",
     "/api/polls/respond",  # Public poll response endpoints
     # Generic content upload. The endpoint authenticates the request itself

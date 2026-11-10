@@ -30,6 +30,7 @@ from memory.common.scopes import SCOPE_ADMIN
 from memory.api.auth import (
     assert_project_membership,
     get_interactive_user,
+    get_session_user,
     get_user_account,
     require_scope,
     resolve_user_filter,
@@ -406,87 +407,17 @@ def google_authorize(
     return {"authorization_url": authorization_url}
 
 
-@router.get("/callback", response_class=HTMLResponse)
-def google_callback(
-    request: Request,
-    code: str | None = None,
-    state: str | None = None,
-    error: str | None = None,
-    scope: str | None = None,
-):
-    """Handle Google OAuth2 callback."""
-    if error:
-        return HTMLResponse(
-            content=f"<html><body><h1>Authorization Failed</h1><p>{html.escape(error)}</p></body></html>",
-            status_code=400,
-        )
+def callback_page(title: str, message: str, status_code: int) -> HTMLResponse:
+    return HTMLResponse(
+        content=(
+            f"<html><body><h1>{html.escape(title)}</h1>"
+            f"<p>{html.escape(message)}</p></body></html>"
+        ),
+        status_code=status_code,
+    )
 
-    if not code or not state:
-        return HTMLResponse(
-            content="<html><body><h1>Missing Parameters</h1></body></html>",
-            status_code=400,
-        )
 
-    # Validate state
-    user_id = GoogleOAuthState.validate(state)
-    if not user_id:
-        return HTMLResponse(
-            content="<html><body><h1>Invalid or Expired State</h1></body></html>",
-            status_code=400,
-        )
-
-    from google_auth_oauthlib.flow import Flow
-    from googleapiclient.discovery import build
-
-    with make_session() as session:
-        oauth_config = get_oauth_config(session)
-        redirect_uri = (
-            oauth_config.redirect_uris[0]
-            if oauth_config.redirect_uris
-            else settings.GOOGLE_REDIRECT_URI
-        )
-
-        # Scopes passed to Flow don't matter for token exchange.
-        # The actual granted scopes come from the 'scope' URL parameter.
-        flow = Flow.from_client_config(
-            oauth_config.to_client_config(),
-            scopes=BASE_GOOGLE_SCOPES,
-            redirect_uri=redirect_uri,
-        )
-        flow.fetch_token(code=code)
-        credentials = flow.credentials
-
-        # Parse granted scopes from callback URL (space-separated)
-        granted_scopes = scope.split() if scope else []
-
-        # Get user info from Google
-        service = build("oauth2", "v2", credentials=credentials)
-        user_info = service.userinfo().get().execute()
-
-        # Create or update GoogleAccount
-        account = (
-            session.query(GoogleAccount)
-            .filter(GoogleAccount.email == user_info["email"])
-            .first()
-        )
-
-        if not account:
-            account = GoogleAccount(
-                user_id=user_id,
-                name=user_info.get("name", user_info["email"]),
-                email=user_info["email"],
-            )
-            session.add(account)
-
-        account.access_token = credentials.token
-        account.refresh_token = credentials.refresh_token
-        account.token_expires_at = credentials.expiry
-        account.scopes = granted_scopes
-        account.active = True
-        account.record_sync(None)
-
-        session.commit()
-
+def connected_page(user_id: int) -> HTMLResponse:
     # The opener listens on this channel: Google's COOP headers can sever its
     # handle on this popup, so popup.closed isn't a reliable completion signal.
     channel_name_js = json.dumps(f"google-oauth-{user_id}")
@@ -507,6 +438,106 @@ def google_callback(
         """,
         status_code=200,
     )
+
+
+def exchange_google_code(session: DBSession, code: str):
+    """Trade the authorization code for credentials and the Google profile."""
+    from google_auth_oauthlib.flow import Flow
+    from googleapiclient.discovery import build
+
+    oauth_config = get_oauth_config(session)
+    redirect_uri = (
+        oauth_config.redirect_uris[0]
+        if oauth_config.redirect_uris
+        else settings.GOOGLE_REDIRECT_URI
+    )
+    # Scopes passed to Flow don't matter for token exchange.
+    # The actual granted scopes come from the 'scope' URL parameter.
+    flow = Flow.from_client_config(
+        oauth_config.to_client_config(),
+        scopes=BASE_GOOGLE_SCOPES,
+        redirect_uri=redirect_uri,
+    )
+    flow.fetch_token(code=code)
+    credentials = flow.credentials
+    service = build("oauth2", "v2", credentials=credentials)
+    return credentials, service.userinfo().get().execute()
+
+
+@router.get("/callback", response_class=HTMLResponse)
+def google_callback(
+    request: Request,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    scope: str | None = None,
+):
+    """Handle Google OAuth2 callback.
+
+    The account is connected for the user logged in to this browser, and only
+    if the state was issued to that same user: a state alone can't attach a
+    Google account to whoever follows the link.
+    """
+    if error:
+        return callback_page("Authorization Failed", error, 400)
+    if not code or not state:
+        return callback_page("Missing Parameters", "", 400)
+
+    with make_session() as session:
+        # Authenticated here rather than by the middleware, so a logged-out
+        # user gets a page to act on and the state survives until they log in.
+        user = get_session_user(request, session)
+        if user is None:
+            return callback_page(
+                "Log in to finish",
+                "Log in to memory in this browser, then reload this page.",
+                401,
+            )
+        user_id = cast(int, user.id)
+
+        state_user_id = GoogleOAuthState.validate(state)
+        if not state_user_id:
+            return callback_page("Invalid or Expired State", "", 400)
+        if state_user_id != user_id:
+            return callback_page(
+                "Wrong account",
+                "This authorization was started by a different memory user.",
+                403,
+            )
+
+        credentials, user_info = exchange_google_code(session, code)
+
+        # google_accounts.email is unique across users
+        account = (
+            session.query(GoogleAccount)
+            .filter(GoogleAccount.email == user_info["email"])
+            .first()
+        )
+        if account and account.user_id != user_id:
+            return callback_page(
+                "Account already connected",
+                "This Google account is connected to another memory user.",
+                409,
+            )
+        if not account:
+            account = GoogleAccount(
+                user_id=user_id,
+                name=user_info.get("name", user_info["email"]),
+                email=user_info["email"],
+            )
+            session.add(account)
+
+        account.access_token = credentials.token
+        account.refresh_token = credentials.refresh_token
+        account.token_expires_at = credentials.expiry
+        # Granted scopes from the callback URL (space-separated)
+        account.scopes = scope.split() if scope else []
+        account.active = True
+        account.record_sync(None)
+
+        session.commit()
+
+    return connected_page(user_id)
 
 
 @router.get("/accounts")

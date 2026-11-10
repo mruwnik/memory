@@ -38,6 +38,7 @@ a new, empty `## Unreleased` above it.
 - IMAP folders whose names contain spaces, parentheses or non-ASCII characters (e.g. `AI orgs`, `Ärger`) sync. Before, the server refused to open them and their mail was never fetched.
 - An IMAP sync that can't open a folder, fetch a message or queue it no longer moves the account's last sync time past that mail: the account shows how many failed and the next sync fetches them again. A clean sync records when it started rather than when it finished, so mail arriving mid-sync isn't skipped, and each sync re-checks the day before the last one (copies already stored are skipped).
 - Emails without a Message-ID header are no longer dropped when another such email has the same IMAP UID in a different folder or account. Their generated id now comes from the message's content; such mail received within a day before upgrading may be stored a second time on the first sync.
+- Connecting a Google account finishes only in a browser logged in as the memory user who started it: a logged-out browser is asked to log in and reload, another user's authorization link is refused, and a Google account already connected to another memory user is refused instead of having its tokens replaced.
 
 ### Required env vars
 None
