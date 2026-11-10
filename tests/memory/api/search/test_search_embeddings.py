@@ -66,7 +66,6 @@ def test_registry_combined_range_merges():
         ("tags", ["tag1", "tag2"], "tags"),
         # recipients filters the derived bare-address payload key.
         ("recipients", ["user1", "user2"], "recipient_emails"),
-        ("authors", ["author1"], "authors"),
     ],
 )
 def test_registry_list_filters(filter_key, filter_value, payload_key):
@@ -81,7 +80,6 @@ def test_registry_list_filters(filter_key, filter_value, payload_key):
         # sender filters the derived bare-address payload key.
         ("sender", "user@example.com", "sender_email"),
         ("domain", "example.com", "domain"),
-        ("author", "John Doe", "author"),
     ],
 )
 def test_registry_string_filters(filter_key, filter_value, payload_key):

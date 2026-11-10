@@ -107,8 +107,8 @@ SEARCH_FILTERS: list[tuple[str, str, str | None]] = [
     ("max_created_at", "latest time the item was stored in memory, ISO format", None),
     ("min_sent_at", "minimum email sent date, ISO format", "mail"),
     ("max_sent_at", "maximum email sent date, ISO format", "mail"),
-    ("min_published", "minimum publication date, ISO format", "blog, forum"),
-    ("max_published", "maximum publication date, ISO format", "blog, forum"),
+    ("min_published", "minimum publication date, ISO format", "blog, forum, comic"),
+    ("max_published", "maximum publication date, ISO format", "blog, forum, comic"),
     ("folder_path", "Google Drive folder path filter", "doc"),
     ("folder", "exact match on email folder name, e.g. INBOX", "mail"),
     (
@@ -118,7 +118,7 @@ SEARCH_FILTERS: list[tuple[str, str, str | None]] = [
         "mail",
     ),
     ("domain", "exact match on website domain", "blog"),
-    ("author", "exact match on author name", None),
+    ("author", "exact match on an author name (blog, comic, forum, GitHub, book)", None),
     (
         "recipients",
         "match email recipients by address substring, case-insensitive "
@@ -131,7 +131,7 @@ SEARCH_FILTERS: list[tuple[str, str, str | None]] = [
         "(groups all aliases the account handled, incoming and sent)",
         "mail",
     ),
-    ("authors", "list of authors to match", None),
+    ("authors", "list of author names; items by any of them match", None),
     ("network", "chat network, e.g. whatsapp, signal, slack (case-insensitive)", "beeper"),
     ("chat", "chat title or Beeper chat id (case-insensitive)", "beeper"),
 ]
@@ -942,10 +942,9 @@ def apply_item_filters(query, modalities: set[str], filters: MCPSearchFilters):
 
     Shared by list_items and count_items so the two can never drift. Registry
     filters (mail/blog/doc metadata) are folded on via
-    :func:`apply_registry_filters_sql`, which joins each joined-inheritance
-    subclass table on ``SourceItem.id``. A query that combines filters from two
-    different subclasses can never match a row (an item is exactly one
-    subclass); that is the correct outcome.
+    :func:`apply_registry_filters_sql`. A query that combines filters only
+    different item types can satisfy can never match a row (an item is exactly
+    one type); that is the correct outcome.
 
     Any provided filter key not in :data:`ITEM_ALLOWED_FILTER_KEYS` raises
     ValueError instead of being silently dropped.

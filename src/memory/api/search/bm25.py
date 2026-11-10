@@ -153,13 +153,9 @@ def run_bm25_query(
         # short-circuits to "hidden filter only" for None.
         items_query = apply_access_filter_to_query(items_query, access_filter)
 
-        # Declarative content-metadata filters (tags/size/mail/blog/doc). The
-        # joins are 1:1 on id so rank/order is unaffected. SourceItem is
-        # already joined above; pass it as pre-joined so registry helper only
-        # adds the subclass joins.
-        items_query = apply_registry_filters_sql(
-            items_query, filters, joined={SourceItem}
-        )
+        # Declarative content-metadata filters (tags/size/mail/blog/doc), as
+        # conditions on the SourceItem joined above.
+        items_query = apply_registry_filters_sql(items_query, filters)
 
         # Apply person filter (requires source join)
         # Include items where: no people associations exist OR person is associated
