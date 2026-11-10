@@ -9,7 +9,16 @@ import pytest
 from fastapi.testclient import TestClient
 
 from memory.common.access_control import credential_scopes
-from memory.common.db.models import ForumComment, ForumPost, ForumSyncConfig, JobType
+from memory.common.db.models import (
+    ForumComment,
+    ForumPost,
+    ForumSyncConfig,
+    JobType,
+    Person,
+    Project,
+    Team,
+)
+from memory.common.db.models.sources import project_teams, team_members
 
 
 @pytest.fixture
@@ -214,6 +223,56 @@ def test_upload_report_admin_can_set_allowed_connect_urls(
     call_kwargs = mock_dispatch_job.call_args.kwargs
     assert call_kwargs["task_kwargs"]["allow_scripts"] is True
     assert call_kwargs["task_kwargs"]["allowed_connect_urls"] == ["https://api.example.com"]
+
+
+# ====== Reports upload — project membership ======
+
+
+@pytest.fixture
+def projects(db_session, user):
+    """Two projects: the test user's team is on "mine", not on "theirs"."""
+    mine = Project(title="Mine", state="open")
+    theirs = Project(title="Theirs", state="open")
+    team = Team(name="T", slug="t", is_active=True)
+    user.person = Person(identifier="me", display_name="Me")
+    db_session.add_all([mine, theirs, team])
+    db_session.flush()
+    db_session.execute(
+        team_members.insert().values(team_id=team.id, person_id=user.person.id, role="member")
+    )
+    db_session.execute(project_teams.insert().values(project_id=mine.id, team_id=team.id))
+    db_session.commit()
+    return {"mine": mine.id, "theirs": theirs.id}
+
+
+def upload_report_into(client: TestClient, project_id: int):
+    return client.post(
+        "/reports/upload",
+        files={"file": ("plain.html", BytesIO(b"<p>project report</p>"), "text/html")},
+        data={"project_id": str(project_id)},
+    )
+
+
+def test_upload_report_into_a_foreign_project_is_refused(
+    member_client: TestClient, mock_dispatch_job, projects
+):
+    response = upload_report_into(member_client, projects["theirs"])
+
+    assert response.status_code == 403
+    mock_dispatch_job.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "client_fixture, project",
+    [("member_client", "mine"), ("client", "mine"), ("client", "theirs")],
+)
+def test_upload_report_into_a_permitted_project(
+    request, mock_dispatch_job, projects, client_fixture, project
+):
+    response = upload_report_into(request.getfixturevalue(client_fixture), projects[project])
+
+    assert response.status_code == 200
+    assert mock_dispatch_job.call_args.kwargs["task_kwargs"]["project_id"] == projects[project]
 
 
 # ====== Forum sync — admin-gated, rate-limited, max_items capped ======

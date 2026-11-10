@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session as DBSession
 
-from memory.api.auth import require_rest_access, request_api_key
+from memory.api.auth import assert_project_membership, require_rest_access, request_api_key
 from memory.common.access_control import (
     apply_access_filter_to_query,
     build_access_filter,
@@ -420,6 +420,7 @@ async def upload_report(
     # rather than 403 — keeps the upload flow usable.
     if not is_admin:
         allowed_connect_urls = ""
+    assert_project_membership(db, user, project_id)
 
     settings.REPORT_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
