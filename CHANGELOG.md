@@ -41,6 +41,7 @@ a new, empty `## Unreleased` above it.
 - `core_search_observations` filters by `subject` (exact) and `observation_types`. Before, a subject returned no observations (it was matched against mail subjects) and observation types were ignored. The generic search filters no longer accept `observation_types`.
 - The `author`, `authors`, `min_published` and `max_published` search filters match every item type that has an author or publication date (blog posts, comics, forum posts and comments, GitHub items, book sections). Before, keyword search and `core_list_items`/`core_count_items` matched them on blog posts only, and `authors` matched only forum posts in semantic search.
 - Titles recalled by query analysis no longer bring in results that the search filters exclude. Before, they honoured only access control, tags and the item-id filters, so e.g. an `author`, `sender`, `person_id` or `min_confidences` filter could still return a non-matching item.
+- Web UI: a slow earlier search, month or Tasks/Polls filter load no longer replaces newer results; the calendar loads a month once, works with browser storage blocked, and shows a tappable event count per day on phones; People says when a person's teams or tidbits failed to load, with Retry, instead of showing none.
 
 ### Required env vars
 None
