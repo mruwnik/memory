@@ -37,6 +37,7 @@ a new, empty `## Unreleased` above it.
 - MCP `core_list_items` and `core_count_items` take `item_types`, `embed_statuses` (default still indexed items only), `contains` and `connection_id`. List rows carry `type` and `embed_status`; `include_total=false` skips the total count; pages sort by id within equal timestamps so they never overlap. `core_count_items` adds `by_type` and, for types that share a kind of connection, `by_connection`.
 - MCP `organizer_upcoming` only returns calendar events the caller can access, as `list_tasks` does (admins see all). Before, every user saw everyone's events. Non-admins naming other users in `user_ids` are refused.
 - MCP `organizer_upcoming` with a date-only `start_date` or `end_date` (e.g. "2024-01-15") includes recurring events again; dates and times without an offset are read as UTC.
+- Recurring calendar events with an `INTERVAL=0`, secondly or minutely rule, or multi-line rule text, are skipped with a warning instead of expanding: an `INTERVAL=0` rule from a synced calendar hung `organizer_upcoming` forever, and sub-hourly rules on old series took minutes.
 
 ### Required env vars
 None

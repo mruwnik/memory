@@ -1,5 +1,7 @@
 """Tests for common calendar utilities."""
 
+import signal
+
 import pytest
 from datetime import datetime, timedelta, timezone
 
@@ -300,6 +302,125 @@ def test_expand_recurring_event_invalid_rule():
     # Should return empty list, not raise
     occurrences = expand_recurring_event(event, start, end)
     assert occurrences == []
+
+
+class DeadlineExceeded(BaseException):
+    """A BaseException, so no ``except Exception`` in the code under test hides it."""
+
+
+@pytest.fixture
+def deadline():
+    """Fail the test, rather than hang, if it runs past five seconds."""
+
+    def expire(signum, frame):
+        raise DeadlineExceeded("recurrence expansion did not finish")
+
+    previous = signal.signal(signal.SIGALRM, expire)
+    signal.alarm(5)
+    yield
+    signal.alarm(0)
+    signal.signal(signal.SIGALRM, previous)
+
+
+MALFORMED_RULES = [
+    "FREQ=DAILY;BYDAY=XX",
+    "FREQ=DAILY\nDTSTART:20200101T000000",
+    "FREQ=DAILY\r\nDTSTART:20200101T000000",
+    "FREQ=BOGUS",
+    "FREQ",
+    ";",
+    "FREQ=DAILY;BYHOUR=99",
+    "FREQ=DAILY;UNTIL=99999999T999999Z",
+    "FREQ=DAILY;BYSETPOS=0",
+    "FREQ=DAILY;INTERVAL=0",
+    "FREQ=DAILY;INTERVAL=-1",
+    "FREQ=DAILY;INTERVAL=x",
+    "FREQ=SECONDLY",
+    "FREQ=MINUTELY",
+]
+
+
+@pytest.mark.parametrize("rule", MALFORMED_RULES)
+def test_expand_recurring_event_malformed_rule_yields_nothing(rule, deadline):
+    event = CalendarEvent(
+        modality="calendar",
+        sha256=b"m" * 32,
+        event_title="Bad rule",
+        start_time=datetime(2020, 1, 1, 9, 0, 0, tzinfo=timezone.utc),
+        recurrence_rule=rule,
+    )
+    start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    end = datetime(2024, 1, 31, tzinfo=timezone.utc)
+
+    assert expand_recurring_event(event, start, end) == []
+
+
+@pytest.mark.parametrize("rule", MALFORMED_RULES)
+def test_get_events_in_range_malformed_rule_spares_siblings(
+    db_session, calendar_account, recurring_event, rule, deadline
+):
+    db_session.add(
+        CalendarEvent(
+            modality="calendar",
+            sha256=b"m" * 32,
+            event_title="Bad rule",
+            start_time=datetime(2020, 1, 1, 9, 0, 0, tzinfo=timezone.utc),
+            calendar_account_id=calendar_account.id,
+            recurrence_rule=rule,
+        )
+    )
+    db_session.commit()
+    start = datetime(2024, 1, 15, tzinfo=timezone.utc)
+    end = datetime(2024, 1, 17, tzinfo=timezone.utc)
+
+    events = get_events_in_range(db_session, start, end, access_filter=None)
+
+    assert [e["event_title"] for e in events] == ["Daily Standup", "Daily Standup"]
+
+
+@pytest.mark.parametrize("rule", ["FREQ=BOGUS", "FREQ=DAILY;INTERVAL=0"])
+def test_expand_recurring_event_logs_only_event_id(
+    db_session, calendar_account, rule, caplog, deadline
+):
+    event = CalendarEvent(
+        modality="calendar",
+        sha256=b"l" * 32,
+        event_title="Secret title",
+        start_time=datetime(2024, 1, 1, 9, 0, 0, tzinfo=timezone.utc),
+        calendar_account_id=calendar_account.id,
+        recurrence_rule=rule,
+    )
+    db_session.add(event)
+    db_session.commit()
+    start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    end = datetime(2024, 1, 31, tzinfo=timezone.utc)
+
+    expand_recurring_event(event, start, end)
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert [(r.levelname, str(event.id) in r.getMessage()) for r in caplog.records] == [
+        ("WARNING", True)
+    ]
+    assert not any(rule in m or "Secret" in m for m in messages)
+
+
+def test_expand_recurring_event_huge_count_is_valid(deadline):
+    event = CalendarEvent(
+        modality="calendar",
+        sha256=b"c" * 32,
+        event_title="Long series",
+        start_time=datetime(2024, 1, 1, 9, 0, 0, tzinfo=timezone.utc),
+        recurrence_rule="FREQ=DAILY;COUNT=99999999999999999999999",
+    )
+    start = datetime(2024, 1, 10, tzinfo=timezone.utc)
+    end = datetime(2024, 1, 12, tzinfo=timezone.utc)
+
+    starts = [s for s, _ in expand_recurring_event(event, start, end)]
+
+    assert starts == [
+        datetime(2024, 1, 10, 9, 0, 0, tzinfo=timezone.utc),
+        datetime(2024, 1, 11, 9, 0, 0, tzinfo=timezone.utc),
+    ]
 
 
 # =============================================================================

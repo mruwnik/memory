@@ -2,6 +2,7 @@
 Common calendar utilities for event expansion and querying.
 """
 
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import TypedDict
 
@@ -12,6 +13,8 @@ from memory.common.dates import parse_iso_datetime_utc
 from memory.common.db.connection import DBSession
 from memory.common.db.models import CalendarEvent
 from memory.common.db.models.sources import CalendarAccount
+
+logger = logging.getLogger(__name__)
 
 
 class EventDict(TypedDict):
@@ -28,6 +31,61 @@ class EventDict(TypedDict):
     meeting_link: str | None
 
 
+# Recurrence rules come from external calendars, so a malformed one must only
+# lose its own event. These are what dateutil raises on bad rule text.
+RRULE_ERRORS = (ValueError, TypeError, OverflowError, KeyError)
+
+# dateutil walks every occurrence from DTSTART, so sub-hourly rules on an old
+# series take minutes. No calendar app creates them.
+UNBOUNDED_FREQS = frozenset({"SECONDLY", "MINUTELY"})
+
+
+def rule_parts(rule: str) -> dict[str, str] | None:
+    """Split an RRULE value into upper-cased KEY -> value, or None if malformed.
+
+    Multi-line text is refused: it could smuggle in a DTSTART or other
+    properties that rrulestr would honour.
+    """
+    if "\n" in rule or "\r" in rule:
+        return None
+    pairs = [part.partition("=") for part in rule.split(";") if part]
+    if not pairs or any(not sep for _, sep, _ in pairs):
+        return None
+    return {key.strip().upper(): value.strip() for key, _, value in pairs}
+
+
+def is_bounded_rule(parts: dict[str, str]) -> bool:
+    """Whether dateutil can expand this rule in bounded time.
+
+    INTERVAL=0 makes dateutil loop forever.
+    """
+    if parts.get("FREQ", "").upper() in UNBOUNDED_FREQS:
+        return False
+    interval = parts.get("INTERVAL", "1")
+    return interval.isdigit() and int(interval) >= 1
+
+
+def occurrence_starts(
+    event: CalendarEvent, start_range: datetime, end_range: datetime
+) -> list[datetime]:
+    """Start times of the event's occurrences within the range.
+
+    A rule that is malformed or too costly to expand yields nothing, with a
+    warning naming only the event id.
+    """
+    rule_text = event.recurrence_rule or ""
+    parts = rule_parts(rule_text)
+    if parts is None or not is_bounded_rule(parts):
+        logger.warning("Skipping unsupported recurrence rule on calendar event %s", event.id)
+        return []
+    try:
+        rule = rrulestr(f"RRULE:{rule_text}", dtstart=event.start_time)
+        return list(rule.between(start_range, end_range, inc=True))
+    except RRULE_ERRORS:
+        logger.warning("Skipping malformed recurrence rule on calendar event %s", event.id)
+        return []
+
+
 def expand_recurring_event(
     event: CalendarEvent,
     start_range: datetime,
@@ -40,24 +98,11 @@ def expand_recurring_event(
     if not event.recurrence_rule or not event.start_time:
         return []
 
-    try:
-        rule = rrulestr(
-            f"RRULE:{event.recurrence_rule}",
-            dtstart=event.start_time,
-        )
-
-        duration = None
-        if event.end_time and event.start_time:
-            duration = event.end_time - event.start_time
-
-        occurrences = []
-        for occ_start in rule.between(start_range, end_range, inc=True):
-            occ_end = occ_start + duration if duration else None
-            occurrences.append((occ_start, occ_end))
-
-        return occurrences
-    except Exception:
-        return []
+    duration = event.end_time - event.start_time if event.end_time else None
+    return [
+        (occ_start, occ_start + duration if duration else None)
+        for occ_start in occurrence_starts(event, start_range, end_range)
+    ]
 
 
 def event_to_dict(
