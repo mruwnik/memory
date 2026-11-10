@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
 import { renderWithRouter, mcpToolFromRequest, mockFetch, mockResponse, setAuthCookies, clearCookies } from '@/test/utils'
 import { mcpEnvelopeJson } from '@/hooks/mcpEnvelope.testhelper'
-import { useLocation } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import Search from './Search'
 
 const LocationProbe = () => <div data-testid="location">{useLocation().search}</div>
@@ -127,6 +127,27 @@ describe('Search', () => {
     await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('?q=beta'))
     const searched = fetchMock.mock.calls.filter(([u, init]) => mcpToolFromRequest(u, init) === 'core_search')
     expect(searched).toHaveLength(2)
+  })
+
+  it('shows the newest search when an older one finishes after it', async () => {
+    let finishAlpha: (r: Response) => void = () => {}
+    mockFetch(async (input, init) => {
+      const tool = mcpToolFromRequest(input, init)
+      if (tool === 'meta_get_metadata_schemas') return mockResponse({ json: mcpEnvelopeJson(schemas) })
+      if (tool === 'meta_get_tags') return mockResponse({ json: mcpEnvelopeJson([]) })
+      if (tool === 'meta_get_search_defaults') return mockResponse({ json: mcpEnvelopeJson(searchDefaults) })
+      if (tool !== 'core_search') return mockResponse({ json: { user_id: 1, scopes: ['*'] } })
+      if (String(init?.body).includes('"alpha"')) return new Promise<Response>(resolve => { finishAlpha = resolve })
+      return mockResponse({ json: mcpEnvelopeJson({ results: [textResult('beta.txt')] }) })
+    })
+    const { user } = renderWithRouter(<><Search /><Link to="/search?q=beta">to beta</Link></>, { initialEntries: ['/search?q=alpha'] })
+    await waitFor(() => expect(screen.getByText('Searching...', { selector: 'button' })).toBeInTheDocument())
+    await user.click(screen.getByRole('link', { name: 'to beta' }))
+    expect(await screen.findByText('beta.txt')).toBeInTheDocument()
+    finishAlpha(mockResponse({ json: mcpEnvelopeJson({ results: [textResult('alpha.txt')] }) }))
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(screen.queryByText('alpha.txt')).not.toBeInTheDocument()
+    expect(screen.getByText('beta.txt')).toBeInTheDocument()
   })
 
   it('says when the search filters fail to load', async () => {

@@ -52,6 +52,7 @@ a new, empty `## Unreleased` above it.
 - Gmail syncs no longer re-download, on every run, messages they never store (a copy already stored, password-reset mail, a message that keeps killing its worker). The account remembers their ids (new column `email_accounts.gmail_declined_ids`) until they leave the mailbox; messages that failed to queue are retried.
 - Connecting a Google account finishes only in a browser logged in as the memory user who started it: a logged-out browser is asked to log in and reload, another user's authorization link is refused, and a Google account already connected to another memory user is refused instead of having its tokens replaced.
 - On https, the login cookies the web app sets carry the Secure flag, so the browser never sends them over plain http.
+- Web UI: a slow earlier search, month or Tasks/Polls filter load no longer replaces newer results; the calendar loads a month once, works with browser storage blocked, and shows a tappable event count per day on phones; People says when a person's teams or tidbits failed to load, with Retry, instead of showing none.
 
 ### Required env vars
 None

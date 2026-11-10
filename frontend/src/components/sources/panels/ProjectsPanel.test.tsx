@@ -122,6 +122,14 @@ describe('ProjectsPanel - load states', () => {
     )
   })
 
+  it('works when localStorage is blocked', async () => {
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new DOMException('blocked', 'SecurityError') })
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new DOMException('blocked', 'SecurityError') })
+    listProjects.mockResolvedValue([project()])
+    renderWithUser(<ProjectsPanel />)
+    expect(await screen.findByText('Alpha')).toBeInTheDocument()
+  })
+
   it('filters the list by the search query', async () => {
     listProjects.mockResolvedValue([project(), project({ id: 2, title: 'Beta' })])
     const { user } = renderWithUser(<ProjectsPanel />)

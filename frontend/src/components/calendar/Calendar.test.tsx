@@ -125,6 +125,22 @@ describe('Calendar', () => {
     expect(await screen.findByRole('dialog', { name: 'E5' })).toBeInTheDocument()
   })
 
+  it('gives phones a day button that opens the day, in place of the event list', async () => {
+    getEventsForMonths.mockResolvedValue([
+      onDay(14, { id: 1, event_title: 'Breakfast' }),
+      onDay(14, { id: 2, event_title: 'Lunch', start_time: new Date(new Date().getFullYear(), new Date().getMonth(), 14, 12).toISOString() }),
+    ])
+    const user = userEvent.setup()
+    renderWithRouter(<Calendar />)
+    const dayButton = await screen.findByRole('button', { name: '2 events' })
+    expect(dayButton).toHaveClass('sm:hidden', 'min-h-11', 'w-full')
+    expect(screen.getByRole('button', { name: /Breakfast/ }).parentElement).toHaveClass('hidden', 'sm:block')
+    await user.click(dayButton)
+    const day = screen.getByRole('dialog')
+    expect(within(day).getByRole('button', { name: /Breakfast/ })).toBeInTheDocument()
+    expect(within(day).getByRole('button', { name: /Lunch/ })).toBeInTheDocument()
+  })
+
   it('filters events by calendar via the Calendars dropdown', async () => {
     getEventsForMonths.mockResolvedValue([
       onDay(8, { id: 1, event_title: 'WorkEvt', calendar_name: 'Work' }),
@@ -212,6 +228,48 @@ describe('Calendar', () => {
     const saved = JSON.parse(localStorage.getItem('calendar-enabled-calendars')!)
     expect(saved).toContain('Work')
     expect(saved).not.toContain('Home')
+  })
+
+  it('keeps the newest month when an older month finishes loading after it', async () => {
+    const now = new Date()
+    let finishThisMonth: (events: CalendarEvent[]) => void = () => {}
+    getEventsForMonths.mockImplementation((year: number, month: number) =>
+      year === now.getFullYear() && month === now.getMonth()
+        ? new Promise<CalendarEvent[]>(resolve => { finishThisMonth = resolve })
+        : Promise.resolve([]))
+    const user = userEvent.setup()
+    renderWithRouter(<Calendar />)
+    await waitFor(() => expect(getEventsForMonths).toHaveBeenCalled())
+    await user.click(screen.getByRole('button', { name: 'Next month' }))
+    expect(await screen.findByText(/No events this month/)).toBeInTheDocument()
+    finishThisMonth([onDay(15, { event_title: 'Stale' })])
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(screen.getByText(/No events this month/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Calendars/ })).toHaveTextContent('(0/0)')
+  })
+
+  it('fetches the first month once', async () => {
+    getEventsForMonths.mockResolvedValue([onDay(8)])
+    renderWithRouter(<Calendar />)
+    await screen.findByText('Event 8')
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(getEventsForMonths).toHaveBeenCalledTimes(1)
+  })
+
+  it('works when localStorage is blocked', async () => {
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new DOMException('blocked', 'SecurityError') })
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new DOMException('blocked', 'SecurityError') })
+    getEventsForMonths.mockResolvedValue([
+      onDay(8, { id: 1, event_title: 'WorkEvt', calendar_name: 'Work' }),
+      onDay(9, { id: 2, event_title: 'HomeEvt', calendar_name: 'Home' }),
+    ])
+    const user = userEvent.setup()
+    renderWithRouter(<Calendar />)
+    expect(await screen.findByText('WorkEvt')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /Calendars/ }))
+    await user.click(within(screen.getByText('Home').closest('label')!).getByRole('checkbox'))
+    await waitFor(() => expect(screen.queryByText('HomeEvt')).not.toBeInTheDocument())
+    expect(screen.getByText('WorkEvt')).toBeInTheDocument()
   })
 
   it('ignores a corrupt localStorage value', async () => {

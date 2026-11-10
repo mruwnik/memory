@@ -4,7 +4,9 @@ import { useCalendar, CalendarEvent } from '@/hooks/useCalendar'
 import { useAuth } from '@/hooks/useAuth'
 import { useUsers, User } from '@/hooks/useUsers'
 import { usePeople, Person } from '@/hooks/usePeople'
+import { useNewestRequest } from '@/hooks/useNewestRequest'
 import { Badge, Button, Card, Checkbox, DetailList, LoadingState, Modal, Notice, Page, RefreshButton, buttonClass, NewTabLink } from '@/components/shared/ui'
+import { readStorage, readStoredArray, writeStorage } from '@/utils/storage'
 
 const DAYS_OF_WEEK = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 const MONTH_NAMES = [
@@ -20,6 +22,7 @@ interface DayCell {
 }
 
 const VIEWPORT_GUTTER = 8
+const CALENDARS_KEY = 'calendar-enabled-calendars'
 
 interface FilterMenuProps<T> {
   label: string
@@ -101,22 +104,12 @@ const Calendar = () => {
   const [currentDate, setCurrentDate] = useState(new Date())
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null)
   const [selectedDayEvents, setSelectedDayEvents] = useState<{ date: Date; events: CalendarEvent[] } | null>(null)
-  const [enabledCalendars, setEnabledCalendars] = useState<Set<string>>(() => {
-    // Load saved selection from localStorage
-    const saved = localStorage.getItem('calendar-enabled-calendars')
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved)
-        if (Array.isArray(parsed)) {
-          return new Set(parsed)
-        }
-      } catch {
-        // Ignore parse errors
-      }
-    }
-    return new Set()
-  })
-  const [hasLoadedInitialCalendars, setHasLoadedInitialCalendars] = useState(false)
+  const [enabledCalendars, setEnabledCalendars] = useState<Set<string>>(
+    () => new Set(readStoredArray<string>(CALENDARS_KEY) ?? []),
+  )
+  // A ref, not state: loadEvents reads it, and depending on it would refetch once the first load sets it.
+  const calendarsLoaded = useRef(false)
+  const beginLoad = useNewestRequest()
 
   // Attendee popup state
   const [selectedAttendee, setSelectedAttendee] = useState<{ email: string; person: Person | null; loading: boolean } | null>(null)
@@ -155,16 +148,20 @@ const Calendar = () => {
   }, [isAdmin, usersLoaded, enabledUsers, users.length])
 
   const loadEvents = useCallback(async (date: Date, userIds?: number[]) => {
+    const isStale = beginLoad()
     setLoading(true)
     setError(null)
     try {
       const data = await getEventsForMonths(date.getFullYear(), date.getMonth(), userIds)
+      if (isStale()) return
       setEvents(data)
       // Handle calendar selection
       const newCalendarNames = new Set(data.map(e => e.calendar_name || 'Unknown').filter(Boolean))
+      const firstLoad = !calendarsLoaded.current
+      calendarsLoaded.current = true
       setEnabledCalendars(prev => {
         // First load ever (no saved selection): enable all calendars
-        if (!hasLoadedInitialCalendars && prev.size === 0 && !localStorage.getItem('calendar-enabled-calendars')) {
+        if (firstLoad && prev.size === 0 && !readStorage(CALENDARS_KEY)) {
           return newCalendarNames
         }
         // Otherwise, just add any new calendars that weren't in the previous set
@@ -173,13 +170,13 @@ const Calendar = () => {
         newCalendarNames.forEach(name => updated.add(name))
         return updated
       })
-      setHasLoadedInitialCalendars(true)
     } catch (e) {
+      if (isStale()) return
       setError(e instanceof Error ? e.message : 'Failed to load events')
     } finally {
-      setLoading(false)
+      if (!isStale()) setLoading(false)
     }
-  }, [getEventsForMonths, hasLoadedInitialCalendars])
+  }, [getEventsForMonths, beginLoad])
 
   useEffect(() => {
     // Wait for auth to load before fetching - we need to know if user is admin
@@ -190,12 +187,10 @@ const Calendar = () => {
     loadEvents(currentDate, selectedUserIds)
   }, [loadEvents, currentDate, selectedUserIds, isAdmin, usersLoaded, authLoading])
 
-  // Persist calendar selection to localStorage
+  // Persist the calendar selection once a load has filled it in
   useEffect(() => {
-    if (hasLoadedInitialCalendars) {
-      localStorage.setItem('calendar-enabled-calendars', JSON.stringify(Array.from(enabledCalendars)))
-    }
-  }, [enabledCalendars, hasLoadedInitialCalendars])
+    if (calendarsLoaded.current) writeStorage(CALENDARS_KEY, JSON.stringify(Array.from(enabledCalendars)))
+  }, [enabledCalendars])
 
   // Get unique calendar names for filter
   const calendarNames = useMemo(() => {
@@ -396,7 +391,7 @@ const Calendar = () => {
             key={index}
             role="group"
             aria-label={day.date.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}
-            className={`min-h-28 p-2 border-b border-r border-slate-100 ${
+            className={`min-h-16 sm:min-h-28 p-1 sm:p-2 border-b border-r border-slate-100 ${
               !day.isCurrentMonth ? 'bg-slate-50/50' : 'bg-white'
             } ${day.isToday ? 'bg-primary/10' : ''}`}
           >
@@ -411,7 +406,18 @@ const Calendar = () => {
                 {day.date.getDate()}
               </span>
             </div>
-            <div className="space-y-1">
+            {/* Event titles don't fit a phone-width column, so phones get one tappable count per day. */}
+            {day.events.length > 0 && (
+              <button
+                type="button"
+                className="sm:hidden w-full min-h-11 rounded bg-primary/20 text-xs font-medium text-primary-dark focus-visible:outline-2 focus-visible:outline-primary"
+                aria-label={`${day.events.length} event${day.events.length === 1 ? '' : 's'}`}
+                onClick={() => setSelectedDayEvents({ date: day.date, events: day.events })}
+              >
+                {day.events.length}
+              </button>
+            )}
+            <div className="hidden sm:block space-y-1">
               {day.events.slice(0, 4).map((event) => (
                 <button
                   type="button"
@@ -448,7 +454,7 @@ const Calendar = () => {
         )}
       </Card>
 
-      {/* Day Events Modal (for +N more) */}
+      {/* Day Events Modal (for +N more and the phone day buttons) */}
       {selectedDayEvents && (
         <Modal title={formatDateHeader(selectedDayEvents.date)} onClose={() => setSelectedDayEvents(null)}>
           <div className="space-y-2">
