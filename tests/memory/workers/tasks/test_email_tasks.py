@@ -32,6 +32,7 @@ from memory.common.email_sender import (
 from memory.parsers.email import parse_email_message
 from memory.workers.tasks.email import (
     FAILURE_HOLD_LIMIT,
+    FIRST_SYNC_HOLD_LIMIT,
     SYNC_OVERLAP,
     QueueOutcome,
     get_cutoff_date,
@@ -1124,15 +1125,15 @@ def test_imap_sync_with_failures_keeps_cutoff(
 
 
 @pytest.mark.parametrize(
-    "last_sync_age, created_age",
+    "last_sync_age, created_age, span",
     [
-        (FAILURE_HOLD_LIMIT + timedelta(hours=1), timedelta(days=30)),
-        # Never synced cleanly: the hold runs from when the account was added
-        (None, FAILURE_HOLD_LIMIT + timedelta(hours=1)),
+        (FAILURE_HOLD_LIMIT + timedelta(hours=1), timedelta(days=30), "3 days"),
+        # Never synced cleanly: a shorter hold, from when the account was added
+        (None, FIRST_SYNC_HOLD_LIMIT + timedelta(minutes=10), "6 hours"),
     ],
 )
 def test_imap_sync_gives_up_on_failures_held_past_the_limit(
-    db_session, test_email_account, last_sync_age, created_age
+    db_session, test_email_account, last_sync_age, created_age, span
 ):
     now = datetime.now(timezone.utc)
     test_email_account.last_sync_at = last_sync_age and now - last_sync_age
@@ -1146,7 +1147,7 @@ def test_imap_sync_gives_up_on_failures_held_past_the_limit(
     assert now <= test_email_account.last_sync_at <= cast(datetime, provider.searched_at)
     assert test_email_account.sync_error == (
         "1 messages or folders could not be fetched or queued for over "
-        f"{FAILURE_HOLD_LIMIT.days} days; the sync moved on without them"
+        f"{span}; the sync moved on without them"
     )
 
 

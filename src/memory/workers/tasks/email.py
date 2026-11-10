@@ -344,6 +344,9 @@ SYNC_OVERLAP = timedelta(days=1)
 # back. Every sync re-downloads all mail since the cutoff, so mail still
 # failing after this long is given up on rather than re-fetching ever more.
 FAILURE_HOLD_LIMIT = timedelta(days=3)
+# The same for an account that never synced cleanly, whose every retry
+# re-downloads the whole mailbox.
+FIRST_SYNC_HOLD_LIMIT = timedelta(hours=6)
 
 
 def get_cutoff_date(account: EmailAccount, since_date: str | None) -> datetime:
@@ -591,9 +594,23 @@ def sync_gmail_messages(
     }
 
 
+def hold_limit(account: EmailAccount) -> timedelta:
+    """How long failed mail may hold this account's cutoff back."""
+    if account.last_sync_at is None:
+        return FIRST_SYNC_HOLD_LIMIT
+    return FAILURE_HOLD_LIMIT
+
+
+def describe_span(span: timedelta) -> str:
+    """``span`` in whole days, or whole hours when under a day."""
+    if span.days:
+        return f"{span.days} days"
+    return f"{span.seconds // 3600} hours"
+
+
 def gives_up_on_failures(account: EmailAccount, errors: int, now: datetime) -> bool:
     """Whether this IMAP sync moves the cutoff past mail it failed to fetch or
-    queue, because the cutoff has been held for ``FAILURE_HOLD_LIMIT``.
+    queue, because the cutoff has been held for ``hold_limit(account)``.
 
     Gmail syncs retry failed mail whatever ``last_sync_at`` says.
     """
@@ -602,7 +619,7 @@ def gives_up_on_failures(account: EmailAccount, errors: int, now: datetime) -> b
     held_since = cast(datetime | None, account.last_sync_at) or cast(
         datetime, account.created_at
     )
-    if now - held_since < FAILURE_HOLD_LIMIT:
+    if now - held_since < hold_limit(account):
         return False
     logger.warning(
         f"Account {account.id}: moving the sync cutoff past {errors} failed "
@@ -611,19 +628,21 @@ def gives_up_on_failures(account: EmailAccount, errors: int, now: datetime) -> b
     return True
 
 
-def failure_notes(errors: int, unavailable: list[str], gave_up: bool) -> list[str]:
-    """The sync error lines for a sync's failures."""
+def failure_notes(
+    errors: int, unavailable: list[str], gave_up_after: timedelta | None
+) -> list[str]:
+    """The sync error lines for a sync's failures. ``gave_up_after`` is how
+    long failed mail held the cutoff before this sync moved on, if it did."""
     notes = []
     if unavailable:
         notes.append(
             f"the server won't open folder(s) {', '.join(unavailable)}; "
             "check the account's folder list"
         )
-    if errors and gave_up:
-        days = FAILURE_HOLD_LIMIT.days
+    if errors and gave_up_after:
         notes.append(
             f"{errors} messages or folders could not be fetched or queued for "
-            f"over {days} days; the sync moved on without them"
+            f"over {describe_span(gave_up_after)}; the sync moved on without them"
         )
     elif errors:
         notes.append(
@@ -639,13 +658,16 @@ def sync_failures(
     """What a finished sync tells the user (None if nothing failed), and
     whether it moves the cutoff.
 
-    Failed mail holds the cutoff back for up to ``FAILURE_HOLD_LIMIT``. A
-    folder the server won't open never does: it fails until the folder list
+    Failed mail holds the cutoff back for up to ``hold_limit(account)``. A
+    folder that no longer exists never does: it fails until the folder list
     is fixed.
     """
     errors = stats.get("errors", 0)
+    limit = hold_limit(account)
     gave_up = bool(errors) and gives_up_on_failures(account, errors, now)
-    notes = failure_notes(errors, stats.get("unavailable_folders", []), gave_up)
+    notes = failure_notes(
+        errors, stats.get("unavailable_folders", []), limit if gave_up else None
+    )
     return "; ".join(notes) or None, gave_up or not errors
 
 
