@@ -1287,12 +1287,12 @@ def update_slack_reactions(
                 return {"status": "updated", "message_ts": message_ts}
     except OperationalError:
         logger.info(f"Reaction update for Slack message {message_ts} hit a lock conflict; retrying")
-        update_slack_reactions.apply_async(kwargs=retry_kwargs, countdown=1)  # type: ignore[attr-defined]
+        update_slack_reactions.apply_async(kwargs=retry_kwargs, countdown=1)
         return {"status": "retrying", "message_ts": message_ts}
 
     if attempt >= REACTION_RETRIES:
         return {"status": "not_found", "message_ts": message_ts}
-    update_slack_reactions.apply_async(  # type: ignore[attr-defined]
+    update_slack_reactions.apply_async(
         kwargs=retry_kwargs, countdown=REACTION_RETRY_SECONDS * (attempt + 1)
     )
     return {"status": "retrying", "message_ts": message_ts}

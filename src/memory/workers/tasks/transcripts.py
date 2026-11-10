@@ -325,7 +325,7 @@ def sync_all_transcript_accounts() -> list[dict]:
             {
                 "account_id": account.id,
                 "provider": account.provider,
-                "task_id": sync_transcript_account.delay(account.id).id,  # type: ignore[attr-defined]
+                "task_id": sync_transcript_account.delay(account.id).id,
             }
             for account in accounts
         ]

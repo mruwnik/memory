@@ -1,7 +1,10 @@
 import json
 import logging
+from collections.abc import Callable
+from typing import Any, Protocol, TypeVar, overload
 
 from celery import Celery
+from celery.result import EagerResult
 from celery.schedules import crontab
 from kombu.utils.url import safequote
 
@@ -310,7 +313,44 @@ def get_broker_url() -> str:
 
 TASK_TIME_LIMIT = 3600
 
-app = Celery(
+R = TypeVar("R")
+R_co = TypeVar("R_co", covariant=True)
+
+
+class Dispatched(Protocol):
+    """The handle ``delay`` and ``apply_async`` return for a queued task."""
+
+    id: str
+
+
+class TaskFn(Protocol[R_co]):
+    """What a function decorated with ``app.task`` exposes."""
+
+    name: str
+
+    def __call__(self, *args: Any, **kwargs: Any) -> R_co: ...
+    def delay(self, *args: Any, **kwargs: Any) -> Dispatched: ...
+    def apply_async(
+        self, args: Any = None, kwargs: dict[str, Any] | None = None, **options: Any
+    ) -> Dispatched: ...
+    def apply(
+        self, args: Any = None, kwargs: dict[str, Any] | None = None, **options: Any
+    ) -> EagerResult: ...
+    def run(self, *args: Any, **kwargs: Any) -> R_co: ...
+
+
+class MemoryCelery(Celery):
+    """Celery whose ``task`` decorator is typed, as Celery ships no type hints."""
+
+    @overload
+    def task(self, fun: Callable[..., R], /) -> TaskFn[R]: ...
+    @overload
+    def task(self, **opts: Any) -> Callable[[Callable[..., R]], TaskFn[R]]: ...
+    def task(self, *args: Any, **opts: Any) -> Any:
+        return super().task(*args, **opts)
+
+
+app = MemoryCelery(
     settings.APP_NAME,
     broker=get_broker_url(),
     backend=settings.CELERY_RESULT_BACKEND,

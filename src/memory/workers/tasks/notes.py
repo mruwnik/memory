@@ -316,7 +316,7 @@ def reindex_notes(repo_root: pathlib.Path, filenames: list[str]):
     # Not via to_db_filename(path): that resolves symlinks, which reindex_note must refuse.
     prefix = paths.to_db_filename(repo_root)
     for filename in filenames:
-        reindex_note.delay(f"{prefix}/{filename}")  # type: ignore[attr-defined]
+        reindex_note.delay(f"{prefix}/{filename}")
 
 
 def mark_pending_write(filename: str, sha256: bytes):
@@ -496,7 +496,7 @@ def write_note_file_or_defer(note_id: int, filename: str, sha256: bytes, commit_
         write_note_file(note_id, sha256, commit_message)
     except (VaultBusy, GitLockTimeout):
         logger.warning("Notes vault busy: deferring the file write of note %s", note_id)
-        write_note_file_when_free.apply_async(  # type: ignore[attr-defined]
+        write_note_file_when_free.apply_async(
             (note_id, filename, sha256.hex(), commit_message), countdown=vault_busy_backoff(0)
         )
     except Exception:
@@ -836,7 +836,7 @@ def sync_notes_when_due():
     client = get_redis()
     if not client.set(SYNC_QUEUED_KEY, "1", nx=True, ex=min(interval, SYNC_QUEUED_TTL)):
         return {"status": "already_queued"}
-    track_git_changes.delay()  # type: ignore[attr-defined]
+    track_git_changes.delay()
     return {"status": "queued"}
 
 

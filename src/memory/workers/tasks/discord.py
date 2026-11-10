@@ -331,12 +331,12 @@ def update_reactions(
                 return {"status": "ignored", "message_id": message_id}
     except sqlalchemy_exc.OperationalError:
         logger.info("Reaction update for Discord message %s hit a lock conflict; retrying", message_id)
-        update_reactions.apply_async(kwargs=retry_kwargs, countdown=1)  # type: ignore[attr-defined]
+        update_reactions.apply_async(kwargs=retry_kwargs, countdown=1)
         return {"status": "retrying", "message_id": message_id}
 
     if attempt >= RETRIES:
         return {"status": "not_found", "message_id": message_id}
-    update_reactions.apply_async(  # type: ignore[attr-defined]
+    update_reactions.apply_async(
         kwargs=retry_kwargs, countdown=RETRY_SECONDS * (attempt + 1)
     )
     return {"status": "retrying", "message_id": message_id}
