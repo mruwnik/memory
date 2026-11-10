@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { act, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { useState } from 'react'
+import { useState, type FormEvent } from 'react'
 import { createMemoryRouter, Link, MemoryRouter, RouterProvider, useSearchParams } from 'react-router-dom'
 import { Button, Combobox, ConfirmButton, CopyButton, Field, Fieldset, Input, List, Modal, NewTabLink, Row, SplitView, Tabs, useActionNotice, useUnsavedGuard } from './ui'
 
@@ -21,6 +21,18 @@ describe('ConfirmButton', () => {
     await user.click(cancel)
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(trigger).toHaveFocus()
+  })
+
+  it('cancelling inside a form does not submit the form', async () => {
+    const user = userEvent.setup()
+    const onSubmit = vi.fn((e: FormEvent) => e.preventDefault())
+    render(<form onSubmit={onSubmit}><ConfirmButton confirm="Clear it?" onConfirm={vi.fn()} /></form>)
+    await user.click(screen.getByRole('button', { name: 'Delete' }))
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(onSubmit).not.toHaveBeenCalled()
   })
 })
 
