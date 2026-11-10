@@ -35,6 +35,7 @@ a new, empty `## Unreleased` above it.
 - `meta_notify_user` says why it can't use a channel: for Discord, whether no Discord account is linked to your Person or you have no Discord bot of your own (notifications go out through a bot you registered). Results list `skipped_channels`, why each channel ahead of the one used was passed over. A Discord user id in the Person's `contact_info.discord` counts as a linked account when no Discord account is linked.
 - Browse what has been ingested: each content type on the Ingestion overview opens its items, newest first, a page at a time, and the overview page can show each type's latest five items inline. The list can be narrowed to one connection (email account, Discord or Slack channel, Beeper chat, feed, GitHub repo, Google Drive folder, calendar or transcript account, book), filtered by indexing status, and searched by title, subject, sender, author or filename (not the item text). Only items you can access are listed.
 - MCP `core_list_items` and `core_count_items` take `item_types`, `embed_statuses` (default still indexed items only), `contains` and `connection_id`. List rows carry `type` and `embed_status`; `include_total=false` skips the total count; pages sort by id within equal timestamps so they never overlap. `core_count_items` adds `by_type` and, for types that share a kind of connection, `by_connection`.
+- A subscription's `max_per_hour` sets its hourly delivery limit, above `AGENT_MAX_RUNS_PER_HOUR` as well as below: it was held to that setting, so deliveries over 60 an hour were throttled whatever it said. Runs an agent handler starts are still held to that agent's own hourly limit, which `AGENT_MAX_RUNS_PER_HOUR` caps. Rate refusals name the limit that fired (`max_per_hour`, `max_runs_per_hour`, or `AGENT_MAX_RUNS_PER_HOUR` as default or ceiling). Filter and raw subscriptions are returned with `limits`, the `max_per_hour` and `backlog_max` in effect (null: no limit).
 
 ### Required env vars
 None
@@ -43,6 +44,7 @@ None
 None
 
 ### Other changes for operators
+- `AGENT_MAX_RUNS_PER_HOUR` is the ceiling on runs an agent definition or prebuilt agent starts an hour, and only the default for a subscription's `max_per_hour`.
 - New beat task `notify-finished-runs` (every 30s, `scheduler` queue) sends `agent_run(notify=true)` notifications.
 - A repo synced before this release while GitHub refused queries may have had its `last_sync_at` moved past items it never stored. After granting the missing permissions, run Sync on the repo with `force_full=true` (`POST /github/accounts/{account_id}/repos/{repo_id}/sync?force_full=true`), or clear `last_sync_at` for it. Later incidents catch up by themselves.
 
