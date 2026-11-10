@@ -36,6 +36,7 @@ a new, empty `## Unreleased` above it.
 - Browse what has been ingested: each content type on the Ingestion overview opens its items, newest first, a page at a time, and the overview page can show each type's latest five items inline. The list can be narrowed to one connection (email account, Discord or Slack channel, Beeper chat, feed, GitHub repo, Google Drive folder, calendar or transcript account, book), filtered by indexing status, and searched by title, subject, sender, author or filename (not the item text). Only items you can access are listed.
 - MCP `core_list_items` and `core_count_items` take `item_types`, `embed_statuses` (default still indexed items only), `contains` and `connection_id`. List rows carry `type` and `embed_status`; `include_total=false` skips the total count; pages sort by id within equal timestamps so they never overlap. `core_count_items` adds `by_type` and, for types that share a kind of connection, `by_connection`.
 - `people_merge` moves deadline ownership, Beeper participant links and GitHub item authorship to the kept person, and reports `deadlines_moved`, `beeper_participants_moved` and `github_items_moved`. Before, these were cleared when the merged-away person was deleted.
+- `teams_upsert` without a `slug` folds accented letters into the derived slug (Équipe → `equipe`). It refuses a name with no usable slug characters, and a derived slug that belongs to a team with a different name (e.g. "C++" and "C" both give `c`), instead of overwriting that team. Pass `slug` to choose one.
 
 ### Required env vars
 None

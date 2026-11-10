@@ -332,6 +332,8 @@ async def test_team_add_member_access_control_denied(
         pytest.param("with-hyphen", "with-hyphen", id="preserves_hyphens"),
         pytest.param("123 Numbers", "123-numbers", id="keeps_numbers"),
         pytest.param("---leading---", "leading", id="strips_leading_trailing_hyphens"),
+        pytest.param("Équipe Café", "equipe-cafe", id="folds_accents"),
+        pytest.param("日本チーム", "", id="no_ascii_form"),
     ],
 )
 def test_make_slug(name, expected_slug):
@@ -599,6 +601,50 @@ async def test_upsert_auto_generates_slug(db_session, admin_session):
 
     assert result["success"] is True
     assert result["team"]["slug"] == "auto-slug-team"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["日本チーム", "!!!"])
+async def test_upsert_refuses_empty_derived_slug(db_session, admin_session, name):
+    with mcp_auth_context(admin_session.token):
+        result = await get_fn(upsert)(name=name)
+
+    assert "pass `slug`" in result["error"]
+    assert db_session.query(Team).count() == 0
+
+
+@pytest.mark.asyncio
+async def test_upsert_refuses_derived_slug_of_another_team(db_session, admin_session):
+    db_session.add(Team(name="C", slug="c", description="The C team"))
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.token):
+        result = await get_fn(upsert)(name="C++", description="Overwritten")
+
+    db_session.expire_all()
+    team = db_session.query(Team).filter(Team.slug == "c").one()
+    assert "pass `slug`" in result["error"]
+    assert (team.name, team.description) == ("C", "The C team")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "existing_name, name, slug",
+    [
+        ("C", "C++", "c"),
+        ("Platform Team", "platform team", None),
+    ],
+)
+async def test_upsert_updates_team_by_explicit_or_same_name_slug(
+    db_session, admin_session, existing_name, name, slug
+):
+    db_session.add(Team(name=existing_name, slug=make_slug(existing_name)))
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.token):
+        result = await get_fn(upsert)(name=name, slug=slug, description="Updated")
+
+    assert (result["action"], result["team"]["name"]) == ("updated", name)
 
 
 @pytest.mark.asyncio
