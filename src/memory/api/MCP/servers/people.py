@@ -7,7 +7,7 @@ from functools import reduce
 from typing import Any, Literal
 
 from fastmcp import FastMCP
-from sqlalchemy import ColumnElement, Text, exists, false, or_, text, true
+from sqlalchemy import ColumnElement, Text, exists, false, or_, select, text, true
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import InstrumentedAttribute, selectinload
@@ -54,7 +54,7 @@ from memory.common.db.models import (
 from memory.common.db.models.discord import DiscordUser
 from memory.common.db.models.polls import PollResponse
 from memory.common.db.models.source_item import source_item_people
-from memory.common.db.models.sources import GithubUser
+from memory.common.db.models.sources import GithubUser, transcript_account_task_people
 from memory.common.people import contact_values, discord_ids
 
 logger = logging.getLogger(__name__)
@@ -794,8 +794,9 @@ def merge_contact_info(primary: Person, secondaries: list[Person]) -> None:
 
 # Each column here holds a plain reference to a Person; a merge points the
 # secondaries' rows at the primary. The key is its count in the merge stats.
-# team_members and source_item_people are link tables merged with dedup by
-# merge_team_memberships and merge_source_items.
+# team_members, source_item_people and transcript_account_task_people are link
+# tables merged with dedup by merge_team_memberships, merge_source_items and
+# merge_transcript_task_people.
 REPOINTED_PERSON_COLUMNS: dict[str, InstrumentedAttribute[Any]] = {
     "tidbits_moved": PersonTidbit.person_id,
     "discord_users_moved": DiscordUser.person_id,
@@ -911,6 +912,41 @@ def merge_source_items(session: DBSession, primary: Person, secondaries: list[Pe
                 )
             total += 1
     return total
+
+
+def merge_transcript_task_people(
+    session: DBSession, primary: Person, secondaries: list[Person]
+) -> int:
+    """Move transcript accounts' action-item task picks from the secondaries to
+    the primary, deduplicating. Returns the number of accounts whose picks moved.
+
+    The delete cascade would drop them instead, and an account left with no
+    picks makes a task of every action item."""
+    picks = transcript_account_task_people
+    secondary_ids = [sec.id for sec in secondaries]
+    account_ids = set(
+        session.scalars(
+            select(picks.c.transcript_account_id).where(picks.c.person_id.in_(secondary_ids))
+        )
+    )
+    if not account_ids:
+        return 0
+    already_picked = set(
+        session.scalars(
+            select(picks.c.transcript_account_id).where(
+                picks.c.person_id == primary.id,
+                picks.c.transcript_account_id.in_(account_ids),
+            )
+        )
+    )
+    new_picks = [
+        {"transcript_account_id": account_id, "person_id": primary.id}
+        for account_id in sorted(account_ids - already_picked)
+    ]
+    if new_picks:
+        session.execute(picks.insert(), new_picks)
+    session.execute(picks.delete().where(picks.c.person_id.in_(secondary_ids)))
+    return len(account_ids)
 
 
 def merged_user_id(session: DBSession, primary: Person, secondaries: list[Person]) -> int | None:
@@ -1038,6 +1074,9 @@ async def merge(
             **repointed,
             "team_memberships_moved": merge_team_memberships(session, primary, secondaries),
             "source_items_moved": merge_source_items(session, primary, secondaries),
+            "transcript_task_picks_moved": merge_transcript_task_people(
+                session, primary, secondaries
+            ),
             "users_updated": users_updated,
         }
 

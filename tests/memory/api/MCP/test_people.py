@@ -30,6 +30,7 @@ from memory.common.db.models import (
     PersonTidbit,
 )
 from memory.common.db.models.discord import DiscordUser
+from memory.common.db.models.sources import TranscriptAccount, transcript_account_task_people
 from memory.common.content_processing import create_content_hash
 from memory.common.notify import user_info_for
 from memory.common.people import find_person_by_slack_id
@@ -1595,8 +1596,53 @@ def test_merge_covers_every_reference_to_people():
         (column.property.columns[0].table.name, column.property.columns[0].name)
         for column in REPOINTED_PERSON_COLUMNS.values()
     }
-    link_tables = {("team_members", "person_id"), ("source_item_people", "person_id")}
+    link_tables = {
+        ("team_members", "person_id"),
+        ("source_item_people", "person_id"),
+        ("transcript_account_task_people", "person_id"),
+    }
     assert person_fk_columns() == repointed | link_tables
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "picked, expected",
+    [
+        (["alice_dup"], {"alice_chen"}),
+        (["alice_chen", "alice_dup"], {"alice_chen"}),
+        (["bob_smith", "alice_dup"], {"alice_chen", "bob_smith"}),
+        (["bob_smith"], {"bob_smith"}),
+    ],
+)
+async def test_merge_people_moves_transcript_task_picks(
+    db_session, admin_session, admin_user, sample_people, picked, expected
+):
+    """A transcript account that picks the merged-away person picks the
+    primary instead; an account left with no picks would task everyone."""
+    duplicate = Person(identifier="alice_dup", display_name="Alice Dup")
+    account = TranscriptAccount(user_id=admin_user.id, name="FF", provider="fireflies")
+    db_session.add_all([duplicate, account])
+    db_session.flush()
+    people = {p.identifier: p.id for p in db_session.query(Person)}
+    db_session.execute(
+        transcript_account_task_people.insert(),
+        [{"transcript_account_id": account.id, "person_id": people[i]} for i in picked],
+    )
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.token):
+        result = await get_fn(merge)(
+            identifiers=["alice_chen", "alice_dup"], primary_identifier="alice_chen"
+        )
+
+    rows = db_session.execute(
+        transcript_account_task_people.select().where(
+            transcript_account_task_people.c.transcript_account_id == account.id
+        )
+    ).fetchall()
+    by_id = {person_id: identifier for identifier, person_id in people.items()}
+    assert result["success"] is True
+    assert {by_id[row.person_id] for row in rows} == expected
 
 
 def make_deadline(person_id: int, creator_id: int) -> Deadline:
