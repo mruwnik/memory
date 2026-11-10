@@ -13,7 +13,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from sqlalchemy.orm import Session, object_session, scoped_session
 
-from memory.common import collections, embedding, paths, settings
+from memory.common import collections, embedding, mail_connect, paths, settings
 from memory.common.content_processing import (
     chunk_ids_by_collection,
     delete_vectors,
@@ -316,9 +316,9 @@ def imap_connection(account: EmailAccount) -> Generator[imaplib.IMAP4, None, Non
     context = ssl.create_default_context()
     # Port 143 requires STARTTLS before any credentials are sent.
     if account.use_ssl is False:
-        conn: imaplib.IMAP4 = imaplib.IMAP4(host=host, port=port)
+        conn: imaplib.IMAP4 = mail_connect.PublicIMAP4(host=host, port=port)
     else:
-        conn = imaplib.IMAP4_SSL(host=host, port=port, ssl_context=context)
+        conn = mail_connect.PublicIMAP4SSL(host=host, port=port, ssl_context=context)
     try:
         if account.use_ssl is False:
             conn.starttls(ssl_context=context)

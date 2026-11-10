@@ -15,6 +15,7 @@ from typing import Any
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
+from memory.common import mail_connect
 from memory.common.db.connection import DBSession
 from memory.common.db.models import EmailAccount, GoogleAccount
 
@@ -292,13 +293,13 @@ def send_via_smtp(
 
         # Port 465 uses implicit TLS (SMTP_SSL), port 587 uses STARTTLS
         if smtp_port == 465:
-            with smtplib.SMTP_SSL(
+            with mail_connect.PublicSMTPSSL(
                 smtp_server, smtp_port, timeout=30, context=context
             ) as server:
                 server.login(config.username or config.email_address, config.password)
                 server.send_message(msg, to_addrs=all_recipients)
         else:
-            with smtplib.SMTP(smtp_server, smtp_port, timeout=30) as server:
+            with mail_connect.PublicSMTP(smtp_server, smtp_port, timeout=30) as server:
                 server.starttls(context=context)
                 server.login(config.username or config.email_address, config.password)
                 server.send_message(msg, to_addrs=all_recipients)

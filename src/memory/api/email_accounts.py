@@ -489,9 +489,11 @@ def test_connection(
     (loaded via ``get_user_account``, so ownership is enforced); each
     provided body field overrides it, except a blank ``password`` which
     falls back to the stored one. The effective ``imap_server`` /
-    ``imap_port`` are re-validated against the SSRF/port allowlist
-    (``validate_public_hostname`` re-resolves DNS, defeating rebinding),
-    then a transient account drives ``imap_connection`` -> ``conn.list()``.
+    ``imap_port`` are validated against the SSRF/port allowlist, so a
+    private host or odd port is a 400, then a transient account drives
+    ``imap_connection`` -> ``conn.list()``. The connection resolves the host
+    again and dials only an address it checked (``mail_connect``), which is
+    what stops a DNS answer that changed after validation.
     On success the parsed folder list is returned so the client can offer a
     folder picker. Any connection failure returns a deliberately-generic
     message so the connect/refuse/auth-failed differential can't enumerate

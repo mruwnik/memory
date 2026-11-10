@@ -65,7 +65,7 @@ class FailingSMTP:
 )
 def test_smtp_failure_keeps_mailbox_out_of_error_log(caplog, monkeypatch, error):
     monkeypatch.setattr(
-        "memory.common.email_sender.smtplib.SMTP", FailingSMTP(error)
+        "memory.common.email_sender.mail_connect.PublicSMTP", FailingSMTP(error)
     )
     config = SmtpConfig(
         email_address=f"{SECRET}@example.com",

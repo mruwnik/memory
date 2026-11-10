@@ -36,6 +36,7 @@ a new, empty `## Unreleased` above it.
 - Browse what has been ingested: each content type on the Ingestion overview opens its items, newest first, a page at a time, and the overview page can show each type's latest five items inline. The list can be narrowed to one connection (email account, Discord or Slack channel, Beeper chat, feed, GitHub repo, Google Drive folder, calendar or transcript account, book), filtered by indexing status, and searched by title, subject, sender, author or filename (not the item text). Only items you can access are listed.
 - MCP `core_list_items` and `core_count_items` take `item_types`, `embed_statuses` (default still indexed items only), `contains` and `connection_id`. List rows carry `type` and `embed_status`; `include_total=false` skips the total count; pages sort by id within equal timestamps so they never overlap. `core_count_items` adds `by_type` and, for types that share a kind of connection, `by_connection`.
 - ERROR logs of the api and workers carry ids instead of document text, mailbox addresses, GitHub titles and responses, feed URLs, calendar names or file paths, and exception text goes only into the traceback the operator log filter cuts to the exception type.
+- IMAP syncs and SMTP sends check the mail server's address each time they connect and dial only an address they checked, so a server whose DNS later points at a loopback, private or link-local address is refused instead of only being checked when the account is saved.
 
 ### Required env vars
 None
