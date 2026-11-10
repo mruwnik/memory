@@ -376,8 +376,8 @@ def process_email_batch(
                 db, cast(int, account.id), message_id, folder, raw_email, received_at
             ):
                 new_messages += 1
-        except Exception as e:
-            logger.error(f"Error queuing message {message_id}: {e}")
+        except Exception:
+            logger.exception(f"Error queuing message {message_id}")
             errors += 1
 
     return {

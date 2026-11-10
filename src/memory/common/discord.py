@@ -56,8 +56,8 @@ def send_over_rest(access: BotAccess, action: Callable[[DiscordRest], Awaitable[
 
     try:
         asyncio.run(run())
-    except DiscordAPIError as e:
-        logger.error(f"Discord bot {access.bot_id} could not send ({e})")
+    except DiscordAPIError:
+        logger.exception(f"Discord bot {access.bot_id} could not send")
         return False
     return True
 
@@ -127,8 +127,8 @@ def refresh_discord_metadata(bot_id: int) -> dict[str, Any] | None:
             raise BotNotConnected(bot_id)
         response.raise_for_status()
         return response.json()
-    except requests.RequestException as e:
-        logger.error(f"Failed to refresh Discord metadata: {e}")
+    except requests.RequestException:
+        logger.exception("Failed to refresh Discord metadata")
         return None
 
 
@@ -223,5 +223,5 @@ def notify_task_failure(
     try:
         send_error_message(bot_id, message)
         logger.info(f"Discord error notification sent for task: {task_name}")
-    except Exception as e:
-        logger.error(f"Failed to send Discord notification: {e}")
+    except Exception:
+        logger.exception("Failed to send Discord notification")

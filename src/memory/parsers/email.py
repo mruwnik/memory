@@ -123,8 +123,8 @@ def extract_body(msg: email.message.Message) -> str:  # type: ignore
                 return markdownify(content).strip()
             else:
                 return content
-        except Exception as e:
-            logger.error(f"Error decoding message body: {str(e)}")
+        except Exception:
+            logger.exception("Error decoding message body")
             return ""
 
     # Extract both HTML and plain text parts
@@ -149,8 +149,8 @@ def extract_body(msg: email.message.Message) -> str:  # type: ignore
                 html_body += content + "\n"
             else:
                 plain_body += content + "\n"
-        except Exception as e:
-            logger.error(f"Error decoding message part: {str(e)}")
+        except Exception:
+            logger.exception("Error decoding message part")
 
     # Prefer HTML (converted to markdown) over plain text
     if html_body.strip():
@@ -192,10 +192,8 @@ def extract_attachments(msg: email.message.Message) -> list[Attachment]:  # type
                         "content": content,
                     }
                 )
-            except Exception as e:
-                logger.error(
-                    f"Error extracting attachment content: {str(e)}"
-                )
+            except Exception:
+                logger.exception("Error extracting attachment content")
 
     return attachments
 

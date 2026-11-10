@@ -134,14 +134,12 @@ def enqueue_access_control_propagation(
             UPDATE_SOURCE_ACCESS_CONTROL,
             args=[source_type, source.id, source.config_version],
         )
-    except Exception as exc:
+    except Exception:
         # Don't fail the user's request just because the broker is down;
         # surface it loudly in logs so the operator can replay manually.
-        logger.error(
-            "Failed to enqueue access-control propagation for %s id=%s "
-            "config_version=%s: %s",
+        logger.exception(
+            "Failed to enqueue access-control propagation for %s id=%s config_version=%s",
             source_type,
             source.id,
             source.config_version,
-            exc,
         )

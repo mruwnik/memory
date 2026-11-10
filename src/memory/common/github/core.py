@@ -348,7 +348,7 @@ class GithubClientCore:
                     time.sleep(retry_delay)
                     retry_delay *= 2  # Exponential backoff
                 else:
-                    logger.error(f"GitHub token fetch failed after {max_retries} attempts: {e}")
+                    logger.exception(f"GitHub token fetch failed after {max_retries} attempts")
                     raise
 
         # Unreachable - loop always returns or raises, but needed for type checker

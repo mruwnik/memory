@@ -362,8 +362,8 @@ def process_verification_results(
                 try:
                     if delete_orphaned_item(item, session):
                         stats.deleted += 1
-                except Exception as e:
-                    logger.error(f"Failed to delete orphaned item {item.id}: {e}")
+                except Exception:
+                    logger.exception(f"Failed to delete orphaned item {item.id}")
                     stats.errors += 1
             else:
                 item.last_verified_at = now

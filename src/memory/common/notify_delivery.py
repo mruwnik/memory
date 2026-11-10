@@ -137,8 +137,8 @@ async def send_via_slack_async(params: NotificationParams) -> bool:
 
         logger.info(f"Slack message sent to {label}")
         return True
-    except Exception as e:
-        logger.error(f"Failed to send Slack message: {e}")
+    except Exception:
+        logger.exception("Failed to send Slack message")
         return False
 
 

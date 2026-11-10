@@ -509,9 +509,9 @@ def _update_existing_item(
     if existing_chunks:
         try:
             delete_chunk_vectors(existing_chunks)
-        except IOError as e:
+        except IOError:
             # Re-raise to fail the task - leaving stale vectors causes duplicate results
-            logger.error(f"Error deleting chunks from Qdrant: {e}")
+            logger.exception("Error deleting chunks from Qdrant")
             raise
 
     # Delete chunks from database and clear the collection

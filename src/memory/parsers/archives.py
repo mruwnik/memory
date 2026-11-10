@@ -78,8 +78,8 @@ class ArchiveFetcher:
                 if self.delay_between_requests > 0:
                     time.sleep(self.delay_between_requests)
 
-            except Exception as e:
-                logger.error(f"Error processing {current_url}: {e}")
+            except Exception:
+                logger.exception(f"Error processing archive page {page_count}")
                 break
 
     def _find_next_page(self, parser: FeedParser, current_page: int = 0) -> str | None:

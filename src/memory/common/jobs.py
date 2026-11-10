@@ -394,7 +394,7 @@ def dispatch_job(
         # Task dispatch failed - mark job as failed so it doesn't sit in PENDING forever
         job.mark_failed(f"Failed to dispatch Celery task: {e}")
         session.commit()
-        logger.error(f"Failed to dispatch task {task_name} for job {job.id}: {e}")
+        logger.exception(f"Failed to dispatch task {task_name} for job {job.id}")
         raise
 
     session.refresh(job)
@@ -480,7 +480,7 @@ def retry_failed_job(
         # Dispatch failed - revert to failed status
         locked_job.mark_failed(f"Failed to dispatch retry task: {e}")
         session.commit()
-        logger.error(f"Failed to dispatch retry for job {locked_job.id}: {e}")
+        logger.exception(f"Failed to dispatch retry for job {locked_job.id}")
         raise
 
     session.refresh(locked_job)
@@ -569,7 +569,7 @@ def reingest_job(
         # Dispatch failed - mark as failed
         locked_job.mark_failed(f"Failed to dispatch reingest task: {e}")
         session.commit()
-        logger.error(f"Failed to dispatch reingest for job {locked_job.id}: {e}")
+        logger.exception(f"Failed to dispatch reingest for job {locked_job.id}")
         raise
 
     session.refresh(locked_job)

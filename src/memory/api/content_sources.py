@@ -181,8 +181,8 @@ def delete_photo(
     # Delete chunks from Qdrant and PostgreSQL
     try:
         clear_item_chunks(photo, db)
-    except Exception as e:
-        logger.error(f"Error clearing chunks for photo {photo_id}: {e}")
+    except Exception:
+        logger.exception(f"Error clearing chunks for photo {photo_id}")
 
     # Delete the physical file if it exists
     if photo.filename:

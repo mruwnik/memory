@@ -210,8 +210,8 @@ def fetch_email(conn: imaplib.IMAP4, uid: str) -> RawEmailResponse | None:
             return None
 
         return extract_email_uid(msg_data)
-    except Exception as e:
-        logger.error(f"Error processing message {uid!r}: {str(e)}")
+    except Exception:
+        logger.exception(f"Error processing message {uid!r}")
         return None
 
 
@@ -243,8 +243,8 @@ def fetch_email_since(
         if status != "OK":
             logger.error(f"Error searching folder {folder}: {data}")
             return []
-    except Exception as e:
-        logger.error(f"Error in fetch_email_since for folder {folder}: {str(e)}")
+    except Exception:
+        logger.exception("Error in fetch_email_since for a folder")
         return []
 
     if not data or not data[0]:
@@ -294,12 +294,12 @@ def process_folder(
                 )
                 if task:
                     new_messages += 1
-            except Exception as e:
-                logger.error(f"Error queuing message {uid}: {str(e)}")
+            except Exception:
+                logger.exception(f"Error queuing message {uid}")
                 errors += 1
 
-    except Exception as e:
-        logger.error(f"Error processing folder {folder}: {str(e)}")
+    except Exception:
+        logger.exception("Error processing a folder")
         errors += 1
 
     return {
@@ -328,8 +328,8 @@ def imap_connection(account: EmailAccount) -> Generator[imaplib.IMAP4, None, Non
         # Always try to logout and close the connection
         try:
             conn.logout()
-        except Exception as e:
-            logger.error(f"Error logging out from {account.imap_server}: {str(e)}")
+        except Exception:
+            logger.exception("Error logging out of IMAP")
             # If logout fails, explicitly close the socket to prevent resource leak
             try:
                 conn.shutdown()
@@ -586,10 +586,10 @@ def delete_removed_emails(
     """
     try:
         server_uids = get_folder_uids(conn, folder)
-    except FolderUidsError as e:
+    except FolderUidsError:
         # Could not read the folder. Skip reconciliation rather than risk
         # mass-deleting local mail on a transient SELECT/SEARCH failure.
-        logger.error(f"Skipping deletion for folder {folder}: {str(e)}")
+        logger.exception("Skipping deletion for a folder that could not be read")
         return 0
 
     # Intentional safety asymmetry: a genuinely-empty folder (empty set) also
@@ -761,8 +761,8 @@ def fetch_gmail_message(service, message_id: str) -> tuple[str, datetime | None]
         raw_email = base64.urlsafe_b64decode(message.get("raw", "")).decode("utf-8", errors="replace")
         internal_date = message.get("internalDate")
         received_at = internal_date and datetime.fromtimestamp(int(internal_date) / 1000, timezone.utc)
-    except Exception as e:
-        logger.error(f"Error fetching Gmail message {message_id}: {e}")
+    except Exception:
+        logger.exception(f"Error fetching Gmail message {message_id}")
         return None
     return raw_email, received_at or None
 
