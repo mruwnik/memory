@@ -389,12 +389,18 @@ def process_folder(
     }
 
 
+# imaplib's own limit on one response line (imaplib._MAXLINE).
+IMAP_MAX_LINE = 1_000_000
+
+
 class CappedResponses:
     """Bound what the server can make imaplib buffer or wait for.
 
     One command's response, lines and literals together, may be at most
-    MAX_EMAIL_BYTES and must arrive within IMAP_COMMAND_TIMEOUT_SEC; each read
-    waits no longer than what is left of that. The budget restarts with each
+    MAX_EMAIL_BYTES and must arrive within IMAP_COMMAND_TIMEOUT_SEC. Reads go
+    through the buffered file one socket receive at a time, each waiting no
+    longer than what is left of that, so a server trickling bytes in is cut off
+    at the deadline rather than once the whole line or literal has arrived. The budget restarts with each
     command sent, after leftover untagged responses are dropped (imaplib reads
     a command's own responses right after it). The whole connection may
     receive at most MAX_IMAP_CONNECTION_BYTES. A literal is refused before it
@@ -416,14 +422,39 @@ class CappedResponses:
         if self.refuse_literals:
             raise imaplib.IMAP4.abort("server sent a literal where none was expected")
         self.count_response(size)
-        self.bound_wait()
-        return super().read(size)  # type: ignore[misc]
+        parts: list[bytes] = []
+        left = size
+        while left:
+            self.bound_wait()
+            chunk = self.file.read1(left)  # type: ignore[attr-defined]
+            self.check_deadline()
+            if not chunk:
+                break
+            parts.append(chunk)
+            left -= len(chunk)
+        return b"".join(parts)
 
     def readline(self) -> bytes:
-        self.bound_wait()
-        line = super().readline()  # type: ignore[misc]
-        self.count_response(len(line))
-        return line
+        """One line; like imaplib, a line over IMAP_MAX_LINE is an error."""
+        limit = IMAP_MAX_LINE + 1
+        parts: list[bytes] = []
+        length = 0
+        while length < limit:
+            self.bound_wait()
+            buffered = self.file.peek(1)  # type: ignore[attr-defined]
+            if not buffered:
+                break
+            end = buffered.find(b"\n")
+            take = min(end + 1 if end >= 0 else len(buffered), limit - length)
+            chunk = self.file.read(take)  # type: ignore[attr-defined]
+            parts.append(chunk)
+            length += len(chunk)
+            self.count_response(len(chunk))
+            if chunk.endswith(b"\n"):
+                break
+        if length > IMAP_MAX_LINE:
+            raise imaplib.IMAP4.error(f"got more than {IMAP_MAX_LINE} bytes")
+        return b"".join(parts)
 
     def bound_wait(self) -> None:
         """Let the next read wait no longer than the command has left."""
@@ -439,6 +470,9 @@ class CappedResponses:
             raise imaplib.IMAP4.abort("server response is over MAX_EMAIL_BYTES")
         if self.connection_bytes > settings.MAX_IMAP_CONNECTION_BYTES:
             raise imaplib.IMAP4.abort("server sent over MAX_IMAP_CONNECTION_BYTES")
+        self.check_deadline()
+
+    def check_deadline(self) -> None:
         if self.deadline is not None and time.monotonic() > self.deadline:
             raise imaplib.IMAP4.abort("server response took over IMAP_COMMAND_TIMEOUT_SEC")
 

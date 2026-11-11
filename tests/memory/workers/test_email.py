@@ -6,6 +6,7 @@ import ipaddress
 import pathlib
 import socket
 import threading
+import time
 from datetime import datetime, timezone
 from typing import cast
 from unittest.mock import MagicMock, patch
@@ -21,6 +22,7 @@ from memory.common.db.models import (
     MailMessage,
 )
 from memory.parsers.email import Attachment, parse_email_message
+from memory.workers import email as email_module
 from memory.workers.email import (
     FolderUidsError,
     FolderUnavailableError,
@@ -490,9 +492,10 @@ def test_fetch_emails_skips_messages_over_size_cap():
 
 
 @contextlib.contextmanager
-def scripted_imap_server(untagged: bytes):
+def scripted_imap_server(untagged: bytes, trickled: bytes = b"", byte_delay: float = 0.0):
     """A one-connection IMAP server on localhost: it greets, then answers every
-    command but CAPABILITY with ``untagged`` followed by a tagged OK."""
+    command but CAPABILITY with ``untagged``, then ``trickled`` one byte every
+    ``byte_delay`` seconds, then a tagged OK."""
     server = socket.create_server(("127.0.0.1", 0))
 
     def serve():
@@ -501,8 +504,14 @@ def scripted_imap_server(untagged: bytes):
             conn.sendall(b"* PREAUTH ready\r\n")
             for line in lines:
                 tag, command = line.strip().split(b" ", 2)[:2]
-                answer = b"* CAPABILITY IMAP4rev1\r\n" if command == b"CAPABILITY" else untagged
-                conn.sendall(answer + tag + b" OK done\r\n")
+                if command == b"CAPABILITY":
+                    conn.sendall(b"* CAPABILITY IMAP4rev1\r\n" + tag + b" OK done\r\n")
+                    continue
+                conn.sendall(untagged)
+                for byte in trickled:
+                    time.sleep(byte_delay)
+                    conn.sendall(bytes([byte]))
+                conn.sendall(tag + b" OK done\r\n")
 
     threading.Thread(target=serve, daemon=True).start()
     try:
@@ -607,6 +616,46 @@ def test_capped_connection_reads_wait_no_longer_than_the_command_has_left():
         conn.uid("FETCH", "1:*", "(BODY.PEEK[])")
 
     assert 0 < (conn.sock.gettimeout() or 0) <= 2
+
+
+@pytest.mark.parametrize(
+    "untagged, trickled",
+    [
+        (b"* 1 FETCH (UID 1 BODY[] {80}\r\n", b"x" * 80 + b")\r\n"),
+        (b"", b"* 1 FETCH (UID 1 FLAGS (" + b"x" * 80 + b"))\r\n"),
+    ],
+    ids=["literal", "line"],
+)
+def test_capped_connection_aborts_a_trickled_response_at_its_deadline(untagged, trickled):
+    with (
+        scripted_imap_server(untagged, trickled, byte_delay=0.05) as port,
+        patch.object(settings, "REMOTE_SERVER_TIMEOUT_SEC", 60),
+        patch.object(settings, "IMAP_COMMAND_TIMEOUT_SEC", 1),
+    ):
+        conn = selected_connection(port)
+        started = time.monotonic()
+        with pytest.raises(imaplib.IMAP4.abort):
+            conn.uid("FETCH", "1:*", "(BODY.PEEK[])")
+
+    assert time.monotonic() - started < 2
+
+
+@pytest.mark.parametrize("line_length, outcome", [(40, "OK"), (41, "error")])
+def test_capped_connection_refuses_a_line_over_the_imap_line_limit(line_length, outcome):
+    # "* 1 FETCH (UID 1 FLAGS (" is 24 bytes, "))\r\n" is 4.
+    line = b"* 1 FETCH (UID 1 FLAGS (" + b"x" * (line_length - 28) + b"))\r\n"
+    with scripted_imap_server(line) as port, patch.object(email_module, "IMAP_MAX_LINE", 40):
+        conn = selected_connection(port)
+        result = run_fetch(conn)
+
+    assert result == outcome
+
+
+def run_fetch(conn: CappedIMAP4) -> str:
+    try:
+        return conn.uid("FETCH", "1:*", "(BODY.PEEK[])")[0]
+    except imaplib.IMAP4.error:
+        return "error"
 
 
 def test_process_folder(email_provider):
