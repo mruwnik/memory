@@ -512,6 +512,8 @@ class SimpleOAuthProvider(OAuthProvider):
                 ]:
                     value = str(value)
                 setattr(client, key, value)
+            # client_name is optional in RFC 7591, but the column is required.
+            client.client_name = client_info.client_name or ""
             session.add(client)
             session.commit()
 

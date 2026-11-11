@@ -13,10 +13,7 @@ from fastapi import Depends, FastAPI, Request, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
-from slowapi import Limiter
 from sqlalchemy.exc import SQLAlchemyError
-from slowapi.errors import RateLimitExceeded
-from slowapi.middleware import SlowAPIMiddleware
 from memory.common import paths, settings
 from memory.common.access_control import (
     get_accessible_source_item_by_filename,
@@ -26,7 +23,6 @@ from memory.common.access_control import (
 )
 from memory.common.csp import sanitize_csp_source_list
 from memory.common.module_settings import enabled_modules, record_running
-from memory.common.rate_limit import rate_limit_key
 from memory.common.db.connection import get_session, make_session
 from memory.common.db.models import User
 from memory.common.db.models.source_items import Report
@@ -36,6 +32,7 @@ from memory.api.auth import (
     router as auth_router,
 )
 from memory.api.google_drive import router as google_drive_router
+from memory.api.request_limits import RequestRateLimitMiddleware
 from memory.api.mcp_servers import router as mcp_servers_router
 from memory.api.email_accounts import router as email_accounts_router
 from memory.api.article_feeds import router as article_feeds_router
@@ -94,15 +91,6 @@ logging.getLogger("uvicorn.access").addFilter(lambda r: not is_passing_health_ch
 # constructed so a misconfigured deploy crash-loops rather than serving.
 validate_disable_auth_safety()
 
-
-# Rate limiter setup
-limiter = Limiter(
-    key_func=rate_limit_key,
-    default_limits=[settings.API_RATE_LIMIT_DEFAULT]
-    if settings.API_RATE_LIMIT_ENABLED
-    else [],
-    enabled=settings.API_RATE_LIMIT_ENABLED,
-)
 
 # Create the MCP http app to get its lifespan
 mcp_http_app = mcp.http_app(stateless_http=True)
@@ -174,22 +162,6 @@ Most endpoints require authentication via:
     openapi_tags=tags_metadata,
     lifespan=lifespan,
 )
-app.state.limiter = limiter
-
-
-# Rate limit exception handler
-@app.exception_handler(RateLimitExceeded)
-async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
-    retry_after = getattr(exc, "retry_after", None)
-    return JSONResponse(
-        status_code=429,
-        content={
-            "error": "Rate limit exceeded",
-            "detail": str(exc.detail),
-            "retry_after": retry_after,
-        },
-        headers={"Retry-After": str(retry_after)} if retry_after else {},
-    )
 
 
 # Field names whose values must never be logged or echoed in 422 responses.
@@ -296,9 +268,9 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 
-# Add rate limiting middleware
-app.add_middleware(SlowAPIMiddleware)
 app.add_middleware(AuthenticationMiddleware)
+# Outside auth, so floods with bogus credentials are limited before any lookup.
+app.add_middleware(RequestRateLimitMiddleware)
 app.add_middleware(WebUIMiddleware, router=app.router)
 # Configure CORS with specific origin to prevent CSRF attacks.
 # allow_credentials=True requires specific origins, not wildcards.

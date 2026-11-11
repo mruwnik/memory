@@ -534,6 +534,10 @@ def build_beat_schedule() -> dict:
             "task": CLEAN_CHUNK_IMAGES,
             "schedule": crontab(hour="4", minute="35"),
         },
+        "cleanup-expired-sessions": {
+            "task": CLEANUP_EXPIRED_SESSIONS,
+            "schedule": crontab(hour="4", minute="15"),
+        },
         "cleanup-old-pending-jobs": {
             "task": CLEANUP_OLD_PENDING_JOBS,
             "schedule": crontab(hour="4", minute="55"),
