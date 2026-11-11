@@ -456,6 +456,12 @@ class CappedResponses:
             raise imaplib.IMAP4.error(f"got more than {IMAP_MAX_LINE} bytes")
         return b"".join(parts)
 
+    @property
+    def over_connection_budget(self) -> bool:
+        """Whether the connection was cut off at MAX_IMAP_CONNECTION_BYTES; every
+        read after that aborts too."""
+        return self.connection_bytes > settings.MAX_IMAP_CONNECTION_BYTES
+
     def bound_wait(self) -> None:
         """Let the next read wait no longer than the command has left."""
         timeout = settings.REMOTE_SERVER_TIMEOUT_SEC

@@ -602,8 +602,12 @@ def test_capped_connection_aborts_past_its_connection_budget():
         conn = selected_connection(port)
         conn.uid("FETCH", "1:*", "(BODY.PEEK[])")
         conn.uid("FETCH", "1:*", "(BODY.PEEK[])")
+        within_budget = conn.over_connection_budget
         with pytest.raises(imaplib.IMAP4.abort):
             conn.uid("FETCH", "1:*", "(BODY.PEEK[])")
+        past_budget = conn.over_connection_budget
+
+    assert (within_budget, past_budget) == (False, True)
 
 
 def test_capped_connection_reads_wait_no_longer_than_the_command_has_left():
