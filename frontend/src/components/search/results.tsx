@@ -1,4 +1,4 @@
-import ReactMarkdown from 'react-markdown'
+import { Markdown } from '@/components/shared/Markdown'
 import { Badge, DetailList, Disclosure, Row } from '@/components/shared/ui'
 import { fileUrl } from '@/utils/files'
 
@@ -24,10 +24,6 @@ export const Metadata = ({ metadata }: { metadata: any }) => {
     return <DetailList items={Object.entries(metadata).map(([key, value]): [string, React.ReactNode] =>
         [key, value === null || value === undefined ? null : metadataValue(key, value)])} />
 }
-
-const Markdown = ({ children }: { children: string }) => (
-    <div className="prose prose-sm max-w-none"><ReactMarkdown>{children}</ReactMarkdown></div>
-)
 
 const Chunks = ({ chunks }: { chunks: (string | { preview: string; score?: number })[] }) => (
     <Disclosure summary="Relevant sections">

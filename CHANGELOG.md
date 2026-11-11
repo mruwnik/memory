@@ -110,6 +110,7 @@ a new, empty `## Unreleased` above it.
 - Recurring calendar events with `BYSETPOS` under an hourly or daily rule are skipped as unsupported: one whose position the period never reaches (e.g. `FREQ=HOURLY;BYSETPOS=5`) held a calendar sync for minutes. The sync's check of each rule stops after a second, and a rule that runs out of time is skipped.
 - Every response says it may not be framed by another site (`X-Frame-Options: DENY`, CSP `frame-ancestors 'none'`), so the OAuth login page and the web UI can't be overlaid; `/reports/` and `/files/` may still be framed by the web UI itself and send no referrer. All responses also carry `X-Content-Type-Options: nosniff` and `Referrer-Policy: same-origin`. `/auth/logout` only accepts POST, so a link elsewhere can't log you out.
 - OAuth clients may only register a redirect on this server's own address for the web UI's callback (its root); other pages there (reports, files) are refused at registration, and `/authorize` refuses clients stored earlier with one. Only a client redirecting to that callback passes for the web UI: any other gets named on the login page and can't create API keys.
+- Markdown in the web UI (search results for mail, markdown and PDF text, notes) no longer loads images hosted elsewhere by itself: each shows a "Load image from <host>" button, so a sender's tracking pixel doesn't learn when you looked or which instance you use. Images stored on this server still show.
 ### Required env vars
 None
 
