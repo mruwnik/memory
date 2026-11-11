@@ -374,11 +374,87 @@ def test_get_events_in_range_skips_unexpandable_event_quickly(
         *((rule, False) for rule in NEVER_MATCHING_RULES),
         ("FREQ=DAILY;INTERVAL=0", False),
         ("FREQ=BOGUS", False),
+        ("FREQ=HOURLY;INTERVAL=2", True),
+        ("FREQ=MINUTELY;INTERVAL=30", False),
+        ("FREQ=SECONDLY", False),
+        ("freq=secondly;byhour=0", False),
     ],
 )
 def test_recurrence_expandable(rule, expandable):
     start = datetime(2024, 1, 1, 9, 0, 0, tzinfo=timezone.utc)
     assert calendar.recurrence_expandable(rule, start) is expandable
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        # dateutil walks every second to each daily match, then day by day to year 9999
+        "FREQ=SECONDLY;BYMONTH=2;BYMONTHDAY=30",
+        "FREQ=MINUTELY;BYMONTH=2;BYMONTHDAY=30",
+    ],
+)
+def test_sub_hourly_rule_without_occurrences_is_refused_at_once(rule, short_deadline):
+    start = datetime(2024, 1, 1, 9, 0, 0, tzinfo=timezone.utc)
+
+    assert calendar.recurrence_expandable(rule, start) is False
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        "FREQ=SECONDLY;BYHOUR=0;BYMINUTE=0;BYSECOND=0",
+        "FREQ=MINUTELY;BYHOUR=0;BYMINUTE=0",
+    ],
+)
+def test_daily_match_under_sub_hourly_frequency_is_not_expanded(rule, short_deadline, caplog):
+    """Each daily occurrence costs dateutil thousands of steps; a series years old took minutes."""
+    event = CalendarEvent(
+        modality="calendar",
+        sha256=b"s" * 32,
+        event_title="Midnight",
+        start_time=datetime.now(timezone.utc) - timedelta(days=3650),
+        recurrence_rule=rule,
+    )
+    start = datetime.now(timezone.utc)
+
+    occurrences = expand_recurring_event(event, start, start + timedelta(days=7))
+
+    assert occurrences == []
+    assert [r.levelname for r in caplog.records] == ["WARNING"]
+
+
+def test_expansion_stops_when_its_time_runs_out(monkeypatch, caplog):
+    monkeypatch.setattr(calendar, "EXPANSION_BUDGET_SECONDS", 0)
+    event = CalendarEvent(
+        modality="calendar",
+        sha256=b"l" * 32,
+        event_title="Leap day",
+        start_time=datetime(1, 1, 1, tzinfo=timezone.utc),
+        recurrence_rule="FREQ=HOURLY;BYMONTH=2;BYMONTHDAY=29",
+    )
+    start = datetime(2024, 2, 1, tzinfo=timezone.utc)
+
+    occurrences = expand_recurring_event(event, start, start + timedelta(days=60))
+
+    assert occurrences == []
+    assert [r.getMessage() for r in caplog.records] == [
+        "Recurrence of calendar event None ran out of time"
+    ]
+
+
+def test_sparse_old_series_still_expands_within_its_budget():
+    event = CalendarEvent(
+        modality="calendar",
+        sha256=b"m" * 32,
+        event_title="Leap day",
+        start_time=datetime(1990, 2, 1, 9, tzinfo=timezone.utc),
+        recurrence_rule="FREQ=DAILY;BYMONTH=2;BYMONTHDAY=29",
+    )
+    start = datetime(2024, 2, 1, tzinfo=timezone.utc)
+
+    starts = [s for s, _ in expand_recurring_event(event, start, start + timedelta(days=60))]
+
+    assert starts == [datetime(2024, 2, 29, 9, tzinfo=timezone.utc)]
 
 
 def test_recurrence_expandable_reads_naive_start_as_utc():
@@ -537,7 +613,7 @@ EVERY = ",".join(str(n) for n in range(60))
             MAX_OCCURRENCES_VISITED,
         ),
         # Millions of occurrences before the range
-        ("FREQ=SECONDLY", datetime(2000, 1, 1, tzinfo=timezone.utc), 0),
+        (f"FREQ=HOURLY;BYMINUTE={EVERY}", datetime(2000, 1, 1, tzinfo=timezone.utc), 0),
         (
             f"FREQ=DAILY;BYHOUR=0,6,12,18;BYMINUTE={EVERY}",
             datetime(1990, 1, 1, tzinfo=timezone.utc),

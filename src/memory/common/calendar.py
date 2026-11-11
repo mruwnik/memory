@@ -3,6 +3,7 @@ Common calendar utilities for event expansion and querying.
 """
 
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 from itertools import islice
 from typing import TypedDict
@@ -37,9 +38,17 @@ class EventDict(TypedDict):
 RRULE_ERRORS = (ValueError, TypeError, OverflowError, KeyError)
 
 # dateutil walks every occurrence from DTSTART, so a dense rule or an old series
-# can mean millions of steps. Each visit costs a few microseconds; this cap keeps
-# an event under a quarter second and still covers a daily series 130 years old.
+# can mean millions of steps. This cap still covers a daily series 130 years old.
 MAX_OCCURRENCES_VISITED = 50_000
+# A visit costs microseconds when the rule's filters match most periods, but
+# dateutil steps through every period between matches, so a sparse rule (29
+# February, under DAILY or HOURLY) pays for each period skipped. This bounds an
+# event's expansion in time: past it, the occurrences found so far are kept.
+EXPANSION_BUDGET_SECONDS = 0.25
+# Under these frequencies a rule that matches once a day costs dateutil tens
+# of thousands of periods per occurrence. Calendars don't send them (Google
+# refuses them), so rules using them are refused.
+REFUSED_FREQUENCIES = frozenset({"SECONDLY", "MINUTELY"})
 
 
 def strip_rrule_prefix(rule: str) -> str:
@@ -72,9 +81,12 @@ def is_bounded_rule(parts: dict[str, str]) -> bool:
     """Whether dateutil can expand this rule in bounded time.
 
     INTERVAL=0 makes dateutil loop forever without yielding, which the visit
-    cap cannot stop.
+    cap cannot stop. A sub-minute or minute frequency is refused, see
+    REFUSED_FREQUENCIES.
     """
     interval = parts.get("INTERVAL", "1")
+    if parts.get("FREQ", "").upper() in REFUSED_FREQUENCIES:
+        return False
     return interval.isdigit() and int(interval) >= 1
 
 
@@ -97,14 +109,19 @@ def occurrences_within(
     rule: rrule | rruleset, start_range: datetime, end_range: datetime, event_id: int
 ) -> list[datetime]:
     """Occurrences of the rule within the range, visiting at most
-    MAX_OCCURRENCES_VISITED from its start."""
+    MAX_OCCURRENCES_VISITED from its start and stopping once
+    EXPANSION_BUDGET_SECONDS have passed."""
     starts: list[datetime] = []
+    deadline = time.monotonic() + EXPANSION_BUDGET_SECONDS
     # One past the cap, to tell a series that ends there from one cut short.
     for visited, occurrence in enumerate(islice(rule, MAX_OCCURRENCES_VISITED + 1), start=1):
         if occurrence > end_range:
             return starts
         if visited > MAX_OCCURRENCES_VISITED:
             logger.warning("Recurrence of calendar event %s hit the expansion cap", event_id)
+            return starts
+        if time.monotonic() > deadline:
+            logger.warning("Recurrence of calendar event %s ran out of time", event_id)
             return starts
         if occurrence >= start_range:
             starts.append(occurrence)
