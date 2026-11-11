@@ -403,6 +403,10 @@ API_RATE_LIMIT_ENABLED = boolean_env("API_RATE_LIMIT_ENABLED", True)
 # Per-client limit on every API request (api/request_limits.py), except the
 # MCP endpoint and provider webhooks, which have their own budgets below.
 API_RATE_LIMIT_DEFAULT = os.getenv("API_RATE_LIMIT_DEFAULT", "100/minute")
+# Requests carrying a credential (bearer token or session cookie) count against
+# API_RATE_LIMIT_DEFAULT per credential instead of per address, and all of them
+# from one address against this, so made-up tokens can't each mint a bucket.
+API_RATE_LIMIT_CREDENTIALED_ADDRESS = os.getenv("API_RATE_LIMIT_CREDENTIALED_ADDRESS", "1000/minute")
 # /mcp: agents behind one address make many tool calls a minute.
 API_RATE_LIMIT_MCP = os.getenv("API_RATE_LIMIT_MCP", "1200/minute")
 # Signed webhook pushes (GitHub, Slack, Discord, transcripts) arrive from a

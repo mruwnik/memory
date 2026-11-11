@@ -3,8 +3,12 @@
 Runs as ASGI middleware outside authentication, so it covers routes on routers
 at any nesting depth, the mounted MCP app (OAuth endpoints, ``/mcp``) and
 requests carrying bogus credentials alike. Clients are keyed by
-``rate_limit_key``. Counters live in this process's memory: the api runs as one
-uvicorn process, and the limit holds even while Redis is down.
+``rate_limit_key`` (their address), except that the default limit counts a
+request carrying a credential against that credential, so anonymous traffic
+from a shared address doesn't lock out the users behind it. Credentials aren't
+checked here; a per-address ceiling on credentialed requests keeps made-up
+ones from escaping the limit. Counters live in this process's memory: the api
+runs as one uvicorn process, and the limit holds even while Redis is down.
 """
 
 import re
@@ -18,7 +22,9 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from memory.api.auth import get_token
 from memory.common import settings
+from memory.common.db.models.users import hash_token
 from memory.common.rate_limit import rate_limit_key
 
 # The container healthcheck polls it every 15 s.
@@ -52,12 +58,29 @@ def limit_specs(path: str) -> list[tuple[str, str]]:
     return default + [(path, extra)] if extra else default
 
 
-def exceeded_limit(path: str, key: str) -> tuple[str, RateLimitItem] | None:
-    """Count one request from ``key`` to ``path``; the first limit it exceeds, if any."""
-    for bucket, spec in limit_specs(path):
+def keyed_limits(path: str, address: str, credential: str | None) -> list[tuple[str, str, str]]:
+    """The (bucket name, limit spec, client key) triples a request counts against:
+    ``limit_specs`` by address, but the default bucket by credential when the
+    request carries one, plus the address's ceiling on credentialed requests."""
+    specs = limit_specs(path)
+    if credential is None:
+        return [(bucket, spec, address) for bucket, spec in specs]
+    principal = "credential:" + hash_token(credential)
+    keyed = [(bucket, spec, principal if bucket == "default" else address) for bucket, spec in specs]
+    if any(bucket == "default" for bucket, _ in specs):
+        keyed.append(("credentialed", settings.API_RATE_LIMIT_CREDENTIALED_ADDRESS, address))
+    return keyed
+
+
+def exceeded_limit(
+    path: str, address: str, credential: str | None = None
+) -> tuple[str, RateLimitItem, str] | None:
+    """Count one request to ``path``; the first limit it exceeds and the key it
+    was counted under, if any."""
+    for bucket, spec, key in keyed_limits(path, address, credential):
         item = parse_spec(spec)
         if not limiter.hit(item, bucket, key):
-            return bucket, item
+            return bucket, item, key
     return None
 
 
@@ -87,8 +110,8 @@ class RequestRateLimitMiddleware:
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http" or not settings.API_RATE_LIMIT_ENABLED:
             return await self.app(scope, receive, send)
-        key = rate_limit_key(Request(scope))
-        exceeded = exceeded_limit(scope["path"], key)
+        request = Request(scope)
+        exceeded = exceeded_limit(scope["path"], rate_limit_key(request), get_token(request))
         if exceeded is None:
             return await self.app(scope, receive, send)
-        await too_many_requests(*exceeded, key)(scope, receive, send)
+        await too_many_requests(*exceeded)(scope, receive, send)
