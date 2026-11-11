@@ -22,14 +22,18 @@ def epub_package(
     spine: list[str],
     opf_path: str = "content.opf",
     container_path: str | None = None,
+    media_types: dict[str, str] | None = None,
 ) -> bytes:
-    """An EPUB of `entries` whose package lists `manifest` (id, href) and `spine` idrefs."""
+    """An EPUB of `entries` whose package lists `manifest` (id, href) and `spine` idrefs.
+    Manifest items are XHTML unless `media_types` maps their id to another type."""
+    types = media_types or {}
     opf = (
         "<?xml version='1.0'?><package xmlns='http://www.idpf.org/2007/opf' version='3.0'>"
         "<metadata xmlns:dc='http://purl.org/dc/elements/1.1/'><dc:title>t</dc:title></metadata>"
         "<manifest>"
         + "".join(
-            f"<item id='{item_id}' href='{href}' media-type='application/xhtml+xml'/>"
+            f"<item id='{item_id}' href='{href}' "
+            f"media-type='{types.get(item_id, 'application/xhtml+xml')}'/>"
             for item_id, href in manifest
         )
         + "</manifest><spine>"

@@ -385,7 +385,7 @@ def test_parse_ebook_refuses_book_too_large_to_parse(tmp_path, make_book):
     make_book(path)
 
     with (
-        patch.object(settings, "MAX_EBOOK_INFLATED_BYTES", 100_000),
+        patch.object(settings, "MAX_EBOOK_ARCHIVE_BYTES", 100_000),
         patch.object(settings, "MAX_EBOOK_ZIP_ENTRIES", 50),
         patch("memory.parsers.ebook.mupdf_sandbox.book_contents") as mupdf_open,
         pytest.raises(ValueError),
@@ -514,7 +514,7 @@ def chapter_book(name: str, href: str, spine: list[str], **kwargs) -> bytes:
 SHARED_FILE = book_files.epub_package(
     {"c.xhtml": CHAPTER}, [(f"i{n}", "c.xhtml") for n in range(4)], [f"i{n}" for n in range(4)]
 )
-TOO_MANY = "chapters add up"
+TOO_MANY = r"\(MAX_EBOOK_INFLATED_BYTES\)"
 
 
 @pytest.mark.parametrize(
@@ -550,6 +550,70 @@ def test_check_parse_size_charges_each_spine_chapter(tmp_path, data, match):
         pytest.raises(ValueError, match=match),
     ):
         check_parse_size(path)
+
+
+COVER = b"\xff\xd8\xff" + b"\0" * 200_000
+STYLE = b"p { color: red }" * 3_000  # 48,000 bytes
+
+
+@pytest.mark.parametrize(
+    "data, archive_cap, refusal",
+    [
+        (book_files.epub_package({"c.xhtml": CHAPTER, "cover.jpg": COVER}, [("c", "c.xhtml")], ["c"]), 300_000, None),
+        (book_files.epub_package({"c.xhtml": CHAPTER, "cover.jpg": COVER}, [("c", "c.xhtml")], ["c"]), 150_000, "MAX_EBOOK_ARCHIVE_BYTES"),
+        (
+            book_files.epub_package(
+                {"a.xhtml": CHAPTER, "b.xhtml": CHAPTER, "s.css": STYLE},
+                [("a", "a.xhtml"), ("b", "b.xhtml"), ("s", "s.css")],
+                ["a", "b"],
+                media_types={"s": "text/css"},
+            ),
+            300_000,
+            "MAX_EBOOK_INFLATED_BYTES",
+        ),
+        (
+            book_files.epub_package(
+                {"a.xhtml": CHAPTER, "b.xhtml": CHAPTER, "s.svg": STYLE},
+                [("a", "a.xhtml"), ("b", "b.xhtml"), ("s", "s.svg")],
+                ["a", "b"],
+                media_types={"s": "image/svg+xml"},
+            ),
+            300_000,
+            "MAX_EBOOK_INFLATED_BYTES",
+        ),
+        (
+            book_files.epub_package(
+                {"a.xhtml": CHAPTER, "b.xhtml": CHAPTER, "s.png": STYLE},
+                [("a", "a.xhtml"), ("b", "b.xhtml"), ("s", "s.png")],
+                ["a", "b"],
+                media_types={"s": "image/png"},
+            ),
+            300_000,
+            None,
+        ),
+    ],
+    ids=["cover over the markup budget", "past the archive cap", "stylesheet", "svg image", "png image"],
+)
+def test_check_parse_size_charges_markup_not_images(tmp_path, data, archive_cap, refusal):
+    path = tmp_path / "book.epub"
+    path.write_bytes(data)
+
+    with (
+        patch.object(settings, "MAX_EBOOK_INFLATED_BYTES", 100_000),
+        patch.object(settings, "MAX_EBOOK_ARCHIVE_BYTES", archive_cap),
+    ):
+        refused_by = refusing_setting(path)
+
+    assert refused_by == refusal
+
+
+def refusing_setting(path) -> str | None:
+    """The setting check_parse_size names when it refuses `path`, or None."""
+    try:
+        check_parse_size(path)
+    except ValueError as e:
+        return str(e).rsplit("(", 1)[-1].rstrip(")")
+    return None
 
 
 def unreadable_package(path):

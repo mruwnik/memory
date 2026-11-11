@@ -213,16 +213,16 @@ def head_is_zip(file: BinaryIO) -> bool:
 
 def check_zip_size(path: Path) -> None:
     """Raise ValueError for a zipped book with more than MAX_EBOOK_ZIP_ENTRIES
-    entries, or whose entries inflate past MAX_EBOOK_INFLATED_BYTES.
+    entries, or whose entries together inflate past MAX_EBOOK_ARCHIVE_BYTES.
 
-    Every entry counts, whatever its name: MuPDF reads any entry the package
-    file points at, and lays out its markup in memory. Entries are measured by
-    inflating their data, since their declared sizes and CRCs are the
-    uploader's to choose; one that inflates to other than its declared size is
-    refused, and so is an archive that doesn't start the file (MuPDF and
-    zipfile could read different entries). An EPUB's spine is then charged for each chapter it lists.
+    Every entry counts, whatever its name. Entries are measured by inflating
+    their data, since their declared sizes and CRCs are the uploader's to
+    choose; one that inflates to other than its declared size is refused, and
+    so is an archive that doesn't start the file (MuPDF and zipfile could read
+    different entries). An EPUB's markup is then charged against
+    MAX_EBOOK_INFLATED_BYTES by check_epub_spine.
     """
-    limit = settings.MAX_EBOOK_INFLATED_BYTES
+    limit = settings.MAX_EBOOK_ARCHIVE_BYTES
     try:
         archive = zipfile.ZipFile(path)
     except zipfile.BadZipFile as e:
@@ -232,7 +232,7 @@ def check_zip_size(path: Path) -> None:
         if not head_is_zip(file) or all(info.header_offset for info in entries):
             raise ValueError("Book has data before its zip archive")
         if len(entries) > settings.MAX_EBOOK_ZIP_ENTRIES:
-            raise ValueError(f"Book has more than {settings.MAX_EBOOK_ZIP_ENTRIES} entries")
+            raise ValueError(f"Book has more than {settings.MAX_EBOOK_ZIP_ENTRIES} entries (MAX_EBOOK_ZIP_ENTRIES)")
         total = 0
         for info in entries:
             try:
@@ -241,7 +241,7 @@ def check_zip_size(path: Path) -> None:
                 raise ValueError("Book has a zip entry that does not inflate") from e
             total += size
             if total > limit:
-                raise ValueError(f"Book inflates to more than {limit} bytes")
+                raise ValueError(f"Book inflates to more than {limit} bytes (MAX_EBOOK_ARCHIVE_BYTES)")
             if size != info.file_size:
                 raise ValueError("Book has a zip entry whose size does not match its header")
         check_epub_spine(archive)
@@ -315,14 +315,31 @@ def manifest_costs(
     return costs
 
 
+# Manifest media types MuPDF parses as markup besides the chapters themselves.
+MARKUP_MEDIA_TYPES = {"text/css", "image/svg+xml"}
+
+
+def declared_markup_cost(
+    package: ElementTree.Element, base: str, sizes: dict[str, int], largest: int
+) -> int:
+    """The size of the stylesheets and SVG images the manifest declares, each once."""
+    return sum(
+        href_cost(base, local_attribute(item, "href") or "", sizes, largest)
+        for item in elements_named(package, "item", settings.MAX_EBOOK_ZIP_ENTRIES)
+        if (local_attribute(item, "media-type") or "").lower() in MARKUP_MEDIA_TYPES
+    )
+
+
 EPUB_CONTAINER = "meta-inf/container.xml"
+TOO_MUCH_MARKUP = "Book's chapters and stylesheets add up to more than {} bytes (MAX_EBOOK_INFLATED_BYTES)"
 MAX_EPUB_ROOTFILES = 8
 
 
 def check_epub_spine(archive: zipfile.ZipFile) -> None:
-    """Raise ValueError for an EPUB whose spine makes MuPDF lay out more than
-    MAX_EBOOK_INFLATED_BYTES, or that lists more than MAX_EBOOK_ZIP_ENTRIES
-    chapters or manifest items or more than MAX_EPUB_ROOTFILES package files.
+    """Raise ValueError for an EPUB whose spine and declared stylesheets and SVG
+    images make MuPDF lay out more than MAX_EBOOK_INFLATED_BYTES, or that lists
+    more than MAX_EBOOK_ZIP_ENTRIES chapters or manifest items or more than
+    MAX_EPUB_ROOTFILES package files.
 
     A spine may list one file many times, and MuPDF lays it out each time, so
     each itemref is charged its file's size. Every package file the container
@@ -349,13 +366,17 @@ def check_epub_spine(archive: zipfile.ZipFile) -> None:
         if info is None:
             raise ValueError("Book's container names a missing package file")
         package = parse_package_xml(archive, info)
-        costs = manifest_costs(package, posixpath.dirname(info.filename), sizes, largest)
+        base = posixpath.dirname(info.filename)
+        costs = manifest_costs(package, base, sizes, largest)
+        total += declared_markup_cost(package, base, sizes, largest)
+        if total > limit:
+            raise ValueError(TOO_MUCH_MARKUP.format(limit))
         cap = settings.MAX_EBOOK_ZIP_ENTRIES - chapters
         for itemref in elements_named(package, "itemref", cap):
             chapters += 1
             total += costs.get(local_attribute(itemref, "idref") or "", largest)
             if total > limit:
-                raise ValueError(f"Book's chapters add up to more than {limit} bytes")
+                raise ValueError(TOO_MUCH_MARKUP.format(limit))
 
 
 def palmdb_records(data: bytes) -> list[bytes]:
@@ -393,7 +414,7 @@ def check_palmdb_size(path: Path) -> None:
     if record_size != PALMDOC_RECORD_SIZE:
         raise ValueError("Book has an unsupported text record size")
     if min(text_count, len(records) - 1) * PALMDOC_RECORD_SIZE > limit:
-        raise ValueError(f"Book text is more than {limit} bytes")
+        raise ValueError(f"Book text is more than {limit} bytes (MAX_EBOOK_INFLATED_BYTES)")
 
 
 def check_parse_size(path: Path) -> None:
@@ -420,7 +441,7 @@ def check_parse_size(path: Path) -> None:
         return
     limit = settings.MAX_EBOOK_INFLATED_BYTES
     if path.stat().st_size > limit:
-        raise ValueError(f"Book is more than {limit} bytes")
+        raise ValueError(f"Book is more than {limit} bytes (MAX_EBOOK_INFLATED_BYTES)")
 
 
 def parse_ebook(file_path: str | Path) -> Ebook:

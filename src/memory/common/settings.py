@@ -522,12 +522,17 @@ MAX_MISC_UPLOAD_BYTES = int(
 )
 # A book with more markup than this is not parsed: MuPDF lays it out in memory,
 # roughly 50 bytes of RAM per byte, so this refuses early a book that would run
-# into MUPDF_MEMORY_BYTES. An EPUB counts every entry's inflated size (images
-# too, since any entry can hold markup; raise it for image-heavy books along
-# with MUPDF_MEMORY_BYTES), a MOBI its text records, any other format but PDF
-# its file size.
+# into MUPDF_MEMORY_BYTES (the sandbox's limit, which still applies to anything
+# this misses). An EPUB counts the chapters its spine lists and the stylesheets
+# and SVG images its manifest declares, a MOBI its text records, any other
+# format but PDF its file size.
 MAX_EBOOK_INFLATED_BYTES = int(
     os.getenv("MAX_EBOOK_INFLATED_BYTES", 10 * 1024 * 1024)
+)
+# A zipped book whose entries together inflate past this is not parsed, images
+# included: a decompression-bomb guard, far above any real book.
+MAX_EBOOK_ARCHIVE_BYTES = int(
+    os.getenv("MAX_EBOOK_ARCHIVE_BYTES", 200 * 1024 * 1024)
 )
 MAX_EBOOK_ZIP_ENTRIES = int(os.getenv("MAX_EBOOK_ZIP_ENTRIES", 10_000))
 # Every MuPDF parse or render of a PDF or book runs in a child process with
