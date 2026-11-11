@@ -233,6 +233,9 @@ MAX_ATTACHMENT_EMBED_SIZE = int(
 MAX_ATTACHMENT_EMBED_PAGES = int(os.getenv("MAX_ATTACHMENT_EMBED_PAGES", 50))
 # The same image-page cap for uploaded documents and PDF reports.
 MAX_DOC_EMBED_PAGES = int(os.getenv("MAX_DOC_EMBED_PAGES", 50))
+# Text chunks embedded per item on the server's Voyage key; past it, the first
+# chunks and the item's summary are kept.
+MAX_EMBEDDED_CHUNKS_PER_ITEM = int(os.getenv("MAX_EMBEDDED_CHUNKS_PER_ITEM", 500))
 # PDFs with more pages are not chunked at all: every page's text is extracted
 # and embedded on the server's Voyage key.
 MAX_PDF_PAGES = int(os.getenv("MAX_PDF_PAGES", 2000))
