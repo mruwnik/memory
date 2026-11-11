@@ -10,7 +10,6 @@ from collections import defaultdict
 import hashlib
 import inspect
 import time
-import traceback
 import logging
 from typing import Any, Callable, Iterable, Sequence, TypeVar, cast
 
@@ -20,7 +19,7 @@ from memory.common import embedding, qdrant
 from memory.common.access_control import apply_access_filter_to_query, uploader_access_filter
 from memory.common.db.models import SourceItem, Chunk, item_event
 from memory.common.db.models.events import CAUSING_EVENT, caused_by_event
-from memory.common.discord import notify_task_failure
+from memory.common.discord import job_id_of, notify_task_failure
 from memory.common.metrics import record_metric
 
 # TaskPredicate is the common base for Celery's flow-control exceptions
@@ -572,7 +571,6 @@ def safe_task_execution(
             status = "failure"
             error_message = str(e)
             logger.exception(f"Task {func.__name__} failed")
-            traceback_str = traceback.format_exc()
 
             # Check if this is a bound task and if retries are exhausted
             task_self = args[0] if args and hasattr(args[0], "request") else None
@@ -586,10 +584,9 @@ def safe_task_execution(
             if is_final_retry or task_self is None:
                 notify_task_failure(
                     task_name=func.__name__,
-                    error_message=error_message,
-                    task_args=args[1:] if task_self else args,
-                    task_kwargs=kwargs,
-                    traceback_str=traceback_str,
+                    error_type=type(e).__name__,
+                    task_id=getattr(task_self.request, "id", None) if task_self else None,
+                    job_id=job_id_of(kwargs),
                 )
 
             # Re-raise to allow Celery retries

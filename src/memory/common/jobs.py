@@ -26,7 +26,7 @@ from memory.common.content_processing import (
 )
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import PendingJob, JobStatus, JobType
-from memory.common.discord import notify_task_failure
+from memory.common.discord import job_id_of, notify_task_failure
 from memory.common.metrics import record_metric
 
 logger = logging.getLogger(__name__)
@@ -815,7 +815,7 @@ def report_dropped_task(task_name: str, fn_name: str, kwargs: dict[str, Any]) ->
         )
     except Exception:
         logger.warning("Failed to record metric for %s", task_name, exc_info=True)
-    notify_task_failure(task_name=fn_name, error_message=WORKER_LOST_ERROR, task_kwargs=kwargs)
+    notify_task_failure(task_name=fn_name, error_type=WORKER_LOST_ERROR, job_id=job_id_of(kwargs))
 
 
 def update_job(job_id: int | None, change: Callable[[PendingJob], None]) -> None:
