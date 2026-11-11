@@ -1460,7 +1460,7 @@ def test_process_meeting_replace_updates_the_stored_meeting(
     meeting = mock_make_session.get(Meeting, first["meeting_id"])
     assert (meeting.title, meeting.duration_minutes) == ("Final", 42)
     assert meeting.content == "Ann: The corrected transcript."
-    assert meeting.sha256 == create_content_hash("Ann: The corrected transcript.")
+    assert meeting.sha256 == meetings.meeting_sha256("Ann: The corrected transcript.", regular_user.id)
     assert meeting.size == len("Ann: The corrected transcript.")
     assert mock_make_session.query(Meeting).count() == 1
 

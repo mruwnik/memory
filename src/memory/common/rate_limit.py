@@ -266,9 +266,9 @@ def rate_limit_key(request: "Request") -> str:
     """Bucket key for rate limiting: the client's address (``client_address``),
     with IPv6 clients keyed by their /64 (``address_bucket``).
 
-    Use this everywhere a rate-limit bucket is keyed on client IP. Do
-    NOT call ``slowapi.util.get_remote_address`` directly — that helper
-    silently inherits the spoofing bypass.
+    Use this everywhere a rate-limit bucket is keyed on client IP, never
+    ``X-Forwarded-For`` from a peer outside ``RATE_LIMIT_TRUSTED_PROXIES``:
+    a client that can set it mints a fresh bucket per request.
     """
     return address_bucket(client_address(request))
 

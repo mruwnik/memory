@@ -32,7 +32,7 @@ def reset_rate_limit_cache():
         ("10/MINUTE", (10, 60)),  # case-insensitive
     ],
 )
-def test_parse_limit_accepts_slowapi_style(spec, expected):
+def test_parse_limit_accepts_limits_spec_syntax(spec, expected):
     assert rate_limit.parse_limit(spec) == expected
 
 

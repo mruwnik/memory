@@ -1,4 +1,3 @@
-# pyright: reportAttributeAccessIssue=false
 """A session for caldav's DAVClient whose every request is checked at dial time.
 
 A CalDAV server names the URLs the client fetches next (principal, calendar
@@ -10,11 +9,11 @@ response size. GET redirects are followed by httpx through the same transport,
 dropping credentials when the origin changes.
 """
 
-from typing import Any
+from typing import Any, cast
 
 import httpx
 from caldav.davclient import DAVClient
-from caldav.lib.http_sync import requests as dav_requests
+from niquests.auth import HTTPDigestAuth
 
 from memory.common.safe_http import NetworkPolicy, public_sync_http_client
 
@@ -26,7 +25,7 @@ def httpx_auth(auth: Any) -> Any:
     """httpx auth for one of caldav's niquests auth objects. Basic and Bearer
     only set a header, so httpx can call them on its own request; Digest
     needs httpx's challenge-response flow."""
-    if isinstance(auth, dav_requests.auth.HTTPDigestAuth):
+    if isinstance(auth, HTTPDigestAuth):
         return httpx.DigestAuth(auth.username, auth.password)
     return auth
 
@@ -40,6 +39,17 @@ class PinnedDAVSession:
             max_response_bytes=CALDAV_MAX_RESPONSE_BYTES,
             policy=policy,
         )
+        # DAVClient passes the same auth object on every request. Converting
+        # it once keeps httpx.DigestAuth's nonce, so each request after the
+        # first answers the challenge up front instead of taking a 401 first.
+        self.auth_source: Any = None
+        self.auth: Any = None
+
+    def converted_auth(self, auth: Any) -> Any:
+        if auth is not self.auth_source:
+            self.auth_source = auth
+            self.auth = httpx_auth(auth)
+        return self.auth
 
     def request(
         self,
@@ -59,7 +69,7 @@ class PinnedDAVSession:
             url,
             content=data,
             headers=headers,
-            auth=httpx_auth(auth),
+            auth=self.converted_auth(auth),
             follow_redirects=allow_redirects,
         )
 
@@ -70,5 +80,5 @@ class PinnedDAVSession:
 def pin_session(client: DAVClient, policy: NetworkPolicy | None = None) -> DAVClient:
     """Replace `client`'s own niquests session with a PinnedDAVSession."""
     client.session.close()
-    client.session = PinnedDAVSession(policy)
+    cast(Any, client).session = PinnedDAVSession(policy)
     return client

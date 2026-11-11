@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import ssl
 
-from memory.common import embedding, settings
+from memory.common import embedding, paths, settings
 from memory.common.db.models import (
     EmailAccount,
     EmailAttachment,
@@ -758,7 +758,7 @@ def test_vectorize_email_with_attachments(db_session, qdrant, mock_uuid4):
         mail_message_id=mail_message.id,
         size=200,
         content=None,
-        filename=str(file_path),
+        filename=paths.to_db_filename(file_path),
         modality="doc",
         sha256=b"test_hash2" + bytes(24),
         tags=["test"],

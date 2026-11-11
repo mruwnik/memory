@@ -1,6 +1,6 @@
 boto3
 awscli==1.46.2
-caldav
+caldav>=3.7,<3.8
 croniter>=2.0.0
 discord.py==2.7.1
 requests

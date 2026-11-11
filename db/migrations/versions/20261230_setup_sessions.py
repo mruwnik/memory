@@ -6,7 +6,7 @@ agent runs mint sessions of the same shape. Sessions made by setup before this
 release are not marked: creating an API key from one asks to sign in again.
 
 Revision ID: 20261230_setup_sessions
-Revises: 20261226_recurrence_cost
+Revises: 20261228_recurrence_cost
 Create Date: 2026-11-11
 """
 
@@ -14,7 +14,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "20261230_setup_sessions"
-down_revision = "20261226_recurrence_cost"
+down_revision = "20261228_recurrence_cost"
 branch_labels = None
 depends_on = None
 
