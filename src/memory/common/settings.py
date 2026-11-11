@@ -233,6 +233,16 @@ MAX_ATTACHMENT_EMBED_SIZE = int(
 MAX_ATTACHMENT_EMBED_PAGES = int(os.getenv("MAX_ATTACHMENT_EMBED_PAGES", 50))
 # The same image-page cap for uploaded documents and PDF reports.
 MAX_DOC_EMBED_PAGES = int(os.getenv("MAX_DOC_EMBED_PAGES", 50))
+# Word documents (and other zipped office files) are measured before parsing,
+# by inflating each entry: past these totals they are refused. Markup is the
+# .xml/.rels entries, which pandoc and the Drive parser build in memory at
+# many times their size; the total also counts embedded media.
+MAX_OFFICE_MARKUP_BYTES = int(os.getenv("MAX_OFFICE_MARKUP_BYTES", 16 * 1024 * 1024))
+MAX_OFFICE_INFLATED_BYTES = int(os.getenv("MAX_OFFICE_INFLATED_BYTES", 256 * 1024 * 1024))
+MAX_OFFICE_ZIP_ENTRIES = int(os.getenv("MAX_OFFICE_ZIP_ENTRIES", 10_000))
+# A pandoc run (DOCX to PDF through xelatex, or to plain text) is killed,
+# with every process it started, after this many seconds.
+PANDOC_TIMEOUT_SECONDS = float(os.getenv("PANDOC_TIMEOUT_SECONDS", 120))
 # Text chunks embedded per item on the server's Voyage key; past it, the first
 # chunks and the item's summary are kept.
 MAX_EMBEDDED_CHUNKS_PER_ITEM = int(os.getenv("MAX_EMBEDDED_CHUNKS_PER_ITEM", 500))
