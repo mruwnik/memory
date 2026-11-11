@@ -1370,7 +1370,9 @@ def test_a_channel_listing_never_touches_another_workspaces_channel(db_session, 
 
 
 @pytest.fixture
-def unclaimed_message(db_session, stored_message):
+def unclaimed_message(db_session, stored_message, slack_app, slack_credentials):
+    """A message whose storing app is gone; ``slack_app`` is the workspace owner's."""
+    slack_app.created_by_user_id = slack_credentials.user_id
     stored_message.slack_app_id = None
     db_session.commit()
     return stored_message
@@ -1567,7 +1569,7 @@ def test_a_pushed_reply_under_a_thread_slack_does_not_have_is_dropped(db_session
     assert stored_rows(db_session) == []
 
 
-def stored(db_session, app_id: int, channel_id: str = SHARED_CHANNEL, content: str = "what U_A actually wrote",
+def stored(db_session, app_id: int | None, channel_id: str = SHARED_CHANNEL, content: str = "what U_A actually wrote",
            message_ts: str = REAL_TS, thread_ts: str | None = None) -> SlackMessage:
     if db_session.get(SlackChannel, channel_id) is None:
         db_session.add(SlackChannel(id=channel_id, workspace_id="T12345678", name="shared", channel_type="channel"))
@@ -1672,6 +1674,47 @@ def test_a_pushed_delete_is_confirmed_by_the_app_that_stored_the_message(
     result = delete_pushed(apps[pusher], SHARED_CHANNEL)
 
     assert (result["status"], len(stored_rows(db_session)) == 0) == ("deleted" if deleted else "ignored", deleted)
+
+
+@pytest.mark.parametrize(
+    "owner_token, slack_side, deleted",
+    [
+        ("usable", "gone", True),  # B, the workspace's owner, confirms it is gone
+        ("usable", "hidden_from_A", False),  # B's app still sees it
+        ("expired", "gone", False),  # no app of the owner can confirm
+    ],
+)
+def test_a_pushed_delete_of_a_message_whose_storing_app_is_gone_is_confirmed_by_the_owners_app(
+    db_session, two_tenants, fake_slack, slack_credentials, owner_token, slack_side, deleted
+):
+    stored(db_session, None)
+    slack_credentials.token_expires_at = {
+        "usable": None, "expired": datetime.now(timezone.utc) - timedelta(days=1)
+    }[owner_token]
+    db_session.commit()
+    fake_slack.hidden = {"hidden_from_A": {"xoxp-a": {REAL_TS}}, "gone": {}}[slack_side]
+    fake_slack.messages[SHARED_CHANNEL] = fake_slack.messages[SHARED_CHANNEL] * (slack_side != "gone")
+
+    result = delete_pushed(two_tenants["A"], SHARED_CHANNEL)
+
+    assert (result["status"], len(stored_rows(db_session)) == 0) == ("deleted" if deleted else "ignored", deleted)
+
+
+@pytest.mark.parametrize(
+    "storer, pusher, expected",
+    [
+        (None, "A", None),  # another tenant's app can't take over a row whose storing app is gone
+        (None, "B", "B"),  # the workspace owner's app can
+        ("A", "B", "A"),
+        ("B", "A", "B"),
+    ],
+)
+def test_a_later_store_keeps_the_first_storing_app(db_session, two_tenants, fake_slack, storer, pusher, expected):
+    stored(db_session, two_tenants.get(storer))
+
+    push_message(two_tenants[pusher], SHARED_CHANNEL, REAL_TS, edited_ts="1704067900.000100")
+
+    assert [row[4] for row in stored_rows(db_session)] == [two_tenants.get(expected)]
 
 
 def test_a_pushed_delete_of_a_reply_reads_its_thread(db_session, two_tenants, fake_slack):
