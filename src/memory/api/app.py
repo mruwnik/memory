@@ -34,6 +34,7 @@ from memory.api.auth import (
 from memory.api.body_limit import BodySizeLimitMiddleware
 from memory.api.google_drive import router as google_drive_router
 from memory.api.request_limits import RequestRateLimitMiddleware
+from memory.api.security_headers import SecurityHeadersMiddleware
 from memory.api.mcp_servers import router as mcp_servers_router
 from memory.api.email_accounts import router as email_accounts_router
 from memory.api.article_feeds import router as article_feeds_router
@@ -297,6 +298,8 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Edit-Token"],
 )
+# Outermost, so every response gets them, including 429s, CORS preflights and the UI.
+app.add_middleware(SecurityHeadersMiddleware)
 
 
 def validate_path_within_directory(

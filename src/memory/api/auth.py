@@ -727,7 +727,7 @@ def authenticate_user(email: str, password: str, db: DBSession) -> HumanUser | N
     return None
 
 
-@router.api_route("/logout", methods=["GET", "POST"])
+@router.post("/logout")
 def logout(request: Request, db: DBSession = Depends(get_session)):
     """Logout and clear session.
 
