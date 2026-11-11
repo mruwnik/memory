@@ -1809,17 +1809,23 @@ def cross_token_budget(monkeypatch):
     rate_limit.reset_cache()
 
 
+def leave_slack_as_is(fake_slack: FakeSlack) -> None:
+    pass
+
+
 @pytest.mark.parametrize(
-    "storer, token, statuses, reads",
+    "storer, slack_side, token, statuses, reads",
     [
-        ("B", "xoxp-test-token", ["ignored", "ignored", "throttled"], 2),  # B's token confirms A's pushes
-        ("A", "xoxp-a", ["ignored", "ignored", "ignored"], 3),  # A's own token isn't budgeted
+        ("B", "present", "xoxp-test-token", ["ignored", "ignored", "throttled"], 2),  # B's token confirms A's pushes
+        ("A", "present", "xoxp-a", ["ignored", "ignored", "ignored"], 3),  # A's own token isn't budgeted
+        ("B", "past_window", "xoxp-test-token", ["ignored", "throttled"], 2),  # the window check is a second read
     ],
 )
 def test_pushed_deletes_read_another_members_token_only_within_budget(
-    db_session, two_tenants, fake_slack, cross_token_budget, storer, token, statuses, reads
+    db_session, two_tenants, fake_slack, cross_token_budget, storer, slack_side, token, statuses, reads
 ):
     stored(db_session, two_tenants[storer])
+    (SLACK_SIDES | {"present": leave_slack_as_is})[slack_side](fake_slack)
 
     results = [delete_pushed(two_tenants["A"], SHARED_CHANNEL)["status"] for _ in statuses]
 

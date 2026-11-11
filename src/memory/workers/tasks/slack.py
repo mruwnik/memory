@@ -1451,6 +1451,9 @@ def mark_slack_message_deleted(
         logger.info(f"Slack app {slack_app_id} pushed a delete of {message_ts} that Slack doesn't confirm; ignored")
         return {"status": "ignored", "message_ts": message_ts}
     if seen.found is None and not own_token:
+        if not cross_token_reads_allowed("slack", slack_app_id):
+            logger.info(f"Slack app {slack_app_id} is over its cross-token read budget; delete of {message_ts} ignored")
+            return {"status": "throttled", "message_ts": message_ts}
         try:
             earlier = read_as_app(
                 workspace_id, channel_id, confirmer,
