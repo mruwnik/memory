@@ -13,6 +13,7 @@ from memory.agents.provider_keys import credential
 from memory.common import settings
 from memory.common.db.models import Chunk, Session, SessionSegment, SourceItem
 from memory.workers.tasks import sessions as sessions_tasks
+from memory.common.session_transcripts import uuid_index_path
 from memory.workers.tasks.maintenance import cleanup_old_claude_sessions
 from tests.memory.agents.fakes import reply
 
@@ -263,6 +264,20 @@ def test_cleanup_old_sessions_removes_segments(
     assert indexing_env.query(SessionSegment).count() == 0
     assert indexing_env.query(SourceItem).count() == 0
     assert indexing_env.query(Session).count() == 0
+
+
+def test_cleanup_old_sessions_removes_transcript_and_uuid_index(
+    indexing_env, coding_session, sessions_dir
+):
+    transcript = sessions_dir / coding_session.transcript_path
+    write_transcript(transcript, make_events(2))
+    index = uuid_index_path(transcript)
+    index.write_text('"u1"\n"u2"\n')
+
+    with patch("memory.workers.tasks.maintenance.make_session", lambda: _ctx(indexing_env)):
+        cleanup_old_claude_sessions(max_age_days=0)
+
+    assert (transcript.exists(), index.exists()) == (False, False)
 
 
 class _ctx:

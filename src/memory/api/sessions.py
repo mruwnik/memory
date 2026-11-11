@@ -24,6 +24,7 @@ from memory.common import settings
 from memory.common.dates import parse_iso_datetime
 from memory.common.db.connection import make_session
 from memory.common.db.models import CodingProject, Session, TelemetryEvent, User
+from memory.common.session_transcripts import _append_to_index_locked, _stored_uuids_locked
 
 logger = logging.getLogger(__name__)
 
@@ -256,20 +257,9 @@ def append_events_to_transcript(session: Session, events: list[SessionEvent]) ->
             size = os.fstat(f.fileno()).st_size
             if event_ids and size >= settings.MAX_SESSION_TRANSCRIPT_BYTES:
                 raise transcript_full(session)
-            # Read existing UUIDs while holding lock
-            f.seek(0)
-            existing_uuids = set()
-            if event_ids:
-                for line in f:
-                    if line.strip():
-                        try:
-                            data = json.loads(line)
-                            if uuid := data.get("uuid"):
-                                existing_uuids.add(uuid)
-                        except json.JSONDecodeError:
-                            pass
+            stored = _stored_uuids_locked(f, transcript_file, event_ids) if event_ids else set()
 
-            new_events = [event for event in events if event.uuid not in existing_uuids]
+            new_events = [event for event in events if event.uuid not in stored]
             if new_events:
                 text = "\n".join(json.dumps(e.model_dump(), default=str) for e in new_events) + "\n"
                 if size + len(text.encode()) > settings.MAX_SESSION_TRANSCRIPT_BYTES:
@@ -277,6 +267,7 @@ def append_events_to_transcript(session: Session, events: list[SessionEvent]) ->
                 f.seek(0, 2)  # Seek to end
                 f.write(text)
                 f.flush()
+                _append_to_index_locked(transcript_file, (e.uuid for e in new_events))
 
             return new_events
         finally:
@@ -371,7 +362,7 @@ def ingest_session_events_batch(
     Ingest multiple session events in a single request.
 
     Idempotent - duplicate events (by UUID) are skipped. Runs in the
-    threadpool: it reads the session's whole transcript file.
+    threadpool: it reads the session's index of stored event uuids.
     """
     accepted = save_events(
         user.id,
