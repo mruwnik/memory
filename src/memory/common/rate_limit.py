@@ -102,31 +102,29 @@ def reset_cache() -> None:
     local_limiter.storage.reset()
 
 
-def check_local_rate_limit(key: str, limit: int, window_seconds: int) -> bool:
-    """check_rate_limit's in-process counter, used while Redis is unavailable."""
-    return local_limiter.hit(RateLimitItemPerSecond(limit, window_seconds), "rl", key)
+def check_local_rate_limit(key: str, limit: int, window_seconds: int, cost: int = 1) -> bool:
+    """count_hits' in-process counter, used while Redis is unavailable."""
+    return local_limiter.hit(RateLimitItemPerSecond(limit, window_seconds), "rl", key, cost=cost)
 
 
-def check_rate_limit(key: str, limit: int, window_seconds: int) -> bool:
-    """Return True if the request is allowed, False if it exceeds `limit`.
+def count_hits(key: str, limit: int, window_seconds: int, cost: int = 1) -> bool:
+    """Count `cost` hits on `key`; True while its window's total stays within `limit`.
 
     Uses a fixed-window counter keyed on the rounded-down current window
-    instant. Cheaper than a true sliding window and adequate for login
-    throttling — the worst case is 2x the limit at the window boundary.
+    instant. Cheaper than a true sliding window and adequate for throttling:
+    the worst case is 2x the limit at the window boundary.
 
-    While Redis is unavailable, or on any Redis error, the request is counted
+    While Redis is unavailable, or on any Redis error, the hits are counted
     in this process instead.
     """
-    if not settings.API_RATE_LIMIT_ENABLED:
-        return True
     client = rate_limit_redis()
     if client is None:
-        return check_local_rate_limit(key, limit, window_seconds)
+        return check_local_rate_limit(key, limit, window_seconds, cost)
     bucket = int(time.time()) // window_seconds
     redis_key = f"rl:{key}:{bucket}"
     try:
         pipe = client.pipeline()
-        pipe.incr(redis_key, 1)
+        pipe.incr(redis_key, cost)
         pipe.expire(redis_key, window_seconds + 1)
         count, _ = pipe.execute()
         return int(count) <= limit
@@ -135,7 +133,24 @@ def check_rate_limit(key: str, limit: int, window_seconds: int) -> bool:
             "rate_limit: Redis op failed, counting in process: %s", type(exc).__name__
         )
         back_off_redis()
-        return check_local_rate_limit(key, limit, window_seconds)
+        return check_local_rate_limit(key, limit, window_seconds, cost)
+
+
+def check_rate_limit(key: str, limit: int, window_seconds: int) -> bool:
+    """Return True if the request is allowed, False if it exceeds `limit`
+    (always True with API_RATE_LIMIT_ENABLED off)."""
+    if not settings.API_RATE_LIMIT_ENABLED:
+        return True
+    return count_hits(key, limit, window_seconds)
+
+
+def cross_token_reads_allowed(source: str, pusher_id: int, reads: int = 1) -> bool:
+    """Whether pushes from `pusher_id` (a Slack app or Discord bot of `source`)
+    may make `reads` more read-backs this minute with other users' tokens, whose
+    API quota they spend."""
+    return count_hits(
+        f"cross-token:{source}:{pusher_id}", settings.PUSH_CROSS_TOKEN_READS_PER_MINUTE, 60, reads
+    )
 
 
 def check_rate_limit_spec(key: str, spec: str) -> bool:

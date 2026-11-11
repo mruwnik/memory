@@ -83,6 +83,7 @@ const channel = (over: Record<string, unknown> = {}) => ({
   last_message_ts: null,
   project_id: null,
   sensitivity: 'basic',
+  can_switch_off: true,
   ...over,
 })
 
@@ -470,6 +471,7 @@ describe('SlackPanel - channels', () => {
 
   it("shows a non-owner the workspace's and its channels' settings read-only", async () => {
     listWorkspaces.mockResolvedValue([workspace({ can_manage: false })])
+    listChannels.mockResolvedValue([channel({ can_switch_off: false })])
     const { user } = renderWithUser(<SlackPanel />)
     await screen.findByText('Acme')
 
@@ -484,6 +486,20 @@ describe('SlackPanel - channels', () => {
     await user.click(screen.getByRole('button', { name: /Channels \(2\)/ }))
     await screen.findByText('general')
     expect(screen.getByRole('combobox', { name: 'Collect messages' })).toBeDisabled()
+  })
+
+  it('lets a non-owner switch collection off in their own DM, and nothing more', async () => {
+    listWorkspaces.mockResolvedValue([workspace({ can_manage: false })])
+    listChannels.mockResolvedValue([channel({ id: 'D1', name: 'me', channel_type: 'dm', is_private: true })])
+    const { user } = renderWithUser(<SlackPanel />)
+    await screen.findByText('Acme')
+
+    await user.click(screen.getByRole('button', { name: /Channels \(2\)/ }))
+    await screen.findByText('me')
+    expect(screen.queryByRole('combobox', { name: 'Collect messages' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Stop collecting' }))
+
+    await waitFor(() => expect(updateChannel).toHaveBeenCalledWith('D1', { collect_messages: false }))
   })
 
   it('says so when a workspace has no channels', async () => {

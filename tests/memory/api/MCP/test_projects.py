@@ -1247,6 +1247,7 @@ def test_ensure_github_repo_finds_existing(db_session, github_account, github_re
         github_account.id,
         "testorg",
         "testrepo",
+        github_account.user,
     )
 
     assert repo_obj is not None
@@ -1277,6 +1278,7 @@ def test_ensure_github_repo_creates_tracking_for_existing_github_repo(
         github_account.id,
         "testorg",
         "existingrepo",
+        github_account.user,
     )
 
     assert repo_obj is not None
@@ -1301,6 +1303,7 @@ def test_ensure_github_repo_returns_none_when_not_found_and_no_create(
         github_account.id,
         "testorg",
         "nonexistent",
+        github_account.user,
         create_if_missing=False,
     )
 
@@ -1331,6 +1334,7 @@ def test_ensure_github_repo_creates_repo_when_missing(db_session, github_account
         github_account.id,
         "testorg",
         "newrepo",
+        github_account.user,
         description="New repo",
         create_if_missing=True,
         private=True,

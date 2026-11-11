@@ -155,3 +155,62 @@ def test_registration_without_a_name_is_accepted(client, db_session):
     assert response.status_code == 201
     stored = db_session.get(OAuthClientInformation, response.json()["client_id"])
     assert stored.client_name == ""
+
+
+def bearer(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.mark.parametrize(
+    "credential",
+    [{"headers": bearer("tok-user")}, {"cookies": {settings.SESSION_COOKIE_NAME: "tok-user"}}],
+    ids=["bearer", "session cookie"],
+)
+def test_anonymous_traffic_does_not_spend_a_signed_in_clients_budget(client, one_per_minute, credential):
+    anonymous = [client.get("/auth/me").status_code for _ in range(2)]
+    signed_in = [client.get("/auth/me", **credential).status_code for _ in range(2)]
+
+    assert ([s == 429 for s in anonymous], [s == 429 for s in signed_in]) == ([False, True], [False, True])
+
+
+def test_each_credential_has_its_own_default_budget(client, one_per_minute):
+    statuses = [client.get("/auth/me", headers=bearer(token)).status_code for token in ("a", "b", "a")]
+
+    assert [s == 429 for s in statuses] == [False, False, True]
+
+
+def test_made_up_tokens_share_the_addresss_ceiling(client, monkeypatch):
+    monkeypatch.setattr(settings, "API_RATE_LIMIT_CREDENTIALED_ADDRESS", "3/minute")
+
+    statuses = [client.get("/auth/me", headers=bearer(f"made-up-{i}")).status_code for i in range(4)]
+
+    assert [s == 429 for s in statuses] == [False, False, False, True]
+
+
+ADDRESS = "10.0.0.1"
+
+
+@pytest.mark.parametrize(
+    "path, keys",
+    [
+        ("/auth/me", [ADDRESS, "credential"]),
+        ("/register", [ADDRESS, "credential", ADDRESS]),
+        ("/mcp", [ADDRESS]),
+        ("/github/webhook/3", [ADDRESS]),
+        ("/health", []),
+    ],
+)
+def test_only_the_default_bucket_is_keyed_by_credential(path, keys):
+    keyed = request_limits.keyed_limits(path, ADDRESS, "tok")
+
+    assert [key.split(":")[0] for _, _, key in keyed] == keys
+
+
+def test_tokens_over_the_address_ceiling_create_no_counters(monkeypatch):
+    monkeypatch.setattr(settings, "API_RATE_LIMIT_CREDENTIALED_ADDRESS", "2/minute")
+    request_limits.reset()
+
+    results = [request_limits.exceeded_limit("/auth/me", ADDRESS, f"made-up-{i}") for i in range(10)]
+
+    counters = [key for key in request_limits.storage.storage if "credential:" in key]
+    assert ([r is None for r in results], len(counters)) == ([True, True] + [False] * 8, 2)

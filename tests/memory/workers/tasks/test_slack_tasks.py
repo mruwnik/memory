@@ -12,18 +12,20 @@ import pytest
 import redis
 from sqlalchemy.exc import InterfaceError, OperationalError
 
+from memory.common import rate_limit, settings
 from memory.common.celery_app import SEND_NOTIFICATION, SYNC_SLACK_CHANNEL, SYNC_SLACK_WORKSPACE
 from memory.common.db.models import Event, User
 from memory.common.db.models.slack import (
     SlackApp,
     SlackChannel,
+    SlackChannelMember,
     SlackUserCredentials,
     SlackWorkspace,
 )
 from memory.common.db.models.source_items import SlackMessage
 from memory.common.redis_lock import Lock
 from memory.common.safe_http import BlockedDestination
-from memory.common.slack import SlackAPIError
+from memory.common.slack import MAX_RATE_LIMIT_RETRIES, SlackAPIError
 from memory.workers.tasks import slack
 from tests.conftest import unique_sha256
 
@@ -1361,9 +1363,11 @@ def test_images_are_not_fetched_from_an_api_url_no_longer_allowed(
     download.assert_not_called()
 
 
-def test_a_channel_listing_never_touches_another_workspaces_channel(db_session, slack_workspace, other_workspace_channel):
+def test_a_channel_listing_never_touches_another_workspaces_channel(
+    db_session, slack_workspace, slack_credentials, other_workspace_channel
+):
     with patch.object(slack, "iter_channels", return_value=[{"id": other_workspace_channel.id, "name": "hijacked"}]):
-        slack.sync_workspace_channels(MagicMock(), slack_workspace, db_session, {})
+        slack.sync_workspace_channels(MagicMock(), slack_workspace, db_session, {}, slack_credentials.user_id)
 
     db_session.refresh(other_workspace_channel)
     assert (other_workspace_channel.name, other_workspace_channel.workspace_id) == ("theirs", "T99999999")
@@ -1418,14 +1422,17 @@ class FakeSlack:
         # Messages a token can't see in a channel it reads, as past a free plan's history limit.
         self.hidden: dict[str, set[str]] = {}
         self.outage: str | Exception | httpx.Response | None = None
+        self.retry_after = "120"
+        self.tokens: list[str] = []
 
     def handle(self, request: httpx.Request) -> httpx.Response:
+        self.tokens.append(request.headers["Authorization"].removeprefix("Bearer "))
         if isinstance(self.outage, Exception):
             raise self.outage
         if isinstance(self.outage, httpx.Response):
             return self.outage
         if self.outage:
-            return httpx.Response(200, json={"ok": False, "error": self.outage}, headers={"Retry-After": "120"})
+            return httpx.Response(200, json={"ok": False, "error": self.outage}, headers={"Retry-After": self.retry_after})
         token = request.headers["Authorization"].removeprefix("Bearer ")
         form = dict(httpx.QueryParams(request.content.decode()))
         channel = form["channel"]
@@ -1734,6 +1741,46 @@ def test_a_pushed_delete_slack_cannot_confirm_yet_is_retried(db_session, two_ten
         delete_pushed(two_tenants["A"], SHARED_CHANNEL)
 
     assert len(stored_rows(db_session)) == 1
+
+
+@pytest.fixture
+def cross_token_budget(monkeypatch):
+    """Two cross-token read-backs a minute, counted in this process."""
+    monkeypatch.setattr(settings, "PUSH_CROSS_TOKEN_READS_PER_MINUTE", 2)
+    monkeypatch.setattr(rate_limit, "rate_limit_redis", lambda: None)
+    rate_limit.reset_cache()
+    yield
+    rate_limit.reset_cache()
+
+
+@pytest.mark.parametrize(
+    "storer, token, statuses, reads",
+    [
+        ("B", "xoxp-test-token", ["ignored", "ignored", "throttled"], 2),  # B's token confirms A's pushes
+        ("A", "xoxp-a", ["ignored", "ignored", "ignored"], 3),  # A's own token isn't budgeted
+    ],
+)
+def test_pushed_deletes_read_another_members_token_only_within_budget(
+    db_session, two_tenants, fake_slack, cross_token_budget, storer, token, statuses, reads
+):
+    stored(db_session, two_tenants[storer])
+
+    results = [delete_pushed(two_tenants["A"], SHARED_CHANNEL)["status"] for _ in statuses]
+
+    assert (results, fake_slack.tokens.count(token), len(stored_rows(db_session))) == (statuses, reads, 1)
+
+
+@pytest.mark.parametrize("storer, waits", [("A", MAX_RATE_LIMIT_RETRIES), ("B", 0)])
+def test_a_rate_limited_delete_read_back_waits_in_the_task_only_on_the_pushers_token(
+    db_session, two_tenants, fake_slack, cross_token_budget, storer, waits
+):
+    stored(db_session, two_tenants[storer])
+    fake_slack.outage, fake_slack.retry_after = "ratelimited", "1"
+
+    with patch("memory.common.slack.time.sleep") as sleep, pytest.raises(slack.PushedMessageUnread):
+        delete_pushed(two_tenants["A"], SHARED_CHANNEL)
+
+    assert (sleep.call_count, len(stored_rows(db_session))) == (waits, 1)
 
 
 def react_pushed(app_id: int, channel_id: str, **change) -> dict:
@@ -2497,3 +2544,22 @@ def test_the_first_pushed_message_dates_push_in_its_channel(db_session, slack_ap
     db_session.refresh(slack_channel)
     assert first is not None
     assert slack_channel.push_since == first
+
+
+LISTED_CHANNELS = [
+    {"id": "C0PUBLIC", "name": "general", "is_channel": True},
+    {"id": "G0PRIVATE", "name": "team", "is_group": True, "is_private": True},
+    {"id": "D0DM", "is_im": True, "user": "U2", "is_private": True},
+]
+
+
+def test_a_channel_listing_records_its_tokens_user_in_the_non_public_channels(
+    db_session, slack_workspace, slack_credentials
+):
+    with patch.object(slack, "iter_channels", return_value=LISTED_CHANNELS):
+        slack.sync_workspace_channels(MagicMock(), slack_workspace, db_session, {}, slack_credentials.user_id)
+    with patch.object(slack, "iter_channels", return_value=LISTED_CHANNELS[:2]):
+        slack.sync_workspace_channels(MagicMock(), slack_workspace, db_session, {}, slack_credentials.user_id)
+
+    members = db_session.query(SlackChannelMember).all()
+    assert [(m.channel_id, m.user_id) for m in members] == [("G0PRIVATE", slack_credentials.user_id)]

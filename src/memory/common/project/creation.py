@@ -267,6 +267,7 @@ def _ensure_repo_for_create(
             account.id,
             owner,
             repo_name,
+            user,
             description=description,
             create_if_missing=create_repo,
             private=private,

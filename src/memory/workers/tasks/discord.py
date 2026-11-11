@@ -37,6 +37,7 @@ from memory.common.db.models.discord import DM_CHANNEL_TYPES, DiscordBot, Discor
 from memory.common.db.models.events import CAUSING_EVENT, reject_raw_event
 from memory.common.people import DBSession, json_string
 from memory.common.reactions import ReactionAction, Reactions, apply_reaction
+from memory.common.rate_limit import cross_token_reads_allowed
 from memory.common.content_processing import (
     clear_item_chunks,
     create_task_result,
@@ -557,15 +558,26 @@ def delete_targets(session: DBSession, pusher_id: int, bot_ids: set[int], messag
     return targets
 
 
+def may_confirm_with(pusher_id: int, confirmer: int, reads: int) -> bool:
+    """Whether the pusher may spend `reads` read-backs on the confirmer's token:
+    always its own, another owner's bot within PUSH_CROSS_TOKEN_READS_PER_MINUTE."""
+    if confirmer == pusher_id or cross_token_reads_allowed("discord", pusher_id, reads):
+        return True
+    logger.info(f"Discord bot {pusher_id} is over its cross-token read budget; {reads} deletes ignored")
+    return False
+
+
 def delete_pushed(pusher_id: int, bot_ids: set[int], message_ids: list[int]) -> dict[str, Any]:
     """A pushed delete: each stored message these bots may change is deleted
     once Discord tells ``delete_confirmer``'s token it has no such message.
-    One that token still reads, or can't read, stays."""
+    One that token still reads, or can't read, stays, as do those past the
+    pusher's budget of reads on other owners' bot tokens."""
     with make_session() as session:
         targets = delete_targets(session, pusher_id, bot_ids, message_ids)
     gone = [
         item_id
         for confirmer, items in targets.items()
+        if may_confirm_with(pusher_id, confirmer, len(items))
         for item_id, found in read_as_bot(confirmer, items).items()
         if found is None
     ]

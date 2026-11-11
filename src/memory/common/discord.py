@@ -128,12 +128,17 @@ def refresh_discord_metadata(bot_id: int) -> dict[str, Any] | None:
         return None
 
 
+# Channels an alert may go to by name. Any member may name a thread, so threads
+# (and voice or forum channels) never match.
+ERROR_CHANNEL_TYPES = ("text", "news")
+
+
 def error_channel_id(bot_id: int) -> int | None:
     """The channel task-failure alerts go to: DISCORD_ERROR_CHANNEL as given
-    when it is an id, else the one channel of that name in a server this bot
-    verifiably owns. Other users' bots record channels and their names too, so
-    a name is never looked up beyond the alert bot's own servers, and two
-    matches there send nothing until the operator sets the id."""
+    when it is an id, else the one text or announcement channel of that name in
+    a server this bot verifiably owns. Other users' bots record channels and
+    their names too, so a name is never looked up beyond the alert bot's own
+    servers, and two matches there send nothing until the operator sets the id."""
     configured = str(settings.DISCORD_ERROR_CHANNEL)
     if configured.isdigit():
         return int(configured)
@@ -144,6 +149,7 @@ def error_channel_id(bot_id: int) -> int | None:
             .join(DiscordServer, DiscordServer.id == DiscordChannel.server_id)
             .filter(
                 DiscordChannel.name == configured,
+                DiscordChannel.channel_type.in_(ERROR_CHANNEL_TYPES),
                 DiscordServer.bot_id == bot_id,
                 DiscordServer.verified.is_(True),
             )

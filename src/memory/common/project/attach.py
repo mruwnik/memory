@@ -106,6 +106,7 @@ def handle_attach(
             account.id,
             owner,
             repo_name,
+            user,
             create_if_missing=create_repo,
             private=private,
         )

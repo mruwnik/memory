@@ -415,6 +415,10 @@ API_RATE_LIMIT_ENABLED = boolean_env("API_RATE_LIMIT_ENABLED", True)
 # Per-client limit on every API request (api/request_limits.py), except the
 # MCP endpoint and provider webhooks, which have their own budgets below.
 API_RATE_LIMIT_DEFAULT = os.getenv("API_RATE_LIMIT_DEFAULT", "100/minute")
+# Requests carrying a credential (bearer token or session cookie) count against
+# API_RATE_LIMIT_DEFAULT per credential instead of per address, and all of them
+# from one address against this, so made-up tokens can't each mint a bucket.
+API_RATE_LIMIT_CREDENTIALED_ADDRESS = os.getenv("API_RATE_LIMIT_CREDENTIALED_ADDRESS", "1000/minute")
 # /mcp: agents behind one address make many tool calls a minute.
 API_RATE_LIMIT_MCP = os.getenv("API_RATE_LIMIT_MCP", "1200/minute")
 # Signed webhook pushes (GitHub, Slack, Discord, transcripts) arrive from a
@@ -631,6 +635,9 @@ CHAT_THREAD_REPLIES = int(os.getenv("CHAT_THREAD_REPLIES", 10))
 # interval, if longer) to catch missed events; one gone quiet is polled normally.
 PUSH_GAP_FILL_MINUTES = int(os.getenv("PUSH_GAP_FILL_MINUTES", 720))
 PUSH_STALE_HOURS = int(os.getenv("PUSH_STALE_HOURS", 24))
+# Read-backs a minute that one Slack app's or Discord bot's pushed deletes may make
+# with another user's app or bot token to confirm them; past it they are ignored.
+PUSH_CROSS_TOKEN_READS_PER_MINUTE = int(os.getenv("PUSH_CROSS_TOKEN_READS_PER_MINUTE", 30))
 
 # Extra https origins (e.g. https://chat.example.com) that non-admin users may
 # point Slack apps' OAuth/Web API URLs and Discord bots' REST URL at. Slack's

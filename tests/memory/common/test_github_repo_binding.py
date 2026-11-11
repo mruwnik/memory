@@ -14,7 +14,7 @@ from memory.agents import raw_events
 from memory.api.MCP.servers.projects import upsert
 from memory.common.access_control import owner_may_file_into_project
 from memory.common.db import connection as db_connection
-from memory.common.db.models import Event, HumanUser, Person, UserSession
+from memory.common.db.models import APIKey, Event, HumanUser, Person, UserSession
 from memory.common.db.models.events import record_raw_event
 from memory.common.db.models.sources import GithubAccount, GithubRepo, Project, Team, team_members
 from memory.common.github import GithubClient
@@ -132,6 +132,29 @@ async def test_the_tracker_or_an_admin_binds_without_asking_github(
 
     assert (len(bound), asked) == (1, [])
     assert db_session.get(Project, bound[0]).repo_id == alice_repo.id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key_scopes, bound_count",
+    [(["read", "write", "projects"], 0), (["*"], 1)],
+    ids=["narrowed key", "admin key"],
+)
+async def test_an_admins_narrowed_key_binds_only_what_github_lets_it(
+    db_session, monkeypatch, alice_repo, key_scopes, bound_count
+):
+    admin = github_user(db_session, "root@example.com", ["*"])
+    team = team_of(db_session, "roots", admin)
+    key = APIKey.create(user_id=admin.id, scopes=key_scopes)
+    db_session.add(key)
+    db_session.commit()
+    github_answers(monkeypatch, None)
+
+    with mcp_auth_context(key.key, scopes=key_scopes):
+        await upsert.fn(repo="victim/secret", team_ids=[team.id])
+    db_session.expire_all()
+
+    assert db_session.query(Project).filter(Project.repo_id == alice_repo.id).count() == bound_count
 
 
 @pytest.mark.parametrize(

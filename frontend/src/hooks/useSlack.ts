@@ -62,6 +62,8 @@ export interface SlackChannel {
   // Access control
   project_id: number | null
   sensitivity: 'public' | 'basic' | 'internal' | 'confidential'
+  // Whether the current user may switch off collection here, even without managing the workspace
+  can_switch_off: boolean
 }
 
 export interface SlackChannelUpdate {
