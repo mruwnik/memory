@@ -166,8 +166,8 @@ def is_trusted_proxy(host: str) -> bool:
     return False
 
 
-def rate_limit_key(request: "Request") -> str:
-    """Bucket key for rate limiting that respects only trusted proxies.
+def client_address(request: "Request") -> str:
+    """The client's address, believing ``X-Forwarded-For`` only from trusted proxies.
 
     SlowAPI's bundled ``get_remote_address`` (and any Uvicorn started with
     ``--proxy-headers``) honors ``X-Forwarded-For`` regardless of the
@@ -177,17 +177,13 @@ def rate_limit_key(request: "Request") -> str:
     Trust ``X-Forwarded-For`` only when the *immediate* TCP peer is a
     configured trusted proxy (``RATE_LIMIT_TRUSTED_PROXIES``: addresses
     or CIDRs, like Uvicorn's ``--forwarded-allow-ips``), and then only
-    the hops trusted proxies appended: the key is the right-most entry
+    the hops trusted proxies appended: the address is the right-most entry
     that isn't itself a trusted proxy. Entries to its left were sent by
     the client and can say anything. The
     ``"*"`` wildcard exists for parity with Uvicorn's
     ``--forwarded-allow-ips=*`` default but explicitly opts out of the
     spoofing protection — operators behind a real proxy should list its
     IP instead.
-
-    Use this everywhere a rate-limit bucket is keyed on client IP. Do
-    NOT call ``slowapi.util.get_remote_address`` directly — that helper
-    silently inherits the spoofing bypass.
     """
     immediate = request.client.host if request.client else "unknown"
     if not is_trusted_proxy(immediate):
@@ -198,6 +194,33 @@ def rate_limit_key(request: "Request") -> str:
         return untrusted[-1]
     # Every hop is a trusted proxy (or "*" trusts all): the left-most is the client.
     return hops[0] if hops else immediate
+
+
+def address_bucket(address: str) -> str:
+    """The rate-limit key for a client address: an IPv4 address as is, an IPv6
+    address as its /64 (one host or VPS is routed a whole /64 and may use any
+    address in it), an IPv4-mapped IPv6 address as its IPv4 address. Anything
+    that isn't an IP address is returned unchanged."""
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return address
+    if isinstance(ip, ipaddress.IPv4Address):
+        return str(ip)
+    if ip.ipv4_mapped is not None:
+        return str(ip.ipv4_mapped)
+    return str(ipaddress.IPv6Network((int(ip) >> 64 << 64, 64)))
+
+
+def rate_limit_key(request: "Request") -> str:
+    """Bucket key for rate limiting: the client's address (``client_address``),
+    with IPv6 clients keyed by their /64 (``address_bucket``).
+
+    Use this everywhere a rate-limit bucket is keyed on client IP. Do
+    NOT call ``slowapi.util.get_remote_address`` directly — that helper
+    silently inherits the spoofing bypass.
+    """
+    return address_bucket(client_address(request))
 
 
 def rate_limit_reached(key: str, spec: str) -> bool:

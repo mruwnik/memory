@@ -179,3 +179,32 @@ def test_rate_limit_key_attacker_xff_rotation_is_no_op(make_request):
             )
             keys.add(rate_limit_key(cast(Any, request)))
     assert keys == {"203.0.113.7"}
+
+
+@pytest.mark.parametrize(
+    "peer, expected",
+    [
+        ("203.0.113.7", "203.0.113.7"),
+        ("2001:db8:1:2::1", "2001:db8:1:2::/64"),
+        ("2001:db8:1:2:ffff:ffff:ffff:ffff", "2001:db8:1:2::/64"),
+        ("2001:db8:1:3::1", "2001:db8:1:3::/64"),
+        ("::ffff:203.0.113.7", "203.0.113.7"),
+        ("testclient", "testclient"),
+    ],
+)
+def test_rate_limit_key_buckets_ipv6_by_64(make_request, peer, expected):
+    from memory.common.rate_limit import rate_limit_key
+
+    with patch("memory.common.settings.RATE_LIMIT_TRUSTED_PROXIES", ""):
+        assert rate_limit_key(cast(Any, make_request(peer))) == expected
+
+
+def test_rate_limit_key_buckets_forwarded_ipv6_by_64(make_request):
+    from memory.common.rate_limit import rate_limit_key
+
+    keys = set()
+    with patch("memory.common.settings.RATE_LIMIT_TRUSTED_PROXIES", "10.0.0.5"):
+        for i in range(10):
+            request = make_request("10.0.0.5", {"X-Forwarded-For": f"2001:db8:0:7::{i + 1:x}"})
+            keys.add(rate_limit_key(cast(Any, request)))
+    assert keys == {"2001:db8:0:7::/64"}
