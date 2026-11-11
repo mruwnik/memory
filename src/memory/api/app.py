@@ -35,6 +35,7 @@ from memory.api.auth import (
     require_rest_access,
     router as auth_router,
 )
+from memory.api.body_limit import BodySizeLimitMiddleware
 from memory.api.google_drive import router as google_drive_router
 from memory.api.mcp_servers import router as mcp_servers_router
 from memory.api.email_accounts import router as email_accounts_router
@@ -299,6 +300,8 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 # Add rate limiting middleware
 app.add_middleware(SlowAPIMiddleware)
 app.add_middleware(AuthenticationMiddleware)
+# Outside auth, so no route buffers more than its cap before credentials are checked.
+app.add_middleware(BodySizeLimitMiddleware)
 app.add_middleware(WebUIMiddleware, router=app.router)
 # Configure CORS with specific origin to prevent CSRF attacks.
 # allow_credentials=True requires specific origins, not wildcards.

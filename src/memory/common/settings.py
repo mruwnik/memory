@@ -438,6 +438,18 @@ MAX_TELEMETRY_PAYLOAD_BYTES = int(
     os.getenv("MAX_TELEMETRY_PAYLOAD_BYTES", 5 * 1024 * 1024)
 )
 
+# Request body caps, enforced before authentication (api/body_limit.py).
+# Routes anyone can reach without logging in (poll responses, login, OAuth
+# registration and token, password reset, setup) get the public cap; every
+# other route gets the default, except the uploads and webhooks below.
+REQUEST_BODY_MAX_BYTES = int(os.getenv("REQUEST_BODY_MAX_BYTES", 16 * 1024 * 1024))
+PUBLIC_REQUEST_BODY_MAX_BYTES = int(os.getenv("PUBLIC_REQUEST_BODY_MAX_BYTES", 256 * 1024))
+# Slack, Discord and transcript push webhooks.
+WEBHOOK_MAX_BODY_BYTES = int(os.getenv("WEBHOOK_MAX_BODY_BYTES", 1024 * 1024))
+# GitHub deliveries of the events read (issues, PRs, comments, checks, statuses)
+# are far smaller; GitHub itself sends up to 25 MB (e.g. large pushes).
+GITHUB_WEBHOOK_MAX_BODY_BYTES = int(os.getenv("GITHUB_WEBHOOK_MAX_BODY_BYTES", 5 * 1024 * 1024))
+
 # Per-request size caps for the authenticated content-upload endpoints
 # (``/books/upload``, ``/photos/upload``, ``/reports/upload``). All three
 # previously called ``await file.read()`` with no upper bound, which

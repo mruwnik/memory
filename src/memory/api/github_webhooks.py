@@ -13,6 +13,7 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -23,6 +24,7 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy.orm import Session
 
 from memory.api.request_body import read_request_body_with_cap
+from memory.common import settings
 from memory.common.db.connection import get_session
 from memory.common.db.models import GithubItem
 from memory.common.db.models.events import NO_ITEM_TYPE, NOT_COLLECTED, STORED, record_raw_event
@@ -33,8 +35,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/github", tags=["github"])
 
-# GitHub caps payloads at 25 MB.
-MAX_BODY_BYTES = 25 * 1024 * 1024
+SIGNATURE_FORMAT = re.compile(r"sha256=[0-9a-f]{64}")
 
 
 def signature_matches(secret: str, body: bytes, signature: str) -> bool:
@@ -121,9 +122,20 @@ async def github_webhook(
     db: Session = Depends(get_session),
 ) -> JSONResponse:
     """Accept one signed GitHub webhook delivery for an account."""
-    body = await read_request_body_with_cap(request, MAX_BODY_BYTES)
+    # Refuse what can't be a delivery before reading the body.
+    signature = request.headers.get("x-hub-signature-256", "")
+    has_secret = await run_in_threadpool(account_has_secret, db, account_id)
+    if not has_secret or not SIGNATURE_FORMAT.fullmatch(signature):
+        logger.warning("github webhook rejected account=%s", account_id)
+        raise HTTPException(status_code=401, detail="Invalid signature")
+    body = await read_request_body_with_cap(request, settings.GITHUB_WEBHOOK_MAX_BODY_BYTES)
     # The DB work and the broker publish are blocking.
     return await run_in_threadpool(handle_delivery, db, account_id, body, request)
+
+
+def account_has_secret(db: Session, account_id: int) -> bool:
+    account = db.get(GithubAccount, account_id)
+    return bool(account and account.webhook_secret)
 
 
 def event_type(event: str, payload: Payload) -> str:
