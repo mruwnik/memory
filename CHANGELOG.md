@@ -112,6 +112,7 @@ a new, empty `## Unreleased` above it.
 - OAuth clients may only register a redirect on this server's own address for the web UI's callback (its root); other pages there (reports, files) are refused at registration, and `/authorize` refuses clients stored earlier with one. Only a client redirecting to that callback passes for the web UI: any other gets named on the login page and can't create API keys.
 - Markdown in the web UI (search results for mail, markdown and PDF text, notes) no longer loads images hosted elsewhere by itself: each shows a "Load image from <host>" button, so a sender's tracking pixel doesn't learn when you looked or which instance you use. Images stored on this server still show.
 - PDFs (mail attachments, uploads, reports, docx conversions, Google Drive) and books are parsed by MuPDF in a separate process with its own limits, and refused as unparseable when it breaches one: a few KiB of valid PDF or SVG could make MuPDF draw for minutes and use gigabytes inside the worker. New optional settings: `MUPDF_MEMORY_BYTES` (address space, default 1.5 GiB), `MUPDF_CPU_SECONDS` (default 300), `MUPDF_TIMEOUT_SECONDS` (wall clock, default 360) and `MUPDF_OUTPUT_BYTES` (page text and images handed back, default 512 MiB).
+- Gzip-compressed books are refused before parsing: MuPDF inflates them and opens what is inside, past every size check (a 61 KiB upload cost 108 s and 2.4 GB).
 ### Required env vars
 None
 

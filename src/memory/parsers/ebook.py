@@ -167,6 +167,8 @@ PALMDOC_HEADER = struct.Struct(">HHIHHHH")
 # Uncompressed and PalmDoc: MuPDF reads no other compression.
 PALMDOC_COMPRESSIONS = (1, 2)
 PALMDOC_RECORD_SIZE = 4096
+# MuPDF opens a gzip-compressed file as the document inside it.
+GZIP_MAGIC = b"\x1f\x8b"
 
 
 def stored_chunks(file: BinaryIO, info: zipfile.ZipInfo) -> Iterator[bytes]:
@@ -401,10 +403,13 @@ def check_parse_size(path: Path) -> None:
     inflating its entries (and refused unless the archive starts the file), a
     MOBI/PalmDoc signature by the text records, and anything that is neither,
     nor a PDF, by its size. MuPDF picks the format from the content, so the
-    file name and declared type don't matter.
+    file name and declared type don't matter. A gzip stream is refused: MuPDF
+    inflates it and opens whatever is inside, which none of these measure.
     """
     with path.open("rb") as file:
         head = file.read(PDF_MAGIC_WINDOW)
+    if head.startswith(GZIP_MAGIC):
+        raise ValueError("Book is gzip-compressed")
     zipped = zipfile.is_zipfile(path)
     palmdb = palmdb_signature(head) in PALMDB_BOOK_SIGNATURES
     if zipped:

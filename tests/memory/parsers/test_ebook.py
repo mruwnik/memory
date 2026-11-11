@@ -1,3 +1,4 @@
+import gzip
 import struct
 import zipfile
 import zlib
@@ -598,4 +599,22 @@ def test_check_parse_size_refuses_too_many_package_files(tmp_path):
         archive.writestr("META-INF/container.xml", f"<container><rootfiles>{rootfiles}</rootfiles></container>")
 
     with pytest.raises(ValueError, match="more than 8 rootfile"):
+        check_parse_size(path)
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        gzip.compress(book_files.markup(1024 * 1024), 9),
+        gzip.compress(book_files.epub(book_files.markup(10))),
+        gzip.compress(book_files.fb2(10)),
+        gzip.compress(book_files.nested_form_pdf(2)),
+    ],
+    ids=["html", "epub", "fb2", "pdf"],
+)
+def test_check_parse_size_refuses_a_gzip_compressed_book(tmp_path, data):
+    path = tmp_path / "book.epub"
+    path.write_bytes(data)
+
+    with pytest.raises(ValueError, match="gzip"):
         check_parse_size(path)
