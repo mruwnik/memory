@@ -148,8 +148,8 @@ def _flush_metrics_batch(
             session.add(event)
         session.commit()
         return True
-    except Exception as e:
-        logger.error("Failed to write metrics batch: %s", e)
+    except Exception:
+        logger.exception("Failed to write metrics batch")
         session.rollback()
         return False
     finally:
@@ -196,8 +196,8 @@ def _background_writer() -> None:
             if len(batch) > batch_size * 3:
                 batch = batch[-batch_size:]
 
-        except Exception as e:
-            logger.error("Error in metric writer thread: %s", e)
+        except Exception:
+            logger.exception("Error in metric writer thread")
 
 
 def _start_metrics_writer_locked() -> None:

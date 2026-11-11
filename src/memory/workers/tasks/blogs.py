@@ -148,7 +148,7 @@ def sync_article_feed(feed_id: int) -> dict:
 
         parser = get_feed_parser(feed.url, feed.last_sync_at)
         if not parser:
-            logger.error(f"No parser available for feed: {feed.url}")
+            logger.error("No parser available for feed %s", feed_id)
             feed.record_sync("No parser available for feed")
             session.commit()
             return {"status": "error", "error": "No parser available for feed"}
@@ -175,7 +175,7 @@ def sync_article_feed(feed_id: int) -> dict:
                     new_urls.append(feed_item.url)
 
         except Exception as e:
-            logger.error(f"Error parsing feed {feed.url}: {e}")
+            logger.exception("Error parsing feed %s", feed_id)
             errors += 1
             error = e
 
@@ -282,7 +282,7 @@ def sync_website_archive(
     # Get archive fetcher for the website
     fetcher = get_archive_fetcher(url)
     if not fetcher:
-        logger.error(f"No archive fetcher available for: {url}")
+        logger.error("No archive fetcher available for feed %s", feed_id)
         return {"status": "error", "error": "No archive fetcher available"}
 
     # Override max_pages if provided

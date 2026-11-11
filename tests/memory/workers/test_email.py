@@ -1439,8 +1439,8 @@ def test_gmail_gone_message_ids_makes_no_request_for_nothing():
     assert service.batch_sizes == []
 
 
-@patch("memory.workers.email.imaplib")
-def test_imap_connection_uses_ssl_by_default(mock_imaplib):
+@patch("memory.workers.email.mail_connect")
+def test_imap_connection_uses_ssl_by_default(mock_connect):
     account = EmailAccount(
         name="t",
         email_address="t@example.com",
@@ -1453,16 +1453,16 @@ def test_imap_connection_uses_ssl_by_default(mock_imaplib):
     )
     with imap_connection(account):
         pass
-    kwargs = mock_imaplib.IMAP4_SSL.call_args.kwargs
+    kwargs = mock_connect.PublicIMAP4SSL.call_args.kwargs
     assert kwargs["host"] == "imap.example.com"
     assert kwargs["port"] == 993
     assert kwargs["ssl_context"].verify_mode == ssl.CERT_REQUIRED
     assert kwargs["ssl_context"].check_hostname is True
-    mock_imaplib.IMAP4.assert_not_called()
+    mock_connect.PublicIMAP4.assert_not_called()
 
 
-@patch("memory.workers.email.imaplib")
-def test_imap_connection_starttls_when_ssl_disabled(mock_imaplib):
+@patch("memory.workers.email.mail_connect")
+def test_imap_connection_starttls_when_ssl_disabled(mock_connect):
     account = EmailAccount(
         name="t",
         email_address="t2@example.com",
@@ -1475,16 +1475,16 @@ def test_imap_connection_starttls_when_ssl_disabled(mock_imaplib):
     )
     with imap_connection(account):
         pass
-    mock_imaplib.IMAP4.assert_called_once_with(host="imap.example.com", port=143)
-    mock_imaplib.IMAP4_SSL.assert_not_called()
-    conn = mock_imaplib.IMAP4.return_value
+    mock_connect.PublicIMAP4.assert_called_once_with(host="imap.example.com", port=143)
+    mock_connect.PublicIMAP4SSL.assert_not_called()
+    conn = mock_connect.PublicIMAP4.return_value
     assert [call[0] for call in conn.method_calls] == ["starttls", "login", "logout"]
     context = conn.starttls.call_args.kwargs["ssl_context"]
     assert context.verify_mode == ssl.CERT_REQUIRED
     assert context.check_hostname
 
 
-@patch("memory.workers.email.imaplib.IMAP4")
+@patch("memory.workers.email.mail_connect.PublicIMAP4")
 def test_imap_starttls_failure_never_sends_password(connect):
     account = EmailAccount(imap_server="imap.example.com", imap_port=143,
                            username="u", password="p", use_ssl=False)

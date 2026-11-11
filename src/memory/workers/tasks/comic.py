@@ -49,14 +49,14 @@ def find_new_urls(base_url: str, rss_url: str) -> set[str]:
         response = safe_get(rss_url, timeout=30)
         response.raise_for_status()
         feed = feedparser.parse(response.content)
-    except UnsafeURLError as e:
-        logger.error(f"Refusing to fetch unsafe RSS URL {rss_url}: {e}")
+    except UnsafeURLError:
+        logger.exception("Refusing to fetch an unsafe comic RSS URL")
         return set()
-    except requests.RequestException as e:
-        logger.error(f"Failed to fetch {rss_url}: {e}")
+    except requests.RequestException:
+        logger.exception("Failed to fetch a comic RSS feed")
         return set()
-    except Exception as e:
-        logger.error(f"Failed to parse RSS from {rss_url}: {e}")
+    except Exception:
+        logger.exception("Failed to parse a comic RSS feed")
         return set()
 
     urls = {cast(str, item.get("link") or item.get("id")) for item in feed.entries}
@@ -196,8 +196,8 @@ def trigger_comic_sync():
                 "author": "https://www.smbc-comics.com/"
             }
             sync_comic.delay(**data)
-        except Exception as e:
-            logger.error(f"failed to sync {next_url}: {e}")
+        except Exception:
+            logger.exception(f"failed to sync SMBC comic {len(urls)}")
         urls.append(next_url)
 
     logger.info(f"syncing {BASE_XKCD_URL}")
@@ -208,5 +208,5 @@ def trigger_comic_sync():
         try:
             data = comics.extract_xkcd(url) | {"author": "https://xkcd.com/"}
             sync_comic.delay(**data)
-        except Exception as e:
-            logger.error(f"failed to sync {url}: {e}")
+        except Exception:
+            logger.exception(f"failed to sync xkcd comic {i}")

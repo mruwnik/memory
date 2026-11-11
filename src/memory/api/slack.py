@@ -70,7 +70,7 @@ from memory.common.oauth_client import (
 )
 from memory.common.push_health import push_stale
 from memory.common.safe_http import public_http_client
-from memory.common.slack import user_has_workspace_membership, workspace_poll_plan, workspace_sync_interval
+from memory.common.slack import is_slack_ts, user_has_workspace_membership, workspace_poll_plan, workspace_sync_interval
 
 logger = logging.getLogger(__name__)
 
@@ -1197,6 +1197,16 @@ def channel_event_payload(event_type: str, channel: str | PushedChannel | None) 
     return None
 
 
+def malformed_ts(required: str | None, *optional: str | None) -> bool:
+    """Whether the required timestamp is missing or malformed, or an optional one is malformed."""
+    return not is_slack_ts(required) or any(ts is not None and not is_slack_ts(ts) for ts in optional)
+
+
+def rejected_ts(slack_app_id: int, event_type: str) -> SlackDispatch:
+    logger.warning(f"Rejecting event with malformed ts slack_app_id={slack_app_id} event_type={event_type}")
+    return "rejected_ts", None, {}
+
+
 def plan_event_callback(envelope: SlackEnvelope, slack_app_id: int) -> SlackDispatch:
     """Branch on event.type to the celery task that applies it.
 
@@ -1206,8 +1216,9 @@ def plan_event_callback(envelope: SlackEnvelope, slack_app_id: int) -> SlackDisp
     different format, or a malformed event from a buggy Slack app could put
     arbitrary strings into our Celery task kwargs (workspace_id flows through
     to a SlackMessage Text column with no DB-level shape constraint). We
-    validate workspace_id and channel_id here so garbage gets rejected at the
-    dispatcher rather than wasting Celery cycles + log spam in add_slack_message.
+    validate workspace_id, channel_id and message timestamps here so garbage
+    gets rejected at the dispatcher rather than wasting Celery cycles + log
+    spam in add_slack_message. A timestamp also names a directory on disk.
     """
     event = envelope.event
     event_type, subtype = event.type, event.subtype
@@ -1240,6 +1251,8 @@ def plan_event_callback(envelope: SlackEnvelope, slack_app_id: int) -> SlackDisp
 
     if event_type == "message":
         if subtype == "message_deleted":
+            if malformed_ts(event.deleted_ts or event.ts):
+                return rejected_ts(slack_app_id, event_type)
             return "mark_deleted", MARK_SLACK_MESSAGE_DELETED, {
                 "workspace_id": workspace_id,
                 "channel_id": channel_id,
@@ -1249,6 +1262,8 @@ def plan_event_callback(envelope: SlackEnvelope, slack_app_id: int) -> SlackDisp
         # Both "message" and "message_changed" go through ADD_SLACK_MESSAGE,
         # which carries the merge logic from B-pre-1/B-pre-2.
         message = event if subtype != "message_changed" else event.message or PushedMessage()
+        if malformed_ts(message.ts, message.thread_ts, message.edited and message.edited.ts):
+            return rejected_ts(slack_app_id, event_type)
         return "add_message", ADD_SLACK_MESSAGE, {
             "workspace_id": workspace_id,
             "channel_id": channel_id,
@@ -1265,6 +1280,8 @@ def plan_event_callback(envelope: SlackEnvelope, slack_app_id: int) -> SlackDisp
         }
 
     if reacted:
+        if malformed_ts(event.item and event.item.ts):
+            return rejected_ts(slack_app_id, event_type)
         return "update_reactions", UPDATE_SLACK_REACTIONS, {
             "workspace_id": workspace_id,
             "channel_id": channel_id,

@@ -71,7 +71,7 @@ class VisibilityMiddleware(Middleware):
 
         try:
             return await checker(user_info, session)
-        except Exception as e:
+        except Exception:
             # Rollback to clear the failed transaction state so subsequent
             # checks can proceed (prevents cascading InFailedSqlTransaction errors)
             if session is not None:
@@ -79,10 +79,7 @@ class VisibilityMiddleware(Middleware):
                     session.rollback()
                 except Exception:
                     pass  # Rollback failed, nothing more we can do
-            logger.error(
-                f"Visibility checker failed for tool {tool.name}: {e}",
-                exc_info=True,
-            )
+            logger.exception(f"Visibility checker failed for tool {tool.name}")
             # Fail closed: if checker errors, deny access
             return False
 
@@ -141,11 +138,8 @@ class VisibilityMiddleware(Middleware):
         try:
             with make_session() as session:
                 allowed = await checker(user_info, session)
-        except Exception as e:
-            logger.error(
-                f"Visibility checker failed during tool call for {tool_name}: {e}",
-                exc_info=True,
-            )
+        except Exception:
+            logger.exception(f"Visibility checker failed during tool call for {tool_name}")
             raise ToolError(f"Access denied: {tool_name}")
 
         if not allowed:

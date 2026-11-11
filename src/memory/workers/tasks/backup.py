@@ -252,8 +252,8 @@ def sync_unencrypted_directory(path: Path) -> dict:
         logger.info(f"Synced {path} to {s3_uri}")
         logger.debug(f"Output: {result.stdout}")
         return {"synced": True, "directory": path, "s3_uri": s3_uri}
-    except subprocess.TimeoutExpired as e:
-        logger.error(f"Sync timed out for {path}: {e}")
+    except subprocess.TimeoutExpired:
+        logger.exception(f"Sync timed out for {path}")
         return {"synced": False, "directory": path, "error": "timeout"}
     except subprocess.CalledProcessError as e:
         logger.error(f"Failed to sync {path}: {e.stderr}")
@@ -318,7 +318,7 @@ def backup_encrypted_directory(path: Path) -> dict:
                     "encryption": "openssl",
                 }
             except Exception as e:
-                logger.error(f"Failed to upload {path}: {e}")
+                logger.exception(f"Failed to upload {path}")
                 return {"uploaded": False, "directory": path, "error": str(e)}
             finally:
                 if os.path.exists(enc_path):
@@ -353,7 +353,7 @@ def backup_encrypted_directory(path: Path) -> dict:
             "encryption": "fernet",
         }
     except Exception as e:
-        logger.error(f"Failed to upload {path}: {e}")
+        logger.exception(f"Failed to upload {path}")
         return {"uploaded": False, "directory": path, "error": str(e)}
 
 

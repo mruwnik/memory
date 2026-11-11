@@ -15,6 +15,7 @@ from typing import Any
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
+from memory.common import mail_connect
 from memory.common.db.connection import DBSession
 from memory.common.db.models import EmailAccount, GoogleAccount
 
@@ -292,13 +293,13 @@ def send_via_smtp(
 
         # Port 465 uses implicit TLS (SMTP_SSL), port 587 uses STARTTLS
         if smtp_port == 465:
-            with smtplib.SMTP_SSL(
+            with mail_connect.PublicSMTPSSL(
                 smtp_server, smtp_port, timeout=30, context=context
             ) as server:
                 server.login(config.username or config.email_address, config.password)
                 server.send_message(msg, to_addrs=all_recipients)
         else:
-            with smtplib.SMTP(smtp_server, smtp_port, timeout=30) as server:
+            with mail_connect.PublicSMTP(smtp_server, smtp_port, timeout=30) as server:
                 server.starttls(context=context)
                 server.login(config.username or config.email_address, config.password)
                 server.send_message(msg, to_addrs=all_recipients)
@@ -309,13 +310,13 @@ def send_via_smtp(
         return EmailResult(success=True, message_id=message_id)
 
     except smtplib.SMTPAuthenticationError as e:
-        logger.error(f"SMTP authentication failed for {config.email_address}: {e}")
+        logger.error("SMTP authentication failed")
         return EmailResult(success=False, error=f"Authentication failed: {e}")
     except smtplib.SMTPException as e:
-        logger.error(f"SMTP error sending email: {e}")
+        logger.exception("SMTP error sending email")
         return EmailResult(success=False, error=f"SMTP error: {e}")
     except Exception as e:
-        logger.exception(f"Unexpected error sending email via SMTP: {e}")
+        logger.exception("Unexpected error sending email via SMTP")
         return EmailResult(success=False, error=str(e))
 
 
@@ -403,7 +404,7 @@ def send_via_gmail_api(
         return EmailResult(success=True, message_id=message_id)
 
     except Exception as e:
-        logger.exception(f"Error sending email via Gmail API: {e}")
+        logger.exception("Error sending email via Gmail API")
         return EmailResult(success=False, error=str(e))
 
 

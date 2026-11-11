@@ -210,7 +210,7 @@ def embed_request(
                 )
                 time.sleep(delay)
             else:
-                logger.error(f"Embedding failed after {max_retries} attempts: {e}")
+                logger.exception(f"Embedding failed after {max_retries} attempts")
 
     raise EmbeddingError(
         f"Failed to generate embeddings after {max_retries} attempts"

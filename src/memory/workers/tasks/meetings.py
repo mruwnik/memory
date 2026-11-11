@@ -778,7 +778,7 @@ def execute_meeting_processing(
         }
 
     except Exception as e:
-        logger.exception(f"Failed to process meeting {meeting.id}: {e}")
+        logger.exception(f"Failed to process meeting {meeting.id}")
         session.rollback()
         # "extracted": extraction worked, but the meeting wasn't stored.
         outcome = (extract_result or {}).get("status", "")

@@ -6,6 +6,7 @@ workers, API endpoints, and MCP tools.
 
 import asyncio
 import logging
+import re
 import time
 from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
@@ -35,6 +36,14 @@ DEFAULT_RETRY_AFTER = 5  # seconds
 # The API URL is user-configurable, so a server asking for longer waits gets
 # the call failed rather than a worker held.
 MAX_RETRY_AFTER = 30  # seconds
+
+# A message timestamp: epoch seconds, a dot, a sequence number. It names the
+# message's image directory, so nothing else may pass for one.
+SLACK_TS_PATTERN = re.compile(r"[0-9]{1,12}\.[0-9]{1,9}")
+
+
+def is_slack_ts(value: str | None) -> bool:
+    return value is not None and SLACK_TS_PATTERN.fullmatch(value) is not None
 
 
 def rate_limit_wait(error: str, response: httpx.Response, attempt: int) -> int | None:

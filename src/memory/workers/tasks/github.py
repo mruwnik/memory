@@ -512,9 +512,9 @@ def _update_existing_item(
     if existing_chunks:
         try:
             delete_chunk_vectors(existing_chunks)
-        except IOError as e:
+        except IOError:
             # Re-raise to fail the task - leaving stale vectors causes duplicate results
-            logger.error(f"Error deleting chunks from Qdrant: {e}")
+            logger.exception("Error deleting chunks from Qdrant")
             raise
 
     # Delete chunks from database and clear the collection
@@ -702,8 +702,8 @@ def _lookup_milestone_id(
                 f"Milestone #{milestone_number} not found on GitHub for {repo.repo_path}"
             )
             return None
-    except Exception as e:
-        logger.error(f"Failed to fetch milestone #{milestone_number} from GitHub: {e}")
+    except Exception:
+        logger.exception(f"Failed to fetch milestone #{milestone_number} from GitHub")
         return None
 
 

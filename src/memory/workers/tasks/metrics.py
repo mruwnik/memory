@@ -82,8 +82,8 @@ def collect_system_metrics() -> dict:
         record_gauge("process.num_threads", process.num_threads())
         metrics_collected += 1
 
-    except Exception as e:
-        logger.error(f"Error collecting process metrics: {e}")
+    except Exception:
+        logger.exception("Error collecting process metrics")
 
     try:
         # System-wide metrics - uses time since last call as measurement window
@@ -104,8 +104,8 @@ def collect_system_metrics() -> dict:
         record_gauge("system.disk_total_gb", disk.total / 1024 / 1024 / 1024)
         metrics_collected += 3
 
-    except Exception as e:
-        logger.error(f"Error collecting system metrics: {e}")
+    except Exception:
+        logger.exception("Error collecting system metrics")
 
     return {"status": "success", "metrics_collected": metrics_collected}
 

@@ -129,8 +129,8 @@ class JSONParser(FeedParser):
             self.content = cast(str, fetch_html(self.url))
         try:
             return json.loads(self.content)
-        except json.JSONDecodeError as e:
-            logger.error(f"Error parsing JSON: {e}")
+        except json.JSONDecodeError:
+            logger.exception("Error parsing JSON")
             return []
 
     def extract_title(self, entry: Any) -> str:
