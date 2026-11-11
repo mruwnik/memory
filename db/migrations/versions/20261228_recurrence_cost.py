@@ -7,7 +7,7 @@ before this release are checked again on their next sync; until then they keep
 their stored verdict and expand after the checked rows of their account.
 
 Revision ID: 20261226_recurrence_cost
-Revises: 20261225_null_gdoc_filename
+Revises: 20261227_unbind_github_projects
 Create Date: 2026-11-11
 """
 
@@ -15,7 +15,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "20261226_recurrence_cost"
-down_revision = "20261225_null_gdoc_filename"
+down_revision = "20261227_unbind_github_projects"
 branch_labels = None
 depends_on = None
 
