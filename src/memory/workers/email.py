@@ -243,7 +243,7 @@ def oversized_uids(conn: imaplib.IMAP4, uids: list[str]) -> set[str]:
         try:
             with refusing_literals(conn):
                 status, data = conn.uid("FETCH", batch, "(UID RFC822.SIZE)")
-        except imaplib.IMAP4.error:
+        except (imaplib.IMAP4.error, OSError):
             logger.warning("IMAP server refused a size FETCH")
             continue
         if status != "OK":
@@ -378,16 +378,24 @@ def process_folder(
 
 
 class CappedResponses:
-    """Bound what one command's response can make imaplib buffer: lines and
-    literals together at most MAX_EMAIL_BYTES, within IMAP_COMMAND_TIMEOUT_SEC.
-    A literal is refused before it is read, from the size the server announces.
-    The budget restarts with each command sent."""
+    """Bound what the server can make imaplib buffer or wait for.
+
+    One command's response, lines and literals together, may be at most
+    MAX_EMAIL_BYTES and must arrive within IMAP_COMMAND_TIMEOUT_SEC; each read
+    waits no longer than what is left of that. The budget restarts with each
+    command sent, after leftover untagged responses are dropped (imaplib reads
+    a command's own responses right after it). The whole connection may
+    receive at most MAX_IMAP_CONNECTION_BYTES. A literal is refused before it
+    is read, from the size the server announces.
+    """
 
     response_bytes = 0
+    connection_bytes = 0
     deadline: float | None = None
     refuse_literals = False
 
     def send(self, data: ReadableBuffer) -> None:
+        self.untagged_responses.clear()  # type: ignore[attr-defined]
         self.response_bytes = 0
         self.deadline = time.monotonic() + settings.IMAP_COMMAND_TIMEOUT_SEC
         super().send(data)  # type: ignore[misc]
@@ -396,17 +404,29 @@ class CappedResponses:
         if self.refuse_literals:
             raise imaplib.IMAP4.abort("server sent a literal where none was expected")
         self.count_response(size)
+        self.bound_wait()
         return super().read(size)  # type: ignore[misc]
 
     def readline(self) -> bytes:
+        self.bound_wait()
         line = super().readline()  # type: ignore[misc]
         self.count_response(len(line))
         return line
 
+    def bound_wait(self) -> None:
+        """Let the next read wait no longer than the command has left."""
+        timeout = settings.REMOTE_SERVER_TIMEOUT_SEC
+        if self.deadline is not None:
+            timeout = min(timeout, self.deadline - time.monotonic())
+        self.sock.settimeout(max(0.1, timeout))  # type: ignore[attr-defined]
+
     def count_response(self, size: int) -> None:
         self.response_bytes += size
+        self.connection_bytes += size
         if self.response_bytes > settings.MAX_EMAIL_BYTES:
             raise imaplib.IMAP4.abort("server response is over MAX_EMAIL_BYTES")
+        if self.connection_bytes > settings.MAX_IMAP_CONNECTION_BYTES:
+            raise imaplib.IMAP4.abort("server sent over MAX_IMAP_CONNECTION_BYTES")
         if self.deadline is not None and time.monotonic() > self.deadline:
             raise imaplib.IMAP4.abort("server response took over IMAP_COMMAND_TIMEOUT_SEC")
 

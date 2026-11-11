@@ -539,6 +539,47 @@ def test_size_answer_with_a_literal_parses_outside_a_size_fetch():
     assert status == "OK"
 
 
+def junk_literals(count: int, size: int) -> bytes:
+    """Untagged responses of a type no command collects, so imaplib keeps them."""
+    return b"".join(b"* %d XJUNK {%d}\r\n" % (n, size) + b"x" * size + b"\r\n" for n in range(1, count + 1))
+
+
+def test_capped_connection_drops_leftover_responses_between_commands():
+    with scripted_imap_server(junk_literals(2, 1000)) as port, patch.object(settings, "MAX_EMAIL_BYTES", 2500):
+        conn = selected_connection(port)
+        conn.uid("FETCH", "1:*", "(BODY.PEEK[])")
+        after_one = list(conn.untagged_responses["XJUNK"])
+        conn.uid("FETCH", "1:*", "(BODY.PEEK[])")
+        conn.uid("FETCH", "1:*", "(BODY.PEEK[])")
+
+    assert conn.untagged_responses["XJUNK"] == after_one
+
+
+def test_capped_connection_aborts_past_its_connection_budget():
+    with (
+        scripted_imap_server(junk_literals(2, 1000)) as port,
+        patch.object(settings, "MAX_EMAIL_BYTES", 2500),
+        patch.object(settings, "MAX_IMAP_CONNECTION_BYTES", 5000),
+    ):
+        conn = selected_connection(port)
+        conn.uid("FETCH", "1:*", "(BODY.PEEK[])")
+        conn.uid("FETCH", "1:*", "(BODY.PEEK[])")
+        with pytest.raises(imaplib.IMAP4.abort):
+            conn.uid("FETCH", "1:*", "(BODY.PEEK[])")
+
+
+def test_capped_connection_reads_wait_no_longer_than_the_command_has_left():
+    with (
+        scripted_imap_server(body_literals(1, 10)) as port,
+        patch.object(settings, "REMOTE_SERVER_TIMEOUT_SEC", 60),
+        patch.object(settings, "IMAP_COMMAND_TIMEOUT_SEC", 2),
+    ):
+        conn = selected_connection(port)
+        conn.uid("FETCH", "1:*", "(BODY.PEEK[])")
+
+    assert 0 < (conn.sock.gettimeout() or 0) <= 2
+
+
 def test_process_folder(email_provider):
     account = MagicMock(spec=EmailAccount)
     account.id = 123

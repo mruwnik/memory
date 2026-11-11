@@ -493,6 +493,12 @@ REMOTE_SERVER_TIMEOUT_SEC = int(os.getenv("REMOTE_SERVER_TIMEOUT_SEC", 60))
 MAX_EMAIL_BYTES = int(os.getenv("MAX_EMAIL_BYTES", 64 * 1024 * 1024))
 # Wall-clock limit on one IMAP command's response, however steadily it trickles in.
 IMAP_COMMAND_TIMEOUT_SEC = int(os.getenv("IMAP_COMMAND_TIMEOUT_SEC", 600))
+# Bytes one IMAP connection (one account sync) may receive in all. A sync
+# re-downloads everything since its cutoff, and a first sync starts from the
+# beginning, so this must exceed the largest mailbox synced.
+MAX_IMAP_CONNECTION_BYTES = int(
+    os.getenv("MAX_IMAP_CONNECTION_BYTES", 16 * 1024 * 1024 * 1024)
+)
 # Max decoded base64 accepted inline through the add_content MCP tool; above
 # this the caller is handed a one-time upload URL instead of inlining bytes
 # in the MCP payload.
