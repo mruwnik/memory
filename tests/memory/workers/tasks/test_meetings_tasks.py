@@ -2104,3 +2104,32 @@ def test_dedupe_meetings_groups_only_recordings_that_overlap_each_other(mock_mak
     result = meetings.dedupe_meetings(dry_run=True)
 
     assert result["groups"] == [{"keep": first.id, "delete": [second.id]}]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="S-W8: a synced meeting (Fireflies) stores the provider's transcript id "
+    "as Meeting.external_id, which is globally unique and looked up with no owner "
+    "filter (find_meeting, known_external_ids), so a second user whose account sees "
+    "the same transcript gets the first owner's meeting; needs the synced id "
+    "namespaced per account, with a migration for existing rows",
+)
+def test_every_user_syncing_a_shared_transcript_gets_their_own_meeting(
+    scripted_llm,
+    llm_key,
+    regular_user,
+    admin_user,
+    sample_extraction_response,
+    sample_transcript,
+    mock_make_session,
+    qdrant,
+):
+    scripted_llm.script = [submitted(sample_extraction_response), submitted(sample_extraction_response)]
+
+    for user in (regular_user, admin_user):
+        meetings.process_meeting(
+            creator_id=user.id, transcript=sample_transcript, title="Standup", external_id="01SHARED"
+        )
+
+    stored = mock_make_session.query(Meeting).all()
+    assert {meeting.creator_id for meeting in stored} == {regular_user.id, admin_user.id}

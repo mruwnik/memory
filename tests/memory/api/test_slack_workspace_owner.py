@@ -7,9 +7,10 @@ from memory.agents.provider_keys import ingest_key, payer_id
 from memory.agents.system import SUMMARISE
 from memory.api.slack import _persist_oauth_credentials
 from memory.common.access_control import get_user_project_roles, user_can_access
-from memory.common.db.models import LLMProviderKey, User
+from memory.common.db.models import LLMProviderKey, Person, Project, Team, User
 from memory.common.db.models.slack import SlackApp, SlackChannel, SlackUserCredentials, SlackWorkspace
 from memory.common.db.models.source_items import SlackMessage
+from memory.common.db.models.sources import project_teams, team_members
 from tests.conftest import unique_sha256
 
 WORKSPACE = "T0SHARED"
@@ -342,3 +343,42 @@ def test_a_member_who_leaves_keeps_the_owner_paying(member_client, db_session, u
     db_session.refresh(workspace)
     assert response.status_code in (200, 204)
     assert (workspace.owner_id, workspace.llm_key_id, workspace.llm_disabled) == (victim.id, key_id, False)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="A DM or private channel row has no project or sensitivity of its own, so "
+    "its messages inherit the workspace's and any project member with that "
+    "sensitivity reads them through search and slack_thread; hiding the channel "
+    "rows doesn't cover the messages. Needs a restrictive default for those rows",
+)
+def test_a_co_member_in_the_workspace_project_cannot_read_another_users_dm(db_session, user, shared):
+    project = Project(title="Team", state="open")
+    team = Team(name="T", slug="t", is_active=True)
+    user.person = Person(identifier="member", display_name="Member")
+    db_session.add_all([project, team])
+    db_session.flush()
+    db_session.execute(team_members.insert().values(team_id=team.id, person_id=user.person.id, role="member"))
+    db_session.execute(project_teams.insert().values(project_id=project.id, team_id=team.id))
+    db_session.get(SlackWorkspace, WORKSPACE).project_id = project.id
+    public_message = SlackMessage(
+        modality="message",
+        sha256=unique_sha256("public"),
+        content="lunch at noon",
+        message_ts="1731200000.000200",
+        channel_id="C0GENERAL",
+        workspace_id=WORKSPACE,
+        slack_app_id=shared["message"].slack_app_id,
+        author_id="U_VICTIM",
+    )
+    db_session.add(public_message)
+    db_session.flush()
+    for message in (public_message, shared["message"]):
+        db_session.refresh(message)
+        message.apply_inherited_access_control()
+    db_session.commit()
+
+    roles = get_user_project_roles(db_session, user)
+    readable = (user_can_access(user, public_message, roles), user_can_access(user, shared["message"], roles))
+
+    assert readable == (True, False)
