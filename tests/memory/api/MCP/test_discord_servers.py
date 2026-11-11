@@ -23,6 +23,7 @@ from memory.common.db import connection as db_connection
 from memory.common.db.models import (
     APIKey,
     DiscordBot,
+    DiscordBotServer,
     DiscordChannel,
     DiscordMessage,
     DiscordServer,
@@ -539,6 +540,63 @@ async def test_send_message_rejects_a_bot_outside_the_channels_server(two_bot_ow
     with mcp_auth_context(two_bot_owner.token):
         with pytest.raises(ValueError, match="not in"):
             await get_fn(send_message)(message="hi", channel_name="mine-general", bot_id="103")
+
+    sent[0].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_send_message_names_the_dm_when_the_bot_is_not_the_dms(db_session, two_bot_owner, sent):
+    db_session.add(DiscordChannel(id=9996, name="my dm", channel_type="dm", bot_id=101))
+    db_session.commit()
+
+    with mcp_auth_context(two_bot_owner.token):
+        with pytest.raises(ValueError, match="^Bot 103 is not the bot of this DM$"):
+            await get_fn(send_message)(message="hi", channel_id="9996", bot_id="103")
+
+    sent[0].assert_not_called()
+
+
+@pytest.fixture
+def member_of_theirs(db_session, two_owners):
+    """The caller's bot 101 has also joined server 1002, which the other user's bot 102 owns."""
+    db_session.add(DiscordBotServer(bot_id=101, server_id=1002))
+    db_session.commit()
+    return two_owners
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bot_id", [None, "101"])
+async def test_send_message_uses_the_callers_bot_in_another_users_server(member_of_theirs, sent, bot_id):
+    with mcp_auth_context(member_of_theirs.token):
+        result = await get_fn(send_message)(message="hi", channel_name="theirs-general", bot_id=bot_id)
+
+    assert (result["success"], sent[0].call_args.args[0]) == (True, 101)
+
+
+@pytest.mark.asyncio
+async def test_send_message_refuses_another_users_bot(member_of_theirs, sent):
+    with mcp_auth_context(member_of_theirs.token):
+        with pytest.raises(ValueError, match="don't have access to bot 102"):
+            await get_fn(send_message)(message="hi", channel_name="theirs-general", bot_id="102")
+
+    sent[0].assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "channel_id, where", [("10021", "is in this channel's server"), ("9997", "holds this DM")]
+)
+async def test_send_message_never_borrows_a_bot_the_caller_does_not_own(
+    db_session, two_owners, admin_user_with_session, sent, channel_id, where
+):
+    """An admin sees every channel, but owns no bot in server 1002 or the DM held by bot 102."""
+    db_session.add(DiscordChannel(id=9997, name="their dm", channel_type="dm", bot_id=102))
+    db_session.commit()
+    _, session = admin_user_with_session
+
+    with mcp_auth_context(session.token):
+        with pytest.raises(ValueError, match=f"^None of your Discord bots {where}$"):
+            await get_fn(send_message)(message="hi", channel_id=channel_id)
 
     sent[0].assert_not_called()
 

@@ -192,6 +192,18 @@ def parse_github_date(date_str: str | None) -> datetime | None:
     return parsed
 
 
+def parse_required_github_date(date_str: str | None) -> datetime:
+    """Parse a date GitHub always sends (``createdAt``, ``updatedAt``).
+
+    Raises ``ValueError`` when it is missing or unparseable, so a malformed
+    payload fails at parse time rather than as NULL in a NOT NULL column.
+    """
+    parsed = parse_github_date(date_str)
+    if parsed is None:
+        raise ValueError("Missing required GitHub date")
+    return parsed
+
+
 def compute_content_hash(body: str, comments: list[GithubComment]) -> str:
     """Compute SHA256 hash of issue/PR content for change detection."""
     content_parts = [body or ""]

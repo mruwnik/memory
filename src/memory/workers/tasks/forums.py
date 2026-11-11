@@ -277,7 +277,7 @@ def queue_comment_fetches(
 ) -> None:
     # Staggered so the fetches keep the cooldown between LW requests however many workers run them.
     for i, (post_id, guid, live_count) in enumerate(candidates):
-        sync_lesswrong_comments.apply_async(  # type: ignore[attr-defined]
+        sync_lesswrong_comments.apply_async(
             args=[post_id, guid, live_count, min_karma], countdown=i * cooldown
         )
 
@@ -368,7 +368,7 @@ def run_sync(
                     updated_posts += 1
             else:
                 new_posts += 1
-                sync_lesswrong_post.delay(post, tags)  # type: ignore[attr-defined]
+                sync_lesswrong_post.delay(post, tags)
 
             if posts_num >= max_items:
                 break

@@ -47,10 +47,6 @@ from memory.common.celery_app import (
     UPDATE_SLACK_REACTIONS,
 )
 from memory.common.celery_app import app as celery_app
-from memory.common.data_source_access import (
-    enqueue_access_control_propagation,
-    mark_access_control_changed_if_needed,
-)
 from memory.common.db.connection import get_session
 from memory.common.db.models import User
 from memory.common.db.models.events import NO_ITEM_TYPE, NOT_COLLECTED, REJECTED, STORED, record_raw_event
@@ -689,7 +685,6 @@ def update_workspace(
     """
     workspace = get_workspace_for_settings(db, workspace_id, user)
 
-    snap_pid, snap_sens = workspace.project_id, workspace.sensitivity
     if updates.collect_messages is not None:
         workspace.collect_messages = updates.collect_messages
     if updates.event_reconcile_interval_seconds is not None:
@@ -704,17 +699,8 @@ def update_workspace(
         workspace.sensitivity = updates.sensitivity
     apply_llm_key(db, user, workspace, updates.llm_key)
 
-    access_changed = mark_access_control_changed_if_needed(
-        workspace,
-        snapshot_project_id=snap_pid,
-        snapshot_sensitivity=snap_sens,
-    )
-
     db.commit()
     db.refresh(workspace)
-
-    if access_changed:
-        enqueue_access_control_propagation("slack_workspace", workspace)
 
     return workspace_to_response(workspace, db, user)
 
@@ -849,7 +835,6 @@ def update_channel(
     # Verify user has access to the workspace
     get_workspace_with_access(db, channel.workspace_id, user)
 
-    snap_pid, snap_sens = channel.project_id, channel.sensitivity
     if "collect_messages" in updates.model_fields_set:
         channel.collect_messages = updates.collect_messages
     if "project_id" in updates.model_fields_set:
@@ -859,17 +844,8 @@ def update_channel(
     if updates.sensitivity is not None:
         channel.sensitivity = updates.sensitivity
 
-    access_changed = mark_access_control_changed_if_needed(
-        channel,
-        snapshot_project_id=snap_pid,
-        snapshot_sensitivity=snap_sens,
-    )
-
     db.commit()
     db.refresh(channel)
-
-    if access_changed:
-        enqueue_access_control_propagation("slack_channel", channel)
 
     return channel_to_response(channel)
 

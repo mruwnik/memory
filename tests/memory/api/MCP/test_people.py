@@ -1,5 +1,6 @@
 """Tests for People MCP tools."""
 
+from datetime import date
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
@@ -10,6 +11,7 @@ from memory.api.MCP.servers.people import (
     fetch,
     list_all,
     merge,
+    REPOINTED_PERSON_COLUMNS,
     tidbit_add,
     tidbit_delete,
     tidbit_list,
@@ -17,8 +19,18 @@ from memory.api.MCP.servers.people import (
     upsert,
 )
 from memory.common.db import connection as db_connection
-from memory.common.db.models import Person, PersonTidbit
+from memory.common.db.models import (
+    Base,
+    BeeperAccount,
+    BeeperNetwork,
+    BeeperParticipant,
+    Deadline,
+    GithubItem,
+    Person,
+    PersonTidbit,
+)
 from memory.common.db.models.discord import DiscordUser
+from memory.common.db.models.sources import TranscriptAccount, transcript_account_task_people
 from memory.common.content_processing import create_content_hash
 from memory.common.notify import user_info_for
 from memory.common.people import find_person_by_slack_id
@@ -1566,6 +1578,123 @@ async def test_merge_three_people(db_session, admin_session, sample_people):
     # Verify primary has contact info from all
     assert "field1" in primary.contact_info
     assert "field2" in primary.contact_info
+
+
+def person_fk_columns() -> set[tuple[str, str]]:
+    return {
+        (table.name, fk.parent.name)
+        for table in Base.metadata.sorted_tables
+        for fk in table.foreign_keys
+        if fk.column.table.name == "people"
+    }
+
+
+def test_merge_covers_every_reference_to_people():
+    """Every FK to people is either repointed or merged by a link-table helper,
+    so a new one can't be silently nulled or cascaded away by a merge."""
+    repointed = {
+        (column.property.columns[0].table.name, column.property.columns[0].name)
+        for column in REPOINTED_PERSON_COLUMNS.values()
+    }
+    link_tables = {
+        ("team_members", "person_id"),
+        ("source_item_people", "person_id"),
+        ("transcript_account_task_people", "person_id"),
+    }
+    assert person_fk_columns() == repointed | link_tables
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "picked, expected",
+    [
+        (["alice_dup"], {"alice_chen"}),
+        (["alice_chen", "alice_dup"], {"alice_chen"}),
+        (["bob_smith", "alice_dup"], {"alice_chen", "bob_smith"}),
+        (["bob_smith"], {"bob_smith"}),
+    ],
+)
+async def test_merge_people_moves_transcript_task_picks(
+    db_session, admin_session, admin_user, sample_people, picked, expected
+):
+    """A transcript account that picks the merged-away person picks the
+    primary instead; an account left with no picks would task everyone."""
+    duplicate = Person(identifier="alice_dup", display_name="Alice Dup")
+    account = TranscriptAccount(user_id=admin_user.id, name="FF", provider="fireflies")
+    db_session.add_all([duplicate, account])
+    db_session.flush()
+    people = {p.identifier: p.id for p in db_session.query(Person)}
+    db_session.execute(
+        transcript_account_task_people.insert(),
+        [{"transcript_account_id": account.id, "person_id": people[i]} for i in picked],
+    )
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.token):
+        result = await get_fn(merge)(
+            identifiers=["alice_chen", "alice_dup"], primary_identifier="alice_chen"
+        )
+
+    rows = db_session.execute(
+        transcript_account_task_people.select().where(
+            transcript_account_task_people.c.transcript_account_id == account.id
+        )
+    ).fetchall()
+    by_id = {person_id: identifier for identifier, person_id in people.items()}
+    assert result["success"] is True
+    assert {by_id[row.person_id] for row in rows} == expected
+
+
+def make_deadline(person_id: int, creator_id: int) -> Deadline:
+    return Deadline(
+        title="Grant", date=date(2026, 6, 30), sensitivity="basic",
+        creator_id=creator_id, owner_id=person_id,
+    )
+
+
+def make_beeper_participant(person_id: int, creator_id: int) -> BeeperParticipant:
+    account = BeeperAccount(
+        created_by_user_id=creator_id, server_url="https://beeper.test", setup_state="ready",
+    )
+    network = BeeperNetwork(account=account, network_account_id="slackgo.1", network="Slack")
+    return BeeperParticipant(network=network, participant_id="@alice:beeper.local", person_id=person_id)
+
+
+def make_github_item(person_id: int, creator_id: int) -> GithubItem:
+    return GithubItem(
+        modality="github", sha256=b"m" * 32, kind="issue", repo_path="o/r", number=1,
+        author="alice", author_person_id=person_id, size=5, mime_type="text/markdown",
+        content="hello",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "make_row, column, stat",
+    [
+        (make_deadline, Deadline.owner_id, "deadlines_moved"),
+        (make_beeper_participant, BeeperParticipant.person_id, "beeper_participants_moved"),
+        (make_github_item, GithubItem.author_person_id, "github_items_moved"),
+    ],
+)
+async def test_merge_repoints_person_reference(
+    db_session, admin_session, sample_people, make_row, column, stat
+):
+    duplicate = Person(identifier="alice_dup", display_name="Alice Dup", aliases=[], contact_info={})
+    db_session.add(duplicate)
+    db_session.flush()
+    row = make_row(duplicate.id, admin_session.user_id)
+    db_session.add(row)
+    db_session.commit()
+    row_id = row.id
+    alice_id = db_session.query(Person.id).filter(Person.identifier == "alice_chen").scalar()
+
+    with mcp_auth_context(admin_session.token):
+        result = await get_fn(merge)(identifiers=["alice_chen", "alice_dup"])
+
+    db_session.expire_all()
+    owner = db_session.query(column).filter(column.class_.id == row_id).scalar()
+    assert (owner, result["stats"].get(stat)) == (alice_id, 1)
 
 
 # =============================================================================

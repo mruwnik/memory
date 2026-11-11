@@ -149,7 +149,7 @@ def queue_generic_transcript(
         account.last_sync_at = datetime.now(timezone.utc)
         db.commit()
 
-    # Meeting and job dedupe is global, so a sender's ids are namespaced to
+    # Meeting dedupe is global, so a sender's ids are namespaced to
     # the account to stop them colliding with (or squatting) anyone else's.
     external_id = f"push:{account.id}:{data.external_id}"
     result = dispatch_job(

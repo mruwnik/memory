@@ -87,7 +87,7 @@ def get_job_by_external_id(
     This is useful for checking the status of a job when you only have
     the external_id you provided when creating it.
     """
-    job = job_utils.get_job_by_external_id(db, external_id, job_type)
+    job = job_utils.get_job_by_external_id(db, external_id, job_type, user_id=user.id)
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")

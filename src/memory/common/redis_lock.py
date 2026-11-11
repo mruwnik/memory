@@ -28,7 +28,7 @@ from dataclasses import dataclass
 
 import redis
 
-from memory.common import settings
+from memory.common.redis_pool import get_redis
 
 logger = logging.getLogger(__name__)
 
@@ -105,9 +105,9 @@ def distributed_lock(
         ttl_seconds: Auto-expire after this long even if the holder
             crashes without releasing.
         client: Optional pre-built Redis client (mostly for tests). If
-            omitted a fresh client is created against ``REDIS_URL``.
+            omitted the shared pool's client is used.
     """
-    redis_client = client or redis.from_url(settings.REDIS_URL)
+    redis_client = client or get_redis()
     token = str(uuid.uuid4())
     acquired = bool(redis_client.set(name, token, nx=True, ex=ttl_seconds))
     if not acquired:

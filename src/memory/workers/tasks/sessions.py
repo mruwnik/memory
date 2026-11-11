@@ -230,7 +230,7 @@ def summarize_stale_sessions() -> dict:
 
             # Queue summarization task
             try:
-                summarize_session.delay(str(session.id))  # type: ignore[attr-defined]
+                summarize_session.delay(str(session.id))
                 processed += 1
             except Exception:
                 logger.exception(f"Failed to queue summarization for {session.id}")
@@ -419,7 +419,7 @@ def index_stale_sessions() -> dict:
                 skipped += 1
                 continue
 
-            index_session.delay(str(session_id))  # type: ignore[attr-defined]
+            index_session.delay(str(session_id))
             queued += 1
 
     logger.info(f"Session indexing check: {queued} queued, {skipped} skipped")

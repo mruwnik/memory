@@ -47,14 +47,6 @@ def module_config_errors(enable: frozenset[str], disable: frozenset[str]) -> lis
     return errors
 
 
-def resolve_modules(
-    enable: frozenset[str], disable: frozenset[str], defaults: dict[str, bool] = MODULES
-) -> frozenset[str]:
-    """Bad names are left to `module_config_errors`, which stops the process at startup."""
-    on = {name for name, default in defaults.items() if default}
-    return frozenset(name for name in (on | enable) - disable if name in defaults)
-
-
 def servers_disabled(enabled: frozenset[str]) -> set[str]:
     return {
         server

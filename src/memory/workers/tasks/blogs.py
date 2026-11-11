@@ -181,7 +181,7 @@ def sync_article_feed(feed_id: int) -> dict:
 
         new_urls += pop_due_entries(session, feed.id, now)
         feed_tags = list(feed.tags or [])
-        task_ids = [sync_webpage.delay(url, feed_tags, feed.id).id for url in new_urls]  # type: ignore[attr-defined]
+        task_ids = [sync_webpage.delay(url, feed_tags, feed.id).id for url in new_urls]
 
         feed.last_sync_at = now
         feed.record_sync(error)
@@ -300,7 +300,7 @@ def sync_website_archive(
             if existing:
                 continue
 
-            task_ids.append(sync_webpage.delay(feed_item.url, list(tags), feed_id).id)  # type: ignore[attr-defined]
+            task_ids.append(sync_webpage.delay(feed_item.url, list(tags), feed_id).id)
             new_articles += 1
 
             logger.info(f"Scheduled sync for: {feed_item.title} ({feed_item.url})")

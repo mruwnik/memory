@@ -225,7 +225,7 @@ def queue_doc_sync(
     """
     version = {"id": meta["id"], "modifiedTime": meta.get("modifiedTime")}
     external_id = f"gdrive:{folder_id}:{version['id']}:{version['modifiedTime']}"
-    previous = get_job_by_external_id(session, external_id, DOC_SYNC_JOB)
+    previous = get_job_by_external_id(session, external_id, DOC_SYNC_JOB, user_id=None)
     previous_status = previous.status if previous else None
     if previous_status in (JobStatus.PENDING.value, JobStatus.PROCESSING.value):
         return False

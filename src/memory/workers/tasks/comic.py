@@ -81,7 +81,7 @@ def fetch_new_comics(
 
     for url in new_urls:
         data = parser(url) | {"author": base_url, "url": url}
-        sync_comic.delay(**data)  # type: ignore
+        sync_comic.delay(**data)
     return new_urls
 
 
@@ -165,8 +165,8 @@ def sync_xkcd() -> set[str]:
 @tracked_task
 def sync_all_comics():
     """Synchronize all active comics."""
-    sync_smbc.delay()  # type: ignore
-    sync_xkcd.delay()  # type: ignore
+    sync_smbc.delay()
+    sync_xkcd.delay()
     return {"status": "dispatched", "sources": ["smbc", "xkcd"]}
 
 
@@ -195,7 +195,7 @@ def trigger_comic_sync():
             data = comics.extract_smbc(next_url) | {
                 "author": "https://www.smbc-comics.com/"
             }
-            sync_comic.delay(**data)  # type: ignore
+            sync_comic.delay(**data)
         except Exception:
             logger.exception(f"failed to sync SMBC comic {len(urls)}")
         urls.append(next_url)
@@ -207,6 +207,6 @@ def trigger_comic_sync():
         url = f"{BASE_XKCD_URL}/{i}"
         try:
             data = comics.extract_xkcd(url) | {"author": "https://xkcd.com/"}
-            sync_comic.delay(**data)  # type: ignore
+            sync_comic.delay(**data)
         except Exception:
             logger.exception(f"failed to sync xkcd comic {i}")

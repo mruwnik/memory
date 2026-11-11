@@ -143,7 +143,7 @@ def backfill_channel(channel_id: int, before_id: int | None = None) -> dict[str,
         # Continue from the oldest id fetched this run; short countdown, lock
         # released. Carrying the cursor in task args (not re-reading MIN) keeps
         # progress independent of the async ADD queue.
-        backfill_channel.apply_async(  # type: ignore[attr-defined]
+        backfill_channel.apply_async(
             args=[channel_id],
             kwargs={"before_id": result["oldest_message_id"]},
             countdown=5,
@@ -191,11 +191,11 @@ def schedule_discord_backfills() -> dict[str, Any]:
     jitter = settings.DISCORD_BACKFILL_JITTER_SECONDS
     for channel_id, channel_type in channels:
         countdown = random.randint(0, jitter) if jitter > 0 else 0
-        backfill_channel.apply_async(  # type: ignore[attr-defined]
+        backfill_channel.apply_async(
             args=[channel_id], countdown=countdown
         )
         if channel_type in THREAD_PARENT_TYPES:
-            discover_threads.apply_async(  # type: ignore[attr-defined]
+            discover_threads.apply_async(
                 args=[channel_id], countdown=countdown
             )
     return {"status": "ok", "scheduled": len(channels)}

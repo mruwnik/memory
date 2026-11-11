@@ -10,13 +10,13 @@ from contextlib import contextmanager, ExitStack
 from pathlib import Path
 
 import boto3
-import redis
 from cryptography.fernet import Fernet
 
 from memory.common import settings
 from memory.common.celery_app import app, BACKUP_PATH, BACKUP_ALL
 from memory.common.crypto import derive_encryption_key
 from memory.common.jobs import tracked_task
+from memory.common.redis_pool import get_redis
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +95,7 @@ def backup_lock(lock_name: str = "backup_all"):
     Uses a unique lock value to prevent releasing another process's lock
     if this lock expires during a long-running operation.
     """
-    redis_client = redis.from_url(settings.REDIS_URL)
+    redis_client = get_redis()
     lock_key = f"memory:lock:{lock_name}"
     lock_value = str(uuid.uuid4())
 

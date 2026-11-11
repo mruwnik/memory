@@ -35,6 +35,7 @@ from memory.common.db.models.source_item import Chunk, SourceItem
 from memory.workers.tasks import meetings
 from memory.common.content_processing import create_content_hash
 from memory.common.people import find_or_create_person, make_identifier
+from memory.common.transcripts import meeting_external_id
 from tests.conftest import unique_sha256
 from tests.memory.agents.fakes import key_rejected, submitted
 
@@ -1336,8 +1337,13 @@ def test_cleanup_stuck_meetings_leaves_the_rerun_it_started(
     assert (meeting.extraction_status, len(reprocesses_sent(no_celery_dispatch))) == ("retrying", 1)
 
 
-def open_job(db, external_id):
-    job = PendingJob(job_type=JobType.MEETING.value, external_id=external_id, status=JobStatus.PROCESSING.value)
+def open_job(db, external_id, user_id=None):
+    job = PendingJob(
+        job_type=JobType.MEETING.value,
+        external_id=external_id,
+        user_id=user_id,
+        status=JobStatus.PROCESSING.value,
+    )
     db.add(job)
     db.commit()
     return job
@@ -1349,7 +1355,7 @@ def test_cleanup_stuck_meetings_reruns_a_lost_meeting_under_its_job(
     scripted_llm.script = [submitted(EXTRACTED)]
     meeting = meeting_for(mock_make_session, regular_user.id)
     meeting.external_id, meeting.extraction_status = "ff-1", "processing"
-    job = open_job(mock_make_session, "ff-1")
+    job = open_job(mock_make_session, "ff-1", regular_user.id)
     backdate(mock_make_session, meeting, 2)
 
     meetings.cleanup_stuck_meetings()
@@ -1365,13 +1371,56 @@ def test_cleanup_stuck_meetings_fails_the_job_of_a_meeting_it_gives_up_on(
 ):
     meeting = meeting_for(db_session, regular_user.id)
     meeting.external_id, meeting.extraction_status = "ff-1", "retrying"
-    job = open_job(db_session, "ff-1")
+    job = open_job(db_session, "ff-1", regular_user.id)
     backdate(db_session, meeting, 2)
 
     meetings.cleanup_stuck_meetings()
 
     db_session.refresh(job)
     assert (job.status, meeting.extraction_status) == ("failed", "failed")
+
+
+def test_cleanup_stuck_meetings_fails_the_job_of_a_submitted_meeting(regular_user, admin_user, db_session, no_celery_dispatch):
+    meeting = meeting_for(db_session, regular_user.id)
+    meeting.external_id = meeting_external_id(regular_user.id, "ff-1")
+    meeting.extraction_status = "retrying"
+    job = open_job(db_session, "ff-1", regular_user.id)
+    decoy = open_job(db_session, "ff-1", admin_user.id)
+    backdate(db_session, meeting, 2)
+
+    meetings.cleanup_stuck_meetings()
+
+    db_session.refresh(job)
+    db_session.refresh(decoy)
+    assert (job.status, decoy.status) == ("failed", "processing")
+
+
+def push_account(meeting, user):
+    account = TranscriptAccount(user_id=user.id, name="Push", provider="generic")
+    meeting.transcript_account = account
+    return account
+
+
+def no_account(meeting, user):
+    return None
+
+
+@pytest.mark.parametrize("attach", [push_account, no_account])
+def test_cleanup_stuck_meetings_leaves_another_users_job_with_the_same_id(
+    attach, regular_user, admin_user, db_session, no_celery_dispatch
+):
+    meeting = meeting_for(db_session, regular_user.id)
+    attach(meeting, regular_user)
+    meeting.external_id, meeting.extraction_status = "push:3:x", "retrying"
+    job = open_job(db_session, "push:3:x", regular_user.id)
+    squatter = open_job(db_session, "push:3:x", admin_user.id)
+    backdate(db_session, meeting, 2)
+
+    meetings.cleanup_stuck_meetings()
+
+    db_session.refresh(job)
+    db_session.refresh(squatter)
+    assert (job.status, squatter.status) == ("failed", "processing")
 
 
 def test_process_meeting_replace_updates_the_stored_meeting(

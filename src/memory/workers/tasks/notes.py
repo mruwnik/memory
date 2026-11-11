@@ -10,7 +10,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, NamedTuple, cast
 
-import redis
 from sqlalchemy.exc import IntegrityError
 
 from memory.common import instance_settings, paths, settings
@@ -46,6 +45,7 @@ from memory.common.notes_git import (
     token_for_remote,
 )
 from memory.common.redis_lock import distributed_lock
+from memory.common.redis_pool import get_redis
 from memory.common.notes_ssh import ssh_command
 from memory.workers.verification import delete_orphaned_item
 
@@ -118,7 +118,7 @@ def git_notes_lock(operation: str = "sync", wait_seconds: float = GIT_NOTES_LOCK
     wait runs out.
     """
     lock_key = f"memory:lock:git_notes:{operation}"
-    client = redis.from_url(settings.REDIS_URL)
+    client = get_redis()
     deadline = time.monotonic() + wait_seconds
     while True:
         with distributed_lock(lock_key, GIT_NOTES_LOCK_TIMEOUT, client=client) as lock:
@@ -316,22 +316,22 @@ def reindex_notes(repo_root: pathlib.Path, filenames: list[str]):
     # Not via to_db_filename(path): that resolves symlinks, which reindex_note must refuse.
     prefix = paths.to_db_filename(repo_root)
     for filename in filenames:
-        reindex_note.delay(f"{prefix}/{filename}")  # type: ignore[attr-defined]
+        reindex_note.delay(f"{prefix}/{filename}")
 
 
 def mark_pending_write(filename: str, sha256: bytes):
     key = PENDING_WRITE_KEY.format(filename=filename)
-    redis.from_url(settings.REDIS_URL).set(key, sha256.hex(), ex=PENDING_WRITE_TTL)
+    get_redis().set(key, sha256.hex(), ex=PENDING_WRITE_TTL)
 
 
 def clear_pending_write(filename: str, sha256: bytes):
     key = PENDING_WRITE_KEY.format(filename=filename)
-    redis.from_url(settings.REDIS_URL).eval(CLEAR_PENDING_SCRIPT, 1, key, sha256.hex())  # type: ignore[arg-type]
+    get_redis().eval(CLEAR_PENDING_SCRIPT, 1, key, sha256.hex())  # type: ignore[arg-type]
 
 
 def write_pending(filename: str) -> bool:
     key = PENDING_WRITE_KEY.format(filename=filename)
-    return bool(redis.from_url(settings.REDIS_URL).exists(key))
+    return bool(get_redis().exists(key))
 
 
 def read_vault_note(path: pathlib.Path) -> str | None:
@@ -352,7 +352,7 @@ def record_git_sync(failed_step: str | None):
         "hint": GIT_SYNC_HINTS.get(failed_step or ""),
         "at": datetime.now(timezone.utc).isoformat(),
     }
-    redis.from_url(settings.REDIS_URL).set(GIT_SYNC_STATUS_KEY, json.dumps(status))
+    get_redis().set(GIT_SYNC_STATUS_KEY, json.dumps(status))
 
 
 class VaultBusy(RuntimeError):
@@ -363,7 +363,7 @@ class VaultBusy(RuntimeError):
 
 def indexed_commit(repo_root: pathlib.Path) -> str | None:
     """The vault commit whose notes are all indexed, if it still exists."""
-    commit = redis.from_url(settings.REDIS_URL).get(GIT_INDEXED_COMMIT_KEY)
+    commit = get_redis().get(GIT_INDEXED_COMMIT_KEY)
     if not commit:
         return None
     commit = commit.decode() if isinstance(commit, bytes) else str(commit)
@@ -440,7 +440,7 @@ def git_tracking(repo_root: pathlib.Path, commit_message: str = "Sync note") -> 
         if upstream and not sync.failures and (step := push_upstream(repo_root, upstream)):
             sync.failures.append(step)
         record_git_sync(sync.failed_step)
-        redis.from_url(settings.REDIS_URL).set(GIT_INDEXED_COMMIT_KEY, head_commit(repo_root))
+        get_redis().set(GIT_INDEXED_COMMIT_KEY, head_commit(repo_root))
 
 
 def violates(error: IntegrityError, constraint: str) -> bool:
@@ -496,7 +496,7 @@ def write_note_file_or_defer(note_id: int, filename: str, sha256: bytes, commit_
         write_note_file(note_id, sha256, commit_message)
     except (VaultBusy, GitLockTimeout):
         logger.warning("Notes vault busy: deferring the file write of note %s", note_id)
-        write_note_file_when_free.apply_async(  # type: ignore[attr-defined]
+        write_note_file_when_free.apply_async(
             (note_id, filename, sha256.hex(), commit_message), countdown=vault_busy_backoff(0)
         )
     except Exception:
@@ -833,10 +833,10 @@ def sync_notes_when_due():
     last_at = datetime.fromisoformat(status["at"]) if status else None
     if not sync_due(last_at, interval, datetime.now(timezone.utc)):
         return {"status": "not_due"}
-    client = redis.from_url(settings.REDIS_URL)
+    client = get_redis()
     if not client.set(SYNC_QUEUED_KEY, "1", nx=True, ex=min(interval, SYNC_QUEUED_TTL)):
         return {"status": "already_queued"}
-    track_git_changes.delay()  # type: ignore[attr-defined]
+    track_git_changes.delay()
     return {"status": "queued"}
 
 

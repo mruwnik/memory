@@ -120,19 +120,27 @@ def get_job_by_external_id(
     session: DBSession,
     external_id: str,
     job_type: str | None = None,
+    *,
+    user_id: int | None,
 ) -> PendingJob | None:
     """
-    Get a job by external ID, returning the most recent if multiple exist.
+    Get a user's job by external ID, returning the most recent if multiple exist.
+
+    Idempotency keys belong to whoever submitted them, so one user's key
+    never matches (or reveals) another user's job.
 
     Args:
         session: Database session
         external_id: Client-provided idempotency key
         job_type: Optionally filter by job type
+        user_id: The submitting user; None matches jobs without a user
 
     Returns:
         Most recent PendingJob with the external_id, or None if not found
     """
-    query = session.query(PendingJob).filter(PendingJob.external_id == external_id)
+    query = session.query(PendingJob).filter(
+        PendingJob.external_id == external_id, PendingJob.user_id == user_id
+    )
     if job_type:
         query = query.filter(PendingJob.job_type == job_type)
     return query.order_by(PendingJob.created_at.desc()).first()
@@ -335,6 +343,7 @@ def dispatch_job(
             session,
             external_id,
             job_type.value if isinstance(job_type, JobType) else job_type,
+            user_id=user_id,
         )
         if existing:
             # Allow resubmission if previous job failed

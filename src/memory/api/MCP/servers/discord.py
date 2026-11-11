@@ -29,7 +29,7 @@ from memory.common.scopes import (
     has_scope,
 )
 from memory.common.db.connection import DBSession, make_session
-from memory.common.db.models import DiscordBot, DiscordChannel, DiscordMessage, DiscordServer, DiscordUser
+from memory.common.db.models import DiscordBot, DiscordChannel, DiscordMessage, DiscordUser
 from memory.common.db.models.discord import DM_CHANNEL_TYPES
 from memory.common.people import discord_ids, find_person
 from memory.common.reactions import reaction_counts
@@ -37,6 +37,8 @@ from memory.common.discord_data import (
     caller_can_see_discord_user,
     fetch_servers,
     find_visible_channel,
+    get_user_bots,
+    server_bot_ids,
     visible_channels,
 )
 
@@ -177,6 +179,23 @@ def resolve_bot(session: DBSession, bot_id: str | None) -> int:
     return _get_default_bot(session).id
 
 
+def channel_senders(session: DBSession, channel: DiscordChannel) -> list[int]:
+    """The caller's own bots that can post in ``channel``, the server's owning bot first.
+
+    A server channel takes the caller's bots verified in its server; a
+    serverless channel (a DM) takes its own bot, if the caller owns it.
+    """
+    user_id, _ = _get_user_and_bots(session)
+    own = [bot.id for bot in get_user_bots(session, user_id)]
+    if channel.server_id is None and channel.bot_id is None:
+        return own
+    if channel.server_id is None:
+        return [channel.bot_id] if channel.bot_id in own else []
+    members = server_bot_ids(session, own).get(channel.server_id, [])
+    owner = channel.server.bot_id if channel.server else None
+    return sorted(members, key=lambda bot_id: bot_id != owner)
+
+
 async def send_to_channel(
     session: DBSession,
     bot_id: str | None,
@@ -184,18 +203,22 @@ async def send_to_channel(
     channel_id: str | None,
     channel_name: str | None,
 ) -> dict[str, Any]:
-    """Send to a channel the caller can see, with the bot of the channel's server."""
+    """Send to a channel the caller can see, with one of the caller's bots in it."""
     channel = find_visible_channel(session, require_caller(session), channel_id, channel_name)
     target = str(channel.id)
-    server = session.get(DiscordServer, channel.server_id) if channel.server_id else None
-    server_bot = server.bot_id if server else None
+    senders = channel_senders(session, channel)
 
+    is_dm = channel.server_id is None
     if bot_id is not None:
         sender = resolve_bot(session, bot_id)
-        if server_bot is not None and sender != server_bot:
-            raise ValueError(f"Bot {bot_id} is not in this channel's server")
+        if sender not in senders:
+            where = "the bot of this DM" if is_dm else "in this channel's server"
+            raise ValueError(f"Bot {bot_id} is not {where}")
+    elif senders:
+        sender = senders[0]
     else:
-        sender = server_bot or channel.bot_id or resolve_bot(session, None)
+        where = "holds this DM" if is_dm else "is in this channel's server"
+        raise ValueError(f"None of your Discord bots {where}")
 
     success = await asyncio.to_thread(
         discord_client.send_to_channel, sender, target, message
@@ -302,7 +325,7 @@ async def send_message(
         channel_name: Discord channel name to send to (will search for it)
         user_id: Discord user ID (snowflake) to DM
         username: Discord username to DM (will search for it)
-        bot_id: Optional bot ID to send with; a channel defaults to its server's bot, a DM to your first bot
+        bot_id: Optional bot ID to send with, one of your own; a channel defaults to your bot in its server, a DM to your first bot
 
     Returns:
         Dict with success status and details

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from dateutil import parser as date_parser
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, and_, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import defer, selectinload
 
@@ -36,6 +36,7 @@ from memory.common.content_processing import (
     safe_task_execution,
 )
 from memory.common.jobs import tracked_task
+from memory.common.transcripts import submitted_external_id
 from memory.common.people import (
     contact_values,
     find_or_create_person,
@@ -1133,6 +1134,20 @@ def reprocess_meeting(
         return execute_meeting_processing(session, meeting, attendee_names, job_id)
 
 
+def job_key(meeting: Meeting) -> ColumnElement[bool]:
+    """Matches the meeting's owner's jobs whose idempotency key brought it in.
+
+    The owner is the transcript account's user, else the meeting's creator. A
+    meeting submitted to POST /meetings stores a namespaced id, while its job
+    keeps the submitter's own id.
+    """
+    account = meeting.transcript_account
+    owner = account.user_id if account else meeting.creator_id
+    stored = meeting.external_id or ""
+    key = (owner and submitted_external_id(owner, stored)) or stored
+    return and_(PendingJob.external_id == key, PendingJob.user_id == owner)
+
+
 def open_job(session: DBSession, meeting: Meeting) -> PendingJob | None:
     """The unfinished job that brought the meeting in, so its rerun closes it."""
     if not meeting.external_id:
@@ -1141,7 +1156,7 @@ def open_job(session: DBSession, meeting: Meeting) -> PendingJob | None:
         session.query(PendingJob)
         .filter(
             PendingJob.job_type == JobType.MEETING.value,
-            PendingJob.external_id == meeting.external_id,
+            job_key(meeting),
             PendingJob.status.in_((JobStatus.PENDING.value, JobStatus.PROCESSING.value)),
         )
         .order_by(PendingJob.id.desc())

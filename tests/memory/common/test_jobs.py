@@ -90,7 +90,7 @@ def test_get_job_not_found(db_session):
 def test_get_job_by_external_id(db_session, sample_job):
     """Test retrieving a job by external ID."""
     retrieved = job_utils.get_job_by_external_id(
-        db_session, sample_job.external_id
+        db_session, sample_job.external_id, user_id=None
     )
 
     assert retrieved is not None
@@ -101,22 +101,63 @@ def test_get_job_by_external_id_with_type_filter(db_session, sample_job):
     """Test retrieving a job by external ID with job type filter."""
     # Matching job type
     retrieved = job_utils.get_job_by_external_id(
-        db_session, sample_job.external_id, job_type=JobType.MEETING.value
+        db_session, sample_job.external_id, job_type=JobType.MEETING.value, user_id=None
     )
     assert retrieved is not None
 
     # Non-matching job type
     retrieved = job_utils.get_job_by_external_id(
-        db_session, sample_job.external_id, job_type=JobType.REPROCESS.value
+        db_session, sample_job.external_id, job_type=JobType.REPROCESS.value, user_id=None
     )
     assert retrieved is None
 
 
 def test_get_job_by_external_id_not_found(db_session):
     """Test retrieving a non-existent external ID."""
-    retrieved = job_utils.get_job_by_external_id(db_session, "nonexistent")
+    retrieved = job_utils.get_job_by_external_id(db_session, "nonexistent", user_id=None)
 
     assert retrieved is None
+
+
+@pytest.mark.parametrize("owner, found", [("submitter", True), ("other", False), (None, False)])
+def test_get_job_by_external_id_matches_only_the_submitters_jobs(
+    db_session, test_user, regular_user, owner, found
+):
+    users = {"submitter": test_user.id, "other": regular_user.id, None: None}
+    job = PendingJob(
+        job_type=JobType.MEETING.value, external_id="shared-key", params={}, user_id=users[owner]
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    retrieved = job_utils.get_job_by_external_id(db_session, "shared-key", user_id=test_user.id)
+
+    assert (retrieved is not None) is found
+
+
+@pytest.mark.parametrize(
+    "owner, is_new, result_owner", [("other", True, "submitter"), ("submitter", False, "submitter")]
+)
+def test_dispatch_job_dedupes_only_on_the_submitters_jobs(
+    db_session, test_user, regular_user, owner, is_new, result_owner
+):
+    users = {"submitter": test_user.id, "other": regular_user.id}
+    db_session.add(
+        PendingJob(job_type=JobType.MEETING.value, external_id="shared-key", params={}, user_id=users[owner])
+    )
+    db_session.commit()
+
+    with patch.object(job_utils.celery_app, "send_task", return_value=type("Task", (), {"id": "t"})()):
+        result = job_utils.dispatch_job(
+            session=db_session,
+            job_type=JobType.MEETING,
+            task_name="test.task",
+            task_kwargs={},
+            external_id="shared-key",
+            user_id=test_user.id,
+        )
+
+    assert (result.is_new, result.job.user_id) == (is_new, users[result_owner])
 
 
 def test_start_job(db_session, sample_job):
@@ -541,7 +582,7 @@ def test_get_job_by_external_id_returns_most_recent(db_session):
     db_session.commit()
 
     # Should return the most recent (job2)
-    retrieved = job_utils.get_job_by_external_id(db_session, "multi-job-ext")
+    retrieved = job_utils.get_job_by_external_id(db_session, "multi-job-ext", user_id=None)
 
     assert retrieved is not None
     assert retrieved.id == job2.id
