@@ -44,7 +44,11 @@ def limit(kind: int, value: int) -> None:
 
 
 def set_limits(request: dict[str, Any]) -> None:
-    limit(resource.RLIMIT_AS, request["memory_bytes"])
+    # macOS neither enforces an address space limit nor accepts one below what
+    # the interpreter has already reserved, so there the timeout and CPU limit
+    # are the only bounds on memory.
+    if sys.platform == "linux":
+        limit(resource.RLIMIT_AS, request["memory_bytes"])
     limit(resource.RLIMIT_CPU, request["cpu_seconds"])
     limit(resource.RLIMIT_FSIZE, request["output_bytes"])
     limit(resource.RLIMIT_CORE, 0)

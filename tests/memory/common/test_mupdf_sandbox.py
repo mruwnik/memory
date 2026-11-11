@@ -2,6 +2,7 @@ import gzip
 import pathlib
 import resource
 import subprocess
+import sys
 import time
 from contextlib import contextmanager
 from unittest.mock import patch
@@ -35,6 +36,8 @@ REFUSED_WITHIN_SECONDS = 60
 # Growth of this process's peak RSS handling one may cause; the documents above
 # cost hundreds of MiB to GBs when parsed in-process.
 PARENT_GROWTH_MIB = 100
+# The sandbox's memory cap is applied on Linux only (see mupdf_child.set_limits).
+LINUX_ONLY = pytest.mark.skipif(sys.platform != "linux", reason="memory limits are Linux-only")
 
 
 def peak_rss_mib() -> int:
@@ -54,7 +57,7 @@ def bounded_cost():
     [
         (ENDLESS_PDF, {"MUPDF_TIMEOUT_SECONDS": 2}),
         (ENDLESS_PDF, {"MUPDF_CPU_SECONDS": 1}),
-        (HUNGRY_PDF, {"MUPDF_MEMORY_BYTES": 256 * 1024 * 1024}),
+        pytest.param(HUNGRY_PDF, {"MUPDF_MEMORY_BYTES": 256 * 1024 * 1024}, marks=LINUX_ONLY),
     ],
     ids=["wall clock", "cpu", "memory"],
 )

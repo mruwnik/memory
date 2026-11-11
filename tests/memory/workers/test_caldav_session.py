@@ -1,4 +1,5 @@
 import ipaddress
+import socket
 import threading
 from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
@@ -14,6 +15,9 @@ from memory.workers.tasks.calendar import CalDAVSyncError, fetch_caldav_events
 Answer = tuple[int, dict[str, str], bytes]
 Handler = Callable[[BaseHTTPRequestHandler], Answer]
 ALLOWED = ipaddress.ip_address("127.0.0.1")
+# Loopback, but not ALLOWED. 127.0.0.2 would do on Linux, but macOS only
+# configures 127.0.0.1.
+INTERNAL = "::1"
 
 
 class OnlyFirstLoopback(NetworkPolicy):
@@ -22,6 +26,10 @@ class OnlyFirstLoopback(NetworkPolicy):
 
     def blocked(self, address, stack):
         return address != ALLOWED and super().blocked(address, stack)
+
+
+class IPv6HTTPServer(ThreadingHTTPServer):
+    address_family = socket.AF_INET6
 
 
 class Server:
@@ -51,8 +59,11 @@ class Server:
 
             do_GET = do_PROPFIND = do_REPORT = do_OPTIONS = handle_any
 
-        self.httpd = ThreadingHTTPServer((host, 0), H)
-        self.url = f"http://{host}:{self.httpd.server_address[1]}"
+        address = ipaddress.ip_address(host)
+        server_class = ThreadingHTTPServer if address.version == 4 else IPv6HTTPServer
+        self.httpd = server_class((host, 0), H)
+        netloc = host if address.version == 4 else f"[{host}]"
+        self.url = f"http://{netloc}:{self.httpd.server_address[1]}"
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
 
     def close(self):
@@ -114,7 +125,7 @@ def test_fetch_never_dials_a_non_public_server(servers):
 
 
 def test_a_calendar_home_on_another_host_is_never_dialed(servers):
-    internal = servers("127.0.0.2", secret_answer)
+    internal = servers(INTERNAL, secret_answer)
     dav = servers("127.0.0.1", home_set_answer(internal.url + "/latest/meta-data/"))
     client = pin_session(
         DAVClient(url=dav.url + "/", username="u", password="p"), OnlyFirstLoopback()
@@ -129,7 +140,7 @@ def test_a_calendar_home_on_another_host_is_never_dialed(servers):
 
 @pytest.mark.parametrize("status", [301, 302, 303, 307, 308])
 def test_a_redirect_to_another_host_is_never_followed(servers, status):
-    internal = servers("127.0.0.2", secret_answer)
+    internal = servers(INTERNAL, secret_answer)
     dav = servers(
         "127.0.0.1", lambda h: (status, {"Location": internal.url + "/x"}, b"")
     )

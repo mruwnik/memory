@@ -650,8 +650,9 @@ def notifications(no_celery_dispatch) -> list:
 
 
 def test_poll_finding_an_unpushed_change_marks_the_repo_and_notifies_once(
-    db_session, hooked_repo, qdrant, no_celery_dispatch
+    db_session, hooked_repo, qdrant, no_celery_dispatch, add_sending_email
 ):
+    add_sending_email(hooked_repo.account.user)
     github.sync_item(hooked_repo.id, pr_data(github_updated_at=ago(90)), {OWN})  # pushed
 
     poll(hooked_repo, title="Renamed", github_updated_at=ago(30))

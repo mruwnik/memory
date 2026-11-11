@@ -1,6 +1,7 @@
 import os
 import pathlib
 import stat
+import sys
 import time
 
 import pytest
@@ -110,6 +111,7 @@ def test_extract_docx_refuses_a_bomb_before_pandoc(
     assert os.path.getsize(docx_bomb) < 64 * 1024
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="the memory limit is Linux-only (see limit_memory)")
 def test_pandoc_runs_under_the_memory_limit(tmp_path, monkeypatch, docx):
     script = write_script(tmp_path / "pandoc", "ulimit -d")
     monkeypatch.setattr(extract, "PANDOC_PATH", script)

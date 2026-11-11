@@ -5,6 +5,7 @@ import os
 import resource
 import signal
 import subprocess
+import sys
 from typing import Sequence
 
 from memory.common import settings
@@ -37,9 +38,11 @@ def limit_memory() -> None:
     address range up front with a PROT_NONE mapping, which RLIMIT_AS counts.
     Since Linux 4.7 RLIMIT_DATA counts private writable mappings only, so it
     bounds the memory actually used without refusing that reservation.
+    macOS refuses an RLIMIT_DATA below what is already mapped, so there
+    pandoc runs uncapped.
     """
     limit = settings.PANDOC_MEMORY_LIMIT_BYTES
-    if limit > 0:
+    if limit > 0 and sys.platform == "linux":
         resource.setrlimit(resource.RLIMIT_DATA, (limit, limit))
 
 
