@@ -5,6 +5,9 @@ from datetime import datetime, timedelta, timezone
 from typing import cast
 from unittest.mock import Mock, call, patch
 
+import httpx
+from caldav.lib import error as caldav_error
+
 from memory.common.db.models import CalendarEvent, HumanUser, Person
 from memory.common.db.models.sources import CalendarAccount, GoogleAccount
 from memory.workers.tasks import calendar
@@ -673,6 +676,42 @@ def test_sync_calendar_account_google_success(
     assert result["status"] == "completed"
     assert result["events_synced"] == 1
     assert result["calendar_type"] == "google"
+
+
+@pytest.mark.parametrize(
+    "error, text",
+    [
+        (
+            caldav_error.AuthorizationError(
+                url="http://10.0.0.7:8080/p/", reason="internal admin console"
+            ),
+            "The CalDAV server refused the username or password",
+        ),
+        (
+            httpx.ConnectError("[Errno 111] Connection refused to 10.0.0.7:5432"),
+            "Could not reach the CalDAV server",
+        ),
+        (
+            caldav_error.NotFoundError("http://10.0.0.7:6333/collections 404"),
+            "The CalDAV server's response could not be used",
+        ),
+        (
+            ValueError("Document is empty, line 1, column 1 (10.0.0.7)"),
+            "The CalDAV server's response could not be used",
+        ),
+    ],
+)
+def test_caldav_sync_error_never_echoes_the_server(
+    caldav_account, db_session, error, text
+):
+    with (
+        patch("memory.workers.tasks.calendar.DAVClient", side_effect=error),
+        pytest.raises(Exception),
+    ):
+        calendar.sync_calendar_account(caldav_account.id)
+
+    db_session.refresh(caldav_account)
+    assert caldav_account.sync_error == text
 
 
 def test_sync_calendar_account_updates_timestamp(caldav_account, db_session):

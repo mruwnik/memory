@@ -579,7 +579,18 @@ class PinnedSyncTransport(httpx.BaseTransport):
         self.pool.close()
 
 
-def public_sync_http_client(*, timeout=30.0, max_response_bytes=100 * 1024 * 1024) -> httpx.Client:
-    """Synchronous counterpart of public_http_client with strict public-only policy."""
-    return httpx.Client(transport=PinnedSyncTransport(max_response_bytes),
-                        timeout=timeout, trust_env=False, follow_redirects=False)
+def public_sync_http_client(
+    *,
+    timeout=30.0,
+    max_response_bytes=100 * 1024 * 1024,
+    policy: NetworkPolicy | None = None,
+) -> httpx.Client:
+    """Synchronous counterpart of public_http_client, public-only unless a
+    `policy` says otherwise. Redirects httpx follows go through the same
+    transport, so every hop is checked."""
+    return httpx.Client(
+        transport=PinnedSyncTransport(max_response_bytes, PinnedSyncBackend(policy)),
+        timeout=timeout,
+        trust_env=False,
+        follow_redirects=False,
+    )
