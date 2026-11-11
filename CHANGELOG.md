@@ -93,6 +93,7 @@ a new, empty `## Unreleased` above it.
 - At most `MAX_EMBEDDED_CHUNKS_PER_ITEM` (new, default 500, about 250,000 tokens) text chunks of one item are embedded on the server's Voyage key: past it, the item's first chunks and its summary are kept, and a WARNING log names the item id. Before, a 25 MB plain-text email from anyone embedded about 12,000 chunks.
 - An admin's API key, run or OAuth token narrowed below `*` is no longer treated as admin when it lists a Slack workspace's channels (it sees what any member sees) or binds a GitHub repo another user tracks (GitHub must let its credentials read the repo).
 - A Slack workspace member who isn't its owner sees the DMs and private channels their own token lists, besides its public channels, and may switch their collection off (`PATCH /slack/channels/{id}` with `collect_messages: false`; the web UI shows a Stop collecting button). Channel listings carry `can_switch_off`. Memberships are recorded from each workspace's next channel sync.
+- A Slack app's or Discord bot's pushed deletes may confirm with another user's app or bot token at most `PUSH_CROSS_TOKEN_READS_PER_MINUTE` (new, default 30) times a minute; past it they are ignored and the periodic sync catches real deletes. A Slack confirmation on another user's token no longer waits out a rate limit inside the task; the push is retried later. Before, one member's pushes could spend a co-member's Slack or Discord API quota without limit.
 ### Required env vars
 None
 

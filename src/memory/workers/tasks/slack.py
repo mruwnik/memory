@@ -54,7 +54,9 @@ from memory.common.db.models.slack import (
     SlackUserCredentials,
     SlackWorkspace,
 )
+from memory.common.rate_limit import cross_token_reads_allowed
 from memory.common.slack import (
+    MAX_RATE_LIMIT_RETRIES,
     SlackAPIError,
     SlackClient,
     get_channel_type,
@@ -1227,17 +1229,22 @@ UNREADABLE = ReadBack(readable=False, found=None)
 
 
 def read_as_app(
-    workspace_id: str, channel_id: str, slack_app_id: int, read: Callable[[SlackClient], dict | None]
+    workspace_id: str,
+    channel_id: str,
+    slack_app_id: int,
+    read: Callable[[SlackClient], dict | None],
+    rate_limit_retries: int = MAX_RATE_LIMIT_RETRIES,
 ) -> ReadBack:
     """Run ``read`` against Slack with the app's own token for the workspace.
     PushedMessageUnread when Slack is rate limiting or failing, so the push is
-    retried instead of dropped."""
+    retried instead of dropped; ``rate_limit_retries`` is how often a rate-limited
+    call waits in this task first."""
     with make_session() as session:
         credentials = get_workspace_credentials(session, workspace_id, slack_app_id)
         if not credentials or not credentials.access_token:
             return UNREADABLE
         try:
-            client = slack_client_for(credentials)
+            client = slack_client_for(credentials, rate_limit_retries)
         except SlackAPIError:
             return UNREADABLE
     try:
@@ -1254,11 +1261,20 @@ def read_as_app(
 
 
 def read_back(
-    workspace_id: str, channel_id: str, message_ts: str, thread_ts: str | None, slack_app_id: int
+    workspace_id: str,
+    channel_id: str,
+    message_ts: str,
+    thread_ts: str | None,
+    slack_app_id: int,
+    rate_limit_retries: int = MAX_RATE_LIMIT_RETRIES,
 ) -> ReadBack:
-    """Read the message a push names back with the pushing app's own token."""
+    """Read the message a push names back with the app's token."""
     return read_as_app(
-        workspace_id, channel_id, slack_app_id, lambda client: find_message(client, channel_id, message_ts, thread_ts)
+        workspace_id,
+        channel_id,
+        slack_app_id,
+        lambda client: find_message(client, channel_id, message_ts, thread_ts),
+        rate_limit_retries,
     )
 
 
@@ -1384,6 +1400,11 @@ def mark_slack_message_deleted(
     longer have the message (or only its tombstone). Removes the SlackMessage
     row, its Chunks and its Qdrant points. Message identity is
     ``(workspace_id, channel_id, message_ts)``.
+
+    Confirming with another app's token spends its owner's Slack quota, so the
+    pusher gets PUSH_CROSS_TOKEN_READS_PER_MINUTE such reads; past it the delete
+    is ignored. Such a read never waits out a rate limit in the task: the push
+    is retried later instead.
     """
     stored, thread_ts, confirmer = delete_confirmer(workspace_id, channel_id, message_ts, slack_app_id)
     if not stored:
@@ -1392,8 +1413,15 @@ def mark_slack_message_deleted(
     if confirmer is None:
         logger.info(f"No app may confirm the pushed delete of {message_ts} by Slack app {slack_app_id}; ignored")
         return {"status": "ignored", "message_ts": message_ts}
+    own_token = confirmer == slack_app_id
+    if not own_token and not cross_token_reads_allowed("slack", slack_app_id):
+        logger.info(f"Slack app {slack_app_id} is over its cross-token read budget; delete of {message_ts} ignored")
+        return {"status": "throttled", "message_ts": message_ts}
     try:
-        seen = read_back(workspace_id, channel_id, message_ts, thread_ts, confirmer)
+        seen = read_back(
+            workspace_id, channel_id, message_ts, thread_ts, confirmer,
+            MAX_RATE_LIMIT_RETRIES if own_token else 0,
+        )
     except PushedMessageUnread as e:
         raise self.retry(exc=e, countdown=PUSH_READ_BACK_DELAY * (self.request.retries + 1))
     if not seen.readable or (seen.found is not None and seen.found.get("subtype") != "tombstone"):

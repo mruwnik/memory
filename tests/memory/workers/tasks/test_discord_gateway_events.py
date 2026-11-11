@@ -26,7 +26,7 @@ from memory.common.access_control import user_can_access
 from memory.common.celery_app import UPDATE_SOURCE_ACCESS_CONTROL, VERIFY_DISCORD_MESSAGES
 from memory.common.db.connection import make_session
 from memory.common.db.models.events import record_raw_event
-from memory.common import discord_attachments, discord_events, settings
+from memory.common import discord_attachments, discord_events, rate_limit, settings
 from memory.common.discord_events import ensure_listed_channel, message_task_kwargs
 from memory.common.reactions import apply_reaction
 from memory.discord import rest
@@ -1691,6 +1691,32 @@ def test_a_holders_pushed_delete_is_confirmed_by_the_bot_that_delivered_the_mess
 
     assert db_session.query(DiscordMessage).count() == kept
     assert tokens_asked(discord_api) == {SECOND_TOKEN}
+
+
+def store_without_embedding(item, session, **_kwargs) -> dict:
+    """process_content_item minus embedding: the sandbox has no Qdrant."""
+    session.add(item)
+    session.commit()
+    return {"status": "processed"}
+
+
+@pytest.mark.parametrize("event_type, data", DELETES)
+@pytest.mark.parametrize("budget, kept, asked", [(0, 1, set()), (1, 0, {SECOND_TOKEN})], ids=["spent", "left"])
+def test_a_holders_pushed_deletes_read_another_owners_bot_only_within_budget(
+    db_session, discord_api, webhook_bot, user_owned_bot, monkeypatch, event_type, data, budget, kept, asked
+):
+    monkeypatch.setattr(settings, "PUSH_CROSS_TOKEN_READS_PER_MINUTE", budget)
+    monkeypatch.setattr(rate_limit, "rate_limit_redis", lambda: None)
+    monkeypatch.setattr(discord, "process_content_item", store_without_embedding)
+    monkeypatch.setattr(discord, "clear_item_chunks", lambda item, session: None)
+    rate_limit.reset_cache()
+    held_server_with_a_message(db_session, discord_api, webhook_bot, user_owned_bot)
+    discord_api.requests.clear()
+    discord_api.channels[(SECOND_TOKEN, f"{CHANNEL}/messages/{MESSAGE}")] = UNKNOWN_MESSAGE
+
+    handle(webhook_bot, event_type, data)
+
+    assert (db_session.query(DiscordMessage).count(), tokens_asked(discord_api)) == (kept, asked)
 
 
 def deliverer_gone(db_session, bot) -> None:
