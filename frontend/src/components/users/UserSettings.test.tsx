@@ -161,8 +161,32 @@ describe('UserSettings save profile', () => {
     const emailInput = await screen.findByDisplayValue('ada@x.com')
     await user.clear(emailInput)
     await user.type(emailInput, 'new@x.com')
+    await user.type(screen.getByLabelText('Current password'), 'oldpass12')
     await user.click(screen.getByRole('button', { name: 'Save changes' }))
     expect(await screen.findByText('bad email')).toBeInTheDocument()
+  })
+
+  it('asks for the current password to change the email and sends it', async () => {
+    const patched: unknown[] = []
+    install(me(), authMe(), {
+      '/users/1': (init) => {
+        if (init?.method !== 'PATCH') return undefined
+        patched.push(JSON.parse(init.body as string))
+        return mockResponse({ json: me({ email: 'new@x.com' }) })
+      },
+    })
+    const { user } = renderWithRouter(<UserSettings />)
+    const emailInput = await screen.findByDisplayValue('ada@x.com')
+    expect(screen.queryByLabelText('Current password')).not.toBeInTheDocument()
+    await user.clear(emailInput)
+    await user.type(emailInput, 'new@x.com')
+    const save = screen.getByRole('button', { name: 'Save changes' })
+    expect(save).toBeDisabled()
+
+    await user.type(screen.getByLabelText('Current password'), 'oldpass12')
+    await user.click(save)
+
+    await waitFor(() => expect(patched).toEqual([{ email: 'new@x.com', current_password: 'oldpass12' }]))
   })
 })
 

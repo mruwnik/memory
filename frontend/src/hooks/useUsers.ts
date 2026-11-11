@@ -26,6 +26,8 @@ export interface UserUpdate {
   email?: string
   scopes?: string[]
   timezone?: string
+  // Required to change your own email.
+  current_password?: string
 }
 
 export interface PasswordChange {

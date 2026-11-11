@@ -1,6 +1,8 @@
 import logging
 import pathlib
 import uuid
+from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_access_token
@@ -17,7 +19,7 @@ from memory.api.MCP.servers import (
     get_server_instance,
     unmounted_servers,
 )
-from memory.api.auth import authenticate_user
+from memory.api.auth import authenticate_user, origin_of, web_ui_origins
 from memory.api.password_reset import sender_account
 from memory.common import settings
 from memory.common.db.connection import make_session, get_engine
@@ -107,6 +109,33 @@ async def oauth_protected_resource(request: Request):
     return JSONResponse(metadata)
 
 
+# Client names are chosen by whoever registers the client.
+MAX_CLIENT_NAME_CHARS = 80
+
+
+@dataclass(frozen=True)
+class Requester:
+    """The OAuth client a login is authorizing, as the login page names it."""
+
+    name: str
+    host: str
+
+
+def requester_for(state: object) -> Requester | None:
+    """The client behind the authorization ``state``, unless it is this server's
+    own web UI (or there is no such authorization)."""
+    if not isinstance(state, str) or not state:
+        return None
+    with make_session() as session:
+        oauth_state = session.query(OAuthState).filter(OAuthState.state == state).first()
+        if oauth_state is None or origin_of(oauth_state.redirect_uri) in web_ui_origins():
+            return None
+        client = oauth_state.client
+        name = (client.client_name if client else None) or oauth_state.client_id
+        host = urlsplit(oauth_state.redirect_uri).netloc or oauth_state.redirect_uri
+        return Requester(name=name[:MAX_CLIENT_NAME_CHARS], host=host)
+
+
 def login_form(request: Request, form_data: dict, error: str | None = None):
     with make_session() as session:
         reset_available = sender_account(session) is not None
@@ -118,6 +147,7 @@ def login_form(request: Request, form_data: dict, error: str | None = None):
             "error": error,
             "action": "/oauth/login",
             "reset_available": reset_available,
+            "requester": requester_for(form_data.get("state")),
         },
     )
 

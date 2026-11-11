@@ -35,7 +35,13 @@ from memory.common.scopes import (
     known_scopes,
     validate_scopes,
 )
-from memory.api.auth import get_interactive_user, get_current_user, get_token, require_scope
+from memory.api.auth import (
+    get_current_user,
+    get_interactive_user,
+    get_token,
+    require_scope,
+    require_web_ui_session,
+)
 from memory.api.field_errors import field_error
 from memory.common.access_control import credential_scopes, has_admin_scope, narrow_scopes
 from memory.common.people import make_identifier, people_with_email
@@ -61,6 +67,8 @@ class UserUpdate(BaseModel):
     email: str | None = None
     scopes: list[str] | None = None
     timezone: str | None = None
+    # Required to change your own email, which password resets are sent to.
+    current_password: str | None = Field(default=None, max_length=128)
 
     @field_validator("timezone")
     @classmethod
@@ -313,7 +321,8 @@ def update_user(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_session),
 ) -> UserResponse:
-    """Update a user. Admins can update any user, others can only update their own name/email/timezone."""
+    """Update a user. Admins can update any user, others can only update their own
+    name/email/timezone. Changing your own email needs your current password."""
     is_admin = has_admin_scope(user)
 
     target_user = authorize_user_self_or_admin(db, user_id, user)
@@ -321,7 +330,9 @@ def update_user(
     if updates.name is not None:
         target_user.name = updates.name
 
-    if updates.email is not None:
+    if updates.email is not None and updates.email != target_user.email:
+        if target_user.id == user.id:
+            require_current_password(db, user, updates.current_password)
         # Check for duplicate email
         existing = db.query(User).filter(User.email == updates.email, User.id != user_id).first()
         if existing:
@@ -420,6 +431,17 @@ def revoke_user_credentials(
     return sessions_deleted, refresh_revoked
 
 
+def require_current_password(db: Session, user: User, password: str | None) -> None:
+    """Refuse unless ``password`` is ``user``'s current one, rate-limited per user so
+    a stolen session can't guess it."""
+    if not check_rate_limit_spec(f"change_password:user:{user.id}", settings.API_RATE_LIMIT_AUTH):
+        raise HTTPException(status_code=429, detail="Too many attempts. Please wait and try again.")
+    human_user = db.get(HumanUser, user.id)
+    password_hash = human_user.password_hash if human_user else None
+    if not password or not password_hash or not verify_password(password, password_hash):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+
+
 @router.post("/me/change-password")
 def change_password(
     data: PasswordChange,
@@ -431,28 +453,10 @@ def change_password(
     if user.user_type != "human":
         raise HTTPException(status_code=400, detail="Only human users can change passwords")
 
-    # Per-user rate limit on the current_password check itself.
-    # Prevents an attacker who has stolen a session/token from brute-forcing
-    # the user's current password to escalate to a full password rotation.
-    if not check_rate_limit_spec(
-        f"change_password:user:{user.id}", settings.API_RATE_LIMIT_AUTH
-    ):
-        raise HTTPException(
-            status_code=429,
-            detail="Too many password-change attempts. Please wait and try again.",
-        )
+    require_current_password(db, user, data.current_password)
 
-    human_user = db.get(HumanUser, user.id)
-    if not human_user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    # Verify current password
-    if not verify_password(data.current_password, cast(str, human_user.password_hash)):
-        raise HTTPException(status_code=400, detail="Current password is incorrect")
-
-    # Validate and update password
     validate_password_strength(data.new_password)
-    human_user.password_hash = hash_password(data.new_password)
+    db.get_one(HumanUser, user.id).password_hash = hash_password(data.new_password)
 
     # Revoke other credentials so a stolen session/refresh-token doesn't
     # survive the rotation. Keep the *current* session (the tab the user is
@@ -573,10 +577,12 @@ def scopes_beyond(holder: User, requested: list[str]) -> list[str]:
 def create_user_api_key(
     user_id: int,
     data: APIKeyCreate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_web_ui_session),
     db: Session = Depends(get_session),
 ) -> APIKeyCreateResponse:
-    """Create an API key for a user. Admins can create keys for any user."""
+    """Create an API key for a user. Admins can create keys for any user. Only a
+    login to the web UI can create keys: API keys, agent runs and other OAuth
+    clients (MCP connectors) can't."""
     authorize_user_self_or_admin(db, user_id, user)
 
     requested_scopes = data.scopes or []

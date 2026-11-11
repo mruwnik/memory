@@ -17,6 +17,8 @@ const UserSettings = () => {
   // Form states
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
+  // Changing your email needs your password: reset links go to that address.
+  const [emailPassword, setEmailPassword] = useState('')
   const [timezone, setTimezone] = useState('UTC')
   const [saving, setSaving] = useState(false)
   const [saveMessage, setSaveMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
@@ -49,7 +51,8 @@ const UserSettings = () => {
     loadUser()
   }, [loadUser])
 
-  const profileChanged = !!user && (name !== user.name || email !== user.email || timezone !== user.timezone)
+  const emailChanged = !!user && email !== user.email
+  const profileChanged = !!user && (name !== user.name || emailChanged || timezone !== user.timezone)
 
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -61,11 +64,15 @@ const UserSettings = () => {
     try {
       const updates: UserUpdate = {}
       if (name !== user.name) updates.name = name
-      if (email !== user.email) updates.email = email
+      if (emailChanged) {
+        updates.email = email
+        updates.current_password = emailPassword
+      }
       if (timezone !== user.timezone) updates.timezone = timezone
 
       const updated = await updateUser(user.id, updates)
       setUser(updated)
+      setEmailPassword('')
       setSaveMessage({ type: 'success', text: 'Profile updated successfully' })
       // Refresh auth state to update the header
       await checkAuth()
@@ -133,11 +140,17 @@ const UserSettings = () => {
             <Field label="Email">
               <Input type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} />
             </Field>
+            {emailChanged && (
+              <Field label="Current password" hint="Needed to change your email.">
+                <Input type="password" autoComplete="current-password" value={emailPassword}
+                  onChange={(e) => setEmailPassword(e.target.value)} />
+              </Field>
+            )}
             <Field label="Timezone" hint="Schedules run on this clock. Pick one or type any IANA name, such as Asia/Kolkata.">
               <TimezoneCombobox value={timezone} onChange={setTimezone} />
             </Field>
             <FormActions>
-              <Button variant="primary" type="submit" disabled={saving || !profileChanged}>{saving ? 'Saving...' : 'Save changes'}</Button>
+              <Button variant="primary" type="submit" disabled={saving || !profileChanged || (emailChanged && !emailPassword)}>{saving ? 'Saving...' : 'Save changes'}</Button>
             </FormActions>
           </form>
         </Card>
