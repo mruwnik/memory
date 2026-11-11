@@ -268,6 +268,10 @@ token; a message they can all see is stored once.
   `MESSAGE_REACTION_*` events, `THREAD_CREATE`, `THREAD_UPDATE`); others are
   acknowledged and ignored. Servers first seen through a webhook bot collect
   everything it receives; turn collection off per server or channel as usual.
+  The signature only proves the bot's owner sent an event, so messages, edits
+  and reactions are read back from Discord with the bot's token and stored as
+  Discord returns them, and a delete lands once Discord no longer has the
+  message: a webhook bot needs a token that can read its channels' history.
 
 A DM to one of your bots, gateway or webhook, is collected by default when
 the person sending it shares a server with the bot: they're in the gateway's
