@@ -9,8 +9,9 @@ umask 022
 if [[ ! $0 -ef /usr/local/sbin/memory-bootstrap ]]; then
     install -m 0700 "$0" /usr/local/sbin/memory-bootstrap
 elif [[ ! -v MEMORY_BOOTSTRAP_UNIT ]]; then
-    # Started from an SSM session or command, the snap AWS CLI's writes to
-    # redirected files silently vanish; a transient unit runs as cloud-init did.
+    # Started from SSM, it would run inside the SSM agent's snap service, where
+    # writes to redirected files have silently vanished; a transient unit runs
+    # as cloud-init did.
     # KillMode=process lets the log's tee drain after the script exits.
     exec systemd-run --quiet --wait --pipe --collect --property=KillMode=process \
         --setenv=MEMORY_BOOTSTRAP_UNIT=1 /usr/local/sbin/memory-bootstrap
@@ -56,10 +57,52 @@ optional_param() {
 
 log "Base packages"
 apt_get update
-apt_get install ca-certificates curl gnupg git openssl unattended-upgrades
-snap wait system seed.loaded
-snap list aws-cli >/dev/null 2>&1 || snap install aws-cli --classic
-ln -sfn /snap/bin/aws /usr/local/bin/aws
+apt_get install ca-certificates curl gnupg git openssl unattended-upgrades unzip
+if ! /usr/local/bin/aws --version >/dev/null 2>&1; then
+    log "AWS CLI"
+    d=$(mktemp -d)
+    url=https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip
+    curl -fsSL -o "$d/aws.zip" "$url"
+    curl -fsSL -o "$d/aws.sig" "$url.sig"
+    # The AWS CLI Team's key, from the AWS CLI user guide's install page.
+    gpg --homedir "$d" --batch --quiet --import <<'AWS_CLI_KEY'
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+
+mQINBF2Cr7UBEADJZHcgusOJl7ENSyumXh85z0TRV0xJorM2B/JL0kHOyigQluUG
+ZMLhENaG0bYatdrKP+3H91lvK050pXwnO/R7fB/FSTouki4ciIx5OuLlnJZIxSzx
+PqGl0mkxImLNbGWoi6Lto0LYxqHN2iQtzlwTVmq9733zd3XfcXrZ3+LblHAgEt5G
+TfNxEKJ8soPLyWmwDH6HWCnjZ/aIQRBTIQ05uVeEoYxSh6wOai7ss/KveoSNBbYz
+gbdzoqI2Y8cgH2nbfgp3DSasaLZEdCSsIsK1u05CinE7k2qZ7KgKAUIcT/cR/grk
+C6VwsnDU0OUCideXcQ8WeHutqvgZH1JgKDbznoIzeQHJD238GEu+eKhRHcz8/jeG
+94zkcgJOz3KbZGYMiTh277Fvj9zzvZsbMBCedV1BTg3TqgvdX4bdkhf5cH+7NtWO
+lrFj6UwAsGukBTAOxC0l/dnSmZhJ7Z1KmEWilro/gOrjtOxqRQutlIqG22TaqoPG
+fYVN+en3Zwbt97kcgZDwqbuykNt64oZWc4XKCa3mprEGC3IbJTBFqglXmZ7l9ywG
+EEUJYOlb2XrSuPWml39beWdKM8kzr1OjnlOm6+lpTRCBfo0wa9F8YZRhHPAkwKkX
+XDeOGpWRj4ohOx0d2GWkyV5xyN14p2tQOCdOODmz80yUTgRpPVQUtOEhXQARAQAB
+tCFBV1MgQ0xJIFRlYW0gPGF3cy1jbGlAYW1hem9uLmNvbT6JAlQEEwEIAD4CGwMF
+CwkIBwIGFQoJCAsCBBYCAwECHgECF4AWIQT7Xbd/1cEYuAURraimMQrMRnJHXAUC
+akV0ygUJDqP4lQAKCRCmMQrMRnJHXFHjD/9eyZLYcKuQOlLvtqSDtUBiEZf6ZZjM
+i3ygYH8rJNtuToUH+HvSpe819urJCquXhDrlK6N+aqW0hCLtNABJG/vsafIgvIYJ
+hSGgpgtNnQyMV1jViRWqPjbouw8OkYKBThUfT1i2Y+wn58ifs6ODBCmTexWtXspA
+Si+Gt49xDOW0APmbOPnI+a4HJW6tVEo6MWS0WjzpiBayR3d1A4pt4YrPfSdDgpLo
+h2SLQqlRqvvVZJaWBjhkErNFpfsBA06sDcPEOb0G8LBUbR4WOcdvhe5LubJbZuxC
+AG9kNPCVeQP1ixwjgjXKysaxeQ6rv0VzIQgRp6tLVLWhy6AKDNvLjFSsmXZ1Wl08
+Y/RlOHXlzLuQMRE6sR1wOdRxc9TsrNWTGiBK65cvSWOy03JeBkQQ8pesqltiyxI9
+U21kkgiXtTSKNGfKK8pO27D81YANhRqPK7iTp6kuFiY2WtOg90KTMNlIT+Ff85Y2
+b1rHj6Z0SrCkJujhWk3IBPic/wJgz01LEc/OAdUPlby90RJZcIBhSlWhT7mXnXIO
+c0HWlNQrns2s3CTyYwZSiSlYe9ApeLwhjDo8NhbFuCAy61l6O5UsR4AfZxx/rGKv
+2wFb1/RN/P4gNe6vmxZAPjR0AQcwD3tc2McimOLr/22kmPz8IH3I0X7WoSFr0Biz
+E91G7bb0hOb/cA==
+=knv7
+-----END PGP PUBLIC KEY BLOCK-----
+AWS_CLI_KEY
+    # Captured first: grep -q quitting early would SIGPIPE gpg and fail the pipeline.
+    sig=$(gpg --homedir "$d" --batch --status-fd 1 --verify "$d/aws.sig" "$d/aws.zip" 2>/dev/null)
+    grep -q '^\[GNUPG:\] VALIDSIG .* FB5DB77FD5C118B80511ADA8A6310ACC4672475C$' <<< "$sig"
+    unzip -q "$d/aws.zip" -d "$d"
+    "$d/aws/install" --update
+    rm -rf "$d"
+fi
 
 log "Data volume $VOLUME"
 dev=/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_$${VOLUME//-/}

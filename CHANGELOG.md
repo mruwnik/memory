@@ -142,6 +142,7 @@ None
 - Before upgrading: an admin whose GitHub account tracks a repo bound to a project of teams the admin is not in should join one of those teams first (or remove the project's teams). Otherwise the `20261227_unbind_github_projects` migration detaches that project from the repo, and its items stop being filed there.
 
 ### Other changes for operators
+- EC2: new instances install the AWS CLI from AWS's signed download instead of the snap store, so first boot no longer fails while the snap store is unreachable. Existing instances keep their snap AWS CLI.
 - `AGENT_MAX_RUNS_PER_HOUR` is the ceiling on runs an agent definition or prebuilt agent starts an hour, and only the default for a subscription's `max_per_hour`.
 - New optional `AGENT_MAX_DELIVERIES_PER_HOUR` (default 3600) caps the deliveries one subscription makes an hour; `subscription_upsert` refuses a `max_per_hour` above it, and a subscription saved with more is held to it.
 - New beat task `notify-finished-runs` (every 30s, `scheduler` queue) sends `agent_run(notify=true)` notifications.
