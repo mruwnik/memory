@@ -253,13 +253,13 @@ def test_parse_lesswrong_date(date_str, expected):
 
 
 @patch("memory.parsers.lesswrong.process_images")
-@patch("memory.parsers.lesswrong.markdownify")
+@patch("memory.parsers.lesswrong.html_to_markdown")
 @patch("memory.parsers.lesswrong.settings")
-def test_extract_body(mock_settings, mock_markdownify, mock_process_images):
+def test_extract_body(mock_settings, mock_html_to_markdown, mock_process_images):
     from pathlib import Path
 
     mock_settings.FILE_STORAGE_DIR = Path("/tmp")
-    mock_markdownify.return_value = "# Markdown content"
+    mock_html_to_markdown.return_value = "# Markdown content"
     mock_images = {"image1.jpg": Mock(spec=PILImage.Image)}
     mock_process_images.return_value = (Mock(), mock_images)
 
@@ -273,7 +273,7 @@ def test_extract_body(mock_settings, mock_markdownify, mock_process_images):
     assert body == "# Markdown content"
     assert images == mock_images
     mock_process_images.assert_called_once()
-    mock_markdownify.assert_called_once()
+    mock_html_to_markdown.assert_called_once()
 
 
 @patch("memory.parsers.lesswrong.process_images")

@@ -118,6 +118,8 @@ class MailMessage(SourceItem):
     recipients: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     folder: Mapped[str | None] = mapped_column(Text)
+    # The body extracted at ingest; NULL on mail stored before it was kept.
+    parsed_body: Mapped[str | None] = mapped_column(Text, nullable=True)
     tsv: Mapped[Any | None] = mapped_column(TSVECTOR)
 
     # Sync tracking for deletion detection
@@ -205,6 +207,8 @@ class MailMessage(SourceItem):
 
     @property
     def body(self) -> str:
+        if self.parsed_body is not None:
+            return self.parsed_body
         return self.parsed_content["body"]
 
     def format_content(self, content: dict[str, Any]) -> str:
@@ -247,14 +251,11 @@ class MailMessage(SourceItem):
         }
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
-        content = self.parsed_content
-        body = self.body
-
-        chunks = extract.extract_text(body, modality="mail")
+        chunks = extract.extract_text(self.body, modality="mail")
 
         def add_header(item: extract.MulitmodalChunk) -> extract.MulitmodalChunk:
             if isinstance(item, str):
-                return self.format_content(content | {"body": item}).strip()
+                return self.format_content({"body": item}).strip()
             return item
 
         for chunk in chunks:

@@ -491,6 +491,10 @@ REMOTE_SERVER_TIMEOUT_SEC = int(os.getenv("REMOTE_SERVER_TIMEOUT_SEC", 60))
 # An IMAP message larger than this is not downloaded, and no single IMAP
 # command's response may be larger.
 MAX_EMAIL_BYTES = int(os.getenv("MAX_EMAIL_BYTES", 64 * 1024 * 1024))
+# HTML (email bodies, fetched pages) is converted to markdown up to this many
+# characters; the rest only has its tags stripped. Conversion costs about
+# 10 µs and 100 bytes of RAM per character of tag-dense HTML.
+MAX_HTML_TO_MARKDOWN_CHARS = int(os.getenv("MAX_HTML_TO_MARKDOWN_CHARS", 150_000))
 # Wall-clock limit on one IMAP command's response, however steadily it trickles in.
 IMAP_COMMAND_TIMEOUT_SEC = int(os.getenv("IMAP_COMMAND_TIMEOUT_SEC", 600))
 # Bytes one IMAP connection (one account sync) may receive in all. A sync

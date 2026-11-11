@@ -7,6 +7,7 @@ from datetime import datetime
 from email.utils import formatdate
 from unittest.mock import ANY
 import pytest
+from memory.common import settings
 from memory.common.db.models.source_items import mail_addresses
 from memory.parsers.email import (
     compute_message_hash,
@@ -379,3 +380,25 @@ def test_parse_email_generates_message_id_from_content(first, second, same):
 
     assert first_id.startswith("generated-")
     assert (first_id == second_id) is same
+
+
+def html_mail(html: str) -> str:
+    return (
+        "From: a@example.com\nTo: b@example.com\nSubject: hi\nMessage-ID: <big@example.com>\n"
+        "MIME-Version: 1.0\nContent-Type: text/html; charset=utf-8\n\n" + html
+    )
+
+
+@pytest.mark.parametrize("multipart", [False, True])
+def test_parse_email_converts_html_only_up_to_the_limit(monkeypatch, multipart):
+    monkeypatch.setattr(settings, "MAX_HTML_TO_MARKDOWN_CHARS", 45)
+    html = "<p><b>x</b></p>" * 10
+    msg = email.mime.multipart.MIMEMultipart("alternative")
+    msg.attach(email.mime.text.MIMEText(html, "html"))
+    raw = msg.as_string() if multipart else html_mail(html)
+
+    assert parse_email_message(raw)["body"] == "**x**\n\n**x**\n\n**x**\n\nx x x x x x x"
+
+
+def test_parse_email_survives_deeply_nested_html():
+    assert parse_email_message(html_mail("<div>" * 3000 + "hello"))["body"] == "hello"
