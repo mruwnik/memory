@@ -1248,6 +1248,53 @@ def test_a_discord_image_that_cannot_be_read_leaves_the_message_to_its_text(stor
     assert (embed_source_item(msg), msg.embed_status) == (1, "QUEUED")
 
 
+PR_EMBED = {
+    "type": "rich",
+    "author": {"name": "octocat"},
+    "title": "[memory] Pull request opened: #12 Fix search",
+    "description": "Search returns short messages",
+    "fields": [{"name": "Reviewers", "value": "ann, bob", "inline": True}],
+    "footer": {"text": "GitHub"},
+    "url": "https://github.com/x/memory/pull/12",
+}
+PR_TEXT = "octocat\n[memory] Pull request opened: #12 Fix search\nSearch returns short messages\nReviewers: ann, bob\nGitHub"
+LINK_PREVIEWS = [
+    {"type": kind, "title": "Someone else's page", "description": "Their text"}
+    for kind in ("link", "article", "video", "image", "gifv")
+]
+
+
+@pytest.mark.parametrize(
+    "content, embeds, text",
+    [
+        ("", [PR_EMBED], PR_TEXT),
+        ("see", [PR_EMBED], f"see\n{PR_TEXT}"),
+        ("", [{"type": "rich", "title": "Deploy done"}, {"type": "rich", "fields": [{"name": "env", "value": "prod"}]}], "Deploy done\nenv: prod"),
+        ("https://example.com", LINK_PREVIEWS, "https://example.com"),
+        ("", [{"type": "rich"}], ""),
+        ("plain", None, "plain"),
+    ],
+)
+def test_discord_message_text_includes_its_rich_embeds_only(content, embeds, text):
+    msg = DiscordMessage(sha256=b"dm-embeds", modality="message", content=content, embeds=embeds)
+
+    assert (msg.readable_content, msg.title) == (text, f"unknown: {text}")
+
+
+@pytest.mark.parametrize(
+    "embeds, embedded",
+    [
+        ([PR_EMBED], True),
+        ([{"type": "rich", "title": "ok"}], False),
+        (LINK_PREVIEWS, False),
+    ],
+)
+def test_a_discord_message_is_embedded_by_its_rich_embed_text(embeds, embedded):
+    msg = DiscordMessage(sha256=b"dm-embeds", modality="message", content="", embeds=embeds)
+
+    assert (msg.should_embed, bool(msg.embedding_text)) == (embedded, embedded)
+
+
 CATCH_UP_SQL = (
     "UPDATE source_item SET embed_status='RAW' WHERE embed_status='SKIPPED' AND id IN "
     "(SELECT id FROM discord_message WHERE cardinality(images) > 0 OR attachments @> '[{}]');"

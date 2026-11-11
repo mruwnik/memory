@@ -630,7 +630,8 @@ def test_reingest_empty_source_items_success(db_session, item_type):
         ("FAILED", True, True),
         ("STORED", False, True),
         ("STORED", True, False),
-        ("SKIPPED", False, False),
+        # Mail is always worth embedding, so a skip is stale.
+        ("SKIPPED", False, True),
     ],
 )
 def test_reingest_empty_source_items_selection(
@@ -663,6 +664,42 @@ def test_reingest_empty_source_items_selection(
 
     assert result == {"status": "success", "items": int(requeued)}
     assert mock_reingest.call_args_list == [call(item.id, "MailMessage")][: int(requeued)]
+
+
+@pytest.mark.parametrize(
+    "embed_status, content, embeds, requeued",
+    [
+        # Skipped before rich embeds counted as text.
+        ("SKIPPED", "", [{"type": "rich", "title": "Pull request opened: #12 Fix search"}], True),
+        ("SKIPPED", "", [{"type": "link", "title": "Someone else's page about search"}], False),
+        ("SKIPPED", "thanks", None, False),
+        ("STORED", "", [{"type": "rich", "title": "Pull request opened: #12 Fix search"}], True),
+    ],
+)
+def test_reingest_empty_source_items_requeues_skipped_items_that_would_now_embed(
+    db_session, embed_status, content, embeds, requeued
+):
+    db_session.add_all([DiscordUser(id=5, username="bot"), DiscordChannel(id=2, name="ci", channel_type="text")])
+    db_session.flush()
+    message = DiscordMessage(
+        sha256=unique_sha256(),
+        modality="message",
+        message_id=10,
+        channel_id=2,
+        author_id=5,
+        sent_at=datetime(2026, 11, 1, tzinfo=timezone.utc),
+        content=content,
+        embeds=embeds,
+        embed_status=embed_status,
+    )
+    db_session.add(message)
+    db_session.commit()
+
+    with patch.object(reingest_item, "delay") as mock_reingest:
+        result = reingest_empty_source_items("discord_message")
+
+    assert result == {"status": "success", "items": int(requeued)}
+    assert mock_reingest.call_args_list == [call(message.id, "discord_message")][: int(requeued)]
 
 
 PAST = datetime(2000, 1, 1, tzinfo=timezone.utc)

@@ -24,6 +24,10 @@ a new, empty `## Unreleased` above it.
 
 ### Changes
 - Fix: `fetch` returns items too short to embed (e.g. a Discord "thanks"), and `list_items` / `count_items` include them by default; before, fetching one by id said "not found or not yet indexed". Forwarded Discord messages now store the forwarded text and files instead of an empty message.
+- Fix: Discord messages posted by bots and webhooks as rich embeds (GitHub, CI and similar integrations) are searchable and show the embed's author, title, description, fields and footer; before, their text was dropped and the message was skipped as empty. Link previews of other sites still aren't included.
+
+### Post-deploy commands
+- Re-runnable: re-embed the Discord messages skipped before their rich embeds counted (it also retries any with no chunks or a failed embed): `docker compose exec -T worker python - maintenance reingest-empty-source-items --item-type discord_message < tools/run_celery_task.py`.
 
 ## v0.5.6 (2026-11-11)
 

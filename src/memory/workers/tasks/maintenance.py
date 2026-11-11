@@ -268,6 +268,8 @@ def reingest_item(item_id: str, item_type: str):
 @app.task(name=REINGEST_EMPTY_SOURCE_ITEMS)
 @tracked_task
 def reingest_empty_source_items(item_type: str):
+    """Re-embed the items of a type that have no chunks or failed to embed, and
+    those skipped that would be embedded now."""
     logger.info("Reingesting empty source items")
     try:
         class_ = get_item_class(item_type)
@@ -276,19 +278,20 @@ def reingest_empty_source_items(item_type: str):
         return {"status": "error", "error": str(e)}
 
     with make_session() as session:
-        item_ids = (
-            session.query(class_.id)
-            .filter(
+        empty = session.scalars(
+            select(class_.id).where(
                 or_(~class_.chunks.any(), class_.embed_status == "FAILED"),
                 class_.embed_status != "SKIPPED",
             )
-            .all()
-        )
+        ).all()
+        # A skip is stale when the rules for what is worth embedding have since widened.
+        skipped = session.scalars(select(class_).where(class_.embed_status == "SKIPPED").execution_options(yield_per=1000))
+        item_ids = [*empty, *(item.id for item in skipped if item.should_embed)]
 
         logger.info(f"Found {len(item_ids)} items to reingest")
 
         for item_id in item_ids:
-            reingest_item.delay(item_id.id, item_type)
+            reingest_item.delay(item_id, item_type)
 
         return {"status": "success", "items": len(item_ids)}
 

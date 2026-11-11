@@ -425,6 +425,25 @@ def openable_image(path: pathlib.Path) -> Image.Image | None:
         return None
 
 
+def rich_embed_text(embeds: list[dict] | None) -> str:
+    """The text of rich embeds, the kind bots and webhooks post. Link, article,
+    video, image and gifv embeds are previews of other sites' text, left out so
+    a pasted URL doesn't pull a page's blurb into the message."""
+    return "\n".join(
+        line
+        for embed in embeds or []
+        if embed.get("type") == "rich"
+        for line in (
+            (embed.get("author") or {}).get("name"),
+            embed.get("title"),
+            embed.get("description"),
+            *(": ".join(filter(None, (f.get("name"), f.get("value")))) for f in embed.get("fields") or []),
+            (embed.get("footer") or {}).get("text"),
+        )
+        if line
+    )
+
+
 class DiscordMessage(SourceItem):
     """Discord message collected from a channel or DM.
 
@@ -511,9 +530,15 @@ class DiscordMessage(SourceItem):
         return discord_attachments.attachment_files(self.attachments, self.images, self.message_id)
 
     @property
+    def message_text(self) -> str:
+        """The message's own text, then its rich embeds' text: integration bots
+        often post nothing but an embed."""
+        return "\n".join(filter(None, [self.content, rich_embed_text(self.embeds)]))
+
+    @property
     def readable_content(self) -> str:
         """The text, then a placeholder line per attachment."""
-        lines = [self.content or "", *map(discord_attachments.placeholder, self.attachment_files)]
+        lines = [self.message_text, *map(discord_attachments.placeholder, self.attachment_files)]
         return "\n".join(line for line in lines if line)
 
     @property
@@ -532,7 +557,7 @@ class DiscordMessage(SourceItem):
     @property
     def should_embed(self) -> bool:
         """Skip embedding for very short messages (< 20 chars) with nothing attached."""
-        return bool(self.attachments or self.images) or len(self.content or "") >= 20
+        return bool(self.attachments or self.images) or len(self.message_text) >= 20
 
     @property
     def embedding_text(self) -> str:
