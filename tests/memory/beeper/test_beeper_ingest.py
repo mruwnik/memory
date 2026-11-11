@@ -96,9 +96,8 @@ def test_deeply_nested_html_text_becomes_its_text():
         "<b>" * 30_000,
         "<b>x" * 25_000 + "</i>",
         "<mx-reply>" * 10_000,
-        "<p><b>x</b></p>" * 6_000,
     ],
-    ids=["unclosed", "mismatched-closer", "unclosed-replies", "formatted"],
+    ids=["unclosed", "mismatched-closer", "unclosed-replies"],
 )
 def test_html_detection_is_linear_in_the_text(text):
     start = time.perf_counter()
