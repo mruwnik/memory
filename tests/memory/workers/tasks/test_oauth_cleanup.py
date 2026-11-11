@@ -12,7 +12,9 @@ from memory.common.db.models import (
 )
 from memory.workers.tasks.maintenance import cleanup_expired_sessions
 
-NOW = datetime.now(timezone.utc).replace(tzinfo=None)
+def utc_now() -> datetime:
+    """Naive UTC now, read when each row is built (not at import: a long run outlives short expiries)."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def add_client(db_session, client_id: str, age_days: int) -> OAuthClientInformation:
@@ -41,7 +43,7 @@ def add_state(db_session, client_id: str, user_id: int | None, expires_in: timed
         redirect_uri_provided_explicitly=True,
         code_challenge="x" * 43,
         scopes=["read"],
-        expires_at=NOW + expires_in,
+        expires_at=utc_now() + expires_in,
     )
     db_session.add(state)
     db_session.flush()
@@ -91,7 +93,7 @@ def test_clients_that_never_completed_a_login_are_pruned_after_the_grace_period(
     for logged_in, expires_in in states:
         add_state(db_session, "c", admin_user.id * logged_in or None, expires_in)
     db_session.add_all(
-        OAuthRefreshToken(client_id="c", user_id=admin_user.id, scopes=["read"], expires_at=NOW)
+        OAuthRefreshToken(client_id="c", user_id=admin_user.id, scopes=["read"], expires_at=utc_now())
         for _ in range(refresh_tokens)
     )
     db_session.flush()
@@ -103,8 +105,8 @@ def test_clients_that_never_completed_a_login_are_pruned_after_the_grace_period(
 
 
 def test_expired_sessions_are_deleted(db_session, admin_user):
-    live = UserSession(user_id=admin_user.id, expires_at=NOW + timedelta(hours=1))
-    expired = UserSession(user_id=admin_user.id, expires_at=NOW - timedelta(hours=1))
+    live = UserSession(user_id=admin_user.id, expires_at=utc_now() + timedelta(hours=1))
+    expired = UserSession(user_id=admin_user.id, expires_at=utc_now() - timedelta(hours=1))
     db_session.add_all([live, expired])
     db_session.flush()
     live_id, expired_id = live.id, expired.id
