@@ -113,6 +113,7 @@ a new, empty `## Unreleased` above it.
 - Markdown in the web UI (search results for mail, markdown and PDF text, notes) no longer loads images hosted elsewhere by itself: each shows a "Load image from <host>" button, so a sender's tracking pixel doesn't learn when you looked or which instance you use. Images stored on this server still show.
 - An email keeps at most `MAX_EMAIL_ATTACHMENTS` attachments (default 100) and `MAX_EMAIL_RECIPIENTS` To/Cc/Bcc addresses (default 500); the rest are dropped with a warning naming the Message-ID. Before, a small mail with tens of thousands of attachments held a worker for minutes and became that many items.
 - An email's Subject and From are cut to `MAX_EMAIL_HEADER_CHARS` (default 8192) before their MIME encoded-words are decoded, so a mail with a huge header no longer holds a worker (or each search hit that reparses it) for seconds to minutes.
+- Handing a Slack workspace to another member turns its LLM work off unless its key choice charges whoever made the change; the new owner picks a key (or "default" to pay with their own). Before, a workspace left on the default key started charging the new owner's key without their say.
 ### Required env vars
 None
 
