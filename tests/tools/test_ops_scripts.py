@@ -719,10 +719,16 @@ def test_restore_from_s3_syncs_only_plain_directories_and_never_git(box, backup_
     assert syncs[0].endswith("--exclude .git/* --exclude */.git/*")
 
 
+def shell_list(script: str, name: str) -> list[str]:
+    match = re.search(rf"^{name}='([^']*)'", script, re.M)
+    assert match, f"{name} not found"
+    return match.group(1).split("|")
+
+
 def test_restore_layout_matches_the_backed_up_directories():
     script = (REPO_ROOT / "tools" / "ops" / "restore-latest-backup.sh").read_text()
-    archived = re.search(r"^ARCHIVED_DIRS='([^']*)'", script, re.M).group(1).split("|")
-    plain = re.search(r"^PLAIN_DIRS='([^']*)'", script, re.M).group(1).split("|")
+    archived = shell_list(script, "ARCHIVED_DIRS")
+    plain = shell_list(script, "PLAIN_DIRS")
 
     assert sorted(archived) == sorted(d.name for d in settings.PRIVATE_DIRS)
     assert sorted(archived + plain) == sorted(d.name for d in settings.storage_dirs)
