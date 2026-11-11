@@ -110,6 +110,7 @@ def _mock_mcp_modules(monkeypatch):
 from memory.common.db import connection as db_connection  # noqa: E402
 from memory.common.db.models import CalendarEvent, Task  # noqa: E402
 from memory.common.db.models.events import Event  # noqa: E402
+from tests.conftest import in_block, unwrapped  # noqa: E402
 
 
 def get_fn(tool):
@@ -326,7 +327,7 @@ async def test_list_tasks_no_filters(db_session, sample_tasks):
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        results = await list_tasks_fn()
+        results = unwrapped(await list_tasks_fn())["tasks"]
 
     # Should exclude done and cancelled by default
     assert len(results) == 3
@@ -346,7 +347,7 @@ async def test_list_tasks_include_completed(db_session, sample_tasks):
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        results = await list_tasks_fn(include_completed=True)
+        results = unwrapped(await list_tasks_fn(include_completed=True))["tasks"]
 
     assert len(results) == 5
 
@@ -362,7 +363,7 @@ async def test_list_tasks_filter_by_status(db_session, sample_tasks):
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        results = await list_tasks_fn(status="in_progress")
+        results = unwrapped(await list_tasks_fn(status="in_progress"))["tasks"]
 
     assert len(results) == 1
     assert results[0]["task_title"] == "High priority tomorrow"
@@ -379,7 +380,7 @@ async def test_list_tasks_filter_by_priority(db_session, sample_tasks):
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        results = await list_tasks_fn(priority="urgent")
+        results = unwrapped(await list_tasks_fn(priority="urgent"))["tasks"]
 
     assert len(results) == 1
     assert results[0]["task_title"] == "Urgent task due today"
@@ -396,7 +397,7 @@ async def test_list_tasks_limit(db_session, sample_tasks):
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        results = await list_tasks_fn(limit=2)
+        results = unwrapped(await list_tasks_fn(limit=2))["tasks"]
 
     assert len(results) == 2
 
@@ -418,7 +419,7 @@ async def test_list_tasks_limit_capped_at_200(db_session, sample_tasks):
         return_value=db_session.__enter__(),
     ):
         # Request 500, but implementation should cap at 200
-        results = await list_tasks_fn(limit=500)
+        results = unwrapped(await list_tasks_fn(limit=500))["tasks"]
 
     # Verifies the cap logic exists, though with only 3 tasks this is a weak assertion
     assert len(results) <= 200
@@ -435,8 +436,8 @@ async def test_list_tasks_offset(db_session, sample_tasks):
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        all_results = await list_tasks_fn()
-        offset_results = await list_tasks_fn(offset=1)
+        all_results = unwrapped(await list_tasks_fn())["tasks"]
+        offset_results = unwrapped(await list_tasks_fn(offset=1))["tasks"]
 
     assert len(offset_results) == len(all_results) - 1
 
@@ -458,7 +459,7 @@ async def test_fetch_found(db_session, sample_tasks):
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        result = await fetch_fn(task_id=task_id)
+        result = unwrapped(await fetch_fn(task_id=task_id))
 
     assert result["success"] is True
     assert result["task"]["task_title"] == "Urgent task due today"
@@ -533,7 +534,7 @@ async def test_fetch_with_journal_entries(db_session, sample_tasks):
             return_value=user,
         ),
     ):
-        result = await fetch_fn(task_id=task.id, include_journal=True)
+        result = unwrapped(await fetch_fn(task_id=task.id, include_journal=True))
 
     assert result["success"] is True
     assert "journal_entries" in result
@@ -554,7 +555,7 @@ async def test_fetch_without_journal_entries(db_session, sample_tasks):
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        result = await fetch_fn(task_id=task.id)
+        result = unwrapped(await fetch_fn(task_id=task.id))
 
     assert result["success"] is True
     assert "journal_entries" not in result
@@ -819,7 +820,7 @@ async def test_get_upcoming_default_range(db_session, sample_events):
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        results = await get_upcoming_fn()
+        results = unwrapped(await get_upcoming_fn())["events"]
 
     # Should include future events within 7 days
     assert len(results) >= 1
@@ -841,7 +842,7 @@ async def test_get_upcoming_with_dates(db_session, sample_events):
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        results = await get_upcoming_fn(start_date=start, end_date=end)
+        results = unwrapped(await get_upcoming_fn(start_date=start, end_date=end))["events"]
 
     # Should include events in the range
     assert len(results) >= 1
@@ -861,7 +862,7 @@ async def test_get_upcoming_limit(db_session, sample_events):
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        results = await get_upcoming_fn(start_date=start, end_date=end, limit=1)
+        results = unwrapped(await get_upcoming_fn(start_date=start, end_date=end, limit=1))["events"]
 
     assert len(results) <= 1
 
@@ -878,7 +879,7 @@ async def test_get_upcoming_limit_capped(db_session, sample_events):
         return_value=db_session.__enter__(),
     ):
         # Request 500, should be capped
-        results = await get_upcoming_fn(limit=500)
+        results = unwrapped(await get_upcoming_fn(limit=500))["events"]
 
     assert len(results) <= 200
 
@@ -895,7 +896,7 @@ async def test_get_upcoming_days_capped(db_session, sample_events):
         return_value=db_session.__enter__(),
     ):
         # Request 1000 days, should work but cap at 365
-        results = await get_upcoming_fn(days=1000)
+        results = unwrapped(await get_upcoming_fn(days=1000))["events"]
 
     # Should not raise, just cap internally
     assert isinstance(results, list)
@@ -928,7 +929,7 @@ async def test_list_tasks_various_statuses(
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        results = await list_tasks_fn(status=status, include_completed=True)
+        results = unwrapped(await list_tasks_fn(status=status, include_completed=True))["tasks"]
 
     assert len(results) == expected_count
 
@@ -955,7 +956,7 @@ async def test_list_tasks_various_priorities(
         "memory.api.MCP.servers.organizer.make_session",
         return_value=db_session.__enter__(),
     ):
-        results = await list_tasks_fn(priority=priority, include_completed=True)
+        results = unwrapped(await list_tasks_fn(priority=priority, include_completed=True))["tasks"]
 
     assert len(results) == expected_count
 
@@ -1074,7 +1075,7 @@ async def test_fetch_allows_creator(db_session, sample_tasks, access_users):
             return_value={},
         ),
     ):
-        result = await fetch_fn(task_id=task.id)
+        result = unwrapped(await fetch_fn(task_id=task.id))
 
     assert result.get("success") is True
     assert result["task"]["task_title"] == "Urgent task due today"
@@ -1119,7 +1120,7 @@ async def test_list_tasks_filters_to_accessible(db_session, sample_tasks, access
             return_value={},
         ),
     ):
-        results = await list_tasks_fn()
+        results = unwrapped(await list_tasks_fn())["tasks"]
 
     titles = {r["task_title"] for r in results}
     # Caller's own task and the public one are visible
@@ -1297,7 +1298,7 @@ async def call_upcoming(db_session, user, **kwargs):
             return_value={},
         ),
     ):
-        return await get_fn(upcoming)(days=2, **kwargs)
+        return unwrapped(await get_fn(upcoming)(days=2, **kwargs))["events"]
 
 
 @pytest.mark.asyncio
@@ -1373,3 +1374,27 @@ async def test_upcoming_expands_events_off_the_event_loop(db_session, _mock_admi
 
     assert results == []
     assert ticks > 20
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "field", ["event_title", "location", "calendar_name"]
+)
+async def test_upcoming_wraps_text_the_invite_sender_wrote(db_session, sample_events, field):
+    from memory.api.MCP.servers.organizer import upcoming
+
+    with patch("memory.api.MCP.servers.organizer.make_session", return_value=db_session.__enter__()):
+        result = await get_fn(upcoming)()
+    assert in_block(result, result["events"][0][field])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["task_title", "tags"])
+async def test_task_reads_wrap_text_people_wrote(db_session, sample_tasks, field):
+    from memory.api.MCP.servers.organizer import fetch, list_tasks
+
+    with patch("memory.api.MCP.servers.organizer.make_session", return_value=db_session.__enter__()):
+        listed = await get_fn(list_tasks)()
+        fetched = await get_fn(fetch)(task_id=sample_tasks[0].id)
+    assert in_block(listed, listed["tasks"][0][field])
+    assert in_block(fetched, fetched["task"][field])

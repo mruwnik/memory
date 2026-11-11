@@ -3,7 +3,6 @@ Core MCP subserver for knowledge base search and observations.
 """
 
 import base64
-import json
 import logging
 import textwrap
 from datetime import date, datetime, timedelta, timezone
@@ -16,7 +15,7 @@ from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import selectinload
 
-from memory.agents.subscription_input import new_tag, preamble, untrusted
+from memory.agents.subscription_input import new_tag, preamble, wrap_fields
 from memory.api.MCP.access import (
     build_mcp_user_access_filter,
     fetch_accessible_source_items,
@@ -331,19 +330,15 @@ SYSTEM_FIELDS = frozenset(
 )
 
 
+# Observation fields an agent wrote, possibly from text it read.
+OBSERVATION_TEXT_FIELDS = frozenset({"content", "tags", "metadata"})
+
+
 def wrapped_item(tag: str, item: dict) -> dict:
     """The item with each free field in one `tag` block: text as is, lists and
     dicts as JSON in a block whose field ends in .json."""
 
-    def wrap(field: str, value: Any) -> Any:
-        if field in SYSTEM_FIELDS or value in (None, "", [], {}):
-            return value
-        if isinstance(value, (list, dict)):
-            text = json.dumps(value, ensure_ascii=False, default=str)
-            return untrusted(tag, item["id"], f"{field}.json", text)
-        return untrusted(tag, item["id"], field, str(value))
-
-    return {field: wrap(field, value) for field, value in item.items()}
+    return wrap_fields(tag, item, set(item) - SYSTEM_FIELDS)
 
 
 def filter_observation_source_ids(
@@ -591,7 +586,7 @@ async def search_observations(
     observation_types: list[str] | None = None,
     min_confidences: dict[str, float] = {},
     limit: int = 20,
-) -> list[dict]:
+) -> dict:
     """
     Search recorded observations about the user by meaning; the query matches both content and context.
 
@@ -603,8 +598,10 @@ async def search_observations(
         min_confidences: Minimum confidence thresholds, e.g. {"observation_accuracy": 0.8}
         limit: Maximum number of results to return (default 20, max 100)
 
-    Returns: List with content, tags, created_at, metadata
-    Results sorted by relevance to your query.
+    Returns: {untrusted, observations}, each observation with id, content, tags,
+    created_at and metadata, sorted by relevance to your query. untrusted names the
+    tag of the blocks holding text, which came from agents that may have read text
+    people wrote.
     """
     logger.info("MCP: Searching observations for %s", query)
     # The LLM steps read every chunk as one query, and the temporal chunk's
@@ -658,8 +655,10 @@ async def search_observations(
                 user_id,
             )
 
-    return [
+    tag = new_tag()
+    observations = [
         {
+            "id": r.id,
             "content": r.content,
             "tags": r.tags,
             "created_at": r.created_at.isoformat() if r.created_at else None,
@@ -667,6 +666,10 @@ async def search_observations(
         }
         for r in results
     ]
+    return {
+        "untrusted": preamble(tag),
+        "observations": [wrap_fields(tag, o, OBSERVATION_TEXT_FIELDS) for o in observations],
+    }
 
 
 # Cap on inline file fetches. A base64'd response much larger than this

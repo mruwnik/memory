@@ -78,8 +78,7 @@ export const usePeople = () => {
       limit: filters.limit ?? 50,
       offset: filters.offset ?? 0,
     })
-    // list_all returns a list directly, not wrapped in { people: ... }
-    return (result?.[0] as unknown as Person[]) || []
+    return result?.[0]?.people ?? []
   }, [mcpCall])
 
   const getPerson = useCallback(async (identifier: string, includeTidbits = true): Promise<Person | null> => {

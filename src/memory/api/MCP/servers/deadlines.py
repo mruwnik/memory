@@ -11,12 +11,13 @@ from __future__ import annotations
 
 import logging
 from datetime import date as date_type, timedelta
-from typing import Literal, Sequence
+from typing import Any, Literal, Sequence
 
 from fastmcp import FastMCP
 from sqlalchemy import case
 from sqlalchemy.orm import selectinload
 
+from memory.agents.subscription_input import new_tag, preamble, wrap_fields
 from memory.api.MCP.access import (
     build_mcp_user_access_filter,
     fetch_accessible_source_items,
@@ -33,7 +34,7 @@ from memory.common.access_control import (
     user_can_edit,
 )
 from memory.common.db.connection import make_session
-from memory.common.db.models import Deadline, DeadlinePayload
+from memory.common.db.models import Deadline
 from memory.common.scopes import (
     SCOPE_ORGANIZER,
     SCOPE_ORGANIZER_WRITE,
@@ -57,6 +58,13 @@ def parse_date(value: str, field: str) -> date_type:
         return date_type.fromisoformat(value)
     except ValueError as e:
         raise ValueError(f"Invalid {field}: expected YYYY-MM-DD, got {value!r}") from e
+
+
+DEADLINE_TEXT_FIELDS = frozenset({"title", "description", "tags"})
+
+
+def wrapped_deadline(tag: str, deadline: Deadline) -> dict[str, Any]:
+    return wrap_fields(tag, deadline.as_payload(), DEADLINE_TEXT_FIELDS)
 
 
 def require_user():
@@ -89,7 +97,7 @@ async def list_upcoming(
     project_id: int | None = None,
     limit: int = 50,
     offset: int = 0,
-) -> list[DeadlinePayload]:
+) -> dict[str, Any]:
     """
     List upcoming deadlines within a time window.
     Use to see what's coming up, find what to prep for, or surface anything
@@ -103,7 +111,8 @@ async def list_upcoming(
         limit: Maximum results (default 50, max 500).
         offset: Number of results to skip for pagination (default 0, max 10000).
 
-    Returns: list of deadlines, ordered by date ascending.
+    Returns: {untrusted, deadlines}: deadlines ordered by date ascending. untrusted
+    names the tag of the blocks holding text people wrote (title, description, tags).
     """
     days = min(max(days, 1), 365)
     limit = min(max(limit, 1), 500)
@@ -140,19 +149,25 @@ async def list_upcoming(
 
         query = query.order_by(Deadline.date.asc(), PRIORITY_RANK.desc())
         deadlines = query.offset(offset).limit(limit).all()
-        return [d.as_payload() for d in deadlines]
+        tag = new_tag()
+        return {
+            "untrusted": preamble(tag),
+            "deadlines": [wrapped_deadline(tag, d) for d in deadlines],
+        }
 
 
 @deadlines_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_ORGANIZER), has_items(Deadline))
-async def fetch(deadline_id: int) -> DeadlinePayload | dict:
+async def fetch(deadline_id: int) -> dict[str, Any]:
     """
     Get a single deadline by ID, including its attached SourceItem IDs.
 
     Args:
         deadline_id: The deadline ID.
 
-    Returns: the deadline payload, or {"error": "..."} if not found / no access.
+    Returns: the deadline payload plus untrusted, the tag of the blocks holding text
+    people wrote (title, description, tags), or {"error": "..."} if not found / no
+    access.
     """
     user = require_user()
     with make_session() as session:
@@ -169,7 +184,8 @@ async def fetch(deadline_id: int) -> DeadlinePayload | dict:
             if not user_can_access(user, deadline, project_roles):
                 return {"error": f"Deadline {deadline_id} not found"}
 
-        return deadline.as_payload()
+        tag = new_tag()
+        return {"untrusted": preamble(tag)} | wrapped_deadline(tag, deadline)
 
 
 @deadlines_mcp.tool()

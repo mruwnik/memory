@@ -13,6 +13,7 @@ from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import InstrumentedAttribute, selectinload
 from sqlalchemy.orm.query import RowReturningQuery
 
+from memory.agents.subscription_input import new_tag, preamble, wrap_fields
 from memory.api.MCP.access import (
     ALLOWED_SENSITIVITIES,
     get_mcp_current_user,
@@ -61,6 +62,19 @@ from memory.common.people import contact_values, discord_ids
 logger = logging.getLogger(__name__)
 
 people_mcp = FastMCP("memory-people")
+
+# Person and tidbit fields that hold text people wrote, often copied from mail,
+# chat or meetings.
+PERSON_TEXT_FIELDS = frozenset({"display_name", "aliases", "contact_info", "user_name"})
+TIDBIT_TEXT_FIELDS = frozenset({"content", "tags"})
+
+
+def wrapped_person(tag: str, person: dict[str, Any]) -> dict[str, Any]:
+    """The person dict with its free text, and that of its tidbits, in `tag` blocks."""
+    wrapped = wrap_fields(tag, person, PERSON_TEXT_FIELDS)
+    if "tidbits" in person:
+        wrapped["tidbits"] = [wrap_fields(tag, t, TIDBIT_TEXT_FIELDS) for t in person["tidbits"]]
+    return wrapped
 
 
 def _person_to_dict(person: Person) -> dict[str, Any]:
@@ -525,7 +539,9 @@ async def fetch(
         include_projects: Whether to include projects accessible via team membership (default: False)
 
     Returns:
-        The person record with filtered tidbits/teams/projects, or None if not found
+        The person record with filtered tidbits/teams/projects, or None if not found.
+        Its untrusted field names the tag of the blocks holding text people wrote
+        (display_name, aliases, contact_info, user_name, tidbit content and tags).
     """
     logger.info(f"MCP: Fetching person: {identifier}")
 
@@ -604,7 +620,8 @@ async def fetch(
                 ]
             result["project_count"] = len(result["projects"])
 
-        return result
+        tag = new_tag()
+        return {"untrusted": preamble(tag)} | wrapped_person(tag, result)
 
 
 # These name the `people` table, so they only apply to an unaliased Person in the query.
@@ -681,7 +698,7 @@ async def list_all(
     search: str | None = None,
     limit: int = 50,
     offset: int = 0,
-) -> list[dict]:
+) -> dict:
     """
     List all tracked people, optionally filtered by tags or search term.
 
@@ -701,7 +718,8 @@ async def list_all(
         offset: Number of results to skip for pagination (default 0, max 10000)
 
     Returns:
-        List of person records matching the filters
+        {untrusted, people}: the person records matching the filters. untrusted
+        names the tag of the blocks holding text people wrote.
     """
     logger.info(f"MCP: Listing people (tags={tags}, search={search})")
 
@@ -728,7 +746,11 @@ async def list_all(
         query = query.order_by(Person.display_name).offset(offset).limit(limit)
         people = query.all()
 
-        return [_person_to_dict(p) for p in people]
+        tag = new_tag()
+        return {
+            "untrusted": preamble(tag),
+            "people": [wrapped_person(tag, _person_to_dict(p)) for p in people],
+        }
 
 
 @people_mcp.tool()
@@ -1291,7 +1313,7 @@ async def tidbit_list(
     tidbit_type: str | None = None,
     limit: int = 50,
     offset: int = 0,
-) -> list[dict]:
+) -> dict:
     """
     List tidbits for a person (filtered by your access permissions).
 
@@ -1302,7 +1324,8 @@ async def tidbit_list(
         offset: Number of results to skip for pagination
 
     Returns:
-        List of tidbits you have access to
+        {untrusted, tidbits}: the tidbits you have access to. untrusted names the
+        tag of the blocks holding text people wrote (content and tags).
     """
     logger.info(f"MCP: Listing tidbits for person: {identifier}")
 
@@ -1311,9 +1334,9 @@ async def tidbit_list(
 
     user = get_mcp_current_user()
 
-    # If no user, return empty list (unauthenticated access gets no tidbits)
+    tag = new_tag()
     if not user or user.id is None:
-        return []
+        return {"untrusted": preamble(tag), "tidbits": []}
 
     # Fetch project_roles BEFORE opening session to avoid nested session issues
     # (get_project_roles_by_user_id opens its own session which would conflict)
@@ -1339,4 +1362,7 @@ async def tidbit_list(
         tidbits = _filter_tidbits_by_access(tidbits, user, project_roles)
 
         # Convert to dicts inside session while relationships are accessible
-        return [_tidbit_to_dict(t) for t in tidbits]
+        return {
+            "untrusted": preamble(tag),
+            "tidbits": [wrap_fields(tag, _tidbit_to_dict(t), TIDBIT_TEXT_FIELDS) for t in tidbits],
+        }
