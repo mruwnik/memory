@@ -1620,6 +1620,30 @@ async def test_fetch_excludes_hidden_even_for_admin(db_session, admin_session):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status, fetched",
+    [("STORED", True), ("SKIPPED", True), ("RAW", False), ("QUEUED", False), ("FAILED", False)],
+)
+async def test_fetch_returns_processed_items_whether_or_not_they_were_embedded(
+    db_session, admin_session, status, fetched
+):
+    item = make_source_item(db_session, 1, embed_status=status)
+
+    with mcp_auth_context(admin_session.token):
+        bulk = unwrapped(await fetch.fn(ids=[item.id]))["items"]
+
+    assert [r["id"] for r in bulk] == [item.id] * fetched
+
+
+@pytest.mark.asyncio
+async def test_fetch_of_an_unprocessed_item_says_so(db_session, admin_session):
+    item = make_source_item(db_session, 1, embed_status="QUEUED")
+
+    with mcp_auth_context(admin_session.token), pytest.raises(ValueError, match=f"Item {item.id} not found or not yet processed"):
+        await fetch.fn(id=item.id)
+
+
+@pytest.mark.asyncio
 async def test_fetch_bulk_skips_inaccessible_items(db_session, user_session, admin_user):
     """Bulk fetch filters out items the user cannot access.
 

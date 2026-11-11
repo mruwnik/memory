@@ -188,18 +188,18 @@ def build_message_task_kwargs(message: Message, bot_id: int, is_edit: bool = Fal
     Shared by the live collector (``on_message``) and the history backfill so the
     two paths can never drift in how a Message maps to a stored row.
     """
-    images = [a.url for a in message.attachments if discord_attachments.is_image(a.content_type)]
+    # A forward's own content and attachments are empty: Discord sends what it forwards as snapshots.
+    sources = [message, *message.message_snapshots]
+    files = [a for source in sources for a in source.attachments]
+    images = [a.url for a in files if discord_attachments.is_image(a.content_type)]
     embeds = [embed.to_dict() for embed in message.embeds] if message.embeds else None
-    attachments = [
-        discord_attachments.record(a.filename, a.content_type, a.size, a.url)
-        for a in message.attachments
-    ]
+    attachments = [discord_attachments.record(a.filename, a.content_type, a.size, a.url) for a in files]
     return {
         "bot_id": bot_id,
         "message_id": message.id,
         "channel_id": message.channel.id,
         "author_id": message.author.id,
-        "content": message.content,
+        "content": "\n".join(source.content for source in sources if source.content),
         "sent_at": message.created_at.isoformat(),
         "edited_at": message.edited_at.isoformat() if message.edited_at else None,
         "reply_to_message_id": (

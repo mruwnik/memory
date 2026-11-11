@@ -48,6 +48,9 @@ from memory.common.db.models import (
 )
 
 EMBED_STATUSES = frozenset({"RAW", "QUEUED", "STORED", "FAILED", "SKIPPED"})
+# Done with the pipeline: embedded, or deliberately not (too short to be worth it).
+# RAW and QUEUED items are still being processed, and FAILED ones are retried.
+PROCESSED_STATUSES = frozenset({"STORED", "SKIPPED"})
 
 
 def table_columns(model: Any, *names: str) -> tuple[Column, ...]:

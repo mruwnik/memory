@@ -88,6 +88,17 @@ def texts(obj: dict, *fields: str) -> bool:
     return all(is_text(obj.get(field)) for field in fields)
 
 
+def attachments_well_formed(attachments: Any) -> bool:
+    return attachments is None or (
+        isinstance(attachments, list)
+        and all(isinstance(a, dict) and texts(a, "filename", "content_type", "url") for a in attachments)
+    )
+
+
+def snapshot_well_formed(message: Any) -> bool:
+    return isinstance(message, dict) and texts(message, "content") and attachments_well_formed(message.get("attachments"))
+
+
 def well_formed(data: Any) -> bool:
     """Whether a payload has the shape Discord gives its events: every id a
     snowflake, nested objects objects, names and types of their kind. A bot's
@@ -98,17 +109,18 @@ def well_formed(data: Any) -> bool:
     if not all(value is None or isinstance(value, dict) for value in nested):
         return False
     ids = data.get("ids")
-    attachments = data.get("attachments")
     emoji = data.get("emoji")
     kind = data.get("type")
+    snapshots = data.get("message_snapshots")
     return (
         all(absent_or(data.get(field), is_snowflake) for field in ID_FIELDS)
         and all(absent_or((data.get(f) or {}).get(key), is_snowflake) for f, key in NESTED_IDS.items())
         and texts(data.get("author") or {}, "username", "global_name")
         and (ids is None or (isinstance(ids, list) and all(is_snowflake(i) for i in ids)))
-        and (attachments is None or (
-            isinstance(attachments, list)
-            and all(isinstance(a, dict) and texts(a, "filename", "content_type", "url") for a in attachments)
+        and attachments_well_formed(data.get("attachments"))
+        and (snapshots is None or (
+            isinstance(snapshots, list)
+            and all(isinstance(s, dict) and snapshot_well_formed(s.get("message")) for s in snapshots)
         ))
         and (emoji is None or (isinstance(emoji, dict) and texts(emoji, "name") and absent_or(emoji.get("id"), is_snowflake)))
         and (kind is None or (isinstance(kind, int) and not isinstance(kind, bool)))
@@ -133,7 +145,9 @@ def message_task_kwargs(data: dict, bot_id: int, is_edit: bool = False) -> dict:
     them out (a partial MESSAGE_UPDATE keeps the stored ones) and empty when it
     lists none (the message has none now)."""
     listed = data.get("attachments") is not None
-    attachments = data.get("attachments") or []
+    # A forward's own content and attachments are empty: Discord sends what it forwards as snapshots.
+    forwarded = [s["message"] for s in data.get("message_snapshots") or []]
+    attachments = [a for m in [data, *forwarded] for a in m.get("attachments") or []]
     images = [a["url"] for a in attachments if discord_attachments.is_image(a.get("content_type")) and a.get("url")]
     files = [
         discord_attachments.record(a.get("filename"), a.get("content_type"), a.get("size"), a.get("url"))
@@ -145,7 +159,7 @@ def message_task_kwargs(data: dict, bot_id: int, is_edit: bool = False) -> dict:
         "message_id": int(data["id"]),
         "channel_id": int(data["channel_id"]),
         "author_id": int(data["author"]["id"]),
-        "content": data.get("content") or "",
+        "content": "\n".join(text for m in [data, *forwarded] if (text := m.get("content"))),
         "sent_at": data["timestamp"],
         "edited_at": data.get("edited_timestamp"),
         "reply_to_message_id": snowflake(reference.get("message_id")),

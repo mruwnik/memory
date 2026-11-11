@@ -124,7 +124,7 @@ def fetch_accessible_source_items(
             ``build_mcp_user_access_filter``.
         base_query: Optional pre-built ``session.query(SourceItem)`` carrying
             caller-specific options/filters (e.g. ``selectinload(people)`` or
-            ``embed_status == "STORED"``). The id filter and access filter are
+            an ``embed_status`` filter). The id filter and access filter are
             applied on top. Defaults to a bare ``SourceItem`` query.
     """
     if not ids:

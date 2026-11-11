@@ -34,6 +34,7 @@ def fake_message(**overrides):
     msg.pinned = False
     msg.attachments = []
     msg.embeds = []
+    msg.message_snapshots = []
     for key, value in overrides.items():
         setattr(msg, key, value)
     return msg
@@ -74,6 +75,18 @@ def test_build_message_task_kwargs_downloads_images_and_records_every_attachment
             {"filename": "i.png", "content_type": "image/png", "size": 10, "url": "http://x/i.png"},
             {"filename": "d.pdf", "content_type": "application/pdf", "size": 20, "url": "http://x/d.pdf"},
         ],
+    )
+
+
+def test_build_message_task_kwargs_a_forward_carries_the_text_and_files_it_forwards():
+    image = MagicMock(url="http://x/f.png", content_type="image/png", filename="f.png", size=3)
+    snapshot = MagicMock(content="the forwarded text", attachments=[image])
+    kwargs = build_message_task_kwargs(fake_message(content="", message_snapshots=[snapshot]), bot_id=42)
+
+    assert (kwargs["content"], kwargs["images"], kwargs["attachments"]) == (
+        "the forwarded text",
+        ["http://x/f.png"],
+        [{"filename": "f.png", "content_type": "image/png", "size": 3, "url": "http://x/f.png"}],
     )
 
 

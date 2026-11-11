@@ -42,6 +42,7 @@ from memory.api.search.filters import (
 from memory.api.search.item_browse import (
     CONNECTIONS,
     EMBED_STATUSES,
+    PROCESSED_STATUSES,
     check_embed_statuses,
     connection_clause,
     connection_counts,
@@ -201,7 +202,8 @@ BROWSE_SECTION = "\n".join(
             "item_types: Filter by item type, e.g. mail_message, discord_message, github_pr (empty = all)",
             "embed_statuses: Indexing statuses to include, from "
             + ", ".join(sorted(EMBED_STATUSES)),
-            "    (default STORED: indexed items only; empty = every status)",
+            "    (default STORED and SKIPPED: processed items, embedded or too short to embed;",
+            "    empty = every status)",
             "contains: Case-insensitive text matched against the filename and each type's",
             "    title, subject and author or sender name (not the body text)",
             "connection_id: Only items from this connection (as count_items by_connection",
@@ -825,7 +827,7 @@ async def fetch(
             base_query = (
                 session.query(SourceItem)
                 .options(selectinload(SourceItem.people))
-                .filter(SourceItem.embed_status == "STORED")
+                .filter(SourceItem.embed_status.in_(PROCESSED_STATUSES))
                 # Session transcripts are owner-only-even-for-admins;
                 # only claude_session_fetch may read them.
                 .filter(SourceItem.modality.notin_(SESSION_COLLECTIONS))
@@ -875,7 +877,7 @@ async def fetch(
         tag = new_tag()
         if id is not None and ids is None:
             if not results_by_id:
-                raise ValueError(f"Item {id} not found or not yet indexed")
+                raise ValueError(f"Item {id} not found or not yet processed")
             # Audit-log the access. Best-effort: a logging failure must not
             # fail the user's fetch.
             if user_id is not None:
@@ -1000,7 +1002,7 @@ async def list_items(
     author: str | None = None,
     repo: str | None = None,
     item_types: set[str] = set(),
-    embed_statuses: set[str] = {"STORED"},
+    embed_statuses: set[str] = set(PROCESSED_STATUSES),
     contains: str | None = None,
     connection_id: str | None = None,
     limit: int = 50,
@@ -1090,7 +1092,7 @@ async def count_items(
     author: str | None = None,
     repo: str | None = None,
     item_types: set[str] = set(),
-    embed_statuses: set[str] = {"STORED"},
+    embed_statuses: set[str] = set(PROCESSED_STATUSES),
     contains: str | None = None,
     connection_id: str | None = None,
 ) -> dict:

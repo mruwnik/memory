@@ -218,6 +218,40 @@ def test_message_task_kwargs(overrides, expected):
     )
 
 
+FORWARDED_IMAGE = {"filename": "f.png", "content_type": "image/png", "size": 3, "url": "https://cdn.example.com/f.png"}
+
+
+@pytest.mark.parametrize(
+    "overrides, content, attachments",
+    [
+        ({"message_snapshots": [{"message": {"content": "the forwarded text", "attachments": []}}]}, "the forwarded text", []),
+        (
+            {"message_snapshots": [{"message": {"content": "", "attachments": [FORWARDED_IMAGE]}}]},
+            "",
+            [FORWARDED_IMAGE],
+        ),
+        ({"message_snapshots": [{"message": {}}]}, "", []),
+        ({"message_snapshots": []}, "", []),
+    ],
+)
+def test_a_forward_carries_the_text_and_files_of_the_message_it_forwards(overrides, content, attachments):
+    kwargs = message_task_kwargs(
+        message_create(content="", message_reference={"type": 1, "message_id": "5", "channel_id": "6"}, **overrides),
+        bot_id=3,
+    )
+
+    assert (kwargs["content"], kwargs["attachments"]) == (content, attachments)
+
+
+def test_a_forward_is_stored_with_its_text(db_session, discord_api, webhook_bot, qdrant):
+    forward = message_create(content="", message_snapshots=[{"message": {"content": LONG_TEXT, "attachments": []}}])
+
+    relay(discord_api, webhook_bot, "MESSAGE_CREATE", forward)
+
+    message = stored(db_session)
+    assert (message.content, message.embed_status) == (LONG_TEXT, "STORED")
+
+
 def test_message_task_kwargs_downloads_images_and_records_every_attachment():
     kwargs = message_task_kwargs(
         message_create(
@@ -1569,6 +1603,10 @@ def test_a_bot_no_longer_in_a_server_cannot_change_what_it_delivered_there(
         ("MESSAGE_CREATE", message_create(author={"id": AUTHOR, "username": ["alice"]})),
         ("MESSAGE_CREATE", message_create(author={"id": AUTHOR, "global_name": 5})),
         ("MESSAGE_CREATE", message_create(attachments=[{"filename": "a", "content_type": ["image/png"], "url": "u"}])),
+        ("MESSAGE_CREATE", message_create(message_snapshots={"message": {"content": "x"}})),
+        ("MESSAGE_CREATE", message_create(message_snapshots=[{"message": "x"}])),
+        ("MESSAGE_CREATE", message_create(message_snapshots=[{"message": {"content": ["x"]}}])),
+        ("MESSAGE_CREATE", message_create(message_snapshots=[{"message": {"attachments": [{"url": 5}]}}])),
     ],
 )
 def test_a_payload_of_the_wrong_shape_is_refused(db_session, webhook_bot, discord_api, event_type, data, qdrant):

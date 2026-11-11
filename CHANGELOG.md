@@ -22,6 +22,9 @@ a new, empty `## Unreleased` above it.
 
 ## Unreleased
 
+### Changes
+- Fix: `fetch` returns items too short to embed (e.g. a Discord "thanks"), and `list_items` / `count_items` include them by default; before, fetching one by id said "not found or not yet indexed". Forwarded Discord messages now store the forwarded text and files instead of an empty message.
+
 ## v0.5.6 (2026-11-11)
 
 ### Changes

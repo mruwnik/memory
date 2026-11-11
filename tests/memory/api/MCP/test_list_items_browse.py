@@ -14,7 +14,7 @@ from memory.common.db.models import (
     MailMessage,
     MiscDoc,
 )
-from tests.conftest import mcp_auth_context, unique_sha256
+from tests.conftest import make_source_item, mcp_auth_context, unique_sha256
 
 NOW = datetime(2026, 11, 1, 12, tzinfo=timezone.utc)
 ALL_STATUSES = {"RAW", "QUEUED", "STORED", "FAILED", "SKIPPED"}
@@ -437,3 +437,13 @@ async def test_bad_browse_arguments_are_refused(
             await list_items.fn(**kwargs)
         with pytest.raises(ValueError, match=message):
             await count_items.fn(**kwargs)
+
+
+@pytest.mark.asyncio
+async def test_browsing_by_default_shows_processed_items_whether_or_not_embedded(db_session, admin_session):
+    items = {status: make_source_item(db_session, n, embed_status=status) for n, status in enumerate(sorted(ALL_STATUSES))}
+
+    result, counted = await browse(admin_session)
+
+    assert sorted(row["id"] for row in result["items"]) == [items["SKIPPED"].id, items["STORED"].id]
+    assert counted["total"] == 2
