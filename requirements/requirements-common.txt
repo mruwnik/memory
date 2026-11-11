@@ -16,3 +16,4 @@ cryptography==50.0.2
 PyJWT[crypto]==2.10.1
 bcrypt==4.3.0
 psutil==7.1.0
+limits==5.8.0  # memory.common.rate_limit, used by api and workers

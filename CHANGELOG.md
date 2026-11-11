@@ -22,6 +22,26 @@ a new, empty `## Unreleased` above it.
 
 ## Unreleased
 
+## v0.5.4 (2026-11-11)
+
+### Changes
+- Fix: the worker images were missing the `limits` package that v0.5.3's shared rate limiter needs, so `worker`, `scheduler-worker` and `slack-sync-worker` restarted in a loop on startup and v0.5.3 updates failed their "containers stay up" check.
+
+### Required env vars
+None
+
+### Manual steps
+None
+
+### Other changes for operators
+None
+
+### Migrations
+None
+
+### Post-deploy commands
+None
+
 ## v0.5.3 (2026-11-11)
 
 ### Changes

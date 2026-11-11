@@ -21,7 +21,6 @@ pydocket==0.27.0
 # sse-starlette (via mcp) <3 binds one process-wide exit event to the first event
 # loop, so the tests' per-loop MCP servers hang on it.
 sse-starlette>=3
-limits==5.8.0
 cachetools>=5.3.0  # TTL-based caching for prediction market tools
 jinja2>=3.1.0  # Required by starlette Jinja2Templates (MCP OAuth login page)
 jsonschema>=4.18,<5  # 4.18 added the referencing registry
