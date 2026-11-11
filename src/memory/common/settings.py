@@ -466,6 +466,12 @@ MAX_REPORT_UPLOAD_BYTES = int(
 MAX_MISC_UPLOAD_BYTES = int(
     os.getenv("MAX_MISC_UPLOAD_BYTES", 100 * 1024 * 1024)
 )
+# An EPUB whose markup (xhtml, html, xml, css, svg) inflates past this is not
+# parsed: MuPDF lays all of it out in memory, roughly 50 bytes of worker RAM per
+# byte of markup, so a small compressed upload can OOM a worker.
+MAX_EBOOK_MARKUP_BYTES = int(
+    os.getenv("MAX_EBOOK_MARKUP_BYTES", 10 * 1024 * 1024)
+)
 # Max decoded base64 accepted inline through the add_content MCP tool; above
 # this the caller is handed a one-time upload URL instead of inlining bytes
 # in the MCP payload.

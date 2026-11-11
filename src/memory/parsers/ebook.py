@@ -1,10 +1,11 @@
 import logging
+import zipfile
 from dataclasses import dataclass, field
 from typing import Any, cast
 from pathlib import Path
 
 import pymupdf
-from memory.common import paths
+from memory.common import paths, settings
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +149,32 @@ def extract_sections(doc) -> list[Section]:
     return sections
 
 
+# The parts of an EPUB that MuPDF lays out as pages; their inflated size sets
+# the parse's time and memory.
+EPUB_MARKUP_SUFFIXES = (".xhtml", ".html", ".htm", ".xml", ".opf", ".ncx", ".css", ".svg")
+
+
+def epub_markup_bytes(path: Path) -> int:
+    """The declared inflated size of the markup in the zip at ``path``."""
+    with zipfile.ZipFile(path) as archive:
+        return sum(
+            info.file_size
+            for info in archive.infolist()
+            if info.filename.lower().endswith(EPUB_MARKUP_SUFFIXES)
+        )
+
+
+def check_parse_size(path: Path) -> None:
+    """Raise ValueError for a zipped book whose markup exceeds MAX_EBOOK_MARKUP_BYTES."""
+    if not zipfile.is_zipfile(path):
+        return
+    size = epub_markup_bytes(path)
+    if size > settings.MAX_EBOOK_MARKUP_BYTES:
+        raise ValueError(
+            f"Book text inflates to {size} bytes (limit {settings.MAX_EBOOK_MARKUP_BYTES})"
+        )
+
+
 def parse_ebook(file_path: str | Path) -> Ebook:
     """
     Parse an ebook file and extract its content and metadata.
@@ -157,10 +184,14 @@ def parse_ebook(file_path: str | Path) -> Ebook:
 
     Returns:
         Structured ebook data
+
+    Raises:
+        ValueError: if the book's text is too large to parse.
     """
     path = Path(file_path)
     if not path.exists():
         raise FileNotFoundError(f"File not found: {path}")
+    check_parse_size(path)
 
     try:
         doc = pymupdf.open(str(path))

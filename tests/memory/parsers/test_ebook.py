@@ -1,3 +1,4 @@
+import zipfile
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -11,6 +12,7 @@ from memory.parsers.ebook import (
     extract_sections,
     parse_ebook,
     Section,
+    epub_markup_bytes,
 )
 
 
@@ -392,3 +394,31 @@ def test_parse_ebook_full_content_generation(mock_open, mock_doc, tmp_path):
 
         # Check the full content is concatenated correctly
         assert ebook.full_content == "Content of section 1\n\nContent of section 2"
+
+
+def write_epub(path, chapter_bytes: int):
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr(zipfile.ZipInfo("mimetype"), "application/epub+zip", zipfile.ZIP_STORED)
+        z.writestr("a.xhtml", "<html><body>" + "a " * (chapter_bytes // 2) + "</body></html>")
+        z.writestr("cover.jpg", b"\x00" * 4096)
+
+
+def test_parse_ebook_refuses_oversized_markup(tmp_path):
+    path = tmp_path / "bomb.epub"
+    write_epub(path, 200_000)
+
+    with (
+        patch("memory.parsers.ebook.settings.MAX_EBOOK_MARKUP_BYTES", 100_000),
+        patch("memory.parsers.ebook.pymupdf.open") as mupdf_open,
+        pytest.raises(ValueError),
+    ):
+        parse_ebook(path)
+    mupdf_open.assert_not_called()
+
+
+@pytest.mark.parametrize("chapter_bytes", [1000, 50_000])
+def test_epub_markup_bytes_counts_markup_only(tmp_path, chapter_bytes):
+    path = tmp_path / "book.epub"
+    write_epub(path, chapter_bytes)
+
+    assert epub_markup_bytes(path) == chapter_bytes + len("<html><body></body></html>")

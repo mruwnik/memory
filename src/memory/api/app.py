@@ -9,7 +9,7 @@ import pathlib
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, UploadFile, Request, HTTPException
+from fastapi import Depends, FastAPI, Request, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
@@ -17,7 +17,7 @@ from slowapi import Limiter
 from sqlalchemy.exc import SQLAlchemyError
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
-from memory.common import extract, paths, settings
+from memory.common import paths, settings
 from memory.common.access_control import (
     get_accessible_source_item_by_filename,
     get_user_project_roles,
@@ -486,16 +486,6 @@ async def serve_file(
         raise HTTPException(status_code=403, detail="Access denied")
 
     return stored_file_response(file_path, download)
-
-
-async def input_type(item: str | UploadFile) -> list[extract.DataChunk]:
-    if not item:
-        return []
-
-    if isinstance(item, str):
-        return extract.extract_text(item)
-    content_type = item.content_type or "application/octet-stream"
-    return extract.extract_data_chunks(content_type, await item.read())
 
 
 app.include_router(auth_router)
