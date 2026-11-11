@@ -10,6 +10,7 @@ from fastmcp.server.auth.auth import AccessToken as FastMCPAccessToken  # type: 
 from mcp.server.auth.provider import (
     AuthorizationCode,
     AuthorizationParams,
+    AuthorizeError,
     RefreshToken,
     RegistrationError,
     TokenError,
@@ -37,7 +38,9 @@ from memory.common.db.models.users import (
 )
 from memory.api.auth import (
     is_expired,
+    is_web_ui_callback,
     lookup_principal,
+    on_web_ui_origin,
     system_scopes,
 )
 from memory.common.scopes import (
@@ -101,6 +104,15 @@ def is_redirect_uri_allowed(
         a_scheme == scheme and a_host == host
         for (a_scheme, a_host, _) in allowed_origins
     )
+
+
+def is_misplaced_on_web_ui_origin(uri: str) -> bool:
+    """Whether ``uri`` is on the web UI's origin but not its OAuth callback.
+
+    The rest of that origin serves pages users upload, which could pass on a
+    code sent there, and a redirect on it would pass for the web UI's own.
+    """
+    return on_web_ui_origin(uri) and not is_web_ui_callback(uri)
 
 
 class GrantError(Exception):
@@ -480,6 +492,18 @@ class SimpleOAuthProvider(OAuthProvider):
                         ),
                     )
 
+        misplaced = [
+            str(uri) for uri in client_info.redirect_uris or [] if is_misplaced_on_web_ui_origin(str(uri))
+        ]
+        if misplaced:
+            raise RegistrationError(
+                error="invalid_redirect_uri",
+                error_description=(
+                    f"redirect_uri {misplaced[0]!r} is not permitted: on this server, "
+                    "only the web UI's own callback is."
+                ),
+            )
+
         with make_session() as session:
             existing = session.get(OAuthClientInformation, client_info.client_id)
             if existing is not None:
@@ -528,6 +552,12 @@ class SimpleOAuthProvider(OAuthProvider):
                 f"Redirect URI {redirect_uri_str} not in registered URIs: {registered_uris}"
             )
             raise ValueError(f"Invalid redirect_uri: {redirect_uri_str}")
+        # Registration refuses these; this catches clients stored before it did.
+        if is_misplaced_on_web_ui_origin(redirect_uri_str):
+            raise AuthorizeError(
+                error="unauthorized_client",
+                error_description="This client may not redirect to that page on this server.",
+            )
 
         # PKCE is mandatory (RFC 7636; OAuth 2.1). Reject empty/missing
         # code_challenge here so a malicious client can't strip PKCE by

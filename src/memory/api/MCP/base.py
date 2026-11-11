@@ -19,7 +19,7 @@ from memory.api.MCP.servers import (
     get_server_instance,
     unmounted_servers,
 )
-from memory.api.auth import authenticate_user, origin_of, web_ui_origins
+from memory.api.auth import authenticate_user, is_web_ui_callback
 from memory.api.password_reset import sender_account
 from memory.common import settings
 from memory.common.db.connection import make_session, get_engine
@@ -128,7 +128,7 @@ def requester_for(state: object) -> Requester | None:
         return None
     with make_session() as session:
         oauth_state = session.query(OAuthState).filter(OAuthState.state == state).first()
-        if oauth_state is None or origin_of(oauth_state.redirect_uri) in web_ui_origins():
+        if oauth_state is None or is_web_ui_callback(oauth_state.redirect_uri):
             return None
         client = oauth_state.client
         name = (client.client_name if client else None) or oauth_state.client_id

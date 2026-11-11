@@ -22,6 +22,10 @@ def web_ui_redirect() -> str:
     return settings.SERVER_URL.rstrip("/") + "/"
 
 
+def report_redirect() -> str:
+    return settings.SERVER_URL.rstrip("/") + "/reports/abc_x.html"
+
+
 @pytest.fixture
 def human(db_session):
     user = HumanUser.create_with_password(email="owner@example.test", name="Owner", password=PASSWORD)
@@ -113,10 +117,15 @@ def setup_token(db_session, user) -> str:
         (setup_token, 200),
         (lambda db, u: oauth_token(db, u, THIRD_PARTY, refreshed=False), 403),
         (lambda db, u: oauth_token(db, u, THIRD_PARTY, refreshed=True), 403),
+        (lambda db, u: oauth_token(db, u, report_redirect(), refreshed=False), 403),
+        (lambda db, u: oauth_token(db, u, report_redirect(), refreshed=True), 403),
         (agent_run_token, 403),
         (api_key_token, 403),
     ],
-    ids=["web-ui", "web-ui-refreshed", "setup", "connector", "connector-refreshed", "agent-run", "api-key"],
+    ids=[
+        "web-ui", "web-ui-refreshed", "setup", "connector", "connector-refreshed",
+        "same-origin-page", "same-origin-page-refreshed", "agent-run", "api-key",
+    ],
 )
 def test_only_web_ui_logins_create_api_keys(api, db_session, human, make_token, status):
     token = make_token(db_session, human)
@@ -194,3 +203,77 @@ def test_login_page_for_the_web_ui_is_unchanged(client, db_session):
 
     assert "Access your Memory knowledge base" in response.text
     assert "wants access" not in response.text
+
+
+@pytest.mark.parametrize(
+    "path, host_shown",
+    [
+        ("/reports/abc_x.html", True),
+        ("/?next=1", True),
+        ("/", False),
+        ("/ui/", False),
+    ],
+)
+def test_login_page_names_a_client_redirecting_elsewhere_on_this_server(
+    client, db_session, path, host_shown
+):
+    """Only the web UI's own callback passes for the web UI, whatever the client calls itself."""
+    redirect = settings.SERVER_URL.rstrip("/") + path
+    response = login_page(client, db_session, redirect, "React Memory App")
+
+    assert ("wants access to your Memory" in response.text) == host_shown
+
+
+def registration(redirect_uri: str) -> dict:
+    return {
+        "client_name": "React Memory App",
+        "redirect_uris": [redirect_uri],
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"],
+        "scope": "read write",
+        "token_endpoint_auth_method": "none",
+    }
+
+
+@pytest.mark.parametrize(
+    "path, status",
+    [
+        ("/", 201),
+        ("/reports/abc_x.html", 400),
+        ("/files/x.html", 400),
+        ("/callback", 400),
+        ("/?next=/reports/abc_x.html", 400),
+        ("/#frag", 400),
+    ],
+)
+def test_registration_on_this_server_only_for_the_web_ui_callback(client, path, status):
+    response = client.post("/register", json=registration(settings.SERVER_URL.rstrip("/") + path))
+
+    assert response.status_code == status, response.text
+
+
+@pytest.mark.parametrize(
+    "path, lands_on",
+    [("/", "/oauth/login?state="), ("/reports/abc_x.html", "/reports/abc_x.html?error=unauthorized_client&")],
+)
+def test_authorize_refuses_stored_client_redirecting_elsewhere_on_this_server(
+    client, db_session, path, lands_on
+):
+    redirect = settings.SERVER_URL.rstrip("/") + path
+    client_id = register_client(db_session, redirect, "React Memory App")
+    db_session.commit()
+
+    response = client.get(
+        "/authorize",
+        params={
+            "client_id": client_id,
+            "redirect_uri": redirect,
+            "response_type": "code",
+            "code_challenge": "x" * 43,
+            "code_challenge_method": "S256",
+            "state": "s",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.headers["location"].startswith(settings.SERVER_URL.rstrip("/") + lands_on)

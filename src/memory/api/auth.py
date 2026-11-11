@@ -463,6 +463,30 @@ def web_ui_origins() -> set[str]:
     return {origin_of(settings.SERVER_URL), *(origin_of(o) for o in dev)}
 
 
+# The web UI's OAuth callback is its root; browsers that registered before the
+# UI moved there still hold clients for /ui, which refresh but no longer authorize.
+WEB_UI_CALLBACK_PATHS = frozenset({"", "/", "/ui", "/ui/"})
+
+
+def on_web_ui_origin(uri: str) -> bool:
+    return origin_of(uri) in web_ui_origins()
+
+
+def is_web_ui_callback(uri: str) -> bool:
+    """Whether ``uri`` is exactly where the web UI receives its OAuth codes.
+
+    Other paths on the same origin serve content users upload (reports, files),
+    so a code sent there could be read by whoever wrote the page.
+    """
+    parts = urlsplit(uri)
+    return (
+        on_web_ui_origin(uri)
+        and parts.path in WEB_UI_CALLBACK_PATHS
+        and not parts.query
+        and not parts.fragment
+    )
+
+
 def session_oauth_client(db: DBSession, session: UserSession) -> OAuthClientInformation | None:
     """The OAuth client a session was issued to: through its authorization, or
     through the refresh token issued with it (refreshed sessions have no
@@ -490,9 +514,8 @@ def is_web_ui_session(db: DBSession, session: UserSession) -> bool:
     client = session_oauth_client(db, session)
     if client is None:
         return session.oauth_state_id is None
-    origins = web_ui_origins()
     uris = client.redirect_uris or []
-    return bool(uris) and all(origin_of(str(uri)) in origins for uri in uris)
+    return bool(uris) and all(is_web_ui_callback(str(uri)) for uri in uris)
 
 
 def require_web_ui_session(
