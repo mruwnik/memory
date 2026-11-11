@@ -3,10 +3,13 @@ Common calendar utilities for event expansion and querying.
 """
 
 import logging
+import signal
+import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from itertools import islice
-from typing import TypedDict
+from typing import Iterator, NamedTuple, TypedDict
 
 from dateutil.rrule import rrule, rruleset, rrulestr
 
@@ -54,6 +57,24 @@ SPARSE_DAY_PARTS = ("BYMONTHDAY", "BYYEARDAY", "BYWEEKNO")
 # of thousands of periods per occurrence. Calendars don't send them (Google
 # refuses them), so rules using them are refused.
 REFUSED_FREQUENCIES = frozenset({"SECONDLY", "MINUTELY"})
+# The rule parts RFC 5545 defines. dateutil also reads extensions such as
+# BYEASTER, which no calendar sends; rules naming anything else are refused.
+RULE_PARTS = frozenset({
+    "FREQ", "UNTIL", "COUNT", "INTERVAL", "BYSECOND", "BYMINUTE", "BYHOUR", "BYDAY",
+    "BYMONTHDAY", "BYYEARDAY", "BYWEEKNO", "BYMONTH", "BYSETPOS", "WKST",
+})
+FREQUENCIES = frozenset({"SECONDLY", "MINUTELY", "HOURLY", "DAILY", "WEEKLY", "MONTHLY", "YEARLY"})
+# The calendar sync times each rule's expansion from its start to this far past
+# now and stores the cost; a rule over the per-event budget is stored as not
+# expandable, so queries only expand rules proven cheap, cheapest first.
+RECURRENCE_PROOF_HORIZON = timedelta(days=366)
+RECURRENCE_PROOF_BUDGET_SECONDS = EXPANSION_BUDGET_SECONDS
+# A hard limit on the whole sync-time check: dateutil can step through periods
+# for minutes without yielding, where no budget check between yields runs.
+RECURRENCE_CHECK_TIME_LIMIT_SECONDS = 1.0
+# Under these a BYSETPOS past the period's set size matches nothing, and
+# dateutil steps hour by hour or day by day to year 9999 (minutes).
+SETPOS_REFUSED_FREQUENCIES = frozenset({"HOURLY", "DAILY"})
 
 
 def strip_rrule_prefix(rule: str) -> str:
@@ -71,7 +92,8 @@ def rule_parts(rule: str) -> dict[str, str] | None:
 
     Whitespace and ``:`` are refused: rrulestr splits its input on whitespace
     and reads ``NAME:`` as a property, so either could smuggle in a DTSTART,
-    EXRULE or RDATE that it would honour.
+    EXRULE or RDATE that it would honour. So is a part RFC 5545 doesn't define,
+    a repeated part, and a missing or unknown FREQ.
     """
     rule = rule.strip()
     if ":" in rule or any(c.isspace() for c in rule):
@@ -79,7 +101,12 @@ def rule_parts(rule: str) -> dict[str, str] | None:
     pairs = [part.partition("=") for part in rule.split(";") if part]
     if not pairs or any(not sep for _, sep, _ in pairs):
         return None
-    return {key.strip().upper(): value.strip() for key, _, value in pairs}
+    parts = {key.upper(): value for key, _, value in pairs}
+    if len(parts) != len(pairs) or not parts.keys() <= RULE_PARTS:
+        return None
+    if parts.get("FREQ", "").upper() not in FREQUENCIES:
+        return None
+    return parts
 
 
 def is_bounded_rule(parts: dict[str, str]) -> bool:
@@ -87,10 +114,14 @@ def is_bounded_rule(parts: dict[str, str]) -> bool:
 
     INTERVAL=0 makes dateutil loop forever without yielding, which the visit
     cap cannot stop. A sub-minute or minute frequency is refused, see
-    REFUSED_FREQUENCIES.
+    REFUSED_FREQUENCIES, and so is BYSETPOS under HOURLY or DAILY, see
+    SETPOS_REFUSED_FREQUENCIES.
     """
     interval = parts.get("INTERVAL", "1")
-    if parts.get("FREQ", "").upper() in REFUSED_FREQUENCIES:
+    freq = parts.get("FREQ", "").upper()
+    if freq in REFUSED_FREQUENCIES:
+        return False
+    if "BYSETPOS" in parts and freq in SETPOS_REFUSED_FREQUENCIES:
         return False
     return interval.isdigit() and int(interval) >= 1
 
@@ -183,23 +214,100 @@ def build_rule(recurrence_rule: str, start_time: datetime) -> rrule | rruleset |
         return None
 
 
-def recurrence_expandable(recurrence_rule: str | None, start_time: datetime) -> bool | None:
-    """Whether the rule yields any occurrence at all, or None without a rule.
+def expansion_seconds(rule: rrule | rruleset, start: datetime) -> float:
+    """How long walking the rule from its start to RECURRENCE_PROOF_HORIZON past
+    now takes, visiting at most MAX_OCCURRENCES_VISITED occurrences and stopping
+    once past RECURRENCE_PROOF_BUDGET_SECONDS. Time spent between occurrences
+    counts."""
+    horizon = max(datetime.now(timezone.utc), start) + RECURRENCE_PROOF_HORIZON
+    began = time.monotonic()
+    deadline = began + RECURRENCE_PROOF_BUDGET_SECONDS
+    for occurrence in islice(rule, MAX_OCCURRENCES_VISITED):
+        if occurrence > horizon or time.monotonic() > deadline:
+            break
+    return time.monotonic() - began
 
-    A rule no date satisfies (e.g. 30 February) makes dateutil walk to year
-    9999 before giving up, which takes seconds. The calendar sync pays that
-    once and stores the answer, so queries can skip such events.
+
+class CheckTimedOut(Exception):
+    """Raised by interrupt_after when its time is up."""
+
+
+@contextmanager
+def interrupt_after(seconds: float) -> Iterator[None]:
+    """Raise CheckTimedOut in the block once ``seconds`` have passed.
+
+    Uses SIGALRM, so it interrupts only on the main thread (as in a Celery
+    prefork worker); elsewhere the block runs unbounded. A timer already set
+    stops the block too if it is due sooner, and is restored afterwards with
+    its remaining time.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+
+    def expire(signum, frame):
+        raise CheckTimedOut
+
+    began = time.monotonic()
+    outer_delay, outer_interval = signal.getitimer(signal.ITIMER_REAL)
+    previous = signal.signal(signal.SIGALRM, expire)
+    signal.setitimer(signal.ITIMER_REAL, min(seconds, outer_delay or seconds))
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+        if outer_delay:
+            remaining = max(outer_delay - (time.monotonic() - began), 1e-6)
+            signal.setitimer(signal.ITIMER_REAL, remaining, outer_interval)
+
+
+class RecurrenceCheck(NamedTuple):
+    """What the calendar sync stores about an event's rule; Nones without a rule."""
+
+    expandable: bool | None
+    cost_ms: float | None
+
+
+def check_recurrence(recurrence_rule: str | None, start_time: datetime) -> RecurrenceCheck:
+    """Whether queries may expand the rule, and what expanding it costs.
+
+    The rule must yield an occurrence at all and expand within
+    RECURRENCE_PROOF_BUDGET_SECONDS (see expansion_seconds). A rule no date
+    satisfies (e.g. 30 February) makes dateutil walk to year 9999 before giving
+    up, which takes seconds. The calendar sync pays this once and stores the
+    answer, so queries skip such events and expand the cheapest first. The
+    whole check stops after RECURRENCE_CHECK_TIME_LIMIT_SECONDS (see
+    interrupt_after), and a rule that runs out of time or fails in any way is
+    not expandable.
     """
     if not recurrence_rule:
-        return None
+        return RecurrenceCheck(None, None)
     start = start_time if start_time.tzinfo else start_time.replace(tzinfo=timezone.utc)
-    rule = build_rule(recurrence_rule, start)
-    if rule is None:
-        return False
     try:
-        return rule.after(start, inc=True) is not None
+        with interrupt_after(RECURRENCE_CHECK_TIME_LIMIT_SECONDS):
+            return measure_recurrence(recurrence_rule, start)
+    except CheckTimedOut:
+        logger.warning("Recurrence rule check ran out of time")
     except RRULE_ERRORS:
-        return False
+        pass
+    except Exception:
+        logger.exception("Recurrence rule check failed")
+    return RecurrenceCheck(False, None)
+
+
+def measure_recurrence(recurrence_rule: str, start: datetime) -> RecurrenceCheck:
+    """check_recurrence without its time limit; ``start`` must be aware."""
+    rule = build_rule(recurrence_rule, start)
+    if rule is None or rule.after(start, inc=True) is None:
+        return RecurrenceCheck(False, None)
+    seconds = expansion_seconds(rule, start)
+    return RecurrenceCheck(seconds <= RECURRENCE_PROOF_BUDGET_SECONDS, seconds * 1000)
+
+
+def recurrence_expandable(recurrence_rule: str | None, start_time: datetime) -> bool | None:
+    """check_recurrence's verdict alone."""
+    return check_recurrence(recurrence_rule, start_time).expandable
 
 
 def occurrence_starts(
@@ -265,26 +373,65 @@ def expand_or_skip(
         return []
 
 
-def expand_within_budget(
-    events: list[CalendarEvent], start_range: datetime, end_range: datetime
-) -> list[tuple[CalendarEvent, datetime, datetime | None]]:
-    """(event, start, end) for each occurrence of the recurring events in the range,
-    all sharing QUERY_EXPANSION_BUDGET_SECONDS. Events left once it is spent are
-    skipped, with a warning naming their ids."""
-    deadline = time.monotonic() + QUERY_EXPANSION_BUDGET_SECONDS
-    occurrences: list[tuple[CalendarEvent, datetime, datetime | None]] = []
+Occurrence = tuple[CalendarEvent, datetime, datetime | None]
+
+
+def by_account(events: list[CalendarEvent]) -> list[list[CalendarEvent]]:
+    """The events the sync didn't refuse, grouped by calendar account, each
+    group ordered by the expansion cost the sync measured, cheapest first, with
+    events not checked yet last."""
+    groups: dict[int | None, list[CalendarEvent]] = {}
+    for event in events:
+        if event.recurrence_expandable is not False:
+            groups.setdefault(event.calendar_account_id, []).append(event)
+    return [
+        sorted(group, key=lambda event: (event.recurrence_cost_ms is None, event.recurrence_cost_ms or 0.0))
+        for _, group in sorted(groups.items(), key=lambda item: item[0] or 0)
+    ]
+
+
+def expand_until(
+    events: list[CalendarEvent], start_range: datetime, end_range: datetime, deadline: float
+) -> tuple[list[Occurrence], list[int]]:
+    """Occurrences of ``events`` in order until ``deadline``, and the ids of the
+    events left unexpanded."""
+    occurrences: list[Occurrence] = []
     for index, event in enumerate(events):
         if time.monotonic() > deadline:
-            skipped = [e.id for e in events[index:]]
-            logger.warning(
-                "Calendar query ran out of time; skipped %d recurring events, first ids %s",
-                len(skipped),
-                skipped[:20],
-            )
-            return occurrences
+            return occurrences, [e.id for e in events[index:]]
         occurrences.extend(
             (event, start, end)
             for start, end in expand_or_skip(event, start_range, end_range, deadline)
+        )
+    return occurrences, []
+
+
+def expand_within_budget(
+    events: list[CalendarEvent], start_range: datetime, end_range: datetime
+) -> list[Occurrence]:
+    """(event, start, end) for each occurrence of the recurring events in the range,
+    within QUERY_EXPANSION_BUDGET_SECONDS.
+
+    Each calendar account gets an equal share of what is left when its turn
+    comes, so one account's events can't use up another's time. Events left
+    once their account's share is spent are skipped, with a warning naming
+    their ids.
+    """
+    deadline = time.monotonic() + QUERY_EXPANSION_BUDGET_SECONDS
+    groups = by_account(events)
+    occurrences: list[Occurrence] = []
+    skipped: list[int] = []
+    for index, group in enumerate(groups):
+        now = time.monotonic()
+        share = now + (deadline - now) / (len(groups) - index)
+        found, left = expand_until(group, start_range, end_range, share)
+        occurrences += found
+        skipped += left
+    if skipped:
+        logger.warning(
+            "Calendar query ran out of time; skipped %d recurring events, first ids %s",
+            len(skipped),
+            skipped[:20],
         )
     return occurrences
 

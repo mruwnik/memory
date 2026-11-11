@@ -1216,6 +1216,14 @@ def shown(rendered: str, tag: str | None = None) -> str:
     return rendered.replace(tag, "T")
 
 
+def in_block(result: dict, value: Any) -> bool:
+    """Whether `value` is one block of the tag `result`'s preamble names."""
+    tag = untrusted_tag(result["untrusted"])
+    return isinstance(value, str) and bool(
+        re.fullmatch(rf"<{tag} id=\S+ field=[\w.]+>.*</{tag}>", value, re.DOTALL)
+    )
+
+
 def unwrapped(result: Any, tag: str | None = None) -> Any:
     """A tool result with its preamble dropped and each block's text in place of
     the block, for tests about what the text is rather than how it's wrapped."""

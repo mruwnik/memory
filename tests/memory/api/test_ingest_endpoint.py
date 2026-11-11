@@ -157,3 +157,24 @@ def test_upload_duplicate_returns_existing_status(client, user, tmp_path, monkey
     body = resp.json()
     assert body["job_id"] == 42
     assert body["status"] == "completed"
+
+
+def test_upload_link_takes_one_upload(client, user, tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "MISC_STORAGE_DIR", tmp_path / "misc")
+    token = _mint(user.id)
+    with patch("memory.api.ingest.dispatch_job", return_value=_make_dispatch_result()) as dispatch:
+        first = client.put(f"/ingest/upload?token={token}", content=b"%PDF-1.4 fake")
+        replay = client.put(f"/ingest/upload?token={token}", content=b"%PDF-1.4 other")
+    assert (first.status_code, replay.status_code, dispatch.call_count) == (200, 409, 1)
+
+
+def test_upload_refused_when_the_claim_cannot_be_recorded(client, user, monkeypatch):
+    import redis
+
+    def down(*args, **kwargs):
+        raise redis.ConnectionError("down")
+
+    monkeypatch.setattr("memory.api.ingest.claim_upload_token", down, raising=False)
+    with patch("memory.api.ingest.dispatch_job") as dispatch:
+        resp = client.put(f"/ingest/upload?token={_mint(user.id)}", content=b"%PDF-1.4 fake")
+    assert (resp.status_code, dispatch.called) == (503, False)

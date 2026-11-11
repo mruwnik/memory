@@ -1,6 +1,44 @@
 // Kept out of ui.tsx so pages that never render markdown don't load react-markdown.
+import { useState } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
-import { cx } from '@/components/shared/ui'
+import { Button, cx } from '@/components/shared/ui'
+
+// Markdown here comes from mail, documents and agents, so an image hosted elsewhere
+// would tell its owner who viewed it, when, and from which instance (or carry data
+// out in its URL). Only images from this server load by themselves.
+export const isOwnImage = (src: string, origin: string = window.location.origin) => {
+  if (/^(data|blob):/i.test(src)) return true
+  try {
+    return new URL(src, origin).origin === origin
+  } catch {
+    return false
+  }
+}
+
+const hostOf = (src: string) => {
+  try {
+    return new URL(src).host
+  } catch {
+    return src
+  }
+}
+
+const RemoteImage = ({ src, alt }: { src: string; alt?: string }) => {
+  const [shown, setShown] = useState(false)
+  if (shown) return <img src={src} alt={alt} referrerPolicy="no-referrer" className="max-w-full h-auto" />
+  return (
+    // The image may sit inside a link; loading it shouldn't follow the link too.
+    <Button size="sm" onClick={e => { e.preventDefault(); e.stopPropagation(); setShown(true) }} title={src}>
+      Load image{alt ? ` "${alt}"` : ''} from {hostOf(src)}
+    </Button>
+  )
+}
+
+const MarkdownImage = ({ src, alt }: { src?: string | Blob; alt?: string }) => {
+  if (typeof src !== 'string' || !src) return null
+  if (isOwnImage(src)) return <img src={src} alt={alt} className="max-w-full h-auto" />
+  return <RemoteImage src={src} alt={alt} />
+}
 
 // Text inherits its colour, so markdown reads correctly inside a Notice as well as on white.
 const COMPONENTS: Components = {
@@ -17,6 +55,7 @@ const COMPONENTS: Components = {
   pre: ({ children }) => <pre className="mb-4">{children}</pre>,
   blockquote: ({ children }) => <blockquote className="border-l-4 border-slate-300 pl-4 italic mb-4">{children}</blockquote>,
   hr: () => <hr className="border-slate-200 my-6" />,
+  img: ({ src, alt }) => <MarkdownImage src={src} alt={alt} />,
 }
 
 export const Markdown = ({ children, className }: { children: string; className?: string }) => (

@@ -10,6 +10,7 @@ from typing import Any, Literal
 
 from fastmcp import FastMCP
 
+from memory.agents.subscription_input import new_tag, preamble, wrap_fields
 from memory.api.MCP.access import (
     get_mcp_current_user,
     get_project_roles_by_user_id,
@@ -37,6 +38,13 @@ _UNSET: Any = "__UNSET__"
 
 organizer_mcp = FastMCP("org")
 
+# Fields written by whoever sent the invite, or extracted from a meeting transcript.
+EVENT_TEXT_FIELDS = frozenset(
+    {"event_title", "location", "calendar_name", "attendees", "meeting_link"}
+)
+TASK_TEXT_FIELDS = frozenset({"task_title", "tags"})
+JOURNAL_TEXT_FIELDS = frozenset({"content"})
+
 
 @organizer_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_ORGANIZER), has_items(CalendarEvent))
@@ -46,7 +54,7 @@ async def upcoming(
     days: int = 7,
     limit: int = 50,
     user_ids: list[int] | None = None,
-) -> list[EventDict]:
+) -> dict[str, Any]:
     """
     Get calendar events within a time span.
     Use to check the user's schedule, find meetings, or plan around events.
@@ -61,15 +69,18 @@ async def upcoming(
         user_ids: If provided, only return events from calendars owned by these users.
                   Only admins may name users other than themselves.
 
-    Returns: List of events with id, event_title, start_time, end_time, all_day,
-             location, calendar_name, recurrence_rule. Sorted by start_time.
+    Returns: {untrusted, events}: events with id, event_title, start_time, end_time,
+             all_day, location, calendar_name, recurrence_rule, attendees and
+             meeting_link, sorted by start_time. untrusted names the tag of the
+             blocks holding text the invite's sender wrote.
     """
     days = min(max(days, 1), 365)
     limit = min(max(limit, 1), 1000)
 
+    tag = new_tag()
     user = get_mcp_current_user()
     if user is None or user.id is None:
-        return []
+        return {"untrusted": preamble(tag), "events": []}
 
     is_admin = has_admin_scope(user)
     if not is_admin and any(uid != user.id for uid in user_ids or []):
@@ -78,9 +89,13 @@ async def upcoming(
     range_start, range_end = parse_date_range(start_date, end_date, days)
     # Expanding recurring events is CPU-bound and can take a while, so it runs
     # in a thread rather than stalling every other request on this server.
-    return await asyncio.to_thread(
+    events = await asyncio.to_thread(
         events_in_range_for, user, is_admin, range_start, range_end, limit, user_ids
     )
+    return {
+        "untrusted": preamble(tag),
+        "events": [wrap_fields(tag, e, EVENT_TEXT_FIELDS) for e in events],
+    }
 
 
 def events_in_range_for(
@@ -121,7 +136,7 @@ async def list_tasks(
     include_completed: bool = False,
     limit: int = 50,
     offset: int = 0,
-) -> list[TaskDict]:
+) -> dict[str, Any]:
     """
     List the user's tasks/todos with optional filtering.
     Use to check what tasks are pending, find high-priority items, or review completed work.
@@ -133,15 +148,18 @@ async def list_tasks(
         limit: Maximum tasks to return (default 50, max 200)
         offset: Number of results to skip for pagination (default 0, max 10000)
 
-    Returns: List of tasks with id, task_title, due_date, priority, status,
-             recurrence, completed_at, tags. Sorted by due_date then priority.
+    Returns: {untrusted, tasks}: tasks with id, task_title, due_date, priority,
+             status, recurrence, completed_at and tags, sorted by due_date then
+             priority. untrusted names the tag of the blocks holding text people
+             wrote (titles and tags, which may come from meeting transcripts).
     """
     limit = min(max(limit, 1), 200)
     offset = min(max(offset, 0), 10000)
 
+    tag = new_tag()
     user = get_mcp_current_user()
     if user is None or user.id is None:
-        return []
+        return {"untrusted": preamble(tag), "tasks": []}
 
     with make_session() as session:
         # Build the standard access filter — admins see everything (None),
@@ -154,7 +172,7 @@ async def list_tasks(
             project_roles = get_project_roles_by_user_id(user.id, session)
             access_filter = build_access_filter(user, project_roles)
 
-        return get_tasks(
+        tasks = get_tasks(
             session,
             status=status,
             priority=priority,
@@ -163,11 +181,15 @@ async def list_tasks(
             offset=offset,
             access_filter=access_filter,
         )
+    return {
+        "untrusted": preamble(tag),
+        "tasks": [wrap_fields(tag, t, TASK_TEXT_FIELDS) for t in tasks],
+    }
 
 
 @organizer_mcp.tool(annotations=READ_ONLY)
 @visible_when(require_scopes(SCOPE_ORGANIZER), has_items(Task))
-async def fetch(task_id: int, include_journal: bool = False) -> TaskDict | dict:
+async def fetch(task_id: int, include_journal: bool = False) -> dict:
     """
     Get a specific task by ID.
     Use to retrieve full details of a single task.
@@ -177,8 +199,10 @@ async def fetch(task_id: int, include_journal: bool = False) -> TaskDict | dict:
         include_journal: Whether to include journal entries (default False)
 
     Returns:
-        Dict with task details (id, task_title, due_date, priority, status,
-        recurrence, completed_at, tags), or error dict if not found.
+        {untrusted, success, task, journal_entries?} with the task's id, task_title,
+        due_date, priority, status, recurrence, completed_at and tags, or an error
+        dict if not found. untrusted names the tag of the blocks holding text people
+        wrote (task titles and tags, journal entry content).
     """
     user = get_mcp_current_user()
     if user is None or user.id is None:
@@ -200,7 +224,12 @@ async def fetch(task_id: int, include_journal: bool = False) -> TaskDict | dict:
                 # existence of the row to a user who can't read it.
                 return {"error": f"Task {task_id} not found"}
 
-        result: TaskDict | dict = {"success": True, "task": task_to_dict(task)}
+        tag = new_tag()
+        result: dict[str, Any] = {
+            "untrusted": preamble(tag),
+            "success": True,
+            "task": wrap_fields(tag, task_to_dict(task), TASK_TEXT_FIELDS),
+        }
 
         if include_journal:
             user_id = getattr(user, "id", None) if user else None
@@ -225,7 +254,9 @@ async def fetch(task_id: int, include_journal: bool = False) -> TaskDict | dict:
                 if journal_filter is not True:
                     journal_query = journal_query.filter(journal_filter)
             journal_entries = journal_query.order_by(JournalEntry.created_at.asc()).all()
-            result["journal_entries"] = [e.as_payload() for e in journal_entries]
+            result["journal_entries"] = [
+                wrap_fields(tag, e.as_payload(), JOURNAL_TEXT_FIELDS) for e in journal_entries
+            ]
 
         return result
 

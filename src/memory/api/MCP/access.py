@@ -226,6 +226,25 @@ def require_can_write_at_sensitivity(
         )
 
 
+def require_can_place(user: Any, project_id: int | None, sensitivity: str) -> None:
+    """Check that the caller may write content at ``(project_id, sensitivity)``.
+
+    With a project, the caller must be a member whose role permits the
+    sensitivity. Without one (creator-only content), only the sensitivity
+    string is validated. Every tool that takes both from user input calls
+    this before writing.
+    """
+    if project_id is None:
+        if sensitivity not in ALLOWED_SENSITIVITIES:
+            raise ValueError(
+                f"Invalid sensitivity {sensitivity!r}; must be one of "
+                f"{sorted(ALLOWED_SENSITIVITIES)}."
+            )
+        return
+    require_project_membership(user, project_id)
+    require_can_write_at_sensitivity(user, project_id, sensitivity)
+
+
 def log_search_access(
     user_id: int,
     query: str,

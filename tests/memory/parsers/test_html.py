@@ -310,7 +310,7 @@ def test_extract_metadata():
 
 @patch("memory.parsers.html.is_safe_url", return_value=True)
 @patch("memory.parsers.html.stream_download_to_path")
-@patch("memory.parsers.html.PILImage.open")
+@patch("memory.parsers.html.open_image")
 def test_process_image_success(mock_pil_open, mock_stream_download, mock_is_safe):
     # Helper writes the file and returns True on success — mimic that.
     def fake_download(url, dest, max_bytes, **kwargs):
@@ -356,7 +356,7 @@ def test_process_image_http_error(mock_stream_download, mock_is_safe):
 
 @patch("memory.parsers.html.is_safe_url", return_value=True)
 @patch("memory.parsers.html.stream_download_to_path")
-@patch("memory.parsers.html.PILImage.open")
+@patch("memory.parsers.html.open_image")
 def test_process_image_pil_error(mock_pil_open, mock_stream_download, mock_is_safe):
     def fake_download(url, dest, max_bytes, **kwargs):
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -477,7 +477,7 @@ def test_fetch_html_304_short_circuits(
 
 @patch("memory.parsers.html.is_safe_url", return_value=True)
 @patch("memory.parsers.html.stream_download_to_path")
-@patch("memory.parsers.html.PILImage.open")
+@patch("memory.parsers.html.open_image")
 def test_process_image_cached(mock_pil_open, mock_stream_download, mock_is_safe):
     # Create a temporary file to simulate cached image
     with tempfile.TemporaryDirectory() as temp_dir:

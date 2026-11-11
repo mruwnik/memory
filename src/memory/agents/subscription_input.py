@@ -291,6 +291,25 @@ def untrusted(tag: str, item_id: Any, field: str, text: str, limit: int | None =
     return f"<{tag} id={item_id} field={FIELD_UNSAFE.sub('_', field)}>{body}</{tag}>"
 
 
+def untrusted_value(tag: str, item_id: Any, field: str, value: Any) -> Any:
+    """`value` in one `tag` block: text as is, lists and dicts as JSON in a block
+    whose field ends in .json. Empty values pass through."""
+    if value is None or value in ("", [], {}):
+        return value
+    if isinstance(value, (list, dict)):
+        text = json.dumps(value, ensure_ascii=False, default=str)
+        return untrusted(tag, item_id, f"{field}.json", text)
+    return untrusted(tag, item_id, field, str(value))
+
+
+def wrap_fields(tag: str, record: Mapping[str, Any], fields: Collection[str]) -> dict[str, Any]:
+    """`record` with each of `fields` in a `tag` block named by the record's id."""
+    return {
+        field: untrusted_value(tag, record["id"], field, value) if field in fields else value
+        for field, value in record.items()
+    }
+
+
 def bare(text: str) -> str:
     # Single line and short, so a name can't pass for the input's structure.
     return " ".join(escaped(text).split())[:BARE_CHARS]

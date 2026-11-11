@@ -435,10 +435,10 @@ MCP.call('method_name', { params })
 MCP.batch([
   { method: 'people_list_all', params: { limit: 10 } },
   { method: 'core_list_items', params: { limit: 5 } }
-]).then(([people, listed]) => { /* listed.items, listed.total, listed.has_more */ });
+]).then(([found, listed]) => { /* found.people, listed.items, listed.total, listed.has_more */ });
 ```
 
-Tools that read stored content (`core_search`, `core_fetch`, `core_list_items`, the Slack and Discord thread tools, `github_pr_diff`) hand agents text people wrote inside `<untrusted_item_…>` blocks, named by the result's `untrusted` preamble, with lists and dicts as JSON in a block whose field ends in `.json`. The client unwraps them, so a report gets the plain values; text is still text, so put it in the page with `textContent`, not `innerHTML`.
+Tools that read stored content (`core_search`, `core_fetch`, `core_list_items`, `core_search_observations`, the people, organizer, deadlines and journal read tools, the Slack and Discord thread tools, `github_pr_diff`) hand agents text people wrote inside `<untrusted_item_…>` blocks, named by the result's `untrusted` preamble, with lists and dicts as JSON in a block whose field ends in `.json`. The client unwraps them, so a report gets the plain values; text is still text, so put it in the page with `textContent`, not `innerHTML`.
 
 Reports must be created with `allow_scripts=True` for this to load (set via the UI / API on the report record). The library uses the `access_token` cookie for auth, so reports inherit the viewing user's permissions.
 

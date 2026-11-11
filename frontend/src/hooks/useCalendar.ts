@@ -61,8 +61,8 @@ export const useCalendar = () => {
     if (userIds && userIds.length > 0) {
       params.user_ids = userIds
     }
-    const result = await mcpCall('organizer_upcoming', params) as CalendarEvent[][] | null
-    return result?.[0] || []
+    const result = await mcpCall<{ events: CalendarEvent[] }[] | null>('organizer_upcoming', params)
+    return result?.[0]?.events ?? []
   }, [mcpCall])
 
   const getMonthEvents = useCallback(async (
@@ -138,8 +138,8 @@ export const useCalendar = () => {
     if (filters.userIds && filters.userIds.length > 0) {
       params.user_ids = filters.userIds
     }
-    const result = await mcpCall('organizer_upcoming', params) as CalendarEvent[][] | null
-    return result?.[0] || []
+    const result = await mcpCall<{ events: CalendarEvent[] }[] | null>('organizer_upcoming', params)
+    return result?.[0]?.events ?? []
   }, [mcpCall])
 
   const clearCache = useCallback(() => {

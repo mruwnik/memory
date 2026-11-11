@@ -29,7 +29,7 @@ describe('PeopleManagement list states', () => {
   it('shows loading state initially', () => {
     mockFetchRoutes({
       '/auth/me': authMe,
-      people_list_all: mcpResult([]),
+      people_list_all: mcpResult({ people: [] }),
       teams_list_all: mcpResult({ teams: [], count: 0 }),
     })
     renderWithRouter(<PeopleManagement />)
@@ -39,7 +39,7 @@ describe('PeopleManagement list states', () => {
   it('renders empty state when no people exist', async () => {
     mockFetchRoutes({
       '/auth/me': authMe,
-      people_list_all: mcpResult([]),
+      people_list_all: mcpResult({ people: [] }),
       teams_list_all: mcpResult({ teams: [], count: 0 }),
     })
     renderWithRouter(<PeopleManagement />)
@@ -51,7 +51,7 @@ describe('PeopleManagement list states', () => {
   it('renders a populated list and the summary count', async () => {
     mockFetchRoutes({
       '/auth/me': authMe,
-      people_list_all: mcpResult([person(), person({ id: 2, identifier: 'bob', display_name: 'Bob' })]),
+      people_list_all: mcpResult({ people: [person(), person({ id: 2, identifier: 'bob', display_name: 'Bob' })] }),
       teams_list_all: mcpResult({ teams: [], count: 0 }),
     })
     renderWithRouter(<PeopleManagement />)
@@ -64,7 +64,7 @@ describe('PeopleManagement list states', () => {
     const many = Array.from({ length: 200 }, (_, i) => person({ id: i + 1, identifier: `p${i}`, display_name: `P${i}` }))
     mockFetchRoutes({
       '/auth/me': authMe,
-      people_list_all: mcpResult(many),
+      people_list_all: mcpResult({ people: many }),
       teams_list_all: mcpResult({ teams: [{ id: 5, name: 'Core' }], count: 1 }),
       teams_fetch: mcpResult({ team: { id: 5, name: 'Core', members: [{ identifier: 'p1' }] } }),
     })
@@ -89,7 +89,7 @@ describe('PeopleManagement with teams off', () => {
   it('does not load teams or offer the team filter', async () => {
     const fetchMock = mockFetchRoutes({
       '/auth/me': authMe,
-      people_list_all: mcpResult([person()]),
+      people_list_all: mcpResult({ people: [person()] }),
       teams_list_all: mcpResult({ teams: [{ id: 1, name: 'Core', slug: 'core' }], count: 1 }),
     })
     renderWithRouter(<PeopleManagement />, { modules: new Set() })
@@ -104,7 +104,7 @@ describe('PeopleManagement create flow', () => {
   it('opens the create modal, submits, and closes on success', async () => {
     const fetchMock = mockFetchRoutes({
       '/auth/me': authMe,
-      people_list_all: mcpResult([]),
+      people_list_all: mcpResult({ people: [] }),
       teams_list_all: mcpResult({ teams: [], count: 0 }),
       people_upsert: mcpResult({ success: true }),
     })
@@ -124,7 +124,7 @@ describe('PeopleManagement create flow', () => {
   it('shows an error inside the modal when create fails', async () => {
     mockFetchRoutes({
       '/auth/me': authMe,
-      people_list_all: mcpResult([]),
+      people_list_all: mcpResult({ people: [] }),
       teams_list_all: mcpResult({ teams: [], count: 0 }),
       people_upsert: { status: 500, json: { detail: 'nope' } },
     })
@@ -144,7 +144,7 @@ describe('PeopleManagement edit flow', () => {
   it('opens the edit modal prefilled and submits an update', async () => {
     const fetchMock = mockFetchRoutes({
       '/auth/me': authMe,
-      people_list_all: mcpResult([person()]),
+      people_list_all: mcpResult({ people: [person()] }),
       teams_list_all: mcpResult({ teams: [], count: 0 }),
       people_upsert: mcpResult({ success: true }),
     })
@@ -166,7 +166,7 @@ describe('PeopleManagement delete flow', () => {
   it('confirms deletion via the dialog and issues the delete call', async () => {
     const fetchMock = mockFetchRoutes({
       '/auth/me': authMe,
-      people_list_all: mcpResult([person()]),
+      people_list_all: mcpResult({ people: [person()] }),
       teams_list_all: mcpResult({ teams: [], count: 0 }),
       people_delete: mcpResult({ deleted: true, identifier: 'alice', display_name: 'Alice' }),
     })
@@ -185,7 +185,7 @@ describe('PeopleManagement delete flow', () => {
   it('cancels deletion without calling delete', async () => {
     const fetchMock = mockFetchRoutes({
       '/auth/me': authMe,
-      people_list_all: mcpResult([person()]),
+      people_list_all: mcpResult({ people: [person()] }),
       teams_list_all: mcpResult({ teams: [], count: 0 }),
     })
     const { user } = renderWithRouter(<PeopleManagement />)
@@ -204,7 +204,7 @@ describe('PeopleManagement search and tag filtering', () => {
   it('debounces search input and forwards the term to people_list_all', async () => {
     const fetchMock = mockFetchRoutes({
       '/auth/me': authMe,
-      people_list_all: mcpResult([person()]),
+      people_list_all: mcpResult({ people: [person()] }),
       teams_list_all: mcpResult({ teams: [], count: 0 }),
     })
     const { user } = renderWithRouter(<PeopleManagement />)
@@ -223,7 +223,7 @@ describe('PeopleManagement search and tag filtering', () => {
   it('toggles a tag filter and re-queries with the selected tag', async () => {
     const fetchMock = mockFetchRoutes({
       '/auth/me': authMe,
-      people_list_all: mcpResult([person({ tags: ['vip'] })]),
+      people_list_all: mcpResult({ people: [person({ tags: ['vip'] })] }),
       teams_list_all: mcpResult({ teams: [], count: 0 }),
     })
     const { user } = renderWithRouter(<PeopleManagement />)
@@ -244,7 +244,7 @@ describe('PeopleManagement search and tag filtering', () => {
   it('shows the "no match" empty message when searching yields nothing', async () => {
     mockFetchRoutes({
       '/auth/me': authMe,
-      people_list_all: mcpResult([]),
+      people_list_all: mcpResult({ people: [] }),
       teams_list_all: mcpResult({ teams: [], count: 0 }),
     })
     const { user } = renderWithRouter(<PeopleManagement />)
@@ -259,7 +259,7 @@ describe('PeopleManagement team filter', () => {
     const fetchMock = mockFetchRoutes({
       '/auth/me': authMe,
       teams_list_all: mcpResult({ teams: [{ id: 7, name: 'Eng', slug: 'eng', member_count: 3 }], count: 1 }),
-      people_list_all: mcpResult([person(), person({ id: 2, identifier: 'bob', display_name: 'Bob' })]),
+      people_list_all: mcpResult({ people: [person(), person({ id: 2, identifier: 'bob', display_name: 'Bob' })] }),
       teams_fetch: mcpResult({ team: { id: 7, members: [{ id: 1, identifier: 'alice', display_name: 'Alice' }] } }),
     })
     const { user } = renderWithRouter(<PeopleManagement />)
@@ -278,10 +278,9 @@ describe('PeopleManagement merge flow', () => {
   it('selects two people, opens the merge modal, and merges', async () => {
     const fetchMock = mockFetchRoutes({
       '/auth/me': authMe,
-      people_list_all: mcpResult([
-        person(),
-        person({ id: 2, identifier: 'bob', display_name: 'Bob' }),
-      ]),
+      people_list_all: mcpResult({
+        people: [person(), person({ id: 2, identifier: 'bob', display_name: 'Bob' })],
+      }),
       teams_list_all: mcpResult({ teams: [], count: 0 }),
       people_merge: mcpResult({ success: true, merged_from: ['bob'] }),
     })
@@ -306,7 +305,7 @@ describe('PeopleManagement merge flow', () => {
   it('shows a merge failure inside the merge modal', async () => {
     mockFetchRoutes({
       '/auth/me': authMe,
-      people_list_all: mcpResult([person(), person({ id: 2, identifier: 'bob', display_name: 'Bob' })]),
+      people_list_all: mcpResult({ people: [person(), person({ id: 2, identifier: 'bob', display_name: 'Bob' })] }),
       teams_list_all: mcpResult({ teams: [], count: 0 }),
       people_merge: mcpResult({ success: false, error: 'merge refused' }),
     })
@@ -324,7 +323,7 @@ describe('PeopleManagement merge flow', () => {
   it('clears merge selection', async () => {
     mockFetchRoutes({
       '/auth/me': authMe,
-      people_list_all: mcpResult([person(), person({ id: 2, identifier: 'bob', display_name: 'Bob' })]),
+      people_list_all: mcpResult({ people: [person(), person({ id: 2, identifier: 'bob', display_name: 'Bob' })] }),
       teams_list_all: mcpResult({ teams: [], count: 0 }),
     })
     const { user } = renderWithRouter(<PeopleManagement />)
@@ -342,7 +341,7 @@ describe('PeopleManagement expand', () => {
   it('fetches teams and tidbits when a card is expanded', async () => {
     const fetchMock = mockFetchRoutes({
       '/auth/me': authMe,
-      people_list_all: mcpResult([person({ aliases: ['ali'] })]),
+      people_list_all: mcpResult({ people: [person({ aliases: ['ali'] })] }),
       teams_list_all: mcpResult({ teams: [], count: 0 }),
       people_fetch: mcpResult({ person: { teams: [{ id: 3, name: 'Eng' }] } }),
     })
@@ -361,7 +360,7 @@ describe('PeopleManagement failed expand loads', () => {
   // people_fetch serves both loads: include_teams for teams, include_tidbits for tidbits.
   const serve = (state: { failing: boolean }) => mockFetch(async (input, init) => {
     const tool = mcpToolFromRequest(input, init)
-    if (tool === 'people_list_all') return mockResponse({ json: mcpEnvelopeJson([person()]) })
+    if (tool === 'people_list_all') return mockResponse({ json: mcpEnvelopeJson({ people: [person()] }) })
     if (tool === 'teams_list_all') return mockResponse({ json: mcpEnvelopeJson({ teams: [], count: 0 }) })
     if (tool !== 'people_fetch') return mockResponse(authMe)
     if (state.failing) return mockResponse({ status: 500, json: { detail: 'down' } })
@@ -407,7 +406,7 @@ describe('PeopleManagement tidbits', () => {
 
   const routes = (extra: Record<string, ReturnType<typeof mcpResult>>) => mockFetchRoutes({
     '/auth/me': authMe,
-    people_list_all: mcpResult([person()]),
+    people_list_all: mcpResult({ people: [person()] }),
     teams_list_all: mcpResult({ teams: [], count: 0 }),
     teams_fetch: mcpResult({ teams: [] }),
     people_fetch: mcpResult(person({ tidbits: [tidbit] })),

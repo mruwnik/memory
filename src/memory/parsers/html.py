@@ -13,6 +13,7 @@ from PIL import Image as PILImage
 
 from memory.common import paths, settings
 from memory.common.downloads import safe_get, stream_download_to_path
+from memory.common.images import open_image
 from memory.common.html_text import html_to_markdown
 from memory.common.ssrf import UnsafeURLError, validate_public_url
 
@@ -279,7 +280,7 @@ def process_image(url: str, image_dir: pathlib.Path) -> PILImage.Image | None:
             return None
 
     try:
-        return PILImage.open(local_path)
+        return open_image(local_path)
     except IOError as e:
         logger.warning(f"Failed to open image as PIL Image {local_path}: {e}")
         return None

@@ -21,6 +21,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -35,6 +36,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from uuid import UUID as PyUUID
 
 from memory.common import discord_attachments, paths, settings
+from memory.common.images import open_image
 import memory.common.extract as extract
 import memory.common.summarizer as summarizer
 import memory.common.formatters.observation as observation
@@ -552,7 +554,7 @@ class DiscordMessage(SourceItem):
             try:
                 full_path = settings.FILE_STORAGE_DIR / path
                 if full_path.exists():
-                    image = Image.open(full_path)
+                    image = open_image(full_path)
                     content["images"].append(image)
             except Exception:
                 pass  # Skip failed image loads
@@ -711,7 +713,7 @@ class SlackMessage(SourceItem):
             try:
                 full_path = settings.FILE_STORAGE_DIR / path
                 if full_path.exists():
-                    image = Image.open(full_path)
+                    image = open_image(full_path)
                     content["images"].append(image)
             except Exception:
                 pass  # Skip failed image loads
@@ -856,7 +858,7 @@ class BeeperMessage(SourceItem):
         images = []
         for path in self.images or []:
             try:
-                images.append(Image.open(settings.FILE_STORAGE_DIR / path))
+                images.append(open_image(settings.FILE_STORAGE_DIR / path))
             except OSError:
                 logger.info("Beeper message %s: an image could not be opened", self.id)
         return {"text": self.title, "images": images}
@@ -940,7 +942,7 @@ class Photo(SourceItem):
         return " | ".join(parts)
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
-        image = Image.open(settings.FILE_STORAGE_DIR / (self.filename or ""))
+        image = open_image(settings.FILE_STORAGE_DIR / (self.filename or ""))
         return [extract.DataChunk(data=[image])]
 
     @classmethod
@@ -1005,7 +1007,7 @@ class Comic(SourceItem):
         )
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
-        image = Image.open(settings.FILE_STORAGE_DIR / (self.filename or ""))
+        image = open_image(settings.FILE_STORAGE_DIR / (self.filename or ""))
         description = f"{self.title} by {self.author}"
         return [extract.DataChunk(data=[image, description])]
 
@@ -2288,9 +2290,11 @@ class CalendarEvent(SourceItem):
     all_day: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     location: Mapped[str | None] = mapped_column(Text, nullable=True)
     recurrence_rule: Mapped[str | None] = mapped_column(Text, nullable=True)  # RRULE format
-    # Whether recurrence_rule yields any occurrence, checked by the sync (see
-    # common.calendar.recurrence_expandable). NULL: no rule, or not checked yet.
+    # Whether queries may expand recurrence_rule, and what expanding it cost in
+    # milliseconds, checked by the sync (see common.calendar.check_recurrence).
+    # NULL: no rule, or not checked yet.
     recurrence_expandable: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    recurrence_cost_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     # Sync metadata
     calendar_account_id: Mapped[int | None] = mapped_column(

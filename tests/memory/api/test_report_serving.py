@@ -50,8 +50,8 @@ def test_serve_html_report_has_csp_headers(
     assert response.headers.get("x-content-type-options") == "nosniff"
 
 
-def test_serve_pdf_report_no_csp_headers(client: TestClient, user, db_session):
-    """PDF reports should not include CSP headers."""
+def test_serve_pdf_report_has_no_sandbox_csp(client: TestClient, user, db_session):
+    """PDF reports carry no sandbox CSP (Chrome's viewer refuses one), only the framing rule."""
     pdf_file = settings.REPORT_STORAGE_DIR / "test.pdf"
     pdf_file.write_bytes(b"%PDF-1.4 fake pdf")
 
@@ -69,7 +69,7 @@ def test_serve_pdf_report_no_csp_headers(client: TestClient, user, db_session):
     response = client.get("/reports/test.pdf")
 
     assert response.status_code == 200
-    assert "content-security-policy" not in response.headers
+    assert response.headers["content-security-policy"] == "frame-ancestors 'self'"
 
 
 def test_serve_report_404_not_found(client: TestClient, user):

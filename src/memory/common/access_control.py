@@ -726,6 +726,24 @@ def get_accessible_team_ids(
     return get_user_team_ids(db, user)
 
 
+# Project roles that may change a project itself: team `lead` and `admin`.
+PROJECT_ADMIN_ROLES = frozenset({ProjectRole.MANAGER.value, ProjectRole.ADMIN.value})
+
+
+def user_can_administer_project(
+    db: "Session | scoped_session[Session]", user: UserLike, project_id: int
+) -> bool:
+    """Check if a user may change, re-team or delete a project.
+
+    Global admins may. Otherwise the user's best role on the project, through
+    the teams assigned to it, must be manager or admin. Contributors can read
+    the project and add content to it, but not change it.
+    """
+    if has_admin_scope(user):
+        return True
+    return get_user_project_roles(db, user).get(project_id) in PROJECT_ADMIN_ROLES
+
+
 def user_can_access_project(
     db: "Session | scoped_session[Session]", user: UserLike, project_id: int
 ) -> bool:
@@ -757,11 +775,11 @@ def owner_may_file_into_project(
     """Whether a sync running on ``owner``'s credentials may file items under a project.
 
     Filing an item under a project grants that project's teams access to it,
-    so the source's owner must belong to one of them (or be an admin). A
-    project with no teams grants no one, so filing into it is always allowed.
+    so the source's owner must belong to one of them, admins included: anyone
+    who can read a repo may bind it to their project, and the binding alone
+    must not route the tracker's items there. A project with no teams grants
+    no one, so filing into it is always allowed.
     """
-    if has_admin_scope(owner):
-        return True
     project_team_ids = set(
         db.scalars(
             select(project_teams.c.team_id).where(project_teams.c.project_id == project_id)

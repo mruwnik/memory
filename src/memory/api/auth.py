@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import cache
 from typing import Any, TypeVar, cast
+from urllib.parse import urlsplit
 
 import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -17,6 +18,7 @@ from memory.common.db.connection import DBSession, get_session, make_session
 from memory.common.db.models import (
     APIKey,
     HumanUser,
+    OAuthClientInformation,
     OAuthRefreshToken,
     User,
     UserSession,
@@ -449,6 +451,88 @@ def get_interactive_user(
     return user
 
 
+def origin_of(url: str) -> str:
+    parts = urlsplit(url)
+    return f"{parts.scheme}://{parts.netloc}".lower()
+
+
+def web_ui_origins() -> set[str]:
+    """Where this server's own web UI runs: SERVER_URL, plus the dev
+    origins when ALLOW_LOCALHOST_CORS is on."""
+    dev = settings.LOCALHOST_CORS_ORIGINS if settings.ALLOW_LOCALHOST_CORS else []
+    return {origin_of(settings.SERVER_URL), *(origin_of(o) for o in dev)}
+
+
+# The web UI's OAuth callback is its root; browsers that registered before the
+# UI moved there still hold clients for /ui, which refresh but no longer authorize.
+WEB_UI_CALLBACK_PATHS = frozenset({"", "/", "/ui", "/ui/"})
+
+
+def on_web_ui_origin(uri: str) -> bool:
+    return origin_of(uri) in web_ui_origins()
+
+
+def is_web_ui_callback(uri: str) -> bool:
+    """Whether ``uri`` is exactly where the web UI receives its OAuth codes.
+
+    Other paths on the same origin serve content users upload (reports, files),
+    so a code sent there could be read by whoever wrote the page.
+    """
+    parts = urlsplit(uri)
+    return (
+        on_web_ui_origin(uri)
+        and parts.path in WEB_UI_CALLBACK_PATHS
+        and not parts.query
+        and not parts.fragment
+    )
+
+
+def session_oauth_client(db: DBSession, session: UserSession) -> OAuthClientInformation | None:
+    """The OAuth client a session was issued to: through its authorization, or
+    through the refresh token issued with it (refreshed sessions have no
+    authorization of their own)."""
+    if session.oauth_state is not None:
+        return session.oauth_state.client
+    refresh = (
+        db.query(OAuthRefreshToken)
+        .filter(OAuthRefreshToken.access_token_session_id == session.id)
+        .first()
+    )
+    return refresh.client if refresh else None
+
+
+def is_web_ui_session(db: DBSession, session: UserSession) -> bool:
+    """Whether the session is a person's own login to the web UI.
+
+    The web UI is an OAuth client whose redirect URIs are on this server, so
+    its codes and tokens land nowhere else. Sessions from other OAuth clients,
+    and sessions acting through an API key (agent runs), are not. A session
+    with no client at all comes from first-run setup.
+    """
+    if session.api_key_id is not None:
+        return False
+    client = session_oauth_client(db, session)
+    if client is None:
+        return session.oauth_state_id is None
+    uris = client.redirect_uris or []
+    return bool(uris) and all(is_web_ui_callback(str(uri)) for uri in uris)
+
+
+def require_web_ui_session(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: DBSession = Depends(get_session),
+) -> User:
+    """Some actions (creating API keys) are for a person at the web UI only:
+    not API keys, agent runs or other OAuth clients such as MCP connectors."""
+    if settings.DISABLE_AUTH:
+        return user
+    session = None if request_api_key(request, db) else get_user_session(request, db)
+    if session is None or not is_web_ui_session(db, session):
+        raise HTTPException(status_code=403, detail="Sign in to the web UI to do this")
+    return user
+
+
 def require_rest_access(
     request: Request,
     user: User = Depends(get_current_user),
@@ -666,7 +750,7 @@ def authenticate_user(email: str, password: str, db: DBSession) -> HumanUser | N
     return None
 
 
-@router.api_route("/logout", methods=["GET", "POST"])
+@router.post("/logout")
 def logout(request: Request, db: DBSession = Depends(get_session)):
     """Logout and clear session.
 

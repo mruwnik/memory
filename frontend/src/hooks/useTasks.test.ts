@@ -15,7 +15,7 @@ const sampleTask = { id: 1, task_title: 'do', status: 'pending', tags: [] }
 
 describe('useTasks.listTasks', () => {
   it('returns tasks with default params (include_completed false, limit 50, offset 0)', async () => {
-    const fetchMock = mockFetchRoutes({ organizer_list_tasks: mcpResult([sampleTask]) })
+    const fetchMock = mockFetchRoutes({ organizer_list_tasks: mcpResult({ tasks: [sampleTask] }) })
     const { listTasks } = setup()
 
     const out = await listTasks()
@@ -26,7 +26,7 @@ describe('useTasks.listTasks', () => {
   })
 
   it('forwards a single status and priority', async () => {
-    const fetchMock = mockFetchRoutes({ organizer_list_tasks: mcpResult([]) })
+    const fetchMock = mockFetchRoutes({ organizer_list_tasks: mcpResult({ tasks: [] }) })
     const { listTasks } = setup()
 
     await listTasks({ status: 'in_progress', priority: 'high', include_completed: true, limit: 5, offset: 2 })
@@ -41,7 +41,7 @@ describe('useTasks.listTasks', () => {
   })
 
   it('drops status when it is comma-separated (MCP accepts single values only)', async () => {
-    const fetchMock = mockFetchRoutes({ organizer_list_tasks: mcpResult([]) })
+    const fetchMock = mockFetchRoutes({ organizer_list_tasks: mcpResult({ tasks: [] }) })
     const { listTasks } = setup()
 
     await listTasks({ status: 'pending,in_progress' })

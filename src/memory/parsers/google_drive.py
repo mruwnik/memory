@@ -6,12 +6,13 @@ import logging
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Generator, TypedDict
+from typing import Any, Generator, TypedDict, cast
 
 import defusedxml.ElementTree as DefusedElementTree
-import pymupdf
 
+from memory.common.zip_limits import check_office_zip
 from memory.common import settings
+from memory.common.extract import open_pdf
 
 logger = logging.getLogger(__name__)
 
@@ -355,19 +356,20 @@ class GoogleDriveClient:
         Returns None on failure so callers can distinguish empty PDFs from errors.
         """
         try:
-            doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
-            text_parts = []
-            for page in doc:
-                text_parts.append(page.get_text())  # type: ignore[union-attr]
-            doc.close()
-            return "\n\n".join(text_parts)
+            with open_pdf(pdf_bytes) as doc:
+                if doc.page_count > settings.MAX_PDF_PAGES:
+                    logger.warning("Drive PDF has %d pages; skipping its text", doc.page_count)
+                    return None
+                return "\n\n".join(cast(str, page.get_text()) for page in doc.pages())
         except Exception:
             logger.exception("Failed to extract PDF text")
             return None
 
     def _extract_docx_text(self, docx_bytes: bytes) -> str:
-        """Extract text from Word document."""
+        """Extract text from Word document: empty when it can't be read or is
+        over the office file size limits (see zip_limits.check_office_zip)."""
         try:
+            check_office_zip(io.BytesIO(docx_bytes))
             # Using defusedxml to prevent XXE attacks from untrusted DOCX files
             with zipfile.ZipFile(io.BytesIO(docx_bytes)) as zf:
                 with zf.open("word/document.xml") as doc_xml:

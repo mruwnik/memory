@@ -11,7 +11,7 @@ from caldav.lib import error as caldav_error
 from googleapiclient.discovery import build
 import httpx
 
-from memory.common.calendar import recurrence_expandable, strip_rrule_prefix
+from memory.common.calendar import check_recurrence, strip_rrule_prefix
 from memory.common.celery_app import (
     SYNC_CALENDAR_ACCOUNT,
     SYNC_CALENDAR_EVENT,
@@ -150,6 +150,7 @@ def _create_calendar_event(
     if (meeting_link := event_data.get("meeting_link")):
         metadata["meeting_link"] = meeting_link
 
+    check = check_recurrence(event_data.get("recurrence_rule"), event_data["start_time"])
     return CalendarEvent(
         modality="calendar",
         sha256=_create_event_hash(cast(int, account.id), event_data),
@@ -160,9 +161,8 @@ def _create_calendar_event(
         all_day=event_data.get("all_day", False),
         location=event_data.get("location"),
         recurrence_rule=event_data.get("recurrence_rule"),
-        recurrence_expandable=recurrence_expandable(
-            event_data.get("recurrence_rule"), event_data["start_time"]
-        ),
+        recurrence_expandable=check.expandable,
+        recurrence_cost_ms=check.cost_ms,
         calendar_account_id=account.id,
         calendar_name=event_data.get("calendar_name"),
         external_id=event_data.get("external_id"),
@@ -178,8 +178,11 @@ def _update_existing_event(existing: CalendarEvent, event_data: EventData) -> No
         rule != existing.recurrence_rule
         or event_data["start_time"] != existing.start_time
         or (rule and existing.recurrence_expandable is None)
+        or (rule and existing.recurrence_expandable and existing.recurrence_cost_ms is None)
     ):
-        existing.recurrence_expandable = recurrence_expandable(rule, event_data["start_time"])
+        check = check_recurrence(rule, event_data["start_time"])
+        existing.recurrence_expandable = check.expandable
+        existing.recurrence_cost_ms = check.cost_ms
     existing.event_title = event_data["title"]
     existing.start_time = event_data["start_time"]
     existing.end_time = event_data.get("end_time")

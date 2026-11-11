@@ -1,6 +1,8 @@
 """SSH key import bounds the work a key file can ask the server to do."""
 
 import base64
+import struct
+import time
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -80,6 +82,38 @@ def openssh_key(rounds: int) -> bytes:
     )
     return ed25519.Ed25519PrivateKey.generate().private_bytes(
         serialization.Encoding.PEM, serialization.PrivateFormat.OpenSSH, encryption
+    )
+
+
+def ssh_str(value: bytes) -> bytes:
+    return struct.pack(">I", len(value)) + value
+
+
+def smuggled_openssh_key(rounds: int, separator: bytes) -> bytes:
+    """A bcrypt key whose first line ends in `separator`.
+
+    Read without that line, the body is a decoy header with kdf "none"; the
+    OpenSSH loader decodes leniently and reads the bcrypt header instead.
+    """
+    magic = b"openssh-key-v1\0"
+    public = ed25519.Ed25519PrivateKey.generate().public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw
+    )
+    pubkey = ssh_str(b"ssh-ed25519") + ssh_str(public)
+    decoy = magic + ssh_str(b"none") + ssh_str(b"none") + ssh_str(b"")
+    edata = decoy + b"\0" * (-len(decoy) % 48)
+
+    def head(salt_len: int) -> bytes:
+        options = ssh_str(b"S" * salt_len) + struct.pack(">I", rounds)
+        return (
+            magic + ssh_str(b"aes256-ctr") + ssh_str(b"bcrypt") + ssh_str(options)
+            + struct.pack(">I", 1) + ssh_str(pubkey) + struct.pack(">I", len(edata))
+        )
+
+    real = next(head(n) for n in range(16, 19) if len(head(n)) % 3 == 0)
+    return (
+        b"-----BEGIN OPENSSH PRIVATE KEY-----\n" + base64.b64encode(real) + separator + b"\n"
+        + base64.b64encode(edata) + b"\n-----END OPENSSH PRIVATE KEY-----\n"
     )
 
 
@@ -163,3 +197,11 @@ def test_ordinary_encrypted_keys_still_import(text):
 def test_an_invalid_rsa_key_under_the_cap_is_still_refused():
     with pytest.raises(ValueError):
         load_private_key(fake_rsa_key(2048), None)
+
+
+@pytest.mark.parametrize("separator", [b":", b": x", b"*", b"!"])
+def test_a_key_line_the_loader_would_read_differently_is_refused(separator):
+    start = time.monotonic()
+    with pytest.raises(ValueError, match="Malformed"):
+        load_private_key(smuggled_openssh_key(MAX_BCRYPT_ROUNDS * 4, separator), b"pw")
+    assert time.monotonic() - start < 1

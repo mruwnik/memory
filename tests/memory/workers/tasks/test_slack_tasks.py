@@ -71,7 +71,8 @@ def slack_workspace(db_session):
 
 @pytest.fixture
 def slack_credentials(db_session, slack_app, slack_workspace, slack_user):
-    """Create Slack credentials for testing."""
+    """Create Slack credentials for testing: the first connection, so its user owns the workspace."""
+    slack_workspace.owner_id = slack_user.id
     credentials = SlackUserCredentials(
         slack_app_id=slack_app.id,
         workspace_id=slack_workspace.id,

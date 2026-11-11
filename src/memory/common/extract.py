@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field, replace
 import io
+import zipfile
 import logging
 import math
 import mimetypes
@@ -10,9 +11,13 @@ from contextlib import contextmanager
 from typing import Any, Generator, Sequence, cast
 
 from memory.common import chunker, settings, summarizer
+from memory.common.file_magic import PDF_MAGIC_WINDOW, looks_like_pdf
 from memory.parsers import ebook
 import pymupdf  # PyMuPDF
 from PIL import Image
+from memory.common.images import open_image
+from memory.common.pandoc import PDF_ENGINE_ARGS, UNTRUSTED_INPUT_ARGS, run_pandoc
+from memory.common.zip_limits import check_office_zip
 
 # Backstop for every Image.open in the process. PIL only *warns* (and still
 # decodes) between MAX_IMAGE_PIXELS and 2x it — the band a worker OOMs in — and
@@ -30,11 +35,10 @@ Image.MAX_IMAGE_PIXELS = max(1, settings.MAX_IMAGE_PIXELS // 2)
 try:
     import pypandoc
 
-    pypandoc.get_pandoc_version()
-    HAS_PANDOC = True
+    PANDOC_PATH: str | None = pypandoc.get_pandoc_path()
 except (ImportError, OSError):
-    pypandoc = None  # type: ignore[assignment]
-    HAS_PANDOC = False
+    PANDOC_PATH = None
+HAS_PANDOC = PANDOC_PATH is not None
 
 logger = logging.getLogger(__name__)
 
@@ -218,6 +222,33 @@ def page_text_chunks(page: pymupdf.Page, modality: str) -> list[DataChunk]:
 MIN_PDF_PAGE_TEXT_CHARS = 16
 
 
+def open_pdf(content: bytes | pathlib.Path) -> pymupdf.Document:
+    """Open a PDF with MuPDF, refusing anything that isn't one.
+
+    MuPDF picks its handler from the content, whatever the caller asks for, and
+    opening a reflowable format (EPUB, MOBI, FB2, HTML) lays out the whole
+    document. Only content that starts with the PDF header and carries no
+    other format's signature, nor a zip directory, reaches MuPDF.
+    """
+    if isinstance(content, pathlib.Path):
+        with content.open("rb") as file:
+            head = file.read(PDF_MAGIC_WINDOW)
+        zipped = zipfile.is_zipfile(content)
+    else:
+        head = content[:PDF_MAGIC_WINDOW]
+        zipped = zipfile.is_zipfile(io.BytesIO(content))
+    if not looks_like_pdf(head) or zipped:
+        raise ValueError("Not a PDF")
+    if isinstance(content, pathlib.Path):
+        doc = pymupdf.open(content, filetype="pdf")
+    else:
+        doc = pymupdf.open(stream=content, filetype="pdf")
+    if not doc.is_pdf:
+        doc.close()
+        raise ValueError("Not a PDF")
+    return doc
+
+
 def extract_pdf(
     content: bytes | str | pathlib.Path,
     modality: str = "doc",
@@ -232,11 +263,12 @@ def extract_pdf(
     share its ``page`` metadata. Only the first ``max_image_pages`` pages get an
     image, since every page image is held in memory until the item is embedded.
 
-    Raises ValueError for a PDF of more than MAX_PDF_PAGES pages.
+    Raises ValueError for content that isn't a PDF, or a PDF of more than
+    MAX_PDF_PAGES pages.
     """
     chunks: list[DataChunk] = []
     with as_file(content) as file_path:
-        with pymupdf.open(file_path) as pdf:
+        with open_pdf(file_path) as pdf:
             if pdf.page_count > settings.MAX_PDF_PAGES:
                 raise ValueError(
                     f"PDF has {pdf.page_count} pages (limit {settings.MAX_PDF_PAGES})"
@@ -252,45 +284,42 @@ def docx_to_pdf(
     docx_path: pathlib.Path,
     output_path: pathlib.Path,
 ) -> pathlib.Path:
-    """Convert DOCX to PDF using pypandoc"""
-    if not HAS_PANDOC or pypandoc is None:
+    """Convert DOCX to PDF with pandoc and xelatex."""
+    if PANDOC_PATH is None:
         raise RuntimeError("pandoc is not installed — cannot convert DOCX to PDF")
 
-    # Now that we have all packages installed, try xelatex first as it has better Unicode support
-    try:
-        logger.info(f"Converting {docx_path} to PDF using xelatex")
-        extra_args = [
-            "--pdf-engine=xelatex",
-            "--variable=geometry:margin=1in",
-        ]
-        lua_filter = PANDOC_LUA_FILTER
-        if lua_filter.exists():
-            extra_args.append(f"--lua-filter={lua_filter}")
-        else:
-            logger.warning(
-                "Pandoc lua filter not found at %s; converting without it",
-                lua_filter,
-            )
-        pypandoc.convert_file(
-            str(docx_path),
-            format="docx",
-            to="pdf",
-            outputfile=str(output_path),
-            extra_args=extra_args,
+    logger.info(f"Converting {docx_path} to PDF using xelatex")
+    args = [
+        "--from=docx",
+        f"--output={output_path}",
+        *UNTRUSTED_INPUT_ARGS,
+        *PDF_ENGINE_ARGS,
+        "--variable=geometry:margin=1in",
+    ]
+    lua_filter = PANDOC_LUA_FILTER
+    if lua_filter.exists():
+        args.append(f"--lua-filter={lua_filter}")
+    else:
+        logger.warning(
+            "Pandoc lua filter not found at %s; converting without it",
+            lua_filter,
         )
-        logger.info(f"Successfully converted {docx_path} to PDF")
-        return output_path
+    try:
+        run_pandoc(PANDOC_PATH, [*args, "--", str(docx_path)])
     except Exception:
         logger.exception("Error converting document to PDF")
         raise
+    logger.info(f"Successfully converted {docx_path} to PDF")
+    return output_path
 
 
 def extract_docx_text(docx_path: pathlib.Path) -> list[DataChunk]:
-    """Extract text from DOCX using pypandoc (no LaTeX needed)."""
-    if not HAS_PANDOC or pypandoc is None:
+    """Extract text from DOCX with pandoc (no LaTeX needed)."""
+    if PANDOC_PATH is None:
         raise RuntimeError("pandoc is not installed — cannot extract DOCX text")
-    text = pypandoc.convert_file(str(docx_path), format="docx", to="plain")
-    if not text or not text.strip():
+    args = ["--from=docx", "--to=plain", *UNTRUSTED_INPUT_ARGS, "--", str(docx_path)]
+    text = run_pandoc(PANDOC_PATH, args).decode("utf-8", errors="replace")
+    if not text.strip():
         return []
     return extract_text(text)
 
@@ -301,8 +330,12 @@ def extract_docx(
     """Extract content from DOCX by converting to PDF first, then processing.
 
     Falls back to plain text extraction if PDF conversion fails (e.g. LaTeX errors).
+    Raises ValueError for a document over the office file size limits
+    (see zip_limits.check_office_zip), before pandoc sees it.
     """
     with as_file(docx_path) as file_path:
+        with file_path.open("rb") as file:
+            check_office_zip(file)
         try:
             with tempfile.TemporaryDirectory() as tmp_dir:
                 pdf_path = docx_to_pdf(file_path, pathlib.Path(tmp_dir) / "out.pdf")
@@ -323,7 +356,7 @@ def safe_image_open(content: bytes | pathlib.Path) -> Image.Image:
     poison item forever. The raised error is catchable, so the embed path can
     record it as FAILED.
     """
-    image = Image.open(io.BytesIO(content) if isinstance(content, bytes) else content)
+    image = open_image(io.BytesIO(content) if isinstance(content, bytes) else content)
     pixels = image.width * image.height
     if pixels > settings.MAX_IMAGE_PIXELS:
         image.close()

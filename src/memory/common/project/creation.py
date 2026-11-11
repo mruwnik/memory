@@ -14,7 +14,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DBSession
 
-from memory.common.access_control import UserLike, has_admin_scope, user_can_access_project
+from memory.common.access_control import UserLike, user_can_administer_project
 from memory.common.db.models import Project, Team
 from memory.common.db.models.sources import GithubAccount, GithubRepo
 from memory.common.github import GithubClient
@@ -318,12 +318,7 @@ def create_repo_project(
         .first()
     )
     if existing_project:
-        # Access check: caller must have permission to modify this project.
-        # Otherwise any projects:write user could replace the team assignments
-        # of any project by targeting its repo path.
-        if not has_admin_scope(user) and not user_can_access_project(
-            session, user, existing_project.id
-        ):
+        if not user_can_administer_project(session, user, existing_project.id):
             raise ProjectAccessDeniedError(existing_project.id)
         # Update teams if provided
         existing_project.teams = teams
@@ -425,10 +420,7 @@ def create_milestone_project(
         .first()
     )
     if existing_project:
-        # Access check: caller must have permission to modify this project.
-        if not has_admin_scope(user) and not user_can_access_project(
-            session, user, existing_project.id
-        ):
+        if not user_can_administer_project(session, user, existing_project.id):
             raise ProjectAccessDeniedError(existing_project.id)
         # Update teams if provided
         existing_project.teams = teams

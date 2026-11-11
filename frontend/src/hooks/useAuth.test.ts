@@ -430,7 +430,9 @@ describe('logout', () => {
       await result.current.logout()
     })
 
-    expect(fetchMock.mock.calls.map(([u]) => u.toString())).toEqual(['/auth/logout'])
+    expect(fetchMock.mock.calls.map(([u, init]) => [u.toString(), init?.method])).toEqual([
+      ['/auth/logout', 'POST'],
+    ])
     expect(document.cookie).not.toContain('refresh_token=r')
   })
 

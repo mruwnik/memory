@@ -233,6 +233,18 @@ MAX_ATTACHMENT_EMBED_SIZE = int(
 MAX_ATTACHMENT_EMBED_PAGES = int(os.getenv("MAX_ATTACHMENT_EMBED_PAGES", 50))
 # The same image-page cap for uploaded documents and PDF reports.
 MAX_DOC_EMBED_PAGES = int(os.getenv("MAX_DOC_EMBED_PAGES", 50))
+# Word documents (and other zipped office files) are measured before parsing,
+# by inflating each entry: past these totals they are refused. Markup is the
+# .xml/.rels entries, which pandoc and the Drive parser build in memory at
+# many times their size; the total also counts embedded media.
+MAX_OFFICE_MARKUP_BYTES = int(os.getenv("MAX_OFFICE_MARKUP_BYTES", 16 * 1024 * 1024))
+MAX_OFFICE_INFLATED_BYTES = int(os.getenv("MAX_OFFICE_INFLATED_BYTES", 256 * 1024 * 1024))
+MAX_OFFICE_ZIP_ENTRIES = int(os.getenv("MAX_OFFICE_ZIP_ENTRIES", 10_000))
+# A pandoc run (DOCX to PDF through xelatex, or to plain text) is killed,
+# with every process it started, after this many seconds.
+PANDOC_TIMEOUT_SECONDS = float(os.getenv("PANDOC_TIMEOUT_SECONDS", 120))
+# Data memory (RLIMIT_DATA) each process of a pandoc run (pandoc, xelatex, ...) may use; 0 for no limit.
+PANDOC_MEMORY_LIMIT_BYTES = int(os.getenv("PANDOC_MEMORY_LIMIT_BYTES", 2 * 1024 * 1024 * 1024))
 # Text chunks embedded per item on the server's Voyage key; past it, the first
 # chunks and the item's summary are kept.
 MAX_EMBEDDED_CHUNKS_PER_ITEM = int(os.getenv("MAX_EMBEDDED_CHUNKS_PER_ITEM", 500))
@@ -423,6 +435,9 @@ OAUTH_UNUSED_CLIENT_DAYS = int(os.getenv("OAUTH_UNUSED_CLIENT_DAYS", 30))
 # Used by /oauth/login and /api/users/me/change-password — see
 # `memory.common.rate_limit`.
 API_RATE_LIMIT_AUTH = os.getenv("API_RATE_LIMIT_AUTH", "10/minute")
+# A correct password from an address that logged in to the account within
+# this many days is let through even while its failed-login bucket is full.
+LOGIN_KNOWN_ADDRESS_DAYS = int(os.getenv("LOGIN_KNOWN_ADDRESS_DAYS", 30))
 # Comma-separated set of immediate-hop IPs whose ``X-Forwarded-For`` the
 # rate limiter should trust. Anything else falls back to the direct
 # connection IP — preventing a remote attacker from rotating XFF to mint
@@ -465,6 +480,18 @@ MAX_TELEMETRY_PAYLOAD_BYTES = int(
     os.getenv("MAX_TELEMETRY_PAYLOAD_BYTES", 5 * 1024 * 1024)
 )
 
+# Request body caps, enforced before authentication (api/body_limit.py).
+# Routes anyone can reach without logging in (poll responses, login, OAuth
+# registration and token, password reset, setup) get the public cap; every
+# other route gets the default, except the uploads and webhooks below.
+REQUEST_BODY_MAX_BYTES = int(os.getenv("REQUEST_BODY_MAX_BYTES", 16 * 1024 * 1024))
+PUBLIC_REQUEST_BODY_MAX_BYTES = int(os.getenv("PUBLIC_REQUEST_BODY_MAX_BYTES", 256 * 1024))
+# Slack, Discord and transcript push webhooks.
+WEBHOOK_MAX_BODY_BYTES = int(os.getenv("WEBHOOK_MAX_BODY_BYTES", 1024 * 1024))
+# GitHub deliveries of the events read (issues, PRs, comments, checks, statuses)
+# are far smaller; GitHub itself sends up to 25 MB (e.g. large pushes).
+GITHUB_WEBHOOK_MAX_BODY_BYTES = int(os.getenv("GITHUB_WEBHOOK_MAX_BODY_BYTES", 5 * 1024 * 1024))
+
 # Per-request size caps for the authenticated content-upload endpoints
 # (``/books/upload``, ``/photos/upload``, ``/reports/upload``). All three
 # previously called ``await file.read()`` with no upper bound, which
@@ -493,10 +520,11 @@ MAX_REPORT_UPLOAD_BYTES = int(
 MAX_MISC_UPLOAD_BYTES = int(
     os.getenv("MAX_MISC_UPLOAD_BYTES", 100 * 1024 * 1024)
 )
-# An EPUB whose entries inflate past this in total is not parsed: MuPDF lays
-# its markup out in memory, roughly 50 bytes of worker RAM per byte, so a small
-# compressed upload can OOM a worker. Images count too, since any entry can hold
-# markup; raise it for image-heavy books if workers have the memory.
+# A book with more markup than this is not parsed: MuPDF lays it out in memory,
+# roughly 50 bytes of worker RAM per byte, so a small compressed upload can OOM
+# a worker. An EPUB counts every entry's inflated size (images too, since any
+# entry can hold markup; raise it for image-heavy books if workers have the
+# memory), a MOBI its text records, any other format but PDF its file size.
 MAX_EBOOK_INFLATED_BYTES = int(
     os.getenv("MAX_EBOOK_INFLATED_BYTES", 10 * 1024 * 1024)
 )

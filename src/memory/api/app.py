@@ -31,8 +31,10 @@ from memory.api.auth import (
     require_rest_access,
     router as auth_router,
 )
+from memory.api.body_limit import BodySizeLimitMiddleware
 from memory.api.google_drive import router as google_drive_router
 from memory.api.request_limits import RequestRateLimitMiddleware
+from memory.api.security_headers import SecurityHeadersMiddleware
 from memory.api.mcp_servers import router as mcp_servers_router
 from memory.api.email_accounts import router as email_accounts_router
 from memory.api.article_feeds import router as article_feeds_router
@@ -269,7 +271,10 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 
 app.add_middleware(AuthenticationMiddleware)
-# Outside auth, so floods with bogus credentials are limited before any lookup.
+# Outside auth, so no route buffers more than its cap before credentials are checked.
+app.add_middleware(BodySizeLimitMiddleware)
+# Outermost of the three, so floods (oversize ones included) are limited before
+# any body is counted or credential looked up.
 app.add_middleware(RequestRateLimitMiddleware)
 app.add_middleware(WebUIMiddleware, router=app.router)
 # Configure CORS with specific origin to prevent CSRF attacks.
@@ -293,6 +298,8 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Edit-Token"],
 )
+# Outermost, so every response gets them, including 429s, CORS preflights and the UI.
+app.add_middleware(SecurityHeadersMiddleware)
 
 
 def validate_path_within_directory(

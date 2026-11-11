@@ -1,13 +1,24 @@
 import logging
+import posixpath
 import struct
 import zipfile
 import zlib
 from dataclasses import dataclass, field
 from typing import Any, BinaryIO, Iterator, cast
 from pathlib import Path
+from urllib.parse import unquote
+from xml.etree import ElementTree
 
+import defusedxml.ElementTree as DefusedElementTree
 import pymupdf
+from defusedxml import DefusedXmlException
 from memory.common import paths, settings
+from memory.common.file_magic import (
+    PALMDB_BOOK_SIGNATURES,
+    PDF_MAGIC_WINDOW,
+    looks_like_pdf,
+    palmdb_signature,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +166,14 @@ def extract_sections(doc) -> list[Section]:
 INFLATE_CHUNK = 64 * 1024
 LOCAL_HEADER = struct.Struct("<4s5H3L2H")
 LOCAL_HEADER_SIGNATURE = b"PK\x03\x04"
+# A PalmDB header is 78 bytes, ending in the record count; the record table follows.
+PALMDB_HEADER_SIZE = 78
+# Record 0 of a PalmDoc/MOBI book starts with compression, unused, text length,
+# text record count, record size, encryption and unknown.
+PALMDOC_HEADER = struct.Struct(">HHIHHHH")
+# Uncompressed and PalmDoc: MuPDF reads no other compression.
+PALMDOC_COMPRESSIONS = (1, 2)
+PALMDOC_RECORD_SIZE = 4096
 
 
 def stored_chunks(file: BinaryIO, info: zipfile.ZipInfo) -> Iterator[bytes]:
@@ -192,7 +211,12 @@ def inflated_size(chunks: Iterator[bytes], method: int, budget: int) -> int:
     return size + len(inflater.flush())
 
 
-def check_parse_size(path: Path) -> None:
+def head_is_zip(file: BinaryIO) -> bool:
+    file.seek(0)
+    return file.read(len(LOCAL_HEADER_SIGNATURE)) == LOCAL_HEADER_SIGNATURE
+
+
+def check_zip_size(path: Path) -> None:
     """Raise ValueError for a zipped book with more than MAX_EBOOK_ZIP_ENTRIES
     entries, or whose entries inflate past MAX_EBOOK_INFLATED_BYTES.
 
@@ -200,10 +224,9 @@ def check_parse_size(path: Path) -> None:
     file points at, and lays out its markup in memory. Entries are measured by
     inflating their data, since their declared sizes and CRCs are the
     uploader's to choose; one that inflates to other than its declared size is
-    refused.
+    refused, and so is an archive that doesn't start the file (MuPDF and
+    zipfile could read different entries). An EPUB's spine is then charged for each chapter it lists.
     """
-    if not zipfile.is_zipfile(path):
-        return
     limit = settings.MAX_EBOOK_INFLATED_BYTES
     try:
         archive = zipfile.ZipFile(path)
@@ -211,6 +234,8 @@ def check_parse_size(path: Path) -> None:
         raise ValueError("Book is not a valid zip archive") from e
     with archive, path.open("rb") as file:
         entries = archive.infolist()
+        if not head_is_zip(file) or all(info.header_offset for info in entries):
+            raise ValueError("Book has data before its zip archive")
         if len(entries) > settings.MAX_EBOOK_ZIP_ENTRIES:
             raise ValueError(f"Book has more than {settings.MAX_EBOOK_ZIP_ENTRIES} entries")
         total = 0
@@ -224,6 +249,180 @@ def check_parse_size(path: Path) -> None:
                 raise ValueError(f"Book inflates to more than {limit} bytes")
             if size != info.file_size:
                 raise ValueError("Book has a zip entry whose size does not match its header")
+        check_epub_spine(archive)
+
+
+def local_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1].rsplit(":", 1)[-1]
+
+
+def local_attribute(element: ElementTree.Element, name: str) -> str | None:
+    return next(
+        (value for key, value in element.attrib.items() if local_name(key) == name), None
+    )
+
+
+def elements_named(root: ElementTree.Element, name: str, cap: int) -> Iterator[ElementTree.Element]:
+    """The elements called ``name`` (any namespace), raising once there are more than ``cap``."""
+    count = 0
+    for element in root.iter():
+        if local_name(element.tag) != name:
+            continue
+        count += 1
+        if count > cap:
+            raise ValueError(f"Book's package lists more than {cap} {name} elements")
+        yield element
+
+
+def parse_package_xml(archive: zipfile.ZipFile, info: zipfile.ZipInfo) -> ElementTree.Element:
+    try:
+        return DefusedElementTree.fromstring(archive.read(info))
+    except (ElementTree.ParseError, DefusedXmlException) as e:
+        raise ValueError("Book has an unreadable package file") from e
+
+
+def check_entry_names(entries: list[zipfile.ZipInfo]) -> None:
+    """Refuse entry names whose lookup could differ between MuPDF and this check:
+    a leading /, or an empty, . or .. segment (a folder's trailing / aside)."""
+    for info in entries:
+        name = info.filename[:-1] if info.is_dir() else info.filename
+        if name.startswith("/") or {"", ".", ".."} & set(name.split("/")):
+            raise ValueError("Book has a zip entry with an unusual name")
+
+
+def href_cost(base: str, href: str, sizes: dict[str, int], largest: int) -> int:
+    """The inflated size of the entry MuPDF reads for ``href`` in the package at ``base``.
+
+    MuPDF appends the href to the package's folder, percent-decodes it and
+    matches entry names ignoring case. An href that isn't already in normal
+    form, or that names no entry, costs the largest entry.
+    """
+    path = f"{base}/{href}" if base else href
+    candidates = {path, unquote(path)}
+    if any(posixpath.normpath(candidate) != candidate for candidate in candidates):
+        return largest
+    found = [sizes[name.lower()] for name in candidates if name.lower() in sizes]
+    return max(found, default=largest)
+
+
+def manifest_costs(
+    package: ElementTree.Element, base: str, sizes: dict[str, int], largest: int
+) -> dict[str, int]:
+    """Each manifest item's id and the size of the file it names; ids must be unique."""
+    costs: dict[str, int] = {}
+    for item in elements_named(package, "item", settings.MAX_EBOOK_ZIP_ENTRIES):
+        item_id = local_attribute(item, "id")
+        if item_id is None:
+            continue
+        if item_id in costs:
+            raise ValueError("Book's package repeats a manifest id")
+        costs[item_id] = href_cost(base, local_attribute(item, "href") or "", sizes, largest)
+    return costs
+
+
+EPUB_CONTAINER = "meta-inf/container.xml"
+MAX_EPUB_ROOTFILES = 8
+
+
+def check_epub_spine(archive: zipfile.ZipFile) -> None:
+    """Raise ValueError for an EPUB whose spine makes MuPDF lay out more than
+    MAX_EBOOK_INFLATED_BYTES, or that lists more than MAX_EBOOK_ZIP_ENTRIES
+    chapters or manifest items or more than MAX_EPUB_ROOTFILES package files.
+
+    A spine may list one file many times, and MuPDF lays it out each time, so
+    each itemref is charged its file's size. Every package file the container
+    names is read once. Entry sizes must already have been checked against
+    their inflated data.
+    """
+    entries = archive.infolist()
+    check_entry_names(entries)
+    sizes: dict[str, int] = {}
+    for info in entries:
+        sizes[info.filename.lower()] = max(sizes.get(info.filename.lower(), 0), info.file_size)
+    if EPUB_CONTAINER not in sizes:
+        return
+    largest = max(sizes.values())
+    container_info = next(i for i in entries if i.filename.lower() == EPUB_CONTAINER)
+    container = parse_package_xml(archive, container_info)
+    package_names = {
+        (local_attribute(rootfile, "full-path") or "").lower()
+        for rootfile in elements_named(container, "rootfile", MAX_EPUB_ROOTFILES)
+    }
+    limit, chapters, total = settings.MAX_EBOOK_INFLATED_BYTES, 0, 0
+    for name in sorted(package_names):
+        info = next((i for i in entries if i.filename.lower() == name), None)
+        if info is None:
+            raise ValueError("Book's container names a missing package file")
+        package = parse_package_xml(archive, info)
+        costs = manifest_costs(package, posixpath.dirname(info.filename), sizes, largest)
+        cap = settings.MAX_EBOOK_ZIP_ENTRIES - chapters
+        for itemref in elements_named(package, "itemref", cap):
+            chapters += 1
+            total += costs.get(local_attribute(itemref, "idref") or "", largest)
+            if total > limit:
+                raise ValueError(f"Book's chapters add up to more than {limit} bytes")
+
+
+def palmdb_records(data: bytes) -> list[bytes]:
+    """The records of a PalmDB file, refusing a damaged record table."""
+    if len(data) < PALMDB_HEADER_SIZE:
+        raise ValueError("Book has a damaged PalmDB header")
+    (count,) = struct.unpack_from(">H", data, PALMDB_HEADER_SIZE - 2)
+    table_end = PALMDB_HEADER_SIZE + 8 * count
+    if table_end > len(data):
+        raise ValueError("Book has a damaged PalmDB header")
+    offsets = [
+        struct.unpack_from(">I", data, PALMDB_HEADER_SIZE + 8 * index)[0]
+        for index in range(count)
+    ] + [len(data)]
+    if offsets[0] < table_end or offsets != sorted(offsets):
+        raise ValueError("Book has a damaged PalmDB record table")
+    return [data[start:end] for start, end in zip(offsets, offsets[1:])]
+
+
+def check_palmdb_size(path: Path) -> None:
+    """Raise ValueError for a MOBI/PalmDoc book whose text is more than
+    MAX_EBOOK_INFLATED_BYTES, or that MuPDF couldn't read.
+
+    MuPDF lays out the text of the first ``text_count`` records (record 0's
+    count), at most one record size each however the record decompresses, so
+    that bounds the text it reads. Images live in other records.
+    """
+    limit = settings.MAX_EBOOK_INFLATED_BYTES
+    records = palmdb_records(path.read_bytes())
+    if len(records) < 2 or len(records[0]) < PALMDOC_HEADER.size:
+        raise ValueError("Book has no text records")
+    compression, _, _, text_count, record_size, *_ = PALMDOC_HEADER.unpack_from(records[0])
+    if compression not in PALMDOC_COMPRESSIONS:
+        raise ValueError("Book uses an unsupported MOBI compression")
+    if record_size != PALMDOC_RECORD_SIZE:
+        raise ValueError("Book has an unsupported text record size")
+    if min(text_count, len(records) - 1) * PALMDOC_RECORD_SIZE > limit:
+        raise ValueError(f"Book text is more than {limit} bytes")
+
+
+def check_parse_size(path: Path) -> None:
+    """Raise ValueError for a book whose markup is too large for MuPDF to lay out.
+
+    Every check that applies runs: a zip directory anywhere is measured by
+    inflating its entries (and refused unless the archive starts the file), a
+    MOBI/PalmDoc signature by the text records, and anything that is neither,
+    nor a PDF, by its size. MuPDF picks the format from the content, so the
+    file name and declared type don't matter.
+    """
+    with path.open("rb") as file:
+        head = file.read(PDF_MAGIC_WINDOW)
+    zipped = zipfile.is_zipfile(path)
+    palmdb = palmdb_signature(head) in PALMDB_BOOK_SIGNATURES
+    if zipped:
+        check_zip_size(path)
+    if palmdb:
+        check_palmdb_size(path)
+    if zipped or palmdb or looks_like_pdf(head):
+        return
+    limit = settings.MAX_EBOOK_INFLATED_BYTES
+    if path.stat().st_size > limit:
+        raise ValueError(f"Book is more than {limit} bytes")
 
 
 def parse_ebook(file_path: str | Path) -> Ebook:

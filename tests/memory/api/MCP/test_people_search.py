@@ -55,7 +55,7 @@ def linked_person(db_session):
 async def search_people(session_token: str, **kwargs) -> list[str]:
     with mcp_auth_context(session_token):
         result = await list_all.fn(**kwargs)
-    return [p["identifier"] for p in result]
+    return [p["identifier"] for p in result["people"]]
 
 
 @pytest.mark.asyncio
