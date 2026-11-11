@@ -1412,6 +1412,8 @@ class FakeSlack:
         self.messages = messages
         self.readable = readable
         self.channels = channels or {}
+        # Messages a token can't see in a channel it reads, as past a free plan's history limit.
+        self.hidden: dict[str, set[str]] = {}
         self.outage: str | Exception | httpx.Response | None = None
 
     def handle(self, request: httpx.Request) -> httpx.Response:
@@ -1432,6 +1434,7 @@ class FakeSlack:
         window = [
             m for m in self.messages.get(channel, [])
             if float(form["oldest"]) <= float(m["ts"]) <= float(form["latest"])
+            and m["ts"] not in self.hidden.get(token, set())
         ]
         if method == "conversations.history":
             found = [m for m in window if m.get("thread_ts", m["ts"]) == m["ts"]]
@@ -1632,6 +1635,41 @@ def test_a_pushed_delete_applies_only_when_slack_confirms_it(
     }[slack_side]
 
     result = delete_pushed(two_tenants[pusher], channel_id)
+
+    assert (result["status"], len(stored_rows(db_session)) == 0) == ("deleted" if deleted else "ignored", deleted)
+
+
+@pytest.fixture
+def sibling_app(db_session, two_tenants, slack_user):
+    """A second app of B's owner, whose token reads SHARED_CHANNEL."""
+    app = SlackApp(client_id="b.sibling", name="B's other app", setup_state="live", created_by_user_id=slack_user.id)
+    db_session.add(app)
+    db_session.flush()
+    creds = SlackUserCredentials(slack_app_id=app.id, workspace_id="T12345678", user_id=slack_user.id, scopes=[])
+    creds.access_token = "xoxp-sibling"
+    db_session.add(creds)
+    db_session.commit()
+    return app.id
+
+
+@pytest.mark.parametrize(
+    "pusher, slack_side, deleted",
+    [
+        ("A", "hidden_from_A", False),  # A's history window hides it; B, which stored it, still sees it
+        ("A", "gone", True),  # B's token confirms it is gone
+        ("sibling", "gone", True),
+    ],
+)
+def test_a_pushed_delete_is_confirmed_by_the_app_that_stored_the_message(
+    db_session, two_tenants, fake_slack, sibling_app, pusher, slack_side, deleted
+):
+    stored(db_session, two_tenants["B"])
+    fake_slack.readable["xoxp-sibling"] = {SHARED_CHANNEL}
+    fake_slack.hidden = {"hidden_from_A": {"xoxp-a": {REAL_TS}}, "gone": {}}[slack_side]
+    fake_slack.messages[SHARED_CHANNEL] = fake_slack.messages[SHARED_CHANNEL] * (slack_side != "gone")
+    apps = two_tenants | {"sibling": sibling_app}
+
+    result = delete_pushed(apps[pusher], SHARED_CHANNEL)
 
     assert (result["status"], len(stored_rows(db_session)) == 0) == ("deleted" if deleted else "ignored", deleted)
 

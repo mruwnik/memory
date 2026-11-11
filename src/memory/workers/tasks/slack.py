@@ -1265,6 +1265,33 @@ def stored_thread_ts(workspace_id: str, channel_id: str, message_ts: str) -> tup
         return message is not None, message and message.thread_ts
 
 
+def same_owner(session, app_id: int, other_app_id: int | None) -> bool:
+    """Whether both apps belong to one user (or are the same app)."""
+    if other_app_id is None or app_id == other_app_id:
+        return app_id == other_app_id
+    owners = {
+        row[0] for row in session.query(SlackApp.created_by_user_id).filter(SlackApp.id.in_([app_id, other_app_id]))
+    }
+    return len(owners) == 1 and None not in owners
+
+
+def delete_confirmer(workspace_id: str, channel_id: str, message_ts: str, pusher_id: int) -> tuple[bool, str | None, int]:
+    """Whether the message is stored, its thread, and the app whose token must
+    confirm its deletion: the pusher when it or a sibling app of its owner
+    stored the message, else the app that stored it. Slack showing a message
+    to one app and not another (history limits, missing scopes) mustn't let
+    the other app delete it."""
+    with make_session() as session:
+        identity = {"workspace_id": workspace_id, "channel_id": channel_id, "message_ts": message_ts}
+        message = _get_existing_slack_message(session, identity)
+        if message is None:
+            return False, None, pusher_id
+        storer = message.slack_app_id
+        if storer is None or same_owner(session, pusher_id, storer):
+            return True, message.thread_ts, pusher_id
+        return True, message.thread_ts, storer
+
+
 def store_pushed_slack_message(
     workspace_id: str,
     channel_id: str,
@@ -1317,17 +1344,19 @@ def mark_slack_message_deleted(
 ) -> dict[str, Any]:
     """Hard-delete a Slack message in response to a `message_deleted` event.
 
-    The deletion is confirmed with the pushing app's own token first: the app
-    must be able to read the channel, and Slack must no longer have the message
-    (or only its tombstone). Removes the SlackMessage row, its Chunks and its
-    Qdrant points. Message identity is ``(workspace_id, channel_id, message_ts)``.
+    The deletion is confirmed first with the token of the app that stored the
+    message, or the pusher's own when the same user owns both
+    (``delete_confirmer``): that token must read the channel, and Slack must no
+    longer have the message (or only its tombstone). Removes the SlackMessage
+    row, its Chunks and its Qdrant points. Message identity is
+    ``(workspace_id, channel_id, message_ts)``.
     """
-    stored, thread_ts = stored_thread_ts(workspace_id, channel_id, message_ts)
+    stored, thread_ts, confirmer = delete_confirmer(workspace_id, channel_id, message_ts, slack_app_id)
     if not stored:
         logger.info(f"mark_slack_message_deleted: no row for ({workspace_id}, {channel_id}, {message_ts})")
         return {"status": "not_found", "message_ts": message_ts}
     try:
-        seen = read_back(workspace_id, channel_id, message_ts, thread_ts, slack_app_id)
+        seen = read_back(workspace_id, channel_id, message_ts, thread_ts, confirmer)
     except PushedMessageUnread as e:
         raise self.retry(exc=e, countdown=PUSH_READ_BACK_DELAY * (self.request.retries + 1))
     if not seen.readable or (seen.found is not None and seen.found.get("subtype") != "tombstone"):
