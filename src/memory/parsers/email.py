@@ -81,7 +81,9 @@ def header_addresses(value: str) -> list[str]:
 def decode_mime_header(name: str, value: str) -> str:
     """Header text with MIME encoded-words decoded; address headers come back
     re-quoted (``"Doe, John" <j@x>``) so they still parse as addresses. A value
-    that doesn't decode cleanly is kept raw rather than lost."""
+    that doesn't decode cleanly is kept raw rather than lost. Only the first
+    MAX_EMAIL_HEADER_CHARS characters are kept, as decoding is superlinear."""
+    value = value[: settings.MAX_EMAIL_HEADER_CHARS]
     try:
         decoded = str(email.policy.default.header_fetch_parse(name, value))
     # The stdlib header parser has crash bugs on malformed input (AttributeError on "a@[1.2.3").

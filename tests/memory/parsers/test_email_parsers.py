@@ -435,3 +435,26 @@ def test_parse_email_logs_dropped_attachments_by_message_id(monkeypatch, caplog)
 
     assert "Mail '<many@example.com>': keeping 1 of its 3 attachments" in caplog.text
     assert "secret" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "name, value, expected",
+    [
+        ("Subject", "x" * 20, "x" * 10),
+        ("From", "a@example.com" + "x" * 20, "a@example."),
+    ],
+)
+def test_decode_mime_header_keeps_only_max_header_chars(monkeypatch, name, value, expected):
+    monkeypatch.setattr(settings, "MAX_EMAIL_HEADER_CHARS", 10)
+    assert decode_mime_header(name, value) == expected
+
+
+def test_parse_email_decodes_only_the_start_of_a_huge_subject():
+    raw = (
+        "From: a@example.com\nTo: b@example.com\nMessage-ID: <big@example.com>\n"
+        "Subject: " + "=?utf-8?q?a?= " * 30_000 + "\n\nbody"
+    )
+
+    result = parse_email_message(raw)
+
+    assert len(result["subject"]) <= settings.MAX_EMAIL_HEADER_CHARS

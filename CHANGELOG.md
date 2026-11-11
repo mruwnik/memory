@@ -112,6 +112,7 @@ a new, empty `## Unreleased` above it.
 - OAuth clients may only register a redirect on this server's own address for the web UI's callback (its root); other pages there (reports, files) are refused at registration, and `/authorize` refuses clients stored earlier with one. Only a client redirecting to that callback passes for the web UI: any other gets named on the login page and can't create API keys.
 - Markdown in the web UI (search results for mail, markdown and PDF text, notes) no longer loads images hosted elsewhere by itself: each shows a "Load image from <host>" button, so a sender's tracking pixel doesn't learn when you looked or which instance you use. Images stored on this server still show.
 - An email keeps at most `MAX_EMAIL_ATTACHMENTS` attachments (default 100) and `MAX_EMAIL_RECIPIENTS` To/Cc/Bcc addresses (default 500); the rest are dropped with a warning naming the Message-ID. Before, a small mail with tens of thousands of attachments held a worker for minutes and became that many items.
+- An email's Subject and From are cut to `MAX_EMAIL_HEADER_CHARS` (default 8192) before their MIME encoded-words are decoded, so a mail with a huge header no longer holds a worker (or each search hit that reparses it) for seconds to minutes.
 ### Required env vars
 None
 
