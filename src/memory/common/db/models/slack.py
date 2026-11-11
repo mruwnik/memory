@@ -206,22 +206,26 @@ class SlackWorkspace(SyncStatusMixin, LLMKeyChoice, Base):
     )
 
     @property
-    def llm_registrant_id(self) -> int | None:
-        """The creator of the oldest Slack app synced into this workspace."""
+    def owner_id(self) -> int | None:
+        """The workspace's owner: the user who connected it first (its oldest credential).
+
+        Only the owner or an admin may change the workspace's or its channels' settings,
+        and the owner's default key pays for LLM work on its messages.
+        """
         session = object_session(self)
         if session is None:
             return None
         return (
-            session.query(SlackApp.created_by_user_id)
-            .join(SlackUserCredentials, SlackUserCredentials.slack_app_id == SlackApp.id)
-            .filter(
-                SlackUserCredentials.workspace_id == self.id,
-                SlackApp.created_by_user_id.is_not(None),
-            )
-            .order_by(SlackApp.id)
+            session.query(SlackUserCredentials.user_id)
+            .filter(SlackUserCredentials.workspace_id == self.id)
+            .order_by(SlackUserCredentials.id)
             .limit(1)
             .scalar()
         )
+
+    @property
+    def llm_registrant_id(self) -> int | None:
+        return self.owner_id
 
 
 class SlackUserCredentials(Base):

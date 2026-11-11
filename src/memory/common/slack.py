@@ -13,20 +13,22 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
-from sqlalchemy.orm import object_session
+from sqlalchemy import and_
+from sqlalchemy.orm import Query, object_session
 
 from memory.common import settings
 from memory.common.db.connection import DBSession
 from memory.common.db.models.slack import (
     DEFAULT_SLACK_API_BASE_URL,
     SlackApp,
+    SlackChannel,
     SlackUserCredentials,
     SlackWorkspace,
 )
 from memory.common.chat_urls import chat_url_allowed
 from memory.common.db.models.users import User
 from memory.common.safe_http import public_http_client, public_sync_http_client
-from memory.common.access_control import UserLike
+from memory.common.access_control import UserLike, has_admin_scope
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +86,29 @@ def user_has_workspace_membership(db: DBSession, workspace_id: str, user: UserLi
         .first()
         is not None
     )
+
+
+def user_manages_workspace(workspace: SlackWorkspace, user: UserLike) -> bool:
+    """Whether `user` may change the workspace's or its channels' settings: its owner
+    or an admin. Other members share the workspace's rows but not control of them."""
+    return has_admin_scope(user) or (user.id is not None and workspace.owner_id == user.id)
+
+
+# Every member of a workspace can see its public channels in Slack. DMs and private
+# channels are stored once per workspace, whichever member's token listed them.
+PUBLIC_CHANNEL = and_(SlackChannel.channel_type == "channel", SlackChannel.is_private.is_(False))
+
+
+def is_public_channel(channel: SlackChannel) -> bool:
+    return channel.channel_type == "channel" and not channel.is_private
+
+
+def visible_channels(query: Query, workspace: SlackWorkspace, user: UserLike) -> Query:
+    """`query` over the workspace's channels, narrowed to the ones `user` may see:
+    all of them for its owner and admins, the public ones for other members."""
+    if user_manages_workspace(workspace, user):
+        return query
+    return query.filter(PUBLIC_CHANNEL)
 
 
 def workspace_poll_plan(db: DBSession, workspace_id: str) -> tuple[list[int], list[str]]:

@@ -275,6 +275,7 @@ const WorkspaceRow = ({
   const update = useSubmit()
 
   const status = collectionStatus(workspace)
+  const readOnly = !workspace.can_manage
   const eventlessApps = workspace.apps.filter(app => !EVENTS_LIVE.includes(app.setup_state))
   const lastEventAt = workspace.apps.map(app => app.last_event_at).filter(Boolean).sort().at(-1) ?? null
 
@@ -298,10 +299,10 @@ const WorkspaceRow = ({
         lastEventAt && `Last event: ${formatRelativeTime(lastEventAt)}`,
       ]}
       actions={<>
-        <AccessSelects projectId={workspace.project_id} sensitivity={workspace.sensitivity} projects={projects} disabled={update.busy}
+        <AccessSelects projectId={workspace.project_id} sensitivity={workspace.sensitivity} projects={projects} disabled={readOnly || update.busy}
           onChange={changes => update.submit(() => onUpdateWorkspace(changes))} />
-        <LLMKeyField compact value={workspace.llm_key} onChange={llm_key => update.submit(() => onUpdateWorkspace({ llm_key }))} />
-        <PauseButton active={workspace.collect_messages} onClick={handleToggle} disabled={toggling} />
+        <LLMKeyField compact disabled={readOnly} value={workspace.llm_key} onChange={llm_key => update.submit(() => onUpdateWorkspace({ llm_key }))} />
+        <PauseButton active={workspace.collect_messages} onClick={handleToggle} disabled={readOnly || toggling} />
         {eventlessApps.filter(app => app.is_owner).map(app => (
           <Button key={app.id} size="sm" onClick={() => onResumeSetup(app)} title={`Resume the setup wizard for ${app.name}`}>
             Finish event setup
@@ -312,13 +313,14 @@ const WorkspaceRow = ({
       </>}
     >
       {update.error && <RowError live>{update.error}</RowError>}
+      {readOnly && <Hint>Only this workspace's owner (the first user to connect it) or an admin can change its settings. You see its public channels.</Hint>}
       {workspace.collect_messages && workspace.poll_blocker && <RowError>Not collecting: {workspace.poll_blocker}</RowError>}
       <SyncFailure status={workspace} />
       {workspace.apps.filter(app => app.push_missing_since).map(app => (
         <RowError key={app.id}>Polling stored messages {app.name}'s events never delivered, so they arrived late.</RowError>
       ))}
       <Field label="Background sweep frequency">
-        <Select value={workspace.event_reconcile_interval_seconds ?? 86400} disabled={update.busy}
+        <Select value={workspace.event_reconcile_interval_seconds ?? 86400} disabled={readOnly || update.busy}
           onChange={e => update.submit(() => onUpdateWorkspace({ event_reconcile_interval_seconds: Number(e.target.value) }))}>
           <option value={3600}>Every hour</option>
           <option value={21600}>Every 6 hours</option>
@@ -344,6 +346,7 @@ const WorkspaceRow = ({
             channel={channel}
             projects={projects}
             workspaceCollecting={workspace.collect_messages}
+            readOnly={readOnly}
             onUpdate={(updates) => onUpdateChannel(channel, updates)}
           />
         ))}
@@ -356,10 +359,11 @@ interface ChannelRowProps {
   channel: SlackChannel
   projects: Project[]
   workspaceCollecting: boolean
+  readOnly: boolean
   onUpdate: (updates: SlackChannelUpdate) => Promise<unknown>
 }
 
-const ChannelRow = ({ channel, projects, workspaceCollecting, onUpdate }: ChannelRowProps) => {
+const ChannelRow = ({ channel, projects, workspaceCollecting, readOnly, onUpdate }: ChannelRowProps) => {
   const [updating, update] = useBusy(onUpdate)
 
   // Channel type icons
@@ -377,9 +381,9 @@ const ChannelRow = ({ channel, projects, workspaceCollecting, onUpdate }: Channe
       title={<span className={cx(channel.is_private && 'italic')}><span aria-hidden="true" className="text-slate-500 mr-1">{typeIcon}</span><span>{channel.name}</span></span>}
       badges={channel.is_archived && <Badge>Archived</Badge>}
       actions={<>
-        <AccessSelects projectId={channel.project_id} sensitivity={channel.sensitivity} projects={projects} disabled={updating || channel.is_archived}
+        <AccessSelects projectId={channel.project_id} sensitivity={channel.sensitivity} projects={projects} disabled={readOnly || updating || channel.is_archived}
           onChange={update} />
-        <CollectSelect value={channel.collect_messages} inherited={workspaceCollecting} disabled={updating || channel.is_archived}
+        <CollectSelect value={channel.collect_messages} inherited={workspaceCollecting} disabled={readOnly || updating || channel.is_archived}
           onChange={collect_messages => update({ collect_messages })} />
       </>}
     />
