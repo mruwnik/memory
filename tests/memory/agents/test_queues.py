@@ -11,6 +11,7 @@ from memory.agents import queues, subscriptions
 from memory.agents.fire import fire_subscription
 from memory.agents.work import sweep_worker_runs
 from memory.api.MCP.servers import agent
+from memory.api.MCP.servers import subscription as subscription_tools
 from memory.common import settings
 from memory.common.celery_app import FIRE_SUBSCRIPTION
 from memory.common.db.models import (
@@ -241,6 +242,8 @@ async def test_queue_patterns_are_case_sensitive_globs_over_the_callers_queues(
 ):
     subscribe(db_session, regular_user, queue="reviews")
     subscribe(db_session, regular_user, queue="slack-a")
+    # An agent handler has no queue: its pending batch delivery isn't a queue's.
+    placed_on_workers(db_session, regular_user)
     route_item(db_session, post(db_session, creator_id=regular_user.id).id)
 
     claimed = await claim(worker_session.token, queues=patterns)
@@ -440,6 +443,25 @@ async def test_a_queue_subscription_over_its_hourly_rate_defers_its_deliveries(
     assert (first is not None, second) == (True, None)
     assert deferred.not_before is not None
     assert "throttled" in subscription.state
+
+
+@pytest.mark.asyncio
+async def test_raising_max_per_hour_releases_what_the_old_rate_deferred(
+    db_session, regular_user, worker_session
+):
+    subscription = subscribe(db_session, regular_user, max_per_hour=1)
+    for _ in range(2):
+        route_item(db_session, post(db_session, creator_id=regular_user.id).id)
+    await claim(worker_session.token, queues=[QUEUE])
+    assert await claim(worker_session.token, queues=[QUEUE]) is None
+
+    with mcp_auth_context(worker_session.token):
+        await subscription_tools.upsert.fn(subscription_id=subscription.id, max_per_hour=2)
+    released = await claim(worker_session.token, queues=[QUEUE])
+
+    db_session.refresh(subscription)
+    assert released is not None
+    assert "throttled" not in subscription.state
 
 
 @pytest.mark.asyncio

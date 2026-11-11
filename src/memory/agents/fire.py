@@ -21,7 +21,6 @@ from memory.agents.subscriptions import (
     SKIPPED_INACCESSIBLE,
     SKIPPED_POSTED,
     THROTTLE_WINDOW,
-    THROTTLED,
     IngestConfig,
     REMOVED_VERSION,
     changes_by_item,
@@ -29,7 +28,6 @@ from memory.agents.subscriptions import (
     dedupe_key,
     deliverable_ids,
     delivery_ref,
-    episode_over,
     lock_subscription,
     removals,
     parse_ref,
@@ -38,6 +36,7 @@ from memory.agents.subscriptions import (
     tell_throttled,
     throttled,
     acting_key,
+    end_episode,
 )
 from memory.common import settings
 from memory.common.db.connection import DBSession, make_session
@@ -152,8 +151,7 @@ def start_run(
         return None
     for d in delivered:
         d.status = DONE
-    if THROTTLED in subscription.state and episode_over(subscription.state, datetime.now(timezone.utc)):
-        subscription.state = {k: v for k, v in subscription.state.items() if k != THROTTLED}
+    end_episode(subscription)
     item_ids = sorted(d.item_id for d in delivered)
     items = db.query(SourceItem).filter(SourceItem.id.in_(item_ids)).order_by(SourceItem.id).all()
     changes = changes_by_item(delivered)

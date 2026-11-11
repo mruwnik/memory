@@ -652,6 +652,24 @@ async def test_a_tripped_subscription_can_resume_from_when_it_tripped(
 
 
 @pytest.mark.asyncio
+async def test_resuming_again_extends_a_replay_under_way_and_keeps_its_place(
+    db_session, regular_user, user_session, fake_providers
+):
+    replay = {"from": TRIPPED_AT.isoformat(), "to": TRIPPED_AT.isoformat(), "after": 5}
+    t = tripped(definition(db_session, regular_user), resume=replay)
+    db_session.add(t)
+    db_session.commit()
+
+    with mcp_auth_context(user_session.token):
+        await upsert(subscription_id=t.id, enabled=True, resume=True)
+
+    db_session.expire_all()
+    resumed = db_session.get_one(Subscription, t.id).state["resume"]
+    assert (resumed["from"], resumed["after"]) == (replay["from"], 5)
+    assert datetime.fromisoformat(resumed["to"]) > datetime.now(timezone.utc)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "make, fields, match",
     [

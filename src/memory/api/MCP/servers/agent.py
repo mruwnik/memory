@@ -1136,8 +1136,10 @@ async def work_submit(
 @visible_when(require_scopes(SCOPE_AGENTS_WORK))
 async def work_queues() -> dict:
     """Your subscriptions' queues (agent_work_claim's `queues`), each with how many deliveries
-    of its enabled subscriptions are waiting to be claimed and the oldest one's age in
-    seconds (null when none).
+    of its enabled subscriptions are waiting and the oldest one's age in seconds (null
+    when none). Waiting includes deliveries a claim can't take yet: deferred an hour by
+    a cap (see the subscription's `state.throttled`), in a batch whose window is still
+    open, or held by order_by behind an earlier delivery whose run hasn't ended.
     Deliveries no worker's key can read wait here and end `expired`."""
     user_id = worker_caller()
     with make_session() as db:

@@ -28,11 +28,10 @@ from memory.agents.subscriptions import (
     SHED_BUDGET,
     SHED_RATE,
     SKIPPED_DISABLED,
-    THROTTLED,
-    episode_over,
     lock_subscription,
     tell_throttled,
     throttled,
+    end_episode,
 )
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import AgentDefinition, AgentRun, Event
@@ -77,8 +76,8 @@ def start(db: DBSession, event: Event, target: Target) -> AgentRun:
     # Ended in the run's own transaction, which enqueue_run commits.
     finish(event, DONE)
     subscription = lock_subscription(db, event.subscription_id) if event.subscription_id else None
-    if subscription is not None and THROTTLED in subscription.state and episode_over(subscription.state, utcnow()):
-        subscription.state = {k: v for k, v in subscription.state.items() if k != THROTTLED}
+    if subscription is not None:
+        end_episode(subscription)
     run = enqueue_run(
         db,
         user_id=target.owner.id,

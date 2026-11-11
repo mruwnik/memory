@@ -26,6 +26,10 @@ a new, empty `## Unreleased` above it.
 - Fix: the Discord Add bot form says the bot needs the Message Content and Server Members intents turned on in the Developer Portal.
 - Fix: the Slack connect wizard's last step says a newly connected workspace starts paused and collects nothing until you click Resume.
 - Fix: Slack apps and Discord bots on a Slack- or Discord-compatible server (a custom authorize or API base URL, such as the chat proxy) get setup text pointing at that server instead of Slack's and Discord's developer pages, and such bots no longer offer a Discord invite link.
+- Fix: `agent_work_claim(queues=[...])` no longer fails with "expected string or bytes-like object" while an agent-handled subscription has a pending delivery (#130).
+- Fix: changing a subscription's `max_per_hour` or `backlog_max` ends its throttling episode and releases the deliveries the old cap deferred, instead of leaving them held up to an hour (#123).
+- Fix: a raw subscription's `state.throttled` clears at its first delivery after the episode ends, as filter subscriptions' already did (#123).
+- Fix: a Discord message edited to remove its attachments or embeds no longer keeps them, and its removed images can no longer be fetched; an edit event that doesn't list them still keeps the stored ones.
 
 ### Required env vars
 None

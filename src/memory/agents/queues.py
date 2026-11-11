@@ -36,7 +36,6 @@ from memory.agents.subscriptions import (
     REMOVED_VERSION,
     SKIPPED_INACCESSIBLE,
     SKIPPED_POSTED,
-    THROTTLED,
     Batch,
     IngestConfig,
     accessible_ids,
@@ -47,12 +46,12 @@ from memory.agents.subscriptions import (
     deliverable_ids,
     delivery_ref,
     due_batches,
-    episode_over,
     lock_subscription,
     RAW_WAITING,
     removals,
     subscription_key,
     posted_among,
+    end_episode,
 )
 from memory.common import settings
 from memory.common.db.connection import DBSession
@@ -259,7 +258,9 @@ def ready_to_claim(db: DBSession, run: AgentRun, owner: User, claimer: APIKey | 
 
 def on_queue(queue: str | None) -> tuple[Any, ...]:
     """Conditions for `queue`, or for every queue when it is None."""
-    return () if queue is None else (Subscription.handler["queue"].astext == queue,)
+    if queue is None:
+        return (Subscription.handler.has_key("queue"),)
+    return (Subscription.handler["queue"].astext == queue,)
 
 
 def queue_runs(owner: User, queue: str | None, raw: bool) -> tuple[Any, ...]:
@@ -419,8 +420,7 @@ def delivery_run(
     db.add(run)
     for d in taken:
         d.status, d.run = DONE, run
-    if THROTTLED in subscription.state and episode_over(subscription.state, datetime.now(timezone.utc)):
-        subscription.state = {k: v for k, v in subscription.state.items() if k != THROTTLED}
+    end_episode(subscription)
     db.flush()
     return run
 

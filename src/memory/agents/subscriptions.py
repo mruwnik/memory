@@ -29,7 +29,8 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from sqlalchemy import and_, case, exists, func, or_, select, update
+from sqlalchemy import Text, and_, case, exists, func, inspect, literal, or_, select, update
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import aliased
 
 from memory.common import settings
@@ -1399,7 +1400,9 @@ def deliver_raw(db: DBSession, subscription: Subscription, event: Event) -> Clai
     db.flush()
     if not shed and shed_raw_backlog(db, subscription):
         reason = f"more than {backlog_limit(subscription)} deliveries waiting"
-    locked = lock_subscription(db, subscription.id) if reason else None
+    locked = lock_subscription(db, subscription.id) if reason or THROTTLED in (subscription.state or {}) else None
+    if locked is not None and not reason:
+        end_episode(locked)
     throttle = reason if locked is not None and reason and throttled(locked, reason) else None
     return Claimed(subscription.id, f"raw:{event.id}", False, throttle, shed=shed)
 
@@ -1609,11 +1612,14 @@ def resume_from_trip(db: DBSession, subscription: Subscription) -> None:
     to = (datetime.now(timezone.utc) + REPLAY_MARGIN).isoformat()
     state = subscription.state or {}
     if RESUME in state:
-        subscription.state = state | {RESUME: state[RESUME] | {"to": to}}
-        return
-    cursor = {"from": (since - REPLAY_MARGIN).isoformat(), "to": to}
-    first = db.scalar(missed_events(cursor).with_only_columns(func.min(Event.id)))
-    subscription.state = state | {RESUME: cursor | {"after": (first or 1) - 1}}
+        # Merged onto the stored replay: the router advances its "after" as it goes.
+        replay = func.coalesce(Subscription.state[RESUME], literal(state[RESUME], postgresql.JSONB))
+        resumed = func.jsonb_build_object(RESUME, replay.op("||")(literal({"to": to}, postgresql.JSONB)))
+    else:
+        cursor = {"from": (since - REPLAY_MARGIN).isoformat(), "to": to}
+        first = db.scalar(missed_events(cursor).with_only_columns(func.min(Event.id)))
+        resumed = literal({RESUME: cursor | {"after": (first or 1) - 1}}, postgresql.JSONB)
+    write_state(db, subscription, Subscription.state.op("||")(resumed))
 
 
 def tell_owner(db: DBSession, owner: User, subject: str, message: str) -> None:
@@ -1627,6 +1633,13 @@ def episode_over(state: dict[str, Any], now: datetime) -> bool:
     """Whether a throttling episode ended: nothing held back for THROTTLE_EPISODE."""
     throttle = state.get(THROTTLED)
     return throttle is None or datetime.fromisoformat(throttle["last"]) < now - THROTTLE_EPISODE
+
+
+def end_episode(subscription: Subscription) -> None:
+    """Drop, on the locked subscription, a throttling episode that has ended."""
+    state = subscription.state or {}
+    if THROTTLED in state and episode_over(state, datetime.now(timezone.utc)):
+        subscription.state = {k: v for k, v in state.items() if k != THROTTLED}
 
 
 def throttled(subscription: Subscription, reason: str) -> bool:
@@ -1793,6 +1806,39 @@ def redispatch(db: DBSession, subscription_id: int) -> None:
         update(Delivery)
         .where(Delivery.subscription_id == subscription_id, Delivery.status == PENDING)
         .values(dispatched_at=None, sends=0)
+    )
+
+
+def write_state(db: DBSession, subscription: Subscription, state: Any) -> None:
+    """Set, uncommitted, the subscription's state to the SQL expression `state` (over its
+    stored state), so a caller holding no lock can't overwrite what a delivery path
+    writes there meanwhile."""
+    db.flush()
+    db.execute(update(Subscription).where(Subscription.id == subscription.id).values(state=state))
+    db.expire(subscription, ["state"])
+
+
+def drop_state(db: DBSession, subscription: Subscription, keys: set[str]) -> None:
+    """Remove, uncommitted, `keys` from the subscription's state. A row not yet written
+    has no other writer."""
+    if not inspect(subscription).persistent:
+        subscription.state = {k: v for k, v in (subscription.state or {}).items() if k not in keys}
+        return
+    write_state(db, subscription, Subscription.state.op("-")(postgresql.array(sorted(keys), type_=Text)))
+
+
+def lift_throttle(db: DBSession, subscription: Subscription) -> None:
+    """Forget, uncommitted, the subscription's throttling episode and make what its caps
+    deferred due at once: its caps changed, so the old episode's reason no longer holds."""
+    drop_state(db, subscription, {THROTTLED})
+    db.execute(
+        update(Delivery)
+        .where(
+            Delivery.subscription_id == subscription.id,
+            Delivery.status == PENDING,
+            Delivery.not_before > func.now(),
+        )
+        .values(not_before=None, dispatched_at=None, sends=0)
     )
 
 

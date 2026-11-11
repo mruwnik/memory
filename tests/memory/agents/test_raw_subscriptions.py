@@ -2,7 +2,7 @@
 """Raw-event subscriptions: webhook deliveries handed to a queue, only ever to the
 owner of the account they came in on, and never for what isn't collected."""
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -262,6 +262,22 @@ async def test_over_its_hourly_rate_a_raw_subscription_sheds_and_records_it(
         ("running", ""),
     ]
     assert "throttled" in subscription.state
+
+
+@pytest.mark.parametrize("last_held,kept", [(timedelta(minutes=1), True), (timedelta(hours=3), False)])
+def test_a_raw_delivery_clears_only_a_throttling_episode_that_has_ended(
+    db_session, regular_user, last_held, kept
+):
+    gh = account(db_session, regular_user)
+    subscription = raw_subscription(db_session, regular_user)
+    last = (datetime.now(timezone.utc) - last_held).isoformat()
+    subscription.state = {"throttled": {"reason": "over", "since": last, "last": last}}
+    db_session.commit()
+
+    delivered(db_session, gh)
+
+    db_session.refresh(subscription)
+    assert ("throttled" in subscription.state) == kept
 
 
 @pytest.mark.asyncio

@@ -40,7 +40,9 @@ from memory.agents.subscriptions import (
     PerItem,
     accessible_ids,
     backlog_limit,
+    drop_state,
     dry_run,
+    lift_throttle,
     redispatch,
     resume_from_trip,
     send_due,
@@ -371,7 +373,7 @@ def apply_enabled(
             subscription.active_since = func.now()
         # A replay left from an earlier resume would deliver what "from now" skips.
         stale = {"tripped", "failures", THROTTLED} | (set() if resume else {RESUME})
-        subscription.state = {k: v for k, v in (subscription.state or {}).items() if k not in stale}
+        drop_state(db, subscription, stale)
     if subscription.kind != CRON:
         return
     if not subscription.enabled:
@@ -479,7 +481,8 @@ async def upsert(
     the earlier one to end). Over a cap, deliveries wait an hour and are then shed;
     you're notified once per episode, which ends after two hours with nothing held
     back; `state.throttled` describes the latest episode and clears at the first
-    delivery after it ends. Filter and raw subscriptions are returned with `limits`:
+    delivery after it ends. Changing max_per_hour or backlog_max ends the episode
+    and makes the deliveries it deferred due at once. Filter and raw subscriptions are returned with `limits`:
     their own max_per_hour and backlog_max in effect (null: no limit). An agent
     handler's runs also count against that agent's hourly limit, shared with its
     other runs, so they can be held below `limits.max_per_hour`.
@@ -574,6 +577,7 @@ async def upsert(
             subscription.name = checked_name(db, user_id, name or f"subscription-{subscription.id}", subscription.id)
         subscription.handler, subscription.config = stored, config
         subscription.definition_id = definition.id if definition else None
+        caps = (subscription.max_per_hour, subscription.backlog_max)
         # 0 clears a cap.
         if max_per_hour is not None:
             subscription.max_per_hour = max_per_hour or None
@@ -586,11 +590,14 @@ async def upsert(
         elif existing is None and "queue" in stored:
             subscription.order_by = "item"
         db.add(subscription)
-        apply_enabled(db, subscription, was_enabled, resume, cron_changed)
         woken = existing is not None and kind == INGEST and subscription.enabled and not was_enabled
-        if woken:
-            redispatch(db, subscription.id)
+        # The state writes below flush too, and so may be the first to hit a taken name.
         try:
+            if existing is not None and (subscription.max_per_hour, subscription.backlog_max) != caps:
+                lift_throttle(db, subscription)
+            apply_enabled(db, subscription, was_enabled, resume, cron_changed)
+            if woken:
+                redispatch(db, subscription.id)
             db.flush()
         except IntegrityError as e:
             if "subscriptions_user_name_key" not in str(e.orig):
