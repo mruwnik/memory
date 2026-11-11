@@ -2,6 +2,7 @@
 # pyright: reportFunctionMemberAccess=false
 
 import pytest
+from sqlalchemy import text
 from unittest.mock import patch, MagicMock
 
 from memory.api.MCP.servers.notes import note_files, upsert
@@ -280,13 +281,18 @@ async def test_note_files_lists_markdown_files(
 
 @pytest.mark.asyncio
 async def test_note_files_skips_hidden_paths(mock_settings, db_session, admin_user, admin_session):
-    for filename in [
-        "notes/note.md",
+    make_note(db_session, admin_user.id, "notes/note.md")
+    # Notes can't be given hidden paths any more; rows stored before can hold them.
+    for n, filename in enumerate([
         "notes/.obsidian/workspace.json.md",
         "notes/.gitignore.md",
         "notes/sub/.notes-critic/review.md",
-    ]:
-        make_note(db_session, admin_user.id, filename)
+    ]):
+        note = make_note(db_session, admin_user.id, f"notes/legacy{n}.md")
+        db_session.execute(
+            text("UPDATE source_item SET filename = :f WHERE id = :id"), {"f": filename, "id": note.id}
+        )
+    db_session.commit()
 
     with mcp_auth_context(admin_session.token):
         result = await note_files.fn(path="/")

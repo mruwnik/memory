@@ -333,7 +333,7 @@ def test_email_attachment_as_payload(created_at, expected_date):
 @pytest.mark.parametrize(
     "has_filename,content_source,expected_content",
     [
-        (True, "file", lambda tmp_path: tmp_path / "test.txt"),
+        (True, "file", lambda tmp_path: tmp_path / "emails/test.txt"),
         (False, "content", lambda tmp_path: "attachment content"),
     ],
 )
@@ -350,11 +350,11 @@ def test_email_attachment_data_chunks(
 
     if has_filename:
         # Create a test file
-        test_file = tmp_path / "test.txt"
+        test_file = tmp_path / "emails/test.txt"
         test_file.write_bytes(b"test file content")
         attachment = EmailAttachment(
             sha256=b"test",
-            filename=str(test_file),
+            filename="emails/test.txt",
             mime_type="text/plain",
             mail_message_id=123,
         )

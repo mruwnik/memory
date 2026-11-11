@@ -36,10 +36,10 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.dialects.postgresql import BYTEA, JSONB
 from sqlalchemy import orm
-from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
+from sqlalchemy.orm import Mapped, Session, mapped_column, relationship, validates
 from sqlalchemy.types import Numeric
 
-from memory.common import settings
+from memory.common import paths, settings
 import memory.common.extract as extract
 import memory.common.collections as collections
 import memory.common.chunker as chunker
@@ -635,6 +635,13 @@ class SourceItem(AccessControlMixin, Base):
         Index("source_inserted_at_idx", "inserted_at", "id"),
         Index("source_type_inserted_at_idx", "type", "inserted_at", "id"),
     )
+
+    @validates("filename")
+    def validate_filename(self, key: str, filename: str | None) -> str | None:
+        """``filename`` is a path under this type's storage dir, served by /files."""
+        if filename is None:
+            return None
+        return paths.check_item_filename(self.__mapper__.polymorphic_identity, filename)
 
     @property
     def vector_ids(self):

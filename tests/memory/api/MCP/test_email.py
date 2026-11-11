@@ -342,16 +342,16 @@ def test_load_attachment_valid_path(tmp_path, db_session, regular_user):
     """_load_attachment returns content for a file inside the storage directory."""
     from memory.api.MCP.servers.email import _load_attachment
     from memory.common import settings
-    from memory.common.db.models import SourceItem
+    from memory.common.db.models import MiscDoc
 
-    valid_dir = tmp_path / "valid"
-    valid_dir.mkdir()
+    valid_dir = tmp_path / "misc"
+    valid_dir.mkdir(exist_ok=True)
     valid_file = valid_dir / "file.txt"
     valid_file.write_text("test content")
 
-    item = SourceItem(
+    item = MiscDoc(
         sha256=b"x" * 32,
-        filename="valid/file.txt",
+        filename="misc/file.txt",
         mime_type="text/plain",
         modality="text",
         sensitivity="public",
@@ -361,7 +361,7 @@ def test_load_attachment_valid_path(tmp_path, db_session, regular_user):
     db_session.commit()
 
     with patch.object(settings, "FILE_STORAGE_DIR", str(tmp_path)):
-        result = _load_attachment("valid/file.txt", UserProxy.from_user(regular_user))
+        result = _load_attachment("misc/file.txt", UserProxy.from_user(regular_user))
 
     assert result is not None
     assert result.filename == "file.txt"
@@ -416,14 +416,14 @@ def test_load_attachment_follows_the_token_scopes(
     admin's read-only key can't exfiltrate it."""
     from memory.api.MCP.servers.email import _load_attachment
     from memory.common import settings
-    from memory.common.db.models import SourceItem
+    from memory.common.db.models import MiscDoc
 
-    valid_dir = tmp_path / "valid"
-    valid_dir.mkdir()
+    valid_dir = tmp_path / "misc"
+    valid_dir.mkdir(exist_ok=True)
     (valid_dir / "secret.txt").write_text("secret content")
-    item = SourceItem(
+    item = MiscDoc(
         sha256=b"y" * 32,
-        filename="valid/secret.txt",
+        filename="misc/secret.txt",
         mime_type="text/plain",
         modality="text",
         sensitivity="confidential",
@@ -434,6 +434,6 @@ def test_load_attachment_follows_the_token_scopes(
     user = {"regular": regular_user, "admin": admin_user}[viewer]
 
     with patch.object(settings, "FILE_STORAGE_DIR", str(tmp_path)):
-        result = _load_attachment("valid/secret.txt", UserProxy({"id": user.id, "scopes": scopes}))
+        result = _load_attachment("misc/secret.txt", UserProxy({"id": user.id, "scopes": scopes}))
 
     assert (result is not None) == served

@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Any, FrozenSet, Protocol, runtime_checkable
 from sqlalchemy import any_, literal, select
 from sqlalchemy.orm import Query
 
-from memory.common import discord_attachments
+from memory.common import discord_attachments, paths
 from memory.common.db.models.sources import Project, Team, project_teams, team_members
 from memory.common.scopes import SCOPE_ADMIN, SCOPE_READ, SCOPE_WRITE
 
@@ -407,8 +407,11 @@ def get_accessible_source_item_by_filename(
     own copy of the query + admin check + project-role lookup, and they were
     starting to drift on details like ``has_admin_scope`` placement.
 
+    Only item types that keep files on disk count, and only for a path inside
+    that type's storage dir; hidden (dot-prefixed) segments are never served.
+
     Raises:
-        FileNotFoundError: if no SourceItem has this filename.
+        FileNotFoundError: if no SourceItem owns this filename.
         PermissionError:   if the SourceItem exists but the caller cannot
                            read it.
 
@@ -417,11 +420,17 @@ def get_accessible_source_item_by_filename(
     """
     from memory.common.db.models.source_item import SourceItem  # avoid circular import
 
+    if paths.is_hidden(filename):
+        raise FileNotFoundError(filename)
     # Several items can share a file (e.g. one user's copy of another's upload).
     # A Discord message's downloaded images are named in its images column, not filename.
-    items = session.query(SourceItem).filter(
-        SourceItem.filename == filename
-    ).all() or discord_image_holders(session, filename)
+    candidates = session.query(SourceItem).filter(
+        SourceItem.filename == filename,
+        SourceItem.type.in_(paths.item_storage_dirs()),
+    )
+    items = [
+        item for item in candidates if paths.is_item_file(item.type, filename)
+    ] or discord_image_holders(session, filename)
     if not items:
         raise FileNotFoundError(filename)
 

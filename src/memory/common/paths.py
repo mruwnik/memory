@@ -112,3 +112,42 @@ def to_db_filename(
 def is_hidden(path: str | pathlib.Path) -> bool:
     """Whether any segment of ``path`` is dot-prefixed, like ``.obsidian/`` or ``.gitignore``."""
     return any(part.startswith(".") for part in pathlib.PurePosixPath(path).parts)
+
+
+def item_storage_dirs() -> dict[str, pathlib.Path]:
+    """The storage dir of each SourceItem type whose ``filename`` names a file on disk."""
+    return {
+        "book_section": settings.EBOOK_STORAGE_DIR,
+        "comic": settings.COMIC_STORAGE_DIR,
+        "email_attachment": settings.EMAIL_STORAGE_DIR,
+        "misc_doc": settings.MISC_STORAGE_DIR,
+        "note": settings.NOTES_STORAGE_DIR,
+        "photo": settings.PHOTO_STORAGE_DIR,
+        "report": settings.REPORT_STORAGE_DIR,
+    }
+
+
+def is_item_file(item_type: str | None, filename: str) -> bool:
+    """Whether ``filename`` (FILE_STORAGE_DIR-relative) lies in the storage dir of
+    ``item_type``, with no hidden segments: the only files an item may serve."""
+    storage_dir = item_storage_dirs().get(item_type or "")
+    if storage_dir is None or is_hidden(filename):
+        return False
+    resolved = (pathlib.Path(settings.FILE_STORAGE_DIR) / filename).resolve()
+    return resolved.is_relative_to(storage_dir.resolve())
+
+
+def check_item_filename(item_type: str | None, filename: str) -> str:
+    """Return ``filename`` if it may be stored on an item of ``item_type``.
+
+    Raises ValueError for a type that keeps no file on disk, or for a path that
+    is absolute or has dot-prefixed segments (``..`` included). The untyped
+    base ``source_item`` is never served, so any filename passes.
+    """
+    if item_type == "source_item":
+        return filename
+    if item_type not in item_storage_dirs():
+        raise ValueError(f"{item_type} items keep no file on disk")
+    if filename.startswith("/") or is_hidden(filename):
+        raise ValueError("filename must be a relative path with no dot-prefixed segments")
+    return filename

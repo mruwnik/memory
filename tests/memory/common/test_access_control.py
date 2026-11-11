@@ -16,7 +16,7 @@ from memory.common.access_control import (
     build_access_filter,
     get_accessible_source_item_by_filename,
 )
-from memory.common.db.models import HumanUser, SourceItem
+from memory.common.db.models import HumanUser, Photo, SourceItem
 
 
 class MockUser:
@@ -411,11 +411,11 @@ def test_get_accessible_source_item_raises_permissionerror_for_denied(
     from memory.common.access_control import (
         get_accessible_source_item_by_filename,
     )
-    from memory.common.db.models import SourceItem
+    from memory.common.db.models import MiscDoc
 
-    item = SourceItem(
+    item = MiscDoc(
         sha256=b"a" * 32,
-        filename="someone-elses/secret.txt",
+        filename="misc/someone-elses/secret.txt",
         mime_type="text/plain",
         modality="text",
         sensitivity="confidential",
@@ -427,7 +427,7 @@ def test_get_accessible_source_item_raises_permissionerror_for_denied(
 
     with pytest.raises(PermissionError):
         get_accessible_source_item_by_filename(
-            db_session, regular_user, "someone-elses/secret.txt"
+            db_session, regular_user, "misc/someone-elses/secret.txt"
         )
 
 
@@ -438,11 +438,11 @@ def test_get_accessible_source_item_returns_item_for_creator(
     from memory.common.access_control import (
         get_accessible_source_item_by_filename,
     )
-    from memory.common.db.models import SourceItem
+    from memory.common.db.models import MiscDoc
 
-    item = SourceItem(
+    item = MiscDoc(
         sha256=b"b" * 32,
-        filename="mine/file.txt",
+        filename="misc/mine/file.txt",
         mime_type="text/plain",
         modality="text",
         sensitivity="confidential",
@@ -453,7 +453,7 @@ def test_get_accessible_source_item_returns_item_for_creator(
     db_session.commit()
 
     result = get_accessible_source_item_by_filename(
-        db_session, regular_user, "mine/file.txt"
+        db_session, regular_user, "misc/mine/file.txt"
     )
     assert result.id == item.id
 
@@ -465,11 +465,11 @@ def test_get_accessible_source_item_returns_item_for_admin(
     from memory.common.access_control import (
         get_accessible_source_item_by_filename,
     )
-    from memory.common.db.models import SourceItem
+    from memory.common.db.models import MiscDoc
 
-    item = SourceItem(
+    item = MiscDoc(
         sha256=b"c" * 32,
-        filename="someone/else.txt",
+        filename="misc/someone/else.txt",
         mime_type="text/plain",
         modality="text",
         sensitivity="confidential",
@@ -479,7 +479,7 @@ def test_get_accessible_source_item_returns_item_for_admin(
     db_session.commit()
 
     result = get_accessible_source_item_by_filename(
-        db_session, admin_user, "someone/else.txt"
+        db_session, admin_user, "misc/someone/else.txt"
     )
     assert result.id == item.id
 
@@ -497,11 +497,11 @@ def test_get_accessible_source_item_denies_hidden_for_admin(
     from memory.common.access_control import (
         get_accessible_source_item_by_filename,
     )
-    from memory.common.db.models import SourceItem
+    from memory.common.db.models import MiscDoc
 
-    item = SourceItem(
+    item = MiscDoc(
         sha256=b"d" * 32,
-        filename="hidden/attachment.txt",
+        filename="misc/hidden/attachment.txt",
         mime_type="text/plain",
         modality="text",
         sensitivity="hidden",
@@ -512,7 +512,7 @@ def test_get_accessible_source_item_denies_hidden_for_admin(
 
     with pytest.raises(PermissionError):
         get_accessible_source_item_by_filename(
-            db_session, admin_user, "hidden/attachment.txt"
+            db_session, admin_user, "misc/hidden/attachment.txt"
         )
 
 
@@ -570,7 +570,7 @@ def test_get_accessible_source_item_picks_the_callers_copy_of_a_shared_file(
     db_session.add_all([other, stranger])
     db_session.flush()
     copies = {
-        user.id: SourceItem(
+        user.id: Photo(
             sha256=bytes([n]) * 32,
             filename="photos/abc_dupe.png",
             mime_type="image/png",

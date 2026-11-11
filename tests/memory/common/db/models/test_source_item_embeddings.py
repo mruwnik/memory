@@ -1,4 +1,5 @@
 import hashlib
+import shutil
 import textwrap
 from datetime import datetime
 from typing import Any, Sequence, cast
@@ -46,6 +47,14 @@ from tests.data.contents import (
 # test_mail_message_with_attachments_embeddings, test_email_attachment_embeddings_text,
 # test_book_section_embeddings_single_page, and one parametrized post embeddings test.
 # This represents ~15% of embedding test coverage.
+
+
+def stored_copy(name: str, folder: str) -> str:
+    """Copy a test data file into ``folder`` under FILE_STORAGE_DIR; return its filename."""
+    path = settings.FILE_STORAGE_DIR / folder / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(DATA_DIR / name, path)
+    return f"{folder}/{name}"
 
 
 def compare_chunks(
@@ -252,7 +261,7 @@ def test_email_attachment_embeddings_photo(mock_voyage_client):
     item = EmailAttachment(
         id=1,
         content=SAMPLE_MARKDOWN,
-        filename=DATA_DIR / "lang_timeline.png",
+        filename=stored_copy("lang_timeline.png", "emails"),
         mime_type="image/png",
         modality="photo",
         sha256=hashlib.sha256(SAMPLE_MARKDOWN.encode("utf-8")).hexdigest(),
@@ -297,7 +306,7 @@ def test_email_attachment_embeddings_pdf(mock_voyage_client):
     item = EmailAttachment(
         id=1,
         content=SAMPLE_MARKDOWN,
-        filename=DATA_DIR / "regulamin.pdf",
+        filename=stored_copy("regulamin.pdf", "emails"),
         mime_type="application/pdf",
         modality="doc",
         sha256=hashlib.sha256(SAMPLE_MARKDOWN.encode("utf-8")).hexdigest(),
@@ -314,7 +323,7 @@ def test_email_attachment_embeddings_pdf(mock_voyage_client):
     )
     metadata = cast(dict[str, Any], item.as_payload())
     metadata["tags"] = {"bla"}
-    with pymupdf.open(item.filename) as pdf:
+    with pymupdf.open(settings.FILE_STORAGE_DIR / item.filename) as pdf:
         expected_images = [
             (
                 None,
@@ -368,7 +377,7 @@ def test_embeddings_comic(mock_voyage_client):
     item = Comic(
         id=1,
         content=SAMPLE_MARKDOWN,
-        filename=DATA_DIR / "lang_timeline.png",
+        filename=stored_copy("lang_timeline.png", "comics"),
         mime_type="image/png",
         modality="comic",
         sha256=hashlib.sha256(SAMPLE_MARKDOWN.encode("utf-8")).hexdigest(),
