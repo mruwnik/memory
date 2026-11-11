@@ -7,6 +7,7 @@ import pymupdf
 from PIL import Image
 import io
 import shutil
+import zipfile
 from unittest.mock import patch
 from memory.common import settings, summarizer
 from memory.common.extract import (
@@ -511,22 +512,48 @@ def test_extract_pdf_refuses_a_pdf_named_file_that_is_not_a_pdf(tmp_path, data):
         extract_pdf(path)
 
 
+def epub_holding_a_pdf_header() -> bytes:
+    """An EPUB whose second entry, stored, holds the PDF header within the first KiB."""
+    book = zipfile.ZipFile(io.BytesIO(book_files.epub(book_files.markup(2000))))
+    first, *rest = book.infolist()
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(first, book.read(first), zipfile.ZIP_STORED)
+        archive.writestr("%PDF-1.7.txt", b"%PDF-1.7", zipfile.ZIP_STORED)
+        for info in rest:
+            archive.writestr(info.filename, book.read(info))
+    return buffer.getvalue()
+
+
 @pytest.mark.parametrize(
     "data",
     [
         b"%PDF-1.7\n" + book_files.epub(book_files.markup(2000)),
+        book_files.mobi(book_files.markup(2000), name=b"%PDF-1.7"),
         book_files.mobi(book_files.markup(2000), name=b"xx%PDF-1.7"),
         b"%PDF-1.7\n" + book_files.fb2(2000),
+        b"%PDF-1.7\n" + book_files.markup(2000),
+        epub_holding_a_pdf_header(),
+        pdf_of_pages((612, 792)) + book_files.epub(book_files.markup(10)),
+        b"junk %PDF-1.7\n",
     ],
-    ids=["header then epub", "mobi named like a pdf", "header then fb2"],
+    ids=[
+        "header then epub", "mobi named a pdf", "mobi naming a pdf", "header then fb2",
+        "header then html", "epub holding a pdf header", "pdf with a zip appended", "header after junk",
+    ],
 )
-def test_content_with_the_pdf_header_is_never_opened_as_a_book(data):
-    with pytest.raises((ValueError, pymupdf.FileDataError)):
-        open_pdf(data)
+def test_content_with_another_formats_signature_never_reaches_mupdf(tmp_path, data):
+    path = tmp_path / "file.pdf"
+    path.write_bytes(data)
+    with patch("memory.common.extract.pymupdf.open") as mupdf_open:
+        for content in (data, path):
+            with pytest.raises(ValueError, match="Not a PDF"):
+                open_pdf(content)
+    mupdf_open.assert_not_called()
 
 
-@pytest.mark.parametrize("prefix", [b"", b"\0" * 1000])
-def test_open_pdf_accepts_the_header_within_the_first_kilobyte(prefix):
+@pytest.mark.parametrize("prefix", [b"", b"\0" * 1000, b"\r\n \t"])
+def test_open_pdf_accepts_the_header_after_whitespace(prefix):
     with open_pdf(prefix + pdf_of_pages((612, 792))) as pdf:
         assert pdf.page_count == 1
 

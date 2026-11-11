@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field, replace
 import io
+import zipfile
 import logging
 import math
 import mimetypes
@@ -10,7 +11,7 @@ from contextlib import contextmanager
 from typing import Any, Generator, Sequence, cast
 
 from memory.common import chunker, settings, summarizer
-from memory.common.file_magic import PDF_MAGIC_WINDOW, has_pdf_magic
+from memory.common.file_magic import PDF_MAGIC_WINDOW, looks_like_pdf
 from memory.parsers import ebook
 import pymupdf  # PyMuPDF
 from PIL import Image
@@ -224,18 +225,20 @@ def open_pdf(content: bytes | pathlib.Path) -> pymupdf.Document:
 
     MuPDF picks its handler from the content, whatever the caller asks for, and
     opening a reflowable format (EPUB, MOBI, FB2, HTML) lays out the whole
-    document. Content with the PDF header goes to the PDF handler; anything
-    else is refused before MuPDF sees it.
+    document. Only content that starts with the PDF header and carries no
+    other format's signature, nor a zip directory, reaches MuPDF.
     """
     if isinstance(content, pathlib.Path):
         with content.open("rb") as file:
             head = file.read(PDF_MAGIC_WINDOW)
+        zipped = zipfile.is_zipfile(content)
     else:
         head = content[:PDF_MAGIC_WINDOW]
-    if not has_pdf_magic(head):
-        raise ValueError("Not a PDF: no %PDF- header")
+        zipped = zipfile.is_zipfile(io.BytesIO(content))
+    if not looks_like_pdf(head) or zipped:
+        raise ValueError("Not a PDF")
     if isinstance(content, pathlib.Path):
-        doc = pymupdf.open(content)
+        doc = pymupdf.open(content, filetype="pdf")
     else:
         doc = pymupdf.open(stream=content, filetype="pdf")
     if not doc.is_pdf:
