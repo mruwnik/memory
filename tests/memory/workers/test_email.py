@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import imaplib
+import io
 import pathlib
 from datetime import datetime, timezone
 from typing import cast
@@ -28,7 +29,8 @@ from memory.workers.email import (
     delete_removed_emails,
     extract_email_uid,
     fetch_email,
-    fetch_email_since,
+    fetch_emails,
+    folder_uids_since,
     fetch_gmail_message,
     fetch_gmail_messages_by_ids,
     find_removed_emails,
@@ -38,6 +40,7 @@ from memory.workers.email import (
     gmail_gone_message_ids,
     imap_mailbox,
     imap_connection,
+    CappedIMAP4,
     list_gmail_message_ids,
     list_imap_folders,
     parse_folder_line,
@@ -402,6 +405,12 @@ def test_fetch_email(email_provider):
     assert result is None
 
 
+def fetch_email_since(conn, folder: str, since_date: datetime):
+    fetched = list(fetch_emails(conn, folder_uids_since(conn, folder, since_date)))
+    emails = [email for email in fetched if email]
+    return emails, len(fetched) - len(emails)
+
+
 def test_fetch_email_since(email_provider):
     # Fetch emails from INBOX folder
     result, unfetched = fetch_email_since(email_provider, "INBOX", datetime(1970, 1, 1))
@@ -438,6 +447,38 @@ def test_fetch_email_since_raises_when_folder_unreadable():
 
     with pytest.raises(FolderUidsError):
         fetch_email_since(provider, "INBOX", datetime(1970, 1, 1))
+
+
+def test_fetch_emails_skips_messages_over_size_cap():
+    provider = MockEmailProvider({"INBOX": [{"uid": 1}, {"uid": 2, "body": "x" * 5000}, {"uid": 3}]})
+    provider.select("INBOX")
+
+    with patch.object(settings, "MAX_EMAIL_BYTES", 2000):
+        fetched = list(fetch_emails(cast(imaplib.IMAP4, provider), ["1", "2", "3"]))
+
+    assert [email and email[0] for email in fetched] == ["1", None, "3"]
+    assert provider.fetched_bodies == [1, 3]
+
+
+def capped_connection(body: bytes) -> CappedIMAP4:
+    conn = CappedIMAP4.__new__(CappedIMAP4)
+    conn.file = io.BytesIO(body)
+    return conn
+
+
+def test_capped_connection_reads_literal_within_cap():
+    conn = capped_connection(b"x" * 2000)
+
+    with patch.object(settings, "MAX_EMAIL_BYTES", 2000):
+        assert conn.read(2000) == b"x" * 2000
+
+
+def test_capped_connection_refuses_oversized_literal():
+    conn = capped_connection(b"x" * 2001)
+
+    with patch.object(settings, "MAX_EMAIL_BYTES", 2000), pytest.raises(imaplib.IMAP4.abort):
+        conn.read(2001)
+    assert conn.file.tell() == 0
 
 
 def test_process_folder(email_provider):
@@ -1439,8 +1480,9 @@ def test_gmail_gone_message_ids_makes_no_request_for_nothing():
     assert service.batch_sizes == []
 
 
-@patch("memory.workers.email.imaplib")
-def test_imap_connection_uses_ssl_by_default(mock_imaplib):
+@patch("memory.workers.email.CappedIMAP4")
+@patch("memory.workers.email.CappedIMAP4SSL")
+def test_imap_connection_uses_ssl_by_default(ssl_connect, plain_connect):
     account = EmailAccount(
         name="t",
         email_address="t@example.com",
@@ -1453,16 +1495,18 @@ def test_imap_connection_uses_ssl_by_default(mock_imaplib):
     )
     with imap_connection(account):
         pass
-    kwargs = mock_imaplib.IMAP4_SSL.call_args.kwargs
+    kwargs = ssl_connect.call_args.kwargs
     assert kwargs["host"] == "imap.example.com"
     assert kwargs["port"] == 993
+    assert kwargs["timeout"] == settings.REMOTE_SERVER_TIMEOUT_SEC
     assert kwargs["ssl_context"].verify_mode == ssl.CERT_REQUIRED
     assert kwargs["ssl_context"].check_hostname is True
-    mock_imaplib.IMAP4.assert_not_called()
+    plain_connect.assert_not_called()
 
 
-@patch("memory.workers.email.imaplib")
-def test_imap_connection_starttls_when_ssl_disabled(mock_imaplib):
+@patch("memory.workers.email.CappedIMAP4")
+@patch("memory.workers.email.CappedIMAP4SSL")
+def test_imap_connection_starttls_when_ssl_disabled(ssl_connect, plain_connect):
     account = EmailAccount(
         name="t",
         email_address="t2@example.com",
@@ -1475,16 +1519,18 @@ def test_imap_connection_starttls_when_ssl_disabled(mock_imaplib):
     )
     with imap_connection(account):
         pass
-    mock_imaplib.IMAP4.assert_called_once_with(host="imap.example.com", port=143)
-    mock_imaplib.IMAP4_SSL.assert_not_called()
-    conn = mock_imaplib.IMAP4.return_value
+    plain_connect.assert_called_once_with(
+        host="imap.example.com", port=143, timeout=settings.REMOTE_SERVER_TIMEOUT_SEC
+    )
+    ssl_connect.assert_not_called()
+    conn = plain_connect.return_value
     assert [call[0] for call in conn.method_calls] == ["starttls", "login", "logout"]
     context = conn.starttls.call_args.kwargs["ssl_context"]
     assert context.verify_mode == ssl.CERT_REQUIRED
     assert context.check_hostname
 
 
-@patch("memory.workers.email.imaplib.IMAP4")
+@patch("memory.workers.email.CappedIMAP4")
 def test_imap_starttls_failure_never_sends_password(connect):
     account = EmailAccount(imap_server="imap.example.com", imap_port=143,
                            username="u", password="p", use_ssl=False)

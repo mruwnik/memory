@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import cast
 from unittest.mock import Mock, call, patch
 
+from memory.common import settings
 from memory.common.db.models import CalendarEvent, HumanUser, Person
 from memory.common.db.models.sources import CalendarAccount, GoogleAccount
 from memory.workers.tasks import calendar
@@ -1041,3 +1042,14 @@ def test_fetch_google_events_reads_every_page_of_the_calendar_list(
     assert [e.get("external_id") for e in fetched.events] == ["event-cal-1", "event-cal-2"]
     assert fetched.complete is True
     assert calendar_list.call_args_list == [call(pageToken=None), call(pageToken="page-2")]
+
+
+def test_fetch_caldav_events_sets_a_timeout():
+    client = Mock()
+    client.principal.return_value.calendars.return_value = []
+    now = datetime.now(timezone.utc)
+
+    with patch("memory.workers.tasks.calendar.DAVClient", return_value=client) as connect:
+        calendar.fetch_caldav_events("https://caldav.example.com", "u", "p", [], now, now)
+
+    assert connect.call_args.kwargs["timeout"] == settings.REMOTE_SERVER_TIMEOUT_SEC

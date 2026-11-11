@@ -477,6 +477,17 @@ MAX_MISC_UPLOAD_BYTES = int(
 MAX_EBOOK_MARKUP_BYTES = int(
     os.getenv("MAX_EBOOK_MARKUP_BYTES", 10 * 1024 * 1024)
 )
+# Images fetched for one web page or HTML report: <img> tags past the count,
+# or once the byte total is stored, keep their remote URLs.
+MAX_DOCUMENT_IMAGES = int(os.getenv("MAX_DOCUMENT_IMAGES", 100))
+MAX_DOCUMENT_IMAGE_BYTES = int(
+    os.getenv("MAX_DOCUMENT_IMAGE_BYTES", 50 * 1024 * 1024)
+)
+# Socket timeout for user-configured IMAP and CalDAV servers: a stalled server
+# would otherwise hold a worker until the task's time limit.
+REMOTE_SERVER_TIMEOUT_SEC = int(os.getenv("REMOTE_SERVER_TIMEOUT_SEC", 60))
+# An IMAP message larger than this is not downloaded.
+MAX_EMAIL_BYTES = int(os.getenv("MAX_EMAIL_BYTES", 64 * 1024 * 1024))
 # Max decoded base64 accepted inline through the add_content MCP tool; above
 # this the caller is handed a one-time upload URL instead of inlining bytes
 # in the MCP payload.

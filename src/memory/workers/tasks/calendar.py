@@ -9,6 +9,7 @@ from caldav.collection import Calendar
 from caldav.davclient import DAVClient
 from googleapiclient.discovery import build
 
+from memory.common import settings
 from memory.common.calendar import recurrence_expandable, strip_rrule_prefix
 from memory.common.celery_app import (
     SYNC_CALENDAR_ACCOUNT,
@@ -260,7 +261,9 @@ def fetch_caldav_events(
     A calendar or event that fails to load is skipped and makes the result
     incomplete, as does finding no calendar to sync.
     """
-    client = DAVClient(url=url, username=username, password=password)
+    client = DAVClient(
+        url=url, username=username, password=password, timeout=settings.REMOTE_SERVER_TIMEOUT_SEC
+    )
     principal = client.principal()
     events: list[EventData] = []
     calendars_read = 0

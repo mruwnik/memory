@@ -498,7 +498,7 @@ def sync_imap_messages(
                 }
 
             # Close any transaction left open by the previous folder's
-            # delete pass before fetching this folder. fetch_email_since
+            # delete pass before fetching this folder. Fetching a folder
             # can take a long time on large folders, and a session left
             # idle-in-transaction during it gets killed by Postgres.
             db.commit()
