@@ -17,6 +17,7 @@ from memory.api.MCP.access import (
     ALLOWED_SENSITIVITIES,
     get_mcp_current_user,
     get_project_roles_by_user_id,
+    require_can_place,
     require_can_write_at_sensitivity,
     require_project_membership,
 )
@@ -388,6 +389,8 @@ async def upsert(
 
     if IDENTITY_CONTACT_KEYS & set(contact_info or {}) and not caller_is_admin:
         raise PermissionError("Only an admin can set a person's email, slack, github or discord")
+    if content:
+        require_can_place(user, project_id, sensitivity)
 
     with make_session() as session:
         existing = session.query(Person).filter(Person.identifier == identifier).first()
@@ -1143,18 +1146,7 @@ async def tidbit_add(
     user = get_mcp_current_user()
     creator_id = user.id if user else None
 
-    if project_id is not None:
-        require_project_membership(user, project_id)
-        # Sensitivity-vs-role enforcement: a contributor can't seed
-        # `confidential` content into a project for higher-role readers.
-        require_can_write_at_sensitivity(user, project_id, sensitivity)
-    elif sensitivity not in ALLOWED_SENSITIVITIES:
-        # No project_id (creator-only mode): still validate the string so
-        # we don't store a typo'd / attacker-supplied value verbatim.
-        raise ValueError(
-            f"Invalid sensitivity {sensitivity!r}; must be one of "
-            f"{sorted(ALLOWED_SENSITIVITIES)}."
-        )
+    require_can_place(user, project_id, sensitivity)
 
     task = celery_app.send_task(
         SYNC_PERSON_TIDBIT,

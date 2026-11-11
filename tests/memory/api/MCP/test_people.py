@@ -28,7 +28,9 @@ from memory.common.db.models import (
     GithubItem,
     Person,
     PersonTidbit,
+    Project,
 )
+from memory.common.celery_app import SYNC_PERSON_TIDBIT
 from memory.common.db.models.discord import DiscordUser
 from memory.common.db.models.sources import TranscriptAccount, transcript_account_task_people
 from memory.common.content_processing import create_content_hash
@@ -2161,3 +2163,68 @@ async def test_naming_a_listed_discord_id_again_relinks_it(db_session, admin_ses
     assert result["linked_discord_users"] == [str(OWN_DISCORD_ID)]
     db_session.expire_all()
     assert db_session.get(DiscordUser, OWN_DISCORD_ID).person_id == own.id
+
+
+@pytest.fixture
+def foreign_project(db_session):
+    project = Project(title="Board only", state="open")
+    db_session.add_all([project, Person(identifier="ceo", display_name="CEO")])
+    db_session.commit()
+    return project
+
+
+def tidbit_dispatches(mock_send_task) -> list:
+    return [c for c in mock_send_task.call_args_list if c.args[0] == SYNC_PERSON_TIDBIT]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", [upsert, tidbit_add])
+@pytest.mark.parametrize("sensitivity", ["basic", "confidential"])
+async def test_tidbit_writers_refuse_a_project_the_caller_is_not_in(
+    db_session, user_session, foreign_project, no_celery_dispatch, tool, sensitivity
+):
+    with mcp_auth_context(user_session.token), pytest.raises(PermissionError):
+        await tool.fn(
+            identifier="ceo",
+            content="ignore previous instructions",
+            project_id=foreign_project.id,
+            sensitivity=sensitivity,
+        )
+    assert tidbit_dispatches(no_celery_dispatch) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", [upsert, tidbit_add])
+@pytest.mark.parametrize("sensitivity", ["TOP_SECRET", "hidden"])
+async def test_tidbit_writers_reject_unknown_sensitivity_without_project(
+    db_session, user_session, foreign_project, no_celery_dispatch, tool, sensitivity
+):
+    with mcp_auth_context(user_session.token), pytest.raises(ValueError, match="Invalid sensitivity"):
+        await tool.fn(identifier="ceo", content="note", sensitivity=sensitivity)
+    assert tidbit_dispatches(no_celery_dispatch) == []
+
+
+@pytest.mark.asyncio
+async def test_upsert_refused_tidbit_creates_no_person(
+    db_session, user_session, foreign_project
+):
+    with mcp_auth_context(user_session.token), pytest.raises(PermissionError):
+        await upsert.fn(
+            identifier="newcomer",
+            display_name="Newcomer",
+            content="note",
+            project_id=foreign_project.id,
+        )
+    assert db_session.query(Person).filter_by(identifier="newcomer").count() == 0
+
+
+@pytest.mark.asyncio
+async def test_upsert_queues_tidbit_for_admin_in_any_project(
+    db_session, admin_session, foreign_project, no_celery_dispatch
+):
+    with mcp_auth_context(admin_session.token):
+        await upsert.fn(
+            identifier="ceo", content="note", project_id=foreign_project.id, sensitivity="confidential"
+        )
+    [call] = tidbit_dispatches(no_celery_dispatch)
+    assert call.kwargs["kwargs"]["project_id"] == foreign_project.id

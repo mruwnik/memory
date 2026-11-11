@@ -18,13 +18,11 @@ from sqlalchemy import case
 from sqlalchemy.orm import selectinload
 
 from memory.api.MCP.access import (
-    ALLOWED_SENSITIVITIES,
     build_mcp_user_access_filter,
     fetch_accessible_source_items,
     get_mcp_current_user,
     get_project_roles_by_user_id,
-    require_can_write_at_sensitivity,
-    require_project_membership,
+    require_can_place,
 )
 from memory.api.MCP.visibility import READ_ONLY, has_items, require_scopes, visible_when
 from memory.common.access_control import (
@@ -67,25 +65,6 @@ def require_user():
         raise ValueError("Authentication required")
     return user
 
-
-def enforce_write_ladder(user, project_id: int | None, sensitivity: str) -> None:
-    """Enforce master's project + sensitivity write checks.
-
-    Mirrors the pattern used in ``MCP/servers/people.py`` (and other
-    deep-audit-era write tools): if a project is named, validate membership
-    AND the role-vs-sensitivity matrix; otherwise just validate the
-    sensitivity string. ``require_can_write_at_sensitivity`` short-circuits
-    on admin scope, so admins skip both branches without us reaching for
-    ``has_admin_scope`` here.
-    """
-    if project_id is not None:
-        require_project_membership(user, project_id)
-        require_can_write_at_sensitivity(user, project_id, sensitivity)
-    elif sensitivity not in ALLOWED_SENSITIVITIES:
-        raise ValueError(
-            f"Invalid sensitivity {sensitivity!r}; must be one of "
-            f"{sorted(ALLOWED_SENSITIVITIES)}."
-        )
 
 
 # Lexical sort on text would give "urgent > medium > low > high"; rank
@@ -347,7 +326,7 @@ def _create_deadline(
     attachment_ids: list[int] | None,
 ) -> dict:
     parsed_date = parse_date(date, "date")
-    enforce_write_ladder(user, project_id, sensitivity)
+    require_can_place(user, project_id, sensitivity)
 
     with make_session() as session:
         deadline = Deadline(
@@ -439,7 +418,7 @@ def _update_deadline(
             != (original_project_id, original_sensitivity)
         )
         if ac_tuple_changed:
-            enforce_write_ladder(
+            require_can_place(
                 user, deadline.project_id, deadline.sensitivity
             )
 
