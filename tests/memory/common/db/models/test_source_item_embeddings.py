@@ -5,8 +5,8 @@ from datetime import datetime
 from typing import Any, Sequence, cast
 from unittest.mock import ANY, Mock, call
 
-import pymupdf  # PyMuPDF
 import pytest
+from PIL import Image
 
 from memory.common import settings
 from memory.common.db.models.source_item import Chunk, SourceItem
@@ -21,7 +21,7 @@ from memory.common.db.models.source_items import (
 )
 from memory.common.db.models.sources import Book
 from memory.common.embedding import embed_source_item
-from memory.common.extract import page_to_image
+from memory.common.extract import read_pdf_pages
 from memory.parsers.email import parse_email_message
 from tests.data.contents import (
     CHUNKS,
@@ -323,20 +323,14 @@ def test_email_attachment_embeddings_pdf(mock_voyage_client):
     )
     metadata = cast(dict[str, Any], item.as_payload())
     metadata["tags"] = {"bla"}
-    with pymupdf.open(settings.FILE_STORAGE_DIR / str(item.filename)) as pdf:
-        expected_images = [
-            (
-                None,
-                [image_hash(page_to_image(page))],
-                metadata
-                | {
-                    "page": page.number,
-                    "width": page.rect.width,
-                    "height": page.rect.height,
-                },
-            )
-            for page in pdf.pages()
-        ]
+    expected_images = [
+        (
+            None,
+            [image_hash(cast(Image.Image, page.image))],
+            metadata | {"page": page.number, "width": page.width, "height": page.height},
+        )
+        for page in read_pdf_pages(settings.FILE_STORAGE_DIR / str(item.filename))
+    ]
 
     mock_voyage_client.embed = Mock(return_value=Mock(embeddings=[[0.1] * 1024] * 5))
     mock_voyage_client.multimodal_embed = Mock(

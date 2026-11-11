@@ -2,7 +2,6 @@ from dataclasses import dataclass, field, replace
 import io
 import zipfile
 import logging
-import math
 import mimetypes
 import os
 import pathlib
@@ -10,10 +9,9 @@ import tempfile
 from contextlib import contextmanager
 from typing import Any, Generator, Sequence, cast
 
-from memory.common import chunker, settings, summarizer
+from memory.common import chunker, mupdf_sandbox, settings, summarizer
 from memory.common.file_magic import PDF_MAGIC_WINDOW, looks_like_pdf
 from memory.parsers import ebook
-import pymupdf  # PyMuPDF
 from PIL import Image
 
 # Backstop for every Image.open in the process. PIL only *warns* (and still
@@ -166,47 +164,28 @@ def as_file(content: bytes | str | pathlib.Path) -> Generator[pathlib.Path, None
 MAX_CHUNK_IMAGE_PIXELS = 2_000_000
 
 
-def page_zoom(width: float, height: float) -> float:
-    """The largest zoom, at most 1, whose render fits MAX_CHUNK_IMAGE_PIXELS.
-
-    PyMuPDF rounds each side up to a whole pixel, so this solves
-    (width*zoom + 1) * (height*zoom + 1) = MAX_CHUNK_IMAGE_PIXELS: a render
-    that overshot by a pixel would be resampled again for embedding.
-    """
-    area, perimeter = max(1.0, width * height), width + height
-    discriminant = perimeter**2 + 4 * area * (MAX_CHUNK_IMAGE_PIXELS - 1)
-    return min(1.0, (math.sqrt(discriminant) - perimeter) / (2 * area))
+def page_metadata(page: mupdf_sandbox.PdfPage) -> dict[str, Any]:
+    return {"page": page.number, "width": page.width, "height": page.height}
 
 
-def page_to_image(page: pymupdf.Page) -> Image.Image:
-    # Render oversized pages straight at the size they'd be shrunk to: a page's
-    # raster is unbounded (200x200in at 72dpi is 622MB) and no pixel guard sees it.
-    zoom = page_zoom(page.rect.width, page.rect.height)
-    pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom))  # type: ignore
-    return Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
-
-
-def page_metadata(page: pymupdf.Page) -> dict[str, Any]:
-    return {"page": page.number, "width": page.rect.width, "height": page.rect.height}
-
-
-def page_image_chunk(page: pymupdf.Page, modality: str = "doc") -> DataChunk:
-    """One multimodal image chunk for a PDF page, carrying its page geometry as
-    metadata."""
+def page_image_chunk(
+    page: mupdf_sandbox.PdfPage, image: Image.Image, modality: str = "doc"
+) -> DataChunk:
+    """One multimodal image chunk for a PDF page's render, carrying its page
+    geometry as metadata."""
     return DataChunk(
-        data=[page_to_image(page)],
+        data=[image],
         metadata=page_metadata(page),
         mime_type="image/jpeg",
         modality=modality,
     )
 
 
-def page_text_chunks(page: pymupdf.Page, modality: str) -> list[DataChunk]:
-    try:
-        text = cast(str, page.get_text()).strip()
-    except Exception:
+def page_text_chunks(page: mupdf_sandbox.PdfPage, modality: str) -> list[DataChunk]:
+    if page.text is None:
         logger.warning("get_text failed for page %s; ingesting image-only", page.number)
         return []
+    text = page.text.strip()
     if len(text) < MIN_PDF_PAGE_TEXT_CHARS:
         return []
     return extract_text(
@@ -220,31 +199,32 @@ def page_text_chunks(page: pymupdf.Page, modality: str) -> list[DataChunk]:
 MIN_PDF_PAGE_TEXT_CHARS = 16
 
 
-def open_pdf(content: bytes | pathlib.Path) -> pymupdf.Document:
-    """Open a PDF with MuPDF, refusing anything that isn't one.
+def check_pdf_signature(path: pathlib.Path) -> None:
+    """Raise ValueError for a file that isn't a PDF.
 
     MuPDF picks its handler from the content, whatever the caller asks for, and
     opening a reflowable format (EPUB, MOBI, FB2, HTML) lays out the whole
     document. Only content that starts with the PDF header and carries no
     other format's signature, nor a zip directory, reaches MuPDF.
     """
-    if isinstance(content, pathlib.Path):
-        with content.open("rb") as file:
-            head = file.read(PDF_MAGIC_WINDOW)
-        zipped = zipfile.is_zipfile(content)
-    else:
-        head = content[:PDF_MAGIC_WINDOW]
-        zipped = zipfile.is_zipfile(io.BytesIO(content))
-    if not looks_like_pdf(head) or zipped:
+    with path.open("rb") as file:
+        head = file.read(PDF_MAGIC_WINDOW)
+    if not looks_like_pdf(head) or zipfile.is_zipfile(path):
         raise ValueError("Not a PDF")
-    if isinstance(content, pathlib.Path):
-        doc = pymupdf.open(content, filetype="pdf")
-    else:
-        doc = pymupdf.open(stream=content, filetype="pdf")
-    if not doc.is_pdf:
-        doc.close()
-        raise ValueError("Not a PDF")
-    return doc
+
+
+def read_pdf_pages(
+    content: bytes | str | pathlib.Path, image_pages: int | None = None
+) -> list[mupdf_sandbox.PdfPage]:
+    """Every page of a PDF with its text, and a render of the first
+    ``image_pages`` pages (all when None), parsed in MuPDF's sandbox.
+
+    Raises ValueError for content that isn't a PDF, a PDF of more than
+    MAX_PDF_PAGES pages, or one whose parse breaches the sandbox's limits.
+    """
+    with as_file(content) as file_path:
+        check_pdf_signature(file_path)
+        return mupdf_sandbox.pdf_pages(file_path, image_pages, MAX_CHUNK_IMAGE_PIXELS)
 
 
 def extract_pdf(
@@ -261,20 +241,13 @@ def extract_pdf(
     share its ``page`` metadata. Only the first ``max_image_pages`` pages get an
     image, since every page image is held in memory until the item is embedded.
 
-    Raises ValueError for content that isn't a PDF, or a PDF of more than
-    MAX_PDF_PAGES pages.
+    Raises ValueError as read_pdf_pages does.
     """
     chunks: list[DataChunk] = []
-    with as_file(content) as file_path:
-        with open_pdf(file_path) as pdf:
-            if pdf.page_count > settings.MAX_PDF_PAGES:
-                raise ValueError(
-                    f"PDF has {pdf.page_count} pages (limit {settings.MAX_PDF_PAGES})"
-                )
-            for page in pdf.pages():
-                if max_image_pages is None or page.number < max_image_pages:
-                    chunks.append(page_image_chunk(page, modality))
-                chunks.extend(page_text_chunks(page, modality))
+    for page in read_pdf_pages(content, max_image_pages):
+        if page.image is not None:
+            chunks.append(page_image_chunk(page, page.image, modality))
+        chunks.extend(page_text_chunks(page, modality))
     return chunks
 
 
