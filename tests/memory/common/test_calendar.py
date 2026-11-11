@@ -382,6 +382,12 @@ def test_get_events_in_range_skips_unexpandable_event_quickly(
         ("FREQ=MINUTELY;INTERVAL=30", False),
         ("FREQ=SECONDLY", False),
         ("freq=secondly;byhour=0", False),
+        ("FREQ=MONTHLY;BYDAY=MO,TU;BYSETPOS=1;WKST=SU;COUNT=3", True),
+        ("FREQ=YEARLY;BYEASTER=0", False),
+        ("FREQ=DAILY;BYWEEKDAY=MO", False),
+        ("FREQ=DAILY;X-NAME=1", False),
+        ("FREQ=DAILY;FREQ=WEEKLY", False),
+        ("BYDAY=MO", False),
     ],
 )
 def test_recurrence_expandable(rule, expandable):
@@ -1011,3 +1017,93 @@ def test_get_events_in_range_recurring_no_end_time(db_session, calendar_account)
     assert len(events) >= 2
     for event in events:
         assert event["end_time"] is None
+
+
+@pytest.mark.parametrize("rule", ["FREQ=YEARLY;BYEASTER=0", "FREQ=DAILY;BYWEEKDAY=MO;BYHOUR=9"])
+def test_rule_parts_outside_rfc_5545_are_not_expanded(rule, deadline):
+    event = CalendarEvent(
+        modality="calendar",
+        sha256=b"e" * 32,
+        event_title="Easter",
+        start_time=datetime(2024, 1, 1, 9, tzinfo=timezone.utc),
+        recurrence_rule=rule,
+    )
+    start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+
+    assert expand_recurring_event(event, start, start + timedelta(days=400)) == []
+
+
+def test_check_recurrence_records_the_cost_of_a_cheap_rule():
+    check = calendar.check_recurrence("FREQ=WEEKLY;BYDAY=MO", datetime(2024, 1, 1, 9, tzinfo=timezone.utc))
+
+    assert (check.expandable, 0 < (check.cost_ms or 0) < 1000 * calendar.EXPANSION_BUDGET_SECONDS) == (True, True)
+
+
+def test_check_recurrence_refuses_a_rule_over_the_budget(monkeypatch):
+    monkeypatch.setattr(calendar, "RECURRENCE_PROOF_BUDGET_SECONDS", 0)
+
+    check = calendar.check_recurrence("FREQ=DAILY", datetime(2024, 1, 1, 9, tzinfo=timezone.utc))
+
+    assert check.expandable is False
+
+
+def slow_event(account: CalendarAccount, n: int, title: str, cost_ms: float | None) -> CalendarEvent:
+    return CalendarEvent(
+        modality="calendar",
+        sha256=bytes([n]) * 32,
+        event_title=title,
+        start_time=datetime(2024, 1, 1, 9, tzinfo=timezone.utc),
+        calendar_account_id=account.id,
+        recurrence_rule="FREQ=DAILY",
+        recurrence_expandable=None if cost_ms is None else True,
+        recurrence_cost_ms=cost_ms,
+    )
+
+
+def test_one_accounts_events_cannot_use_up_another_accounts_share(
+    db_session, calendar_account, monkeypatch, slow_expansion, short_deadline
+):
+    """20 events at 0.1 s each in one account; the other account's event still expands."""
+    monkeypatch.setattr(calendar, "QUERY_EXPANSION_BUDGET_SECONDS", 0.4)
+    other = CalendarAccount(name="Other", calendar_type="caldav", caldav_url="https://o.example.com",
+                            caldav_username="o", caldav_password="o", active=True)
+    db_session.add(other)
+    db_session.commit()
+    db_session.add_all(slow_event(calendar_account, n, "Invited", 1.0) for n in range(20))
+    db_session.add(slow_event(other, 99, "Mine", 1.0))
+    db_session.commit()
+    start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+
+    events = get_events_in_range(db_session, start, start + timedelta(days=1), access_filter=None)
+
+    assert "Mine" in {e["event_title"] for e in events}
+
+
+@pytest.mark.parametrize("victim_cost", [0.1, 2.0])
+def test_cheapest_rules_expand_first(
+    db_session, calendar_account, monkeypatch, slow_expansion, short_deadline, victim_cost
+):
+    """The victim's event is synced last; costlier events can't push it out."""
+    monkeypatch.setattr(calendar, "QUERY_EXPANSION_BUDGET_SECONDS", 0.3)
+    db_session.add_all(slow_event(calendar_account, n, "Invited", 200.0) for n in range(20))
+    db_session.add(slow_event(calendar_account, 99, "Mine", victim_cost))
+    db_session.commit()
+    start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+
+    events = get_events_in_range(db_session, start, start + timedelta(days=1), access_filter=None)
+
+    assert "Mine" in {e["event_title"] for e in events}
+
+
+def test_unchecked_rules_expand_after_checked_ones(
+    db_session, calendar_account, monkeypatch, slow_expansion, short_deadline
+):
+    monkeypatch.setattr(calendar, "QUERY_EXPANSION_BUDGET_SECONDS", 0.3)
+    db_session.add_all(slow_event(calendar_account, n, "Unchecked", None) for n in range(20))
+    db_session.add(slow_event(calendar_account, 99, "Checked", 200.0))
+    db_session.commit()
+    start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+
+    events = get_events_in_range(db_session, start, start + timedelta(days=1), access_filter=None)
+
+    assert "Checked" in {e["event_title"] for e in events}

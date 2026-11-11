@@ -21,6 +21,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -2287,9 +2288,11 @@ class CalendarEvent(SourceItem):
     all_day: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     location: Mapped[str | None] = mapped_column(Text, nullable=True)
     recurrence_rule: Mapped[str | None] = mapped_column(Text, nullable=True)  # RRULE format
-    # Whether recurrence_rule yields any occurrence, checked by the sync (see
-    # common.calendar.recurrence_expandable). NULL: no rule, or not checked yet.
+    # Whether queries may expand recurrence_rule, and what expanding it cost in
+    # milliseconds, checked by the sync (see common.calendar.check_recurrence).
+    # NULL: no rule, or not checked yet.
     recurrence_expandable: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    recurrence_cost_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     # Sync metadata
     calendar_account_id: Mapped[int | None] = mapped_column(
