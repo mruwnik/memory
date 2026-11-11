@@ -11,8 +11,8 @@ from typing import Any, Generator, TypedDict
 import defusedxml.ElementTree as DefusedElementTree
 import pymupdf
 
-from memory.common import settings
 from memory.common.zip_limits import check_office_zip
+from memory.common import settings
 
 logger = logging.getLogger(__name__)
 
