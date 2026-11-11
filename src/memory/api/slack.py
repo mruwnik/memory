@@ -39,6 +39,7 @@ from memory.api.llm_keys import (
     LLMKeyInput,
     LLMKeyView,
     apply_llm_key,
+    charged_user_id,
     keep_llm_key_if_caller_pays,
     llm_key_view,
 )
@@ -356,6 +357,24 @@ def connected_member_id(db: Session, workspace_id: str, user_id: int) -> int:
     if member is None or not user_has_workspace_membership(db, workspace_id, member):
         raise HTTPException(status_code=400, detail="The new owner must have connected this workspace")
     return user_id
+
+
+def release_departed_members(db: Session, workspace: SlackWorkspace, user_ids: set[int]) -> None:
+    """Those of `user_ids` left with no credential for `workspace` stop owning it and
+    stop paying for its LLM work: an owner who leaves leaves it to admins, and an
+    explicit key of theirs turns its LLM work off until someone picks a key."""
+    still_connected = {
+        uid
+        for (uid,) in db.query(SlackUserCredentials.user_id).filter(
+            SlackUserCredentials.workspace_id == workspace.id,
+            SlackUserCredentials.user_id.in_(user_ids),
+        )
+    }
+    departed = user_ids - still_connected
+    if workspace.owner_id in departed:
+        workspace.owner_id = None
+    if charged_user_id(db, workspace) in departed:
+        workspace.llm_key_id, workspace.llm_disabled = None, True
 
 
 def get_workspace_for_settings(db: Session, workspace_id: str, user: User) -> SlackWorkspace:
@@ -787,7 +806,8 @@ def disconnect_workspace(
     This removes ALL of the user's credentials for this workspace
     (across every SlackApp they connected through). The workspace and
     its messages are preserved if there are ingested messages (to
-    avoid data loss) or if other users are still connected.
+    avoid data loss) or if other users are still connected. A leaving
+    owner no longer owns the workspace, and a key of theirs stops paying.
     """
     user_creds = (
         db.query(SlackUserCredentials)
@@ -802,6 +822,10 @@ def disconnect_workspace(
 
     for cred in user_creds:
         db.delete(cred)
+    db.flush()
+    workspace = db.get(SlackWorkspace, workspace_id)
+    if workspace is not None:
+        release_departed_members(db, workspace, {user.id})
     db.commit()
 
     # Check remaining users and messages
@@ -1084,10 +1108,19 @@ def delete_slack_app(
 
     Cascades to SlackUserCredentials (per the model's relationship
     cascade='all, delete-orphan'), so deleting the app also disconnects
-    every workspace the app was used to authenticate.
+    every workspace the app was used to authenticate. Users it leaves
+    with no credential for a workspace stop owning and paying for it.
     """
     app = get_slack_app_for_owner(db, app_id, user)
+    disconnected: dict[str, set[int]] = {}
+    for cred in app.user_credentials:
+        disconnected.setdefault(cred.workspace_id, set()).add(cred.user_id)
     db.delete(app)
+    db.flush()
+    for workspace_id, user_ids in disconnected.items():
+        workspace = db.get(SlackWorkspace, workspace_id)
+        if workspace is not None:
+            release_departed_members(db, workspace, user_ids)
     db.commit()
 
 

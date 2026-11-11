@@ -3,7 +3,7 @@ or its channels' settings, and other members see only its public channels."""
 
 import pytest
 
-from memory.agents.provider_keys import ingest_key
+from memory.agents.provider_keys import ingest_key, payer_id
 from memory.agents.system import SUMMARISE
 from memory.api.slack import _persist_oauth_credentials
 from memory.common.access_control import get_user_project_roles, user_can_access
@@ -301,3 +301,44 @@ def test_admin_taking_over_on_default_keeps_llm_on(client, db_session, user, vic
     db_session.refresh(workspace)
     assert response.status_code == 200
     assert (workspace.owner_id, workspace.llm_key_id, workspace.llm_disabled) == (user.id, None, False)
+
+
+def leave_workspace(client, db_session, user_id: int, how: str):
+    if how == "disconnect":
+        return client.delete(f"/slack/workspaces/{WORKSPACE}")
+    app = db_session.query(SlackApp).filter(SlackApp.created_by_user_id == user_id).one()
+    return client.delete(f"/slack/apps/{app.id}")
+
+
+@pytest.mark.parametrize("how", ["disconnect", "delete_app"])
+@pytest.mark.parametrize("own_key_chosen, llm_disabled", [(False, False), (True, True)])
+def test_an_owner_who_leaves_stops_owning_and_paying(
+    member_client, db_session, user, shared, how, own_key_chosen, llm_disabled
+):
+    key_id = own_key(db_session, user.id) if own_key_chosen else None
+    db_session.query(SlackWorkspace).filter(SlackWorkspace.id == WORKSPACE).update(
+        {"owner_id": user.id, "llm_key_id": key_id}
+    )
+    db_session.commit()
+
+    response = leave_workspace(member_client, db_session, user.id, how)
+
+    workspace = db_session.get(SlackWorkspace, WORKSPACE)
+    db_session.refresh(workspace)
+    assert response.status_code in (200, 204)
+    assert (workspace.owner_id, workspace.llm_key_id, workspace.llm_disabled) == (None, None, llm_disabled)
+    assert payer_id(workspace) is None
+
+
+@pytest.mark.parametrize("how", ["disconnect", "delete_app"])
+def test_a_member_who_leaves_keeps_the_owner_paying(member_client, db_session, user, victim, shared, how):
+    key_id = own_key(db_session, victim.id)
+    db_session.query(SlackWorkspace).filter(SlackWorkspace.id == WORKSPACE).update({"llm_key_id": key_id})
+    db_session.commit()
+
+    response = leave_workspace(member_client, db_session, user.id, how)
+
+    workspace = db_session.get(SlackWorkspace, WORKSPACE)
+    db_session.refresh(workspace)
+    assert response.status_code in (200, 204)
+    assert (workspace.owner_id, workspace.llm_key_id, workspace.llm_disabled) == (victim.id, key_id, False)

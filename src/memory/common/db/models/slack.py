@@ -193,8 +193,9 @@ class SlackWorkspace(SyncStatusMixin, LLMKeyChoice, Base):
 
     # The user who connected the workspace first. Only they or an admin may change its or
     # its channels' settings, and their default key pays for LLM work on its messages.
-    # Ownership moves only when the owner or an admin hands it on; with no owner (the
-    # owner's account was deleted) only admins manage the workspace.
+    # Ownership moves only when the owner or an admin hands it on. It is cleared when the
+    # owner is left with no credential for the workspace (they disconnect or delete their
+    # app) or their account is deleted; with no owner only admins manage the workspace.
     owner_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
