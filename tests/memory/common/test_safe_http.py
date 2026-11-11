@@ -66,8 +66,14 @@ class resolver_for:
         "2002:a9fe:a9fe::",  # 6to4 of 169.254.169.254
         "2001:0:4136:e378:8000:63bf:80ff:fffe",  # Teredo client 127.0.0.1
         "2001:0:4136:e378:8000:63bf:5601:5601",  # Teredo client 169.254.169.254
-        "64:ff9b:1::a9fe:a9fe",  # local-use NAT64 of 169.254.169.254
-        "64:ff9b:1::7f00:1",  # local-use NAT64 of 127.0.0.1
+        # Local-use NAT64 (64:ff9b:1::/48) at each RFC 6052 layout.
+        "64:ff9b:1::a9fe:a9fe",  # /96, 169.254.169.254
+        "64:ff9b:1::7f00:1",  # /96, 127.0.0.1
+        "64:ff9b:1:a9fe:a9:fe00::",  # /48, 169.254.169.254
+        "64:ff9b:1:7f00:0:100::",  # /48, 127.0.0.1
+        "64:ff9b:1:0:a9:fea9:fe00:0",  # /64, 169.254.169.254
+        "64:ff9b:1:0:7f:0:100:0",  # /64, 127.0.0.1
+        "64:ff9b:1::808:808",  # any address behind a local-use NAT64
         "192.0.0.192",  # Oracle Cloud metadata
         "168.63.129.16",  # Azure WireServer
         "fec0::1",  # deprecated site-local
@@ -88,7 +94,6 @@ def test_always_blocked_addresses_are_refused(address):
         "fd00::1",
         "64:ff9b::808:808",
         "2002:808:808::",  # 6to4 of a public address
-        "64:ff9b:1::808:808",  # local-use NAT64 of a public address
     ],
 )
 def test_public_and_private_addresses_are_allowed(address):
