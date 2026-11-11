@@ -152,10 +152,12 @@ def add_bot(db_session, email: str, application_id: int) -> DiscordBot:
     return bot
 
 
-def add_channel(db_session, bot: DiscordBot | None, server_id: int, channel_id: int, verified: bool = True) -> None:
+def add_channel(
+    db_session, bot: DiscordBot | None, server_id: int, channel_id: int, verified: bool = True, channel_type: str = "text"
+) -> None:
     db_session.merge(DiscordServer(id=server_id, name=f"s{server_id}", bot_id=bot and bot.id, verified=verified))
     db_session.flush()
-    db_session.add(DiscordChannel(id=channel_id, server_id=server_id, name="ops-errors", channel_type="text"))
+    db_session.add(DiscordChannel(id=channel_id, server_id=server_id, name="ops-errors", channel_type=channel_type))
     db_session.commit()
 
 
@@ -202,6 +204,32 @@ def test_alert_sends_nothing_without_exactly_one_named_channel(db_session, disco
     add_channel(db_session, mallory, 2, OTHER_CHANNEL)
     for server_id, channel_id in enumerate(operator_channels, start=10):
         add_channel(db_session, operator, server_id, channel_id)
+
+    discord.notify_task_failure("sync_note", "ValueError", bot_id=operator.id)
+
+    assert discord_api == []
+
+
+@pytest.mark.parametrize("operator_channel_type", ["text", "news"])
+@pytest.mark.parametrize("other_type", ["thread", "voice", "forum"])
+def test_alert_ignores_same_named_threads_and_non_text_channels(
+    db_session, discord_api, alerts_on, operator_channel_type, other_type
+):
+    operator = add_bot(db_session, "operator@example.com", 7)
+    add_channel(db_session, operator, 1, OPERATOR_CHANNEL, channel_type=operator_channel_type)
+    add_channel(db_session, operator, 1, OTHER_CHANNEL, channel_type=other_type)
+
+    discord.notify_task_failure("sync_note", "ValueError", bot_id=operator.id)
+
+    assert sent_paths(discord_api) == [
+        (f"/api/v10/channels/{OPERATOR_CHANNEL}/messages", "Bot tok-operator@example.com")
+    ]
+
+
+@pytest.mark.parametrize("channel_type", ["thread", "voice", "forum"])
+def test_alert_never_goes_to_a_same_named_thread_alone(db_session, discord_api, alerts_on, channel_type):
+    operator = add_bot(db_session, "operator@example.com", 7)
+    add_channel(db_session, operator, 1, OTHER_CHANNEL, channel_type=channel_type)
 
     discord.notify_task_failure("sync_note", "ValueError", bot_id=operator.id)
 
