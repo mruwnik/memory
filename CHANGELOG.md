@@ -22,6 +22,8 @@ a new, empty `## Unreleased` above it.
 
 ## Unreleased
 
+## v0.5.3 (2026-11-11)
+
 ### Changes
 - GitHub syncs and webhook refetches no longer report success when GitHub refuses a query. The repo row shows what the GitHub App or token can't read and which permissions to grant (e.g. Contents, Checks and Commit statuses for commits; organization Projects for projects; adding the repo to the App's installation when it can't see the repo at all), and the job fails with the same message. A repo GitHub answers not-found for is no longer deactivated as deleted: GitHub hides a private repo the App or token lost access to the same way, so the row says the App isn't installed on it (or the token can't see it), or it was renamed or deleted, and syncs keep trying. Refreshing, attaching or promoting a project through MCP no longer deactivates such a repo either. A refused milestone fetch is shown on the repo without stopping issues and PRs from syncing. Listing a GitHub account's available projects answers 502 with that message.
 - When GitHub withholds only some fields (check results, the head commit), issues and PRs are still stored without them and the repo row shows "Sync incomplete" (a warning, not "Sync failing") with what to grant. Syncs keep moving their cursor; the first sync that gets every field re-fetches everything updated since the first incomplete one, then clears the repo's error. Fields no permission on the repo can grant (e.g. a PR's head repository on a private fork) are left out without flagging the repo.
