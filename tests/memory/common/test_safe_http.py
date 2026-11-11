@@ -62,6 +62,15 @@ class resolver_for:
         "172.20.1.5",
         "10.88.0.4",  # podman default
         "10.89.0.4",
+        "2002:7f00:1::",  # 6to4 of 127.0.0.1
+        "2002:a9fe:a9fe::",  # 6to4 of 169.254.169.254
+        "2001:0:4136:e378:8000:63bf:80ff:fffe",  # Teredo client 127.0.0.1
+        "2001:0:4136:e378:8000:63bf:5601:5601",  # Teredo client 169.254.169.254
+        "64:ff9b:1::a9fe:a9fe",  # local-use NAT64 of 169.254.169.254
+        "64:ff9b:1::7f00:1",  # local-use NAT64 of 127.0.0.1
+        "192.0.0.192",  # Oracle Cloud metadata
+        "168.63.129.16",  # Azure WireServer
+        "fec0::1",  # deprecated site-local
     ],
 )
 def test_always_blocked_addresses_are_refused(address):
@@ -71,10 +80,27 @@ def test_always_blocked_addresses_are_refused(address):
 
 @pytest.mark.parametrize(
     "address",
-    ["8.8.8.8", "10.0.0.5", "192.168.1.20", "100.64.0.1", "fd00::1", "64:ff9b::808:808"],
+    [
+        "8.8.8.8",
+        "10.0.0.5",
+        "192.168.1.20",
+        "100.64.0.1",
+        "fd00::1",
+        "64:ff9b::808:808",
+        "2002:808:808::",  # 6to4 of a public address
+        "64:ff9b:1::808:808",  # local-use NAT64 of a public address
+    ],
 )
 def test_public_and_private_addresses_are_allowed(address):
     NetworkPolicy().check("mcp.example.com", [ip(address)])
+
+
+@pytest.mark.parametrize(
+    "address", ["168.63.129.16", "fec0::1", "100.100.100.200", "fd00:ec2::254"]
+)
+def test_public_only_policy_refuses_cloud_internal_addresses(address):
+    with pytest.raises(UnsafeURLError):
+        NetworkPolicy(public_only=True).check("mcp.example.com", [ip(address)])
 
 
 def test_any_blocked_address_refuses_the_host():

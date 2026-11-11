@@ -30,7 +30,7 @@ import httpcore
 import httpx
 
 from memory.common import settings
-from memory.common.ssrf import UnsafeURLError
+from memory.common.ssrf import CLOUD_INTERNAL_NETWORKS, UnsafeURLError
 
 logger = logging.getLogger(__name__)
 
@@ -51,12 +51,10 @@ STACK_SERVICES = (
     "migrate",
     "backup",
 )
-ALWAYS_BLOCKED_NETWORKS = tuple(
+ALWAYS_BLOCKED_NETWORKS = CLOUD_INTERNAL_NETWORKS + tuple(
     ipaddress.ip_network(n)
     for n in (
         "0.0.0.0/8",
-        "100.100.100.200/32",  # Alibaba Cloud metadata
-        "fd00:ec2::254/128",  # AWS IMDS over IPv6
         # Default docker (172.17-31) and podman (10.88, 10.89) address pools.
         "172.16.0.0/12",
         "10.88.0.0/16",
@@ -64,6 +62,8 @@ ALWAYS_BLOCKED_NETWORKS = tuple(
     )
 )
 NAT64 = ipaddress.ip_network("64:ff9b::/96")
+# RFC 8215 local-use NAT64; deployments embed the IPv4 address in the low 32 bits.
+LOCAL_NAT64 = ipaddress.ip_network("64:ff9b:1::/48")
 IPV4_COMPATIBLE = ipaddress.ip_network("::/96")
 STACK_TTL_SEC = 30.0
 GENERIC_REFUSAL = "connection refused: destination not allowed"
@@ -86,11 +86,17 @@ class UnsupportedEncoding(httpx.DecodingError):
 
 
 def embedded_ipv4(address: IPAddress) -> ipaddress.IPv4Address | None:
+    """The IPv4 address a translation or tunnelling scheme routes `address`
+    to: v4-mapped, v4-compatible, NAT64, 6to4 or the Teredo client."""
     if not isinstance(address, ipaddress.IPv6Address):
         return None
     if address.ipv4_mapped:
         return address.ipv4_mapped
-    if address in NAT64 or address in IPV4_COMPATIBLE:
+    if address.sixtofour:
+        return address.sixtofour
+    if address.teredo:
+        return address.teredo[1]
+    if any(address in net for net in (NAT64, LOCAL_NAT64, IPV4_COMPATIBLE)):
         return ipaddress.IPv4Address(int(address) & 0xFFFFFFFF)
     return None
 
