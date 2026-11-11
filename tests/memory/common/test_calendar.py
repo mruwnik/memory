@@ -1107,3 +1107,50 @@ def test_unchecked_rules_expand_after_checked_ones(
     events = get_events_in_range(db_session, start, start + timedelta(days=1), access_filter=None)
 
     assert "Checked" in {e["event_title"] for e in events}
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        "FREQ=HOURLY;BYSETPOS=5",
+        "FREQ=DAILY;BYSETPOS=2",
+        "FREQ=HOURLY;BYMONTH=2;BYDAY=MO;BYSETPOS=9",
+    ],
+)
+def test_setpos_rule_that_never_matches_is_refused_at_once(rule, short_deadline):
+    start = datetime(2026, 1, 1, 9, tzinfo=timezone.utc)
+
+    assert calendar.recurrence_expandable(rule, start) is False
+
+
+@pytest.mark.parametrize(
+    "rule",
+    ["FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1", "FREQ=YEARLY;BYMONTH=3;BYDAY=SU;BYSETPOS=-1"],
+)
+def test_setpos_under_monthly_or_yearly_still_expands(rule):
+    assert calendar.recurrence_expandable(rule, datetime(2026, 1, 1, 9, tzinfo=timezone.utc)) is True
+
+
+def test_recurrence_check_stops_at_its_time_limit(monkeypatch, short_deadline, caplog):
+    """A walk that never yields is interrupted, not left to reach year 9999."""
+    monkeypatch.setattr(calendar, "RECURRENCE_CHECK_TIME_LIMIT_SECONDS", 0.2)
+    monkeypatch.setattr(calendar, "SETPOS_REFUSED_FREQUENCIES", frozenset())
+
+    check = calendar.check_recurrence("FREQ=HOURLY;BYSETPOS=5", datetime(2026, 1, 1, tzinfo=timezone.utc))
+
+    assert (check, [r.getMessage() for r in caplog.records]) == (
+        (False, None),
+        ["Recurrence rule check ran out of time"],
+    )
+
+
+def test_recurrence_check_restores_an_outer_timer(monkeypatch):
+    monkeypatch.setattr(calendar, "RECURRENCE_CHECK_TIME_LIMIT_SECONDS", 0.2)
+    previous = signal.signal(signal.SIGALRM, lambda signum, frame: None)
+    signal.setitimer(signal.ITIMER_REAL, 30)
+
+    calendar.check_recurrence("FREQ=WEEKLY;BYDAY=MO", datetime(2026, 1, 1, tzinfo=timezone.utc))
+    remaining, _ = signal.setitimer(signal.ITIMER_REAL, 0)
+    signal.signal(signal.SIGALRM, previous)
+
+    assert 25 < remaining <= 30

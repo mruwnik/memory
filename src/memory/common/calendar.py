@@ -3,10 +3,13 @@ Common calendar utilities for event expansion and querying.
 """
 
 import logging
+import signal
+import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from itertools import islice
-from typing import NamedTuple, TypedDict
+from typing import Iterator, NamedTuple, TypedDict
 
 from dateutil.rrule import rrule, rruleset, rrulestr
 
@@ -66,6 +69,12 @@ FREQUENCIES = frozenset({"SECONDLY", "MINUTELY", "HOURLY", "DAILY", "WEEKLY", "M
 # expandable, so queries only expand rules proven cheap, cheapest first.
 RECURRENCE_PROOF_HORIZON = timedelta(days=366)
 RECURRENCE_PROOF_BUDGET_SECONDS = EXPANSION_BUDGET_SECONDS
+# A hard limit on the whole sync-time check: dateutil can step through periods
+# for minutes without yielding, where no budget check between yields runs.
+RECURRENCE_CHECK_TIME_LIMIT_SECONDS = 1.0
+# Under these a BYSETPOS past the period's set size matches nothing, and
+# dateutil steps hour by hour or day by day to year 9999 (minutes).
+SETPOS_REFUSED_FREQUENCIES = frozenset({"HOURLY", "DAILY"})
 
 
 def strip_rrule_prefix(rule: str) -> str:
@@ -105,10 +114,14 @@ def is_bounded_rule(parts: dict[str, str]) -> bool:
 
     INTERVAL=0 makes dateutil loop forever without yielding, which the visit
     cap cannot stop. A sub-minute or minute frequency is refused, see
-    REFUSED_FREQUENCIES.
+    REFUSED_FREQUENCIES, and so is BYSETPOS under HOURLY or DAILY, see
+    SETPOS_REFUSED_FREQUENCIES.
     """
     interval = parts.get("INTERVAL", "1")
-    if parts.get("FREQ", "").upper() in REFUSED_FREQUENCIES:
+    freq = parts.get("FREQ", "").upper()
+    if freq in REFUSED_FREQUENCIES:
+        return False
+    if "BYSETPOS" in parts and freq in SETPOS_REFUSED_FREQUENCIES:
         return False
     return interval.isdigit() and int(interval) >= 1
 
@@ -215,6 +228,40 @@ def expansion_seconds(rule: rrule | rruleset, start: datetime) -> float:
     return time.monotonic() - began
 
 
+class CheckTimedOut(Exception):
+    """Raised by interrupt_after when its time is up."""
+
+
+@contextmanager
+def interrupt_after(seconds: float) -> Iterator[None]:
+    """Raise CheckTimedOut in the block once ``seconds`` have passed.
+
+    Uses SIGALRM, so it interrupts only on the main thread (as in a Celery
+    prefork worker); elsewhere the block runs unbounded. A timer already set
+    stops the block too if it is due sooner, and is restored afterwards with
+    its remaining time.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+
+    def expire(signum, frame):
+        raise CheckTimedOut
+
+    began = time.monotonic()
+    outer_delay, outer_interval = signal.getitimer(signal.ITIMER_REAL)
+    previous = signal.signal(signal.SIGALRM, expire)
+    signal.setitimer(signal.ITIMER_REAL, min(seconds, outer_delay or seconds))
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+        if outer_delay:
+            remaining = max(outer_delay - (time.monotonic() - began), 1e-6)
+            signal.setitimer(signal.ITIMER_REAL, remaining, outer_interval)
+
+
 class RecurrenceCheck(NamedTuple):
     """What the calendar sync stores about an event's rule; Nones without a rule."""
 
@@ -229,20 +276,32 @@ def check_recurrence(recurrence_rule: str | None, start_time: datetime) -> Recur
     RECURRENCE_PROOF_BUDGET_SECONDS (see expansion_seconds). A rule no date
     satisfies (e.g. 30 February) makes dateutil walk to year 9999 before giving
     up, which takes seconds. The calendar sync pays this once and stores the
-    answer, so queries skip such events and expand the cheapest first.
+    answer, so queries skip such events and expand the cheapest first. The
+    whole check stops after RECURRENCE_CHECK_TIME_LIMIT_SECONDS (see
+    interrupt_after), and a rule that runs out of time or fails in any way is
+    not expandable.
     """
     if not recurrence_rule:
         return RecurrenceCheck(None, None)
     start = start_time if start_time.tzinfo else start_time.replace(tzinfo=timezone.utc)
-    rule = build_rule(recurrence_rule, start)
-    if rule is None:
-        return RecurrenceCheck(False, None)
     try:
-        if rule.after(start, inc=True) is None:
-            return RecurrenceCheck(False, None)
-        seconds = expansion_seconds(rule, start)
+        with interrupt_after(RECURRENCE_CHECK_TIME_LIMIT_SECONDS):
+            return measure_recurrence(recurrence_rule, start)
+    except CheckTimedOut:
+        logger.warning("Recurrence rule check ran out of time")
     except RRULE_ERRORS:
+        pass
+    except Exception:
+        logger.exception("Recurrence rule check failed")
+    return RecurrenceCheck(False, None)
+
+
+def measure_recurrence(recurrence_rule: str, start: datetime) -> RecurrenceCheck:
+    """check_recurrence without its time limit; ``start`` must be aware."""
+    rule = build_rule(recurrence_rule, start)
+    if rule is None or rule.after(start, inc=True) is None:
         return RecurrenceCheck(False, None)
+    seconds = expansion_seconds(rule, start)
     return RecurrenceCheck(seconds <= RECURRENCE_PROOF_BUDGET_SECONDS, seconds * 1000)
 
 
