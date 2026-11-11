@@ -92,6 +92,13 @@ describe('DiscordPanel load states', () => {
     expect(screen.getByRole('button', { name: 'Add to server' })).toBeInTheDocument()
   })
 
+  it('offers no Discord invite for a bot on another API server', async () => {
+    mockFetchRoutes(routes({ bots: [{ ...bot, api_base_url: 'https://chat.example.com/discord/api/v10' }] }))
+    renderWithUser(<DiscordPanel />)
+    await waitFor(() => expect(screen.getByText('KB Bot')).toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: 'Add to server' })).not.toBeInTheDocument()
+  })
+
   it('renders a disconnected bot when connected is false', async () => {
     mockFetchRoutes(routes({ bots: [{ ...bot, connected: false }] }))
     renderWithUser(<DiscordPanel />)
@@ -212,6 +219,8 @@ describe('DiscordPanel add bot', () => {
     await user.type(within(dialog).getByLabelText('Bot token'), 'tok')
     await user.click(within(dialog).getByText('Advanced'))
     await user.type(within(dialog).getByLabelText('API base URL'), 'https://chat.example.com/discord/api/v10')
+    expect(within(dialog).queryByText(/Message Content/)).not.toBeInTheDocument()
+    expect(within(dialog).getByText(/chat\.example\.com/)).toBeInTheDocument()
     await user.click(within(dialog).getByRole('button', { name: 'Add bot' }))
 
     await waitFor(() => expect(postedBot(mock)).toEqual({

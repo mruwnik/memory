@@ -25,6 +25,7 @@ a new, empty `## Unreleased` above it.
 ### Changes
 - Fix: the Discord Add bot form says the bot needs the Message Content and Server Members intents turned on in the Developer Portal.
 - Fix: the Slack connect wizard's last step says a newly connected workspace starts paused and collects nothing until you click Resume.
+- Fix: Slack apps and Discord bots on a Slack- or Discord-compatible server (a custom authorize or API base URL, such as the chat proxy) get setup text pointing at that server instead of Slack's and Discord's developer pages, and such bots no longer offer a Discord invite link.
 
 ### Required env vars
 None

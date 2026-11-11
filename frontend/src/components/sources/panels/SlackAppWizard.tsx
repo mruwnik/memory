@@ -23,6 +23,10 @@ const SLACK_URL_DEFAULTS = {
   api_base_url: 'https://slack.com/api',
 }
 
+// A client ID for another authorize URL came from that server, so its setup page holds what Slack's pages would.
+const serverHost = (authorizeUrl: string) =>
+  authorizeUrl && authorizeUrl !== SLACK_URL_DEFAULTS.authorize_url ? authorizeUrl.replace(/^https?:\/\/([^/]*).*$/, '$1') : null
+
 // The register step's fields as the form shows them for `app`: '' for a Slack URL.
 const formFields = (app: SlackAppResponse | null) => ({
   client_id: app?.client_id ?? '',
@@ -72,7 +76,7 @@ const submit = (handler: () => void) => (e: React.FormEvent) => {
   handler()
 }
 
-const AwaitingMessage = () => {
+const AwaitingMessage = ({ host }: { host: string | null }) => {
   const [slow, setSlow] = useState(false)
   useEffect(() => {
     const timer = setTimeout(() => setSlow(true), MESSAGE_HINT_AFTER_MS)
@@ -83,9 +87,11 @@ const AwaitingMessage = () => {
       <p role="status" className="text-sm text-slate-600">Waiting for your message…</p>
       {slow && (
         <Notice tone="warning">
-          Still nothing from Slack. Usually the bot isn't in that channel, or
-          the app isn't subscribed to the message.channels (public) or
-          message.groups (private) bot events on step 5.
+          {host ? <>Still nothing. Check that the events URL from step 5 is saved on {host}.</> : <>
+            Still nothing from Slack. Usually the bot isn't in that channel, or
+            the app isn't subscribed to the message.channels (public) or
+            message.groups (private) bot events on step 5.
+          </>}
         </Notice>
       )}
     </>
@@ -292,9 +298,9 @@ export const SlackAppWizard = ({
       const { blockedUrl } = await openPopup(async () => {
         const state = await wizard.issueOAuthState(app.id)
         // Slack-compatible servers issue user tokens only, so they get no bot `scope`.
-        const scopes: Record<string, string> = app.authorize_url === SLACK_URL_DEFAULTS.authorize_url
-          ? { scope: SLACK_OAUTH_SCOPES, user_scope: SLACK_OAUTH_SCOPES }
-          : { user_scope: SLACK_OAUTH_SCOPES }
+        const scopes: Record<string, string> = serverHost(app.authorize_url)
+          ? { user_scope: SLACK_OAUTH_SCOPES }
+          : { scope: SLACK_OAUTH_SCOPES, user_scope: SLACK_OAUTH_SCOPES }
         const params = new URLSearchParams({
           client_id: app.client_id,
           ...scopes,
@@ -347,6 +353,8 @@ export const SlackAppWizard = ({
   )
 
   const finish = () => (app ? onComplete?.(app) : onCancel())
+  const host = serverHost(step === 'register' ? authorizeUrl.trim() : app?.authorize_url ?? '')
+  const setupPage = `${host}'s setup page`
 
   return (
     <Modal title={initialApp ? `Finish setting up ${initialApp.name}` : 'Connect a Slack app'}
@@ -366,13 +374,17 @@ export const SlackAppWizard = ({
 
         {step === 'register' && (
           <form onSubmit={submit(handleRegister)} className="space-y-4">
-            <p className="text-sm text-slate-600">
-              Create a new Slack app at{' '}
-              <NewTabLink className="text-primary hover:underline" href="https://api.slack.com/apps">
-                api.slack.com/apps
-              </NewTabLink>
-              , then paste its Client ID below.
-            </p>
+            {host ? (
+              <p className="text-sm text-slate-600">Paste the Client ID from {setupPage}.</p>
+            ) : (
+              <p className="text-sm text-slate-600">
+                Create a new Slack app at{' '}
+                <NewTabLink className="text-primary hover:underline" href="https://api.slack.com/apps">
+                  api.slack.com/apps
+                </NewTabLink>
+                , then paste its Client ID below.
+              </p>
+            )}
             <Field label="Display name">
               <Input
                 type="text"
@@ -424,7 +436,7 @@ export const SlackAppWizard = ({
         {step === 'client-secret' && app && (
           <form onSubmit={submit(handleClientSecret)} className="space-y-4">
             <p className="text-sm text-slate-600">
-              Paste the Client Secret from Slack's "Basic Information" page.
+              Paste the Client Secret from {host ? setupPage : `Slack's "Basic Information" page`}.
             </p>
             <Field label="Client secret">
               <Input
@@ -447,7 +459,7 @@ export const SlackAppWizard = ({
         {step === 'oauth' && app && callbackUrl && (
           <div className="space-y-4">
             <p className="text-sm text-slate-600">
-              On Slack's "OAuth &amp; Permissions" page, set your{' '}
+              On {host ? setupPage : `Slack's "OAuth & Permissions" page`}, set your{' '}
               <strong>Redirect URL</strong> to:
             </p>
             <CopyableCode value={callbackUrl} label="Copy redirect URL" />
@@ -475,7 +487,7 @@ export const SlackAppWizard = ({
         {step === 'signing-secret' && app && (
           <form onSubmit={submit(handleSigningSecret)} className="space-y-4">
             <p className="text-sm text-slate-600">
-              Paste the Signing Secret from Slack's "Basic Information" page.
+              Paste the Signing Secret from {host ? setupPage : `Slack's "Basic Information" page`}.
             </p>
             <Field label="Signing secret">
               <Input
@@ -486,7 +498,7 @@ export const SlackAppWizard = ({
               />
             </Field>
             {app.signing_secret_configured && (
-              <Hint>A signing secret is saved. Continue to keep it; a different one has to be verified by Slack again.</Hint>
+              <Hint>A signing secret is saved. Continue to keep it; a different one has to be verified by {host ?? 'Slack'} again.</Hint>
             )}
             <FormActions>
               {leaveButtons}
@@ -499,28 +511,42 @@ export const SlackAppWizard = ({
 
         {step === 'events-url' && app && eventsUrl && (
           <div className="space-y-4">
-            <p className="text-sm text-slate-600">
-              On Slack's "Event Subscriptions" page, enable events and set the{' '}
-              <strong>Request URL</strong> to:
-            </p>
+            {host ? (
+              <p className="text-sm text-slate-600">
+                On {setupPage}, set the <strong>Events URL</strong> to:
+              </p>
+            ) : (
+              <p className="text-sm text-slate-600">
+                On Slack's "Event Subscriptions" page, enable events and set the{' '}
+                <strong>Request URL</strong> to:
+              </p>
+            )}
             <CopyableCode value={eventsUrl} label="Copy request URL" />
-            <p className="text-sm font-medium text-slate-700">
-              Subscribe to bot events:
-            </p>
-            <ul className="list-disc list-inside text-sm text-slate-600 space-y-0.5 ml-2">
-              <li>message.channels</li>
-              <li>message.groups</li>
-              <li>message.im</li>
-              <li>message.mpim</li>
-              <li>reaction_added</li>
-              <li>reaction_removed</li>
-              <li>channel_created / channel_rename / channel_archive / channel_unarchive</li>
-            </ul>
-            <p className="text-sm text-slate-600">
-              Click "Save Changes" in Slack — we'll detect the verification ping
-              and advance automatically.
-            </p>
-            <Hint>{app.setup_state === 'draft' ? 'Polling…' : 'Slack has verified the events URL.'}</Hint>
+            {host ? (
+              <p className="text-sm text-slate-600">
+                Save it there. We'll detect the verification ping and advance automatically.
+              </p>
+            ) : (
+              <>
+                <p className="text-sm font-medium text-slate-700">
+                  Subscribe to bot events:
+                </p>
+                <ul className="list-disc list-inside text-sm text-slate-600 space-y-0.5 ml-2">
+                  <li>message.channels</li>
+                  <li>message.groups</li>
+                  <li>message.im</li>
+                  <li>message.mpim</li>
+                  <li>reaction_added</li>
+                  <li>reaction_removed</li>
+                  <li>channel_created / channel_rename / channel_archive / channel_unarchive</li>
+                </ul>
+                <p className="text-sm text-slate-600">
+                  Click "Save Changes" in Slack — we'll detect the verification ping
+                  and advance automatically.
+                </p>
+              </>
+            )}
+            <Hint>{app.setup_state === 'draft' ? 'Polling…' : `${host ?? 'Slack'} has verified the events URL.`}</Hint>
             <FormActions>
               {leaveButtons}
               {app.setup_state !== 'draft' && (
@@ -533,16 +559,18 @@ export const SlackAppWizard = ({
         {step === 'test-message' && app && (
           <div className="space-y-4">
             <p className="text-sm text-slate-600">
-              Almost done. Post a message in any Slack channel the bot has
-              joined (invite the app to the channel first), for example:
+              {host ? 'Almost done. Post a message in any Slack channel you are in, for example:' : <>
+                Almost done. Post a message in any Slack channel the bot has
+                joined (invite the app to the channel first), for example:
+              </>}
             </p>
             <CopyableCode value={SUGGESTED_TEST_MESSAGE} label="Copy message" />
             <Hint>
               The first message we receive switches events on: the app goes
-              live and this wizard finishes by itself. Inviting the bot to a
-              channel posts a join message, so that alone can be enough.
+              live and this wizard finishes by itself.
+              {!host && ' Inviting the bot to a channel posts a join message, so that alone can be enough.'}
             </Hint>
-            <AwaitingMessage />
+            <AwaitingMessage host={host} />
             <FormActions>{leaveButtons}</FormActions>
           </div>
         )}

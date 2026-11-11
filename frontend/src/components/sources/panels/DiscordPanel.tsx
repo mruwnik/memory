@@ -301,7 +301,7 @@ const BotRow = ({
         title={<ExpandToggle expanded={expanded} onClick={onToggleExpand}>Servers ({servers.length})</ExpandToggle>}
         actions={<>
           {!webhook && <SyncButton onSync={onRefresh} disabled={!bot.is_active} label="Refresh metadata" />}
-          <Button size="sm" onClick={onGetInviteUrl}>Add to server</Button>
+          {bot.api_base_url === DISCORD_API_BASE_URL && <Button size="sm" onClick={onGetInviteUrl}>Add to server</Button>}
         </>}
         empty={expanded && (webhook
           ? 'No servers yet. They appear with the first event or after the daily sync.'
@@ -462,10 +462,18 @@ const RealtimeFields = ({ realtime, onRealtime, publicKey, onPublicKey, eventsUr
   </>
 )
 
+const DISCORD_API_BASE_URL = 'https://discord.com/api/v10'
+
+// A bot on another API server is set up there, not in Discord's Developer Portal.
+const tokenSource = (apiBaseUrl: string) =>
+  apiBaseUrl.trim() && apiBaseUrl.trim() !== DISCORD_API_BASE_URL
+    ? `From the server at ${apiBaseUrl.trim().replace(/^https?:\/\/([^/]*).*$/, '$1')}`
+    : null
+
 const ApiBaseUrlField = ({ value, onChange }: { value: string; onChange: (value: string) => void }) => (
   <Disclosure summary="Advanced">
-    <Field label="API base URL" hint="Where the bot's REST API and gateway live; leave empty for https://discord.com/api/v10">
-      <Input type="url" value={value} onChange={e => onChange(e.target.value)} placeholder="https://discord.com/api/v10" />
+    <Field label="API base URL" hint={`Where the bot's REST API and gateway live; leave empty for ${DISCORD_API_BASE_URL}`}>
+      <Input type="url" value={value} onChange={e => onChange(e.target.value)} placeholder={DISCORD_API_BASE_URL} />
     </Field>
   </Disclosure>
 )
@@ -543,7 +551,7 @@ const AddBotForm = ({ onAdd, onCancel }: AddBotFormProps) => {
         <Field label="Application ID (optional)" hint="Read from the token when left empty">
           <Input type="text" inputMode="numeric" value={applicationId} onChange={e => setApplicationId(e.target.value)} />
         </Field>
-        <Field label="Bot token" hint="From the Discord Developer Portal under Bot → Token. On that page, also turn on the Message Content and Server Members intents">
+        <Field label="Bot token" hint={tokenSource(apiBaseUrl) ?? 'From the Discord Developer Portal under Bot → Token. On that page, also turn on the Message Content and Server Members intents'}>
           <Input type="password" value={token} onChange={e => setToken(e.target.value)} placeholder="Paste your Discord bot token" required />
         </Field>
 
@@ -597,7 +605,7 @@ const EditBotForm = ({ bot, onSave, onCancel }: EditBotFormProps) => {
         <Field label="Bot name">
           <Input type="text" value={name} onChange={e => setName(e.target.value)} required />
         </Field>
-        <Field label={bot.has_token ? 'Bot token (leave empty to keep)' : 'Bot token'} hint="From the Discord Developer Portal under Bot → Token">
+        <Field label={bot.has_token ? 'Bot token (leave empty to keep)' : 'Bot token'} hint={tokenSource(apiBaseUrl) ?? 'From the Discord Developer Portal under Bot → Token'}>
           <Input type="password" value={token} onChange={e => setToken(e.target.value)} placeholder="Paste a new token" required={!bot.has_token} />
         </Field>
 

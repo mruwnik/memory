@@ -338,6 +338,31 @@ describe('SlackAppWizard - test message', () => {
   })
 })
 
+describe('SlackAppWizard - Slack-compatible server', () => {
+  const proxied = (over: Partial<SlackAppResponse> = {}) => app({ authorize_url: 'https://chat.example.com/slack/oauth/v2/authorize', ...over })
+
+  const SLACK_INSTRUCTIONS = /api\.slack\.com|Slack's|Subscribe|bot/
+
+  it.each([
+    ['client-secret', proxied(), true, /chat\.example\.com/],
+    ['oauth', proxied({ client_secret_configured: true }), false, /chat\.example\.com/],
+    ['signing-secret', proxied({ client_secret_configured: true }), true, /chat\.example\.com/],
+    ['events-url', proxied({ client_secret_configured: true, signing_secret_configured: true }), true, /chat\.example\.com/],
+    ['test-message', proxied({ setup_state: 'signing_verified' }), true, /Post a message/],
+  ])('the %s step sends the user to the server that issued the client ID, not to Slack', async (_step, initialApp, connected, shown) => {
+    renderWithUser(<SlackAppWizard initialApp={initialApp} initialAppConnected={connected} onCancel={vi.fn()} />)
+    expect(await screen.findByText(shown)).toBeInTheDocument()
+    expect(screen.getByRole('dialog').textContent).not.toMatch(SLACK_INSTRUCTIONS)
+  })
+
+  it('the register step asks for the client ID from the server named in the authorize URL', async () => {
+    const { user } = renderWithUser(<SlackAppWizard initialApp={proxied()} onCancel={vi.fn()} />)
+    await user.click(await screen.findByRole('button', { name: 'Back' }))
+    expect(await screen.findByText(/chat\.example\.com/)).toBeInTheDocument()
+    expect(screen.getByRole('dialog').textContent).not.toMatch(SLACK_INSTRUCTIONS)
+  })
+})
+
 describe('SlackAppWizard - polling transitions', () => {
   it('advances events-url -> test-message when status becomes signing_verified', async () => {
     getApp.mockResolvedValue(app({ client_secret_configured: true }))
