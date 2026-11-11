@@ -72,6 +72,7 @@ a new, empty `## Unreleased` above it.
 - Changing your own email (`PATCH /api/users/{id}`) needs `current_password`, since password resets are mailed to it; the profile page asks for it. Admins changing another user's email don't need one.
 - The sign-in page reached from another app's OAuth request says which app is asking ("<app> at <host> wants access to your Memory"). Signing in to the web UI looks as before.
 - API keys can only be created from a web UI login. Sessions of other OAuth clients (MCP connectors such as Claude or ChatGPT), agent runs and API keys get 403 from `POST /api/users/{id}/api-keys`; they keep their other access.
+- An `add_content` upload link takes one upload: using it again answers 409, so a link seen in a log or transcript can't be replayed. A failed upload needs a new link from `add_content`.
 ### Required env vars
 None
 
