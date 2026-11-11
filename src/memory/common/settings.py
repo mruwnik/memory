@@ -157,6 +157,8 @@ SLACK_STORAGE_DIR = pathlib.Path(
 BEEPER_STORAGE_DIR = pathlib.Path(
     os.getenv("BEEPER_STORAGE_DIR", FILE_STORAGE_DIR / "beeper")
 )
+# A coding session's transcript file stops accepting events at this size.
+MAX_SESSION_TRANSCRIPT_BYTES = int(os.getenv("MAX_SESSION_TRANSCRIPT_BYTES", 256 * 1024 * 1024))
 SESSIONS_STORAGE_DIR = pathlib.Path(
     os.getenv("SESSIONS_STORAGE_DIR", FILE_STORAGE_DIR / "sessions")
 )
