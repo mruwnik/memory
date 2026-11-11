@@ -16,7 +16,7 @@ from memory.common.db.models.source_item import Chunk
 from memory.workers.tasks import notes
 from memory.common.content_processing import create_content_hash
 from memory.common import notes_git, settings
-from sqlalchemy import text
+from sqlalchemy import text as sql_text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm.attributes import set_committed_value
 
@@ -1582,7 +1582,7 @@ def add_raw_note(db_session, filename: str, on_disk: bool = True) -> Note:
     db_session.add(note)
     db_session.flush()
     db_session.execute(
-        text("UPDATE source_item SET filename = :f WHERE id = :id"), {"f": filename, "id": note.id}
+        sql_text("UPDATE source_item SET filename = :f WHERE id = :id"), {"f": filename, "id": note.id}
     )
     db_session.commit()
     if on_disk:

@@ -323,7 +323,7 @@ def test_email_attachment_embeddings_pdf(mock_voyage_client):
     )
     metadata = cast(dict[str, Any], item.as_payload())
     metadata["tags"] = {"bla"}
-    with pymupdf.open(settings.FILE_STORAGE_DIR / item.filename) as pdf:
+    with pymupdf.open(settings.FILE_STORAGE_DIR / str(item.filename)) as pdf:
         expected_images = [
             (
                 None,

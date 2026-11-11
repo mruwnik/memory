@@ -16,7 +16,7 @@ from memory.common.access_control import (
     build_access_filter,
     get_accessible_source_item_by_filename,
 )
-from memory.common.db.models import HumanUser, Photo, SourceItem
+from memory.common.db.models import HumanUser, Photo
 
 
 class MockUser:
