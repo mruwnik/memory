@@ -65,8 +65,8 @@ people_mcp = FastMCP("memory-people")
 
 # Person and tidbit fields that hold text people wrote, often copied from mail,
 # chat or meetings.
-PERSON_TEXT_FIELDS = frozenset({"display_name", "aliases", "contact_info", "user_name"})
-TIDBIT_TEXT_FIELDS = frozenset({"content", "tags"})
+PERSON_TEXT_FIELDS = frozenset({"identifier", "display_name", "aliases", "contact_info", "user_name"})
+TIDBIT_TEXT_FIELDS = frozenset({"person_identifier", "tidbit_type", "content", "tags"})
 
 
 def wrapped_person(tag: str, person: dict[str, Any]) -> dict[str, Any]:

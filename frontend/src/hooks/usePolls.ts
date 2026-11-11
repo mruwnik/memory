@@ -127,8 +127,8 @@ export const usePolls = () => {
   }, [mcpCall])
 
   const listPolls = useCallback(async (status?: PollStatus): Promise<Poll[]> => {
-    const result = await mcpCall<Poll[]>('polling_list_polls', { status })
-    return result || []
+    const result = await mcpCall<{ polls: Poll[] }>('polling_list_polls', { status })
+    return result?.polls || []
   }, [mcpCall])
 
   const getPoll = useCallback(async (pollId: number): Promise<PollResults> => {

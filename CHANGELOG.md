@@ -115,6 +115,7 @@ a new, empty `## Unreleased` above it.
 - An email's Subject and From are cut to `MAX_EMAIL_HEADER_CHARS` (default 8192) before their MIME encoded-words are decoded, so a mail with a huge header no longer holds a worker (or each search hit that reparses it) for seconds to minutes.
 - Handing a Slack workspace to another member turns its LLM work off unless its key choice charges whoever made the change; the new owner picks a key (or "default" to pay with their own). Before, a workspace left on the default key started charging the new owner's key without their say.
 - Only the session first-run setup signs in with, besides web-UI logins, may create API keys; sessions agent runs act through no longer pass for it. A setup session from before this release has to sign in again to create an API key.
+- MCP `polling_fetch` returns the poll's title and description and respondents' names in untrusted blocks, and `polling_list_polls` returns `{untrusted, polls}` with titles and descriptions wrapped the same way. People reads also wrap a person's `identifier` and a tidbit's `tidbit_type` and `person_identifier`.
 ### Required env vars
 None
 
