@@ -4,9 +4,11 @@ import imaplib
 import ssl
 import logging
 import re
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from collections.abc import Buffer as ReadableBuffer
 from typing import Callable, Generator, Iterable, Iterator, Sequence, cast
 
 from googleapiclient.discovery import build
@@ -232,13 +234,15 @@ SIZE_BATCH = 500
 
 
 def oversized_uids(conn: imaplib.IMAP4, uids: list[str]) -> set[str]:
-    """The ``uids`` whose RFC822.SIZE exceeds MAX_EMAIL_BYTES. A batch the
-    server won't size is fetched anyway, under the literal cap of the connection."""
+    """The ``uids`` whose RFC822.SIZE exceeds MAX_EMAIL_BYTES. A size answer
+    carries no literal, so one is refused. A batch the server won't size is
+    fetched anyway, under the response cap of the connection."""
     oversized: set[str] = set()
     for start in range(0, len(uids), SIZE_BATCH):
         batch = ",".join(uids[start:start + SIZE_BATCH])
         try:
-            status, data = conn.uid("FETCH", batch, "(UID RFC822.SIZE)")
+            with refusing_literals(conn):
+                status, data = conn.uid("FETCH", batch, "(UID RFC822.SIZE)")
         except imaplib.IMAP4.error:
             logger.warning("IMAP server refused a size FETCH")
             continue
@@ -373,21 +377,58 @@ def process_folder(
     }
 
 
-class CappedLiterals:
-    """Refuse a server literal (a message body) larger than MAX_EMAIL_BYTES
-    before reading it: imaplib otherwise reads whatever size the server announces."""
+class CappedResponses:
+    """Bound what one command's response can make imaplib buffer: lines and
+    literals together at most MAX_EMAIL_BYTES, within IMAP_COMMAND_TIMEOUT_SEC.
+    A literal is refused before it is read, from the size the server announces.
+    The budget restarts with each command sent."""
+
+    response_bytes = 0
+    deadline: float | None = None
+    refuse_literals = False
+
+    def send(self, data: ReadableBuffer) -> None:
+        self.response_bytes = 0
+        self.deadline = time.monotonic() + settings.IMAP_COMMAND_TIMEOUT_SEC
+        super().send(data)  # type: ignore[misc]
 
     def read(self, size: int) -> bytes:
-        if size > settings.MAX_EMAIL_BYTES:
-            raise imaplib.IMAP4.abort(f"server literal of {size} bytes is over MAX_EMAIL_BYTES")
+        if self.refuse_literals:
+            raise imaplib.IMAP4.abort("server sent a literal where none was expected")
+        self.count_response(size)
         return super().read(size)  # type: ignore[misc]
 
+    def readline(self) -> bytes:
+        line = super().readline()  # type: ignore[misc]
+        self.count_response(len(line))
+        return line
 
-class CappedIMAP4(CappedLiterals, imaplib.IMAP4):
+    def count_response(self, size: int) -> None:
+        self.response_bytes += size
+        if self.response_bytes > settings.MAX_EMAIL_BYTES:
+            raise imaplib.IMAP4.abort("server response is over MAX_EMAIL_BYTES")
+        if self.deadline is not None and time.monotonic() > self.deadline:
+            raise imaplib.IMAP4.abort("server response took over IMAP_COMMAND_TIMEOUT_SEC")
+
+
+@contextmanager
+def refusing_literals(conn: imaplib.IMAP4) -> Generator[None, None, None]:
+    """Make a capped ``conn`` abort on any literal while the block runs."""
+    if not isinstance(conn, CappedResponses):
+        yield
+        return
+    conn.refuse_literals = True
+    try:
+        yield
+    finally:
+        conn.refuse_literals = False
+
+
+class CappedIMAP4(CappedResponses, imaplib.IMAP4):
     pass
 
 
-class CappedIMAP4SSL(CappedLiterals, imaplib.IMAP4_SSL):
+class CappedIMAP4SSL(CappedResponses, imaplib.IMAP4_SSL):
     pass
 
 

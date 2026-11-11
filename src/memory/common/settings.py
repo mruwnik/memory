@@ -488,8 +488,11 @@ MAX_DOCUMENT_IMAGE_BYTES = int(
 # Socket timeout for user-configured IMAP and CalDAV servers: a stalled server
 # would otherwise hold a worker until the task's time limit.
 REMOTE_SERVER_TIMEOUT_SEC = int(os.getenv("REMOTE_SERVER_TIMEOUT_SEC", 60))
-# An IMAP message larger than this is not downloaded.
+# An IMAP message larger than this is not downloaded, and no single IMAP
+# command's response may be larger.
 MAX_EMAIL_BYTES = int(os.getenv("MAX_EMAIL_BYTES", 64 * 1024 * 1024))
+# Wall-clock limit on one IMAP command's response, however steadily it trickles in.
+IMAP_COMMAND_TIMEOUT_SEC = int(os.getenv("IMAP_COMMAND_TIMEOUT_SEC", 600))
 # Max decoded base64 accepted inline through the add_content MCP tool; above
 # this the caller is handed a one-time upload URL instead of inlining bytes
 # in the MCP payload.

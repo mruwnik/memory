@@ -1,8 +1,10 @@
 import base64
+import contextlib
 import hashlib
 import imaplib
-import io
 import pathlib
+import socket
+import threading
 from datetime import datetime, timezone
 from typing import cast
 from unittest.mock import MagicMock, patch
@@ -41,6 +43,7 @@ from memory.workers.email import (
     imap_mailbox,
     imap_connection,
     CappedIMAP4,
+    oversized_uids,
     list_gmail_message_ids,
     list_imap_folders,
     parse_folder_line,
@@ -460,25 +463,80 @@ def test_fetch_emails_skips_messages_over_size_cap():
     assert provider.fetched_bodies == [1, 3]
 
 
-def capped_connection(body: bytes) -> CappedIMAP4:
-    conn = CappedIMAP4.__new__(CappedIMAP4)
-    conn.file = io.BytesIO(body)
+@contextlib.contextmanager
+def scripted_imap_server(untagged: bytes):
+    """A one-connection IMAP server on localhost: it greets, then answers every
+    command but CAPABILITY with ``untagged`` followed by a tagged OK."""
+    server = socket.create_server(("127.0.0.1", 0))
+
+    def serve():
+        conn, _ = server.accept()
+        with conn, conn.makefile("rb") as lines:
+            conn.sendall(b"* PREAUTH ready\r\n")
+            for line in lines:
+                tag, command = line.strip().split(b" ", 2)[:2]
+                answer = b"* CAPABILITY IMAP4rev1\r\n" if command == b"CAPABILITY" else untagged
+                conn.sendall(answer + tag + b" OK done\r\n")
+
+    threading.Thread(target=serve, daemon=True).start()
+    try:
+        yield server.getsockname()[1]
+    finally:
+        server.close()
+
+
+def body_literals(count: int, size: int) -> bytes:
+    return b"".join(
+        b"* %d FETCH (UID %d BODY[] {%d}\r\n" % (n, n, size) + b"x" * size + b")\r\n"
+        for n in range(1, count + 1)
+    )
+
+
+def selected_connection(port: int) -> CappedIMAP4:
+    conn = CappedIMAP4("127.0.0.1", port, timeout=5)
+    conn.state = "SELECTED"  # the scripted server skips SELECT
     return conn
 
 
-def test_capped_connection_reads_literal_within_cap():
-    conn = capped_connection(b"x" * 2000)
-
-    with patch.object(settings, "MAX_EMAIL_BYTES", 2000):
-        assert conn.read(2000) == b"x" * 2000
+SIZE_WITH_LITERAL = b"* 1 FETCH (UID 1 RFC822.SIZE {2}\r\n99)\r\n"
 
 
-def test_capped_connection_refuses_oversized_literal():
-    conn = capped_connection(b"x" * 2001)
+def test_capped_connection_reads_response_within_budget():
+    with scripted_imap_server(body_literals(2, 1000)) as port, patch.object(settings, "MAX_EMAIL_BYTES", 2500):
+        status, data = selected_connection(port).uid("FETCH", "1:*", "(BODY.PEEK[])")
 
-    with patch.object(settings, "MAX_EMAIL_BYTES", 2000), pytest.raises(imaplib.IMAP4.abort):
-        conn.read(2001)
-    assert conn.file.tell() == 0
+    assert (status, [part[1] for part in data if isinstance(part, tuple)]) == ("OK", [b"x" * 1000] * 2)
+
+
+def test_capped_connection_aborts_when_literals_together_pass_the_cap():
+    # Each literal is under the cap; three of them in one response are not.
+    with scripted_imap_server(body_literals(3, 1000)) as port, patch.object(settings, "MAX_EMAIL_BYTES", 2500):
+        conn = selected_connection(port)
+        with pytest.raises(imaplib.IMAP4.abort):
+            conn.uid("FETCH", "1:*", "(BODY.PEEK[])")
+
+
+def test_capped_connection_aborts_a_response_past_its_deadline():
+    with scripted_imap_server(body_literals(1, 10)) as port:
+        conn = selected_connection(port)
+        with patch.object(settings, "IMAP_COMMAND_TIMEOUT_SEC", -1), pytest.raises(imaplib.IMAP4.abort):
+            conn.uid("FETCH", "1:*", "(BODY.PEEK[])")
+
+
+def test_size_fetch_refuses_a_literal(caplog):
+    with scripted_imap_server(SIZE_WITH_LITERAL) as port:
+        conn = selected_connection(port)
+        assert oversized_uids(conn, ["1"]) == set()
+
+    assert "IMAP server refused a size FETCH" in caplog.text
+    assert conn.refuse_literals is False
+
+
+def test_size_answer_with_a_literal_parses_outside_a_size_fetch():
+    with scripted_imap_server(SIZE_WITH_LITERAL) as port:
+        status, _ = selected_connection(port).uid("FETCH", "1", "(UID RFC822.SIZE)")
+
+    assert status == "OK"
 
 
 def test_process_folder(email_provider):
