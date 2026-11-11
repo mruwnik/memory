@@ -26,7 +26,9 @@ def identity(db, admin=True, key_scopes=None, session=False):
     db.add(user)
     db.flush()
     if session:
-        credential = UserSession(user_id=user.id, expires_at=datetime.now(timezone.utc) + timedelta(days=1))
+        # A first-run setup login: a web-UI session without an OAuth client.
+        credential = UserSession(user_id=user.id, expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+                                 from_setup=True)
     else:
         credential = APIKey.create(user_id=user.id, scopes=key_scopes)
     db.add(credential)
