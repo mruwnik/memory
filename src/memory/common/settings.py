@@ -390,8 +390,21 @@ LOCALHOST_CORS_ORIGINS = [
 
 # API Rate limiting settings
 API_RATE_LIMIT_ENABLED = boolean_env("API_RATE_LIMIT_ENABLED", True)
-# Default rate limit: 100 requests per minute
+# Per-client limit on every API request (api/request_limits.py), except the
+# MCP endpoint and provider webhooks, which have their own budgets below.
 API_RATE_LIMIT_DEFAULT = os.getenv("API_RATE_LIMIT_DEFAULT", "100/minute")
+# /mcp: agents behind one address make many tool calls a minute.
+API_RATE_LIMIT_MCP = os.getenv("API_RATE_LIMIT_MCP", "1200/minute")
+# Signed webhook pushes (GitHub, Slack, Discord, transcripts) arrive from a
+# provider's few addresses on behalf of every account.
+API_RATE_LIMIT_WEBHOOKS = os.getenv("API_RATE_LIMIT_WEBHOOKS", "1000/minute")
+# Anonymous OAuth client registration and authorization requests each write a
+# row, so they get a tighter limit on top of the default.
+API_RATE_LIMIT_OAUTH_REGISTER = os.getenv("API_RATE_LIMIT_OAUTH_REGISTER", "20/hour")
+API_RATE_LIMIT_OAUTH_AUTHORIZE = os.getenv("API_RATE_LIMIT_OAUTH_AUTHORIZE", "10/minute")
+# OAuth clients that never completed a login are deleted this many days after
+# registering.
+OAUTH_UNUSED_CLIENT_DAYS = int(os.getenv("OAUTH_UNUSED_CLIENT_DAYS", 30))
 # Auth endpoints have stricter limits to prevent brute force.
 # Used by /oauth/login and /api/users/me/change-password — see
 # `memory.common.rate_limit`.

@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
+from memory.api import request_limits
 from memory.common.db.models import HumanUser, User
 
 
@@ -51,6 +52,14 @@ def app_client():
     _test_client.__exit__(None, None, None)
     app.dependency_overrides.pop(get_current_user, None)
     settings.DISABLE_AUTH = original_disable_auth
+
+
+@pytest.fixture(autouse=True)
+def fresh_request_limits():
+    """Every test client request shares one address, so each test starts with fresh counters."""
+    request_limits.reset()
+    yield
+    request_limits.reset()
 
 
 @pytest.fixture

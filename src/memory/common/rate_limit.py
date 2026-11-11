@@ -1,11 +1,9 @@
-"""Lightweight Redis-backed rate limiting for endpoints SlowAPI doesn't cover.
+"""Lightweight Redis-backed rate limiting for buckets tighter than the default.
 
-The main API uses slowapi for default per-IP rate limits, but the MCP
-custom_route handlers (e.g. /oauth/login) live on the FastMCP sub-app and
-don't go through SlowAPI's middleware. Login is also a place where per-IP
-limits are insufficient: an attacker rotating X-Forwarded-For has unbounded
-throughput against a single victim account, so we want a per-account bucket
-in addition to the per-IP one.
+Every request already counts against a per-client default limit
+(``memory.api.request_limits``). Endpoints such as login need more: a
+per-account bucket next to the per-IP one, since an attacker rotating
+addresses has unbounded throughput against a single victim account.
 
 This module provides a thin sliding-window counter on top of the existing
 Redis broker. It fails *open* on Redis errors so a Redis outage doesn't

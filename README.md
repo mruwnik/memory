@@ -145,7 +145,7 @@ When connected, the assistant has access to tools organized by domain (core, tea
 If you put the API behind Traefik, nginx, Caddy, or any reverse proxy that terminates TLS, **you must tell uvicorn and the rate limiter which upstream IPs to trust**. Without this:
 
 - Uvicorn ignores `X-Forwarded-Proto`, so any HTTP redirect uses `http://` instead of `https://` and HTTPS clients break (this is a common cause of MCP clients failing to complete the OAuth handshake).
-- The SlowAPI rate limiter keys on the proxy's IP, so every user shares one bucket.
+- The rate limiter keys on the proxy's IP, so every user shares one bucket.
 
 Set both in `.env`:
 
