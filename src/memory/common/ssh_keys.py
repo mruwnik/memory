@@ -26,6 +26,7 @@ MAX_SCRYPT_COST = 64 * 1024 * 1024
 
 PEM_BLOCK = re.compile(rb"-----BEGIN ([A-Z0-9 ]+)-----(.*?)-----END \1-----", re.S)
 OPENSSH_MAGIC = b"openssh-key-v1\0"
+OPENSSH_LABEL = "OPENSSH PRIVATE KEY"
 PBES2 = "1.2.840.113549.1.5.13"
 PBKDF2 = "1.2.840.113549.1.5.12"
 SCRYPT = "1.3.6.1.4.1.11591.4.11"
@@ -34,15 +35,22 @@ TOO_COSTLY = "Key encryption is too costly to import: re-encrypt it with ssh-key
 
 
 def pem_blocks(data: bytes) -> list[tuple[str, bytes]]:
-    """(label, decoded body) of each PEM block, skipping RFC 1421 headers."""
-    blocks = []
-    for label, body in PEM_BLOCK.findall(data):
-        lines = [line.strip() for line in body.strip().splitlines() if b":" not in line]
-        try:
-            blocks.append((label.decode(), base64.b64decode(b"".join(lines), validate=True)))
-        except binascii.Error as exc:
-            raise ValueError("Malformed key") from exc
-    return blocks
+    """(label, undecoded body) of each PEM block."""
+    return [(label.decode(), body) for label, body in PEM_BLOCK.findall(data)]
+
+
+def strict_base64(body: bytes) -> bytes:
+    """Decode a PEM body that holds nothing but base64 lines.
+
+    The loaders decode leniently, skipping characters that aren't base64; any
+    such character here is refused, so the bytes the cost check reads are the
+    bytes the loader decrypts.
+    """
+    lines = [line.strip() for line in body.strip().splitlines()]
+    try:
+        return base64.b64decode(b"".join(lines), validate=True)
+    except binascii.Error as exc:
+        raise ValueError("Malformed key") from exc
 
 
 def ssh_string(data: bytes, offset: int) -> tuple[bytes, int]:
@@ -157,26 +165,30 @@ def check_pkcs8_kdf(der: bytes) -> None:
     raise ValueError("Unsupported key encryption")
 
 
-def check_kdf_cost(data: bytes) -> None:
-    """Refuse key text whose decryption would cost more than the caps, before decrypting it."""
+def check_kdf_cost(data: bytes) -> str:
+    """Refuse key text whose decryption would cost more than the caps, before decrypting it.
+
+    Returns the label of the one PEM block, which decides the loader.
+    """
     blocks = pem_blocks(data)
     if len(blocks) != 1:
         raise ValueError("Provide exactly one PEM or OpenSSH private key")
     label, body = blocks[0]
-    if label == "OPENSSH PRIVATE KEY":
-        check_openssh_kdf(body)
+    if label == OPENSSH_LABEL:
+        check_openssh_kdf(strict_base64(body))
     elif label == "ENCRYPTED PRIVATE KEY":
-        check_pkcs8_kdf(body)
+        check_pkcs8_kdf(strict_base64(body))
+    return label
 
 
 def load_private_key(data: bytes, password: bytes | None):
     """Load key text, refusing costly KDF settings and oversized RSA keys before the expensive work."""
     if len(data) > MAX_KEY_CHARS:
         raise ValueError("Key is too large")
-    check_kdf_cost(data)
+    label = check_kdf_cost(data)
     # RSA validation tests p and q for primality, which takes seconds at
     # 8192 bits and grows with the cube of the size: check the size first.
-    if data.startswith(b"-----BEGIN OPENSSH"):
+    if label == OPENSSH_LABEL:
         private = serialization.load_ssh_private_key(
             data, password=password, unsafe_skip_rsa_key_validation=True
         )
