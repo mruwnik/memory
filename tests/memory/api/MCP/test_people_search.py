@@ -9,7 +9,7 @@ from memory.common.content_processing import create_content_hash
 from memory.common.db.models import DiscordMessage, Person, PersonTidbit
 from memory.common.db.models.discord import DiscordBot, DiscordChannel, DiscordUser
 from memory.common.db.models.sources import GithubUser
-from tests.conftest import mcp_auth_context
+from tests.conftest import mcp_auth_context, unwrapped
 
 SESSIONS = ["admin_session", "user_session"]
 
@@ -54,8 +54,8 @@ def linked_person(db_session):
 
 async def search_people(session_token: str, **kwargs) -> list[str]:
     with mcp_auth_context(session_token):
-        result = await list_all.fn(**kwargs)
-    return [p["identifier"] for p in result]
+        result = unwrapped(await list_all.fn(**kwargs))
+    return [p["identifier"] for p in result["people"]]
 
 
 @pytest.mark.asyncio

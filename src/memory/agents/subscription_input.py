@@ -44,6 +44,14 @@ FIELD_UNSAFE = re.compile(r"[^A-Za-z0-9_.]")
 Getter = Callable[[Any], Any]
 
 
+class ServerLink(str):
+    """A link built here from an item's ids, not one the item's source wrote."""
+
+
+def server_link(url: str | None) -> ServerLink | None:
+    return None if url is None else ServerLink(url)
+
+
 def github_url(item: GithubItem) -> str | None:
     number = item.number if item.number is not None else item.parent_number
     if number is None:
@@ -69,11 +77,11 @@ def discord_url(item: DiscordMessage) -> str:
 
 def item_url(item: SourceItem) -> str | None:
     if isinstance(item, GithubItem):
-        return github_url(item)
+        return server_link(github_url(item))
     if isinstance(item, SlackMessage):
-        return slack_url(item)
+        return server_link(slack_url(item))
     if isinstance(item, DiscordMessage):
-        return discord_url(item)
+        return server_link(discord_url(item))
     url = getattr(item, "url", None)
     return url if isinstance(url, str) else None
 
@@ -283,16 +291,40 @@ def untrusted(tag: str, item_id: Any, field: str, text: str, limit: int | None =
     return f"<{tag} id={item_id} field={FIELD_UNSAFE.sub('_', field)}>{body}</{tag}>"
 
 
+def untrusted_value(tag: str, item_id: Any, field: str, value: Any) -> Any:
+    """`value` in one `tag` block: text as is, lists and dicts as JSON in a block
+    whose field ends in .json. Empty values pass through."""
+    if value is None or value in ("", [], {}):
+        return value
+    if isinstance(value, (list, dict)):
+        text = json.dumps(value, ensure_ascii=False, default=str)
+        return untrusted(tag, item_id, f"{field}.json", text)
+    return untrusted(tag, item_id, field, str(value))
+
+
+def wrap_fields(tag: str, record: Mapping[str, Any], fields: Collection[str]) -> dict[str, Any]:
+    """`record` with each of `fields` in a `tag` block named by the record's id."""
+    return {
+        field: untrusted_value(tag, record["id"], field, value) if field in fields else value
+        for field, value in record.items()
+    }
+
+
 def bare(text: str) -> str:
     # Single line and short, so a name can't pass for the input's structure.
     return " ".join(escaped(text).split())[:BARE_CHARS]
+
+
+def is_untrusted(field: str, value: Any) -> bool:
+    """Free text, or a link a feed, page or sender wrote."""
+    return field in UNTRUSTED or (field == "url" and not isinstance(value, ServerLink))
 
 
 def field_text(tag: str, item_id: int, field: str, value: Any, limit: int | None) -> str:
     text = as_text(value)
     if not text:
         return ""
-    return untrusted(tag, item_id, field, text, limit) if field in UNTRUSTED else bare(text)
+    return untrusted(tag, item_id, field, text, limit) if is_untrusted(field, value) else bare(text)
 
 
 def clip(text: str, limit: int) -> str:
@@ -304,7 +336,7 @@ def default_item(tag: str, fields: dict[str, Any], limit: int | None) -> str:
     label = f"{fields['type']} #{item_id}"
     lines = [f"- [{label}] {', '.join(fields['changes'])}".rstrip()]
     # Ids and links first, then text, the item's own content last.
-    for name, value in sorted(fields.items(), key=lambda f: (f[0] in UNTRUSTED, f[0] == "content")):
+    for name, value in sorted(fields.items(), key=lambda f: (is_untrusted(*f), f[0] == "content")):
         if name in HEADER:
             continue
         text = as_text(value).strip()
@@ -312,7 +344,7 @@ def default_item(tag: str, fields: dict[str, Any], limit: int | None) -> str:
             continue
         if name in LONG:
             text = clip(text, PREVIEW_CHARS)
-        if name in UNTRUSTED:
+        if is_untrusted(name, value):
             lines.append("  " + untrusted(tag, item_id, name, text, limit).replace("\n", "\n  "))
         else:
             lines.append(f"  {name}: {bare(text)}")

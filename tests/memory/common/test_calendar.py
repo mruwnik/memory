@@ -1,9 +1,13 @@
 """Tests for common calendar utilities."""
 
 import signal
+import time
+from itertools import islice
 
 import pytest
 from datetime import datetime, timedelta, timezone
+
+from dateutil.rrule import rrulestr
 
 from memory.common import calendar
 from memory.common.calendar import (
@@ -374,11 +378,207 @@ def test_get_events_in_range_skips_unexpandable_event_quickly(
         *((rule, False) for rule in NEVER_MATCHING_RULES),
         ("FREQ=DAILY;INTERVAL=0", False),
         ("FREQ=BOGUS", False),
+        ("FREQ=HOURLY;INTERVAL=2", True),
+        ("FREQ=MINUTELY;INTERVAL=30", False),
+        ("FREQ=SECONDLY", False),
+        ("freq=secondly;byhour=0", False),
+        ("FREQ=MONTHLY;BYDAY=MO,TU;BYSETPOS=1;WKST=SU;COUNT=3", True),
+        ("FREQ=YEARLY;BYEASTER=0", False),
+        ("FREQ=DAILY;BYWEEKDAY=MO", False),
+        ("FREQ=DAILY;X-NAME=1", False),
+        ("FREQ=DAILY;FREQ=WEEKLY", False),
+        ("BYDAY=MO", False),
     ],
 )
 def test_recurrence_expandable(rule, expandable):
     start = datetime(2024, 1, 1, 9, 0, 0, tzinfo=timezone.utc)
     assert calendar.recurrence_expandable(rule, start) is expandable
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        # dateutil walks every second to each daily match, then day by day to year 9999
+        "FREQ=SECONDLY;BYMONTH=2;BYMONTHDAY=30",
+        "FREQ=MINUTELY;BYMONTH=2;BYMONTHDAY=30",
+    ],
+)
+def test_sub_hourly_rule_without_occurrences_is_refused_at_once(rule, short_deadline):
+    start = datetime(2024, 1, 1, 9, 0, 0, tzinfo=timezone.utc)
+
+    assert calendar.recurrence_expandable(rule, start) is False
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        "FREQ=SECONDLY;BYHOUR=0;BYMINUTE=0;BYSECOND=0",
+        "FREQ=MINUTELY;BYHOUR=0;BYMINUTE=0",
+    ],
+)
+def test_daily_match_under_sub_hourly_frequency_is_not_expanded(rule, short_deadline, caplog):
+    """Each daily occurrence costs dateutil thousands of steps; a series years old took minutes."""
+    event = CalendarEvent(
+        modality="calendar",
+        sha256=b"s" * 32,
+        event_title="Midnight",
+        start_time=datetime.now(timezone.utc) - timedelta(days=3650),
+        recurrence_rule=rule,
+    )
+    start = datetime.now(timezone.utc)
+
+    occurrences = expand_recurring_event(event, start, start + timedelta(days=7))
+
+    assert occurrences == []
+    assert [r.levelname for r in caplog.records] == ["WARNING"]
+
+
+def test_expansion_stops_when_its_time_runs_out(monkeypatch, caplog):
+    monkeypatch.setattr(calendar, "EXPANSION_BUDGET_SECONDS", 0)
+    event = CalendarEvent(
+        modality="calendar",
+        sha256=b"l" * 32,
+        event_title="Leap day",
+        start_time=datetime(1, 1, 1, tzinfo=timezone.utc),
+        recurrence_rule="FREQ=HOURLY;BYMONTH=2;BYMONTHDAY=29",
+    )
+    start = datetime(2024, 2, 1, tzinfo=timezone.utc)
+
+    occurrences = expand_recurring_event(event, start, start + timedelta(days=60))
+
+    assert occurrences == []
+    assert [r.getMessage() for r in caplog.records] == [
+        "Recurrence of calendar event None ran out of time"
+    ]
+
+
+def test_sparse_old_series_still_expands_within_its_budget():
+    event = CalendarEvent(
+        modality="calendar",
+        sha256=b"m" * 32,
+        event_title="Leap day",
+        start_time=datetime(1990, 2, 1, 9, tzinfo=timezone.utc),
+        recurrence_rule="FREQ=DAILY;BYMONTH=2;BYMONTHDAY=29",
+    )
+    start = datetime(2024, 2, 1, tzinfo=timezone.utc)
+
+    starts = [s for s, _ in expand_recurring_event(event, start, start + timedelta(days=60))]
+
+    assert starts == [datetime(2024, 2, 29, 9, tzinfo=timezone.utc)]
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        "FREQ=DAILY;BYMONTHDAY=13;BYDAY=FR",
+        "FREQ=HOURLY;BYMONTH=2;BYMONTHDAY=29",
+        "FREQ=DAILY;BYYEARDAY=1,100,-1;BYHOUR=9,17",
+        "FREQ=DAILY;BYWEEKNO=1;BYDAY=MO,TU",
+        "FREQ=HOURLY;BYMONTHDAY=1;BYHOUR=3;BYMINUTE=15,45",
+        "FREQ=DAILY;BYMONTHDAY=31;COUNT=7",
+        "FREQ=DAILY;BYMONTHDAY=-1;UNTIL=20030101T000000Z",
+        "FREQ=DAILY;INTERVAL=1;BYMONTHDAY=1,15",
+        "FREQ=WEEKLY;BYDAY=MO,FR;BYMONTHDAY=1,2,3",
+    ],
+)
+def test_coarsened_rule_yields_the_same_occurrences(rule):
+    series_start = datetime(2001, 3, 5, 7, 30, tzinfo=timezone.utc)
+    as_given = rrulestr(f"RRULE:{rule}", dtstart=series_start)
+
+    rewritten = calendar.build_rule(rule, series_start)
+
+    assert rewritten is not None
+    assert list(islice(rewritten, 3000)) == list(islice(as_given, 3000))
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        "FREQ=DAILY;INTERVAL=2;BYMONTHDAY=30",
+        "FREQ=HOURLY;INTERVAL=3;BYYEARDAY=1",
+        "FREQ=DAILY;BYMONTHDAY=1;BYSETPOS=1",
+        "FREQ=DAILY;BYMONTHDAY=1,2,3,4,5,6,7;BYDAY=1MO",
+        "FREQ=WEEKLY;BYMONTHDAY=13",
+    ],
+)
+def test_sparse_day_filter_that_cannot_be_coarsened_is_refused(rule):
+    start = datetime(2024, 1, 1, 9, 0, 0, tzinfo=timezone.utc)
+
+    assert calendar.recurrence_expandable(rule, start) is False
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        # Under DAILY or HOURLY dateutil stepped through every day to year 9999: 2-3 s
+        "FREQ=HOURLY;BYMONTH=2;BYMONTHDAY=30",
+        "FREQ=DAILY;BYMONTH=4;BYMONTHDAY=31",
+        "FREQ=DAILY;BYYEARDAY=366;BYMONTH=1",
+        "FREQ=WEEKLY;BYDAY=MO;BYMONTH=2;BYMONTHDAY=30",
+    ],
+)
+def test_sparse_rule_without_occurrences_is_found_at_once(rule, short_deadline):
+    start = datetime(2024, 1, 1, 9, 0, 0, tzinfo=timezone.utc)
+
+    assert calendar.recurrence_expandable(rule, start) is False
+
+
+@pytest.fixture
+def slow_expansion(monkeypatch) -> list[float | None]:
+    """Each event's expansion blocks for 0.1 s; records the deadline it was given."""
+    deadlines: list[float | None] = []
+    expand = calendar.occurrences_within
+
+    def slow(rule, start_range, end_range, event_id, deadline=None):
+        deadlines.append(deadline)
+        time.sleep(0.1)
+        return expand(rule, start_range, end_range, event_id, deadline)
+
+    monkeypatch.setattr(calendar, "occurrences_within", slow)
+    return deadlines
+
+
+def test_many_slow_events_share_one_query_budget(
+    db_session, calendar_account, monkeypatch, caplog, slow_expansion, short_deadline
+):
+    """20 events at 0.1 s each would take 2 s; the query stops at its 0.3 s budget."""
+    monkeypatch.setattr(calendar, "QUERY_EXPANSION_BUDGET_SECONDS", 0.3)
+    db_session.add_all(
+        CalendarEvent(
+            modality="calendar",
+            sha256=bytes([n]) * 32,
+            event_title="Slow",
+            start_time=datetime(2024, 1, 1, 9, tzinfo=timezone.utc),
+            calendar_account_id=calendar_account.id,
+            recurrence_rule="FREQ=DAILY",
+        )
+        for n in range(20)
+    )
+    db_session.commit()
+    start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+
+    get_events_in_range(db_session, start, start + timedelta(days=1), access_filter=None)
+
+    assert 3 <= len(slow_expansion) <= 5
+    assert len(set(slow_expansion)) == 1
+    assert caplog.records[-1].getMessage().split(",")[0] == (
+        f"Calendar query ran out of time; skipped {20 - len(slow_expansion)} recurring events"
+    )
+
+
+def test_spent_query_budget_skips_remaining_events(
+    db_session, calendar_account, recurring_event, monkeypatch, caplog
+):
+    monkeypatch.setattr(calendar, "QUERY_EXPANSION_BUDGET_SECONDS", -1)
+    start = datetime(2024, 1, 15, tzinfo=timezone.utc)
+
+    events = get_events_in_range(db_session, start, start + timedelta(days=2), access_filter=None)
+
+    assert events == []
+    assert [r.getMessage() for r in caplog.records] == [
+        "Calendar query ran out of time; skipped 1 recurring events, "
+        f"first ids [{recurring_event.id}]"
+    ]
 
 
 def test_recurrence_expandable_reads_naive_start_as_utc():
@@ -537,7 +737,7 @@ EVERY = ",".join(str(n) for n in range(60))
             MAX_OCCURRENCES_VISITED,
         ),
         # Millions of occurrences before the range
-        ("FREQ=SECONDLY", datetime(2000, 1, 1, tzinfo=timezone.utc), 0),
+        (f"FREQ=HOURLY;BYMINUTE={EVERY}", datetime(2000, 1, 1, tzinfo=timezone.utc), 0),
         (
             f"FREQ=DAILY;BYHOUR=0,6,12,18;BYMINUTE={EVERY}",
             datetime(1990, 1, 1, tzinfo=timezone.utc),
@@ -817,3 +1017,140 @@ def test_get_events_in_range_recurring_no_end_time(db_session, calendar_account)
     assert len(events) >= 2
     for event in events:
         assert event["end_time"] is None
+
+
+@pytest.mark.parametrize("rule", ["FREQ=YEARLY;BYEASTER=0", "FREQ=DAILY;BYWEEKDAY=MO;BYHOUR=9"])
+def test_rule_parts_outside_rfc_5545_are_not_expanded(rule, deadline):
+    event = CalendarEvent(
+        modality="calendar",
+        sha256=b"e" * 32,
+        event_title="Easter",
+        start_time=datetime(2024, 1, 1, 9, tzinfo=timezone.utc),
+        recurrence_rule=rule,
+    )
+    start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+
+    assert expand_recurring_event(event, start, start + timedelta(days=400)) == []
+
+
+def test_check_recurrence_records_the_cost_of_a_cheap_rule():
+    check = calendar.check_recurrence("FREQ=WEEKLY;BYDAY=MO", datetime(2024, 1, 1, 9, tzinfo=timezone.utc))
+
+    assert (check.expandable, 0 < (check.cost_ms or 0) < 1000 * calendar.EXPANSION_BUDGET_SECONDS) == (True, True)
+
+
+def test_check_recurrence_refuses_a_rule_over_the_budget(monkeypatch):
+    monkeypatch.setattr(calendar, "RECURRENCE_PROOF_BUDGET_SECONDS", 0)
+
+    check = calendar.check_recurrence("FREQ=DAILY", datetime(2024, 1, 1, 9, tzinfo=timezone.utc))
+
+    assert check.expandable is False
+
+
+def slow_event(account: CalendarAccount, n: int, title: str, cost_ms: float | None) -> CalendarEvent:
+    return CalendarEvent(
+        modality="calendar",
+        sha256=bytes([n]) * 32,
+        event_title=title,
+        start_time=datetime(2024, 1, 1, 9, tzinfo=timezone.utc),
+        calendar_account_id=account.id,
+        recurrence_rule="FREQ=DAILY",
+        recurrence_expandable=None if cost_ms is None else True,
+        recurrence_cost_ms=cost_ms,
+    )
+
+
+def test_one_accounts_events_cannot_use_up_another_accounts_share(
+    db_session, calendar_account, monkeypatch, slow_expansion, short_deadline
+):
+    """20 events at 0.1 s each in one account; the other account's event still expands."""
+    monkeypatch.setattr(calendar, "QUERY_EXPANSION_BUDGET_SECONDS", 0.4)
+    other = CalendarAccount(name="Other", calendar_type="caldav", caldav_url="https://o.example.com",
+                            caldav_username="o", caldav_password="o", active=True)
+    db_session.add(other)
+    db_session.commit()
+    db_session.add_all(slow_event(calendar_account, n, "Invited", 1.0) for n in range(20))
+    db_session.add(slow_event(other, 99, "Mine", 1.0))
+    db_session.commit()
+    start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+
+    events = get_events_in_range(db_session, start, start + timedelta(days=1), access_filter=None)
+
+    assert "Mine" in {e["event_title"] for e in events}
+
+
+@pytest.mark.parametrize("victim_cost", [0.1, 2.0])
+def test_cheapest_rules_expand_first(
+    db_session, calendar_account, monkeypatch, slow_expansion, short_deadline, victim_cost
+):
+    """The victim's event is synced last; costlier events can't push it out."""
+    monkeypatch.setattr(calendar, "QUERY_EXPANSION_BUDGET_SECONDS", 0.3)
+    db_session.add_all(slow_event(calendar_account, n, "Invited", 200.0) for n in range(20))
+    db_session.add(slow_event(calendar_account, 99, "Mine", victim_cost))
+    db_session.commit()
+    start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+
+    events = get_events_in_range(db_session, start, start + timedelta(days=1), access_filter=None)
+
+    assert "Mine" in {e["event_title"] for e in events}
+
+
+def test_unchecked_rules_expand_after_checked_ones(
+    db_session, calendar_account, monkeypatch, slow_expansion, short_deadline
+):
+    monkeypatch.setattr(calendar, "QUERY_EXPANSION_BUDGET_SECONDS", 0.3)
+    db_session.add_all(slow_event(calendar_account, n, "Unchecked", None) for n in range(20))
+    db_session.add(slow_event(calendar_account, 99, "Checked", 200.0))
+    db_session.commit()
+    start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+
+    events = get_events_in_range(db_session, start, start + timedelta(days=1), access_filter=None)
+
+    assert "Checked" in {e["event_title"] for e in events}
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        "FREQ=HOURLY;BYSETPOS=5",
+        "FREQ=DAILY;BYSETPOS=2",
+        "FREQ=HOURLY;BYMONTH=2;BYDAY=MO;BYSETPOS=9",
+    ],
+)
+def test_setpos_rule_that_never_matches_is_refused_at_once(rule, short_deadline):
+    start = datetime(2026, 1, 1, 9, tzinfo=timezone.utc)
+
+    assert calendar.recurrence_expandable(rule, start) is False
+
+
+@pytest.mark.parametrize(
+    "rule",
+    ["FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1", "FREQ=YEARLY;BYMONTH=3;BYDAY=SU;BYSETPOS=-1"],
+)
+def test_setpos_under_monthly_or_yearly_still_expands(rule):
+    assert calendar.recurrence_expandable(rule, datetime(2026, 1, 1, 9, tzinfo=timezone.utc)) is True
+
+
+def test_recurrence_check_stops_at_its_time_limit(monkeypatch, short_deadline, caplog):
+    """A walk that never yields is interrupted, not left to reach year 9999."""
+    monkeypatch.setattr(calendar, "RECURRENCE_CHECK_TIME_LIMIT_SECONDS", 0.2)
+    monkeypatch.setattr(calendar, "SETPOS_REFUSED_FREQUENCIES", frozenset())
+
+    check = calendar.check_recurrence("FREQ=HOURLY;BYSETPOS=5", datetime(2026, 1, 1, tzinfo=timezone.utc))
+
+    assert (check, [r.getMessage() for r in caplog.records]) == (
+        (False, None),
+        ["Recurrence rule check ran out of time"],
+    )
+
+
+def test_recurrence_check_restores_an_outer_timer(monkeypatch):
+    monkeypatch.setattr(calendar, "RECURRENCE_CHECK_TIME_LIMIT_SECONDS", 0.2)
+    previous = signal.signal(signal.SIGALRM, lambda signum, frame: None)
+    signal.setitimer(signal.ITIMER_REAL, 30)
+
+    calendar.check_recurrence("FREQ=WEEKLY;BYDAY=MO", datetime(2026, 1, 1, tzinfo=timezone.utc))
+    remaining, _ = signal.setitimer(signal.ITIMER_REAL, 0)
+    signal.signal(signal.SIGALRM, previous)
+
+    assert 25 < remaining <= 30

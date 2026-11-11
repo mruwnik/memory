@@ -1,5 +1,5 @@
 discord.py==2.7.1
 uvicorn>=0.34,<1.0  # see requirements-api.txt for the >=0.31 rationale (CIDR support)
 fastapi>=0.140.0
-caldav
+caldav>=3.7,<3.8
 websockets>=15,<16

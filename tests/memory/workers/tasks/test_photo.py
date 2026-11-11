@@ -19,7 +19,7 @@ from memory.workers.tasks import photo
 # Test extract_exif_data
 
 
-@patch("memory.workers.tasks.photo.Image.open")
+@patch("memory.workers.tasks.photo.open_image")
 def test_extract_exif_successfully(mock_open):
     mock_img = MagicMock()
     mock_img._getexif.return_value = {
@@ -36,7 +36,7 @@ def test_extract_exif_successfully(mock_open):
     assert "DateTime" in result
 
 
-@patch("memory.workers.tasks.photo.Image.open")
+@patch("memory.workers.tasks.photo.open_image")
 def test_extract_exif_returns_empty_dict_when_no_exif(mock_open):
     mock_img = MagicMock()
     mock_img._getexif.return_value = None
@@ -47,7 +47,7 @@ def test_extract_exif_returns_empty_dict_when_no_exif(mock_open):
     assert result == {}
 
 
-@patch("memory.workers.tasks.photo.Image.open")
+@patch("memory.workers.tasks.photo.open_image")
 def test_extract_exif_handles_image_open_error(mock_open):
     mock_open.side_effect = IOError("Cannot open image")
 
@@ -56,7 +56,7 @@ def test_extract_exif_handles_image_open_error(mock_open):
     assert result == {}
 
 
-@patch("memory.workers.tasks.photo.Image.open")
+@patch("memory.workers.tasks.photo.open_image")
 def test_extract_exif_handles_extraction_error(mock_open):
     mock_img = MagicMock()
     mock_img._getexif.side_effect = AttributeError("No EXIF")

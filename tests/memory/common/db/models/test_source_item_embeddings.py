@@ -1,11 +1,12 @@
 import hashlib
+import shutil
 import textwrap
 from datetime import datetime
 from typing import Any, Sequence, cast
 from unittest.mock import ANY, Mock, call
 
-import pymupdf  # PyMuPDF
 import pytest
+from PIL import Image
 
 from memory.common import settings
 from memory.common.db.models.source_item import Chunk, SourceItem
@@ -20,7 +21,7 @@ from memory.common.db.models.source_items import (
 )
 from memory.common.db.models.sources import Book
 from memory.common.embedding import embed_source_item
-from memory.common.extract import page_to_image
+from memory.common.extract import read_pdf_pages
 from memory.parsers.email import parse_email_message
 from tests.data.contents import (
     CHUNKS,
@@ -46,6 +47,14 @@ from tests.data.contents import (
 # test_mail_message_with_attachments_embeddings, test_email_attachment_embeddings_text,
 # test_book_section_embeddings_single_page, and one parametrized post embeddings test.
 # This represents ~15% of embedding test coverage.
+
+
+def stored_copy(name: str, folder: str) -> str:
+    """Copy a test data file into ``folder`` under FILE_STORAGE_DIR; return its filename."""
+    path = settings.FILE_STORAGE_DIR / folder / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(DATA_DIR / name, path)
+    return f"{folder}/{name}"
 
 
 def compare_chunks(
@@ -252,7 +261,7 @@ def test_email_attachment_embeddings_photo(mock_voyage_client):
     item = EmailAttachment(
         id=1,
         content=SAMPLE_MARKDOWN,
-        filename=DATA_DIR / "lang_timeline.png",
+        filename=stored_copy("lang_timeline.png", "emails"),
         mime_type="image/png",
         modality="photo",
         sha256=hashlib.sha256(SAMPLE_MARKDOWN.encode("utf-8")).hexdigest(),
@@ -297,7 +306,7 @@ def test_email_attachment_embeddings_pdf(mock_voyage_client):
     item = EmailAttachment(
         id=1,
         content=SAMPLE_MARKDOWN,
-        filename=DATA_DIR / "regulamin.pdf",
+        filename=stored_copy("regulamin.pdf", "emails"),
         mime_type="application/pdf",
         modality="doc",
         sha256=hashlib.sha256(SAMPLE_MARKDOWN.encode("utf-8")).hexdigest(),
@@ -314,20 +323,14 @@ def test_email_attachment_embeddings_pdf(mock_voyage_client):
     )
     metadata = cast(dict[str, Any], item.as_payload())
     metadata["tags"] = {"bla"}
-    with pymupdf.open(item.filename) as pdf:
-        expected_images = [
-            (
-                None,
-                [image_hash(page_to_image(page))],
-                metadata
-                | {
-                    "page": page.number,
-                    "width": page.rect.width,
-                    "height": page.rect.height,
-                },
-            )
-            for page in pdf.pages()
-        ]
+    expected_images = [
+        (
+            None,
+            [image_hash(cast(Image.Image, page.image))],
+            metadata | {"page": page.number, "width": page.width, "height": page.height},
+        )
+        for page in read_pdf_pages(settings.FILE_STORAGE_DIR / str(item.filename))
+    ]
 
     mock_voyage_client.embed = Mock(return_value=Mock(embeddings=[[0.1] * 1024] * 5))
     mock_voyage_client.multimodal_embed = Mock(
@@ -368,7 +371,7 @@ def test_embeddings_comic(mock_voyage_client):
     item = Comic(
         id=1,
         content=SAMPLE_MARKDOWN,
-        filename=DATA_DIR / "lang_timeline.png",
+        filename=stored_copy("lang_timeline.png", "comics"),
         mime_type="image/png",
         modality="comic",
         sha256=hashlib.sha256(SAMPLE_MARKDOWN.encode("utf-8")).hexdigest(),

@@ -40,12 +40,9 @@ POLL_RESPONSE_RATE_LIMIT = "10/minute"
 def enforce_poll_response_rate_limit(request: Request, slug: str) -> None:
     """Per-(IP, slug) rate limit on public poll-response writes.
 
-    Uses ``rate_limit_key`` instead of slowapi's ``get_remote_address``:
-    the latter blindly trusts ``X-Forwarded-For`` whenever Uvicorn is
-    started with ``--proxy-headers`` (the typical container default), so
-    a remote attacker can rotate XFF to mint a fresh bucket per request
-    and defeat the limit. ``rate_limit_key`` honors XFF only when the
-    immediate TCP peer is in ``RATE_LIMIT_TRUSTED_PROXIES``.
+    Keyed on ``rate_limit_key``, which honors ``X-Forwarded-For`` only
+    when the immediate TCP peer is in ``RATE_LIMIT_TRUSTED_PROXIES``, so a
+    client rotating XFF can't mint a fresh bucket per request.
     """
     ip = rate_limit_key(request)
     if not check_rate_limit_spec(f"poll_resp:{ip}:{slug}", POLL_RESPONSE_RATE_LIMIT):

@@ -1127,6 +1127,21 @@ def test_process_meeting_records_uploader_as_creator(
     assert meeting.creator_id == regular_user.id
 
 
+def test_each_owner_stores_their_copy_of_a_transcript(
+    db_session, regular_user, admin_user, sample_transcript
+):
+    created = [
+        meetings.create_meeting_record(
+            db_session, sample_transcript, "Standup", None, None, None,
+            "api", None, None, creator_id=user.id,
+        )
+        for user in (regular_user, admin_user)
+    ]
+
+    assert [m.creator_id for m in created] == [regular_user.id, admin_user.id]
+    assert all(m.id is not None for m in created)
+
+
 def test_process_meeting_idempotent(
     scripted_llm, llm_key, regular_user, sample_extraction_response, sample_transcript, mock_make_session, qdrant
 ):
@@ -1445,7 +1460,7 @@ def test_process_meeting_replace_updates_the_stored_meeting(
     meeting = mock_make_session.get(Meeting, first["meeting_id"])
     assert (meeting.title, meeting.duration_minutes) == ("Final", 42)
     assert meeting.content == "Ann: The corrected transcript."
-    assert meeting.sha256 == create_content_hash("Ann: The corrected transcript.")
+    assert meeting.sha256 == meetings.meeting_sha256("Ann: The corrected transcript.", regular_user.id)
     assert meeting.size == len("Ann: The corrected transcript.")
     assert mock_make_session.query(Meeting).count() == 1
 
@@ -2089,3 +2104,32 @@ def test_dedupe_meetings_groups_only_recordings_that_overlap_each_other(mock_mak
     result = meetings.dedupe_meetings(dry_run=True)
 
     assert result["groups"] == [{"keep": first.id, "delete": [second.id]}]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="S-W8: a synced meeting (Fireflies) stores the provider's transcript id "
+    "as Meeting.external_id, which is globally unique and looked up with no owner "
+    "filter (find_meeting, known_external_ids), so a second user whose account sees "
+    "the same transcript gets the first owner's meeting; needs the synced id "
+    "namespaced per account, with a migration for existing rows",
+)
+def test_every_user_syncing_a_shared_transcript_gets_their_own_meeting(
+    scripted_llm,
+    llm_key,
+    regular_user,
+    admin_user,
+    sample_extraction_response,
+    sample_transcript,
+    mock_make_session,
+    qdrant,
+):
+    scripted_llm.script = [submitted(sample_extraction_response), submitted(sample_extraction_response)]
+
+    for user in (regular_user, admin_user):
+        meetings.process_meeting(
+            creator_id=user.id, transcript=sample_transcript, title="Standup", external_id="01SHARED"
+        )
+
+    stored = mock_make_session.query(Meeting).all()
+    assert {meeting.creator_id for meeting in stored} == {regular_user.id, admin_user.id}

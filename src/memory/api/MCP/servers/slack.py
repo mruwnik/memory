@@ -24,7 +24,7 @@ from memory.common.db.models.slack import (
     SlackUserCredentials,
     SlackWorkspace,
 )
-from memory.common.slack import async_slack_call, slack_api_base_url
+from memory.common.slack import async_slack_call, slack_api_base_url, visible_channels
 
 logger = logging.getLogger(__name__)
 
@@ -212,8 +212,13 @@ def _get_channels_data(
         if not workspace:
             raise ValueError("Workspace not found")
 
-        query = session.query(SlackChannel).filter(
-            SlackChannel.workspace_id == credentials.workspace_id,
+        caller = get_mcp_current_user(session)
+        if caller is None:
+            raise ValueError("Not authenticated")
+        query = visible_channels(
+            session.query(SlackChannel).filter(SlackChannel.workspace_id == credentials.workspace_id),
+            workspace,
+            caller,
         )
 
         if not include_archived:
@@ -453,7 +458,10 @@ async def list_channels(
     fields: list[str] | None = None,
 ) -> dict[str, Any]:
     """
-    List Slack channels the user has access to.
+    List a Slack workspace's stored channels. Its other members' DMs and private
+    channels are listed only to the workspace's owner (the first user to connect it)
+    and admins; everyone else sees its public channels and their own DMs and
+    private channels.
 
     Args:
         workspace_id: Optional workspace ID (uses default if not specified)

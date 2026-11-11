@@ -65,6 +65,7 @@ const workspace = (over: Record<string, unknown> = {}) => ({
   poll_blocker: null,
   sync_stale: false,
   apps: [],
+  can_manage: true,
   project_id: null,
   sensitivity: 'basic',
   ...over,
@@ -82,6 +83,7 @@ const channel = (over: Record<string, unknown> = {}) => ({
   last_message_ts: null,
   project_id: null,
   sensitivity: 'basic',
+  can_switch_off: true,
   ...over,
 })
 
@@ -465,6 +467,39 @@ describe('SlackPanel - channels', () => {
     await user.click(screen.getByRole('button', { name: /Channels \(2\)/ }))
     await screen.findByText('general')
     expect(screen.getByRole('option', { name: 'Inherit (skip)' })).toBeInTheDocument()
+  })
+
+  it("shows a non-owner the workspace's and its channels' settings read-only", async () => {
+    listWorkspaces.mockResolvedValue([workspace({ can_manage: false })])
+    listChannels.mockResolvedValue([channel({ can_switch_off: false })])
+    const { user } = renderWithUser(<SlackPanel />)
+    await screen.findByText('Acme')
+
+    expect(screen.getByText(/Only this workspace's owner/)).toBeInTheDocument()
+    const row = screen.getByText('Acme').closest('li')!
+    for (const name of ['Project', 'Sensitivity', 'LLM key']) {
+      expect(within(row).getAllByRole('combobox', { name })[0]).toBeDisabled()
+    }
+    expect(screen.getByRole('button', { name: 'Pause' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Sync now' })).toBeEnabled()
+
+    await user.click(screen.getByRole('button', { name: /Channels \(2\)/ }))
+    await screen.findByText('general')
+    expect(screen.getByRole('combobox', { name: 'Collect messages' })).toBeDisabled()
+  })
+
+  it('lets a non-owner switch collection off in their own DM, and nothing more', async () => {
+    listWorkspaces.mockResolvedValue([workspace({ can_manage: false })])
+    listChannels.mockResolvedValue([channel({ id: 'D1', name: 'me', channel_type: 'dm', is_private: true })])
+    const { user } = renderWithUser(<SlackPanel />)
+    await screen.findByText('Acme')
+
+    await user.click(screen.getByRole('button', { name: /Channels \(2\)/ }))
+    await screen.findByText('me')
+    expect(screen.queryByRole('combobox', { name: 'Collect messages' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Stop collecting' }))
+
+    await waitFor(() => expect(updateChannel).toHaveBeenCalledWith('D1', { collect_messages: false }))
   })
 
   it('says so when a workspace has no channels', async () => {

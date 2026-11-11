@@ -1,9 +1,9 @@
-import ReactMarkdown from 'react-markdown'
+import { Markdown } from '@/components/shared/Markdown'
 import { Badge, DetailList, Disclosure, Row } from '@/components/shared/ui'
 import { fileUrl } from '@/utils/files'
 
 export type SearchItem = {
-    filename: string
+    filename: string | null
     content: string
     chunks: (string | { preview: string; score?: number })[]
     tags: string[]
@@ -25,10 +25,6 @@ export const Metadata = ({ metadata }: { metadata: any }) => {
         [key, value === null || value === undefined ? null : metadataValue(key, value)])} />
 }
 
-const Markdown = ({ children }: { children: string }) => (
-    <div className="prose prose-sm max-w-none"><ReactMarkdown>{children}</ReactMarkdown></div>
-)
-
 const Chunks = ({ chunks }: { chunks: (string | { preview: string; score?: number })[] }) => (
     <Disclosure summary="Relevant sections">
         <ul className="space-y-3">
@@ -47,7 +43,7 @@ const KINDS: { match: string; title: (r: SearchItem) => string; body: (r: Search
     {
         match: 'image/',
         title: r => r.metadata?.title || r.filename,
-        body: (r, title) => <img src={fileUrl(r.filename)} alt={title} className="max-w-full h-auto rounded-lg" />,
+        body: (r, title) => r.filename && <img src={fileUrl(r.filename)} alt={title} className="max-w-full h-auto rounded-lg" />,
     },
     {
         match: 'text/markdown',
@@ -61,9 +57,9 @@ const KINDS: { match: string; title: (r: SearchItem) => string; body: (r: Search
     },
     {
         match: 'application/pdf',
-        title: r => r.filename,
+        title: r => r.filename || r.metadata?.title,
         body: r => <>
-            <a href={fileUrl(r.filename)} className="text-primary hover:underline">View PDF</a>
+            {r.filename && <a href={fileUrl(r.filename)} className="text-primary hover:underline">View PDF</a>}
             {r.content && <Disclosure summary="View source"><Markdown>{r.content}</Markdown></Disclosure>}
         </>,
     },

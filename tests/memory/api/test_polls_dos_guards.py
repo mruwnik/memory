@@ -156,34 +156,31 @@ def test_rate_limit_keyed_per_ip_and_slug():
         enforce_poll_response_rate_limit(request_a, "slug-2")
 
 
-def test_rate_limit_fails_open_when_redis_down():
-    """Redis outage must not lock public poll responses out entirely."""
+def test_rate_limit_counts_in_process_when_redis_down():
+    """A Redis outage keeps the per-IP limit without locking out other clients."""
     request = _make_request()
     with patch.object(rate_limit, "rate_limit_redis", return_value=None):
-        for _ in range(50):
-            # No HTTPException — fail open
+        for _ in range(10):
             enforce_poll_response_rate_limit(request, "slug-x")
+        with pytest.raises(HTTPException) as exc:
+            enforce_poll_response_rate_limit(request, "slug-x")
+        enforce_poll_response_rate_limit(_make_request("10.0.0.2"), "slug-x")
+
+    assert exc.value.status_code == 429
 
 
 def test_rate_limit_constant_format():
-    """The constant is in slowapi syntax so it can be configured later
-    without code changes — guard against regressions."""
+    """The constant is in the ``limits`` spec syntax that parse_limit reads."""
     count, window = rate_limit.parse_limit(POLL_RESPONSE_RATE_LIMIT)
     assert count == 10
     assert window == 60
 
 
 def test_rate_limit_does_not_trust_xff_from_untrusted_peer():
-    """Regression: enforce_poll_response_rate_limit previously used
-    slowapi.util.get_remote_address, which honors X-Forwarded-For whenever
-    Uvicorn was started with --proxy-headers. A remote attacker could rotate
-    XFF per request to mint fresh buckets and defeat the cap entirely.
-
-    Now that the function uses rate_limit_key, XFF must be ignored when the
-    immediate TCP peer is not in RATE_LIMIT_TRUSTED_PROXIES — the bucket key
-    falls back to the direct connection IP, so 11 requests from one peer
-    still hit the 10/minute cap regardless of how many XFF values the
-    attacker rotates through.
+    """XFF is ignored when the immediate TCP peer is not in
+    RATE_LIMIT_TRUSTED_PROXIES: the bucket key falls back to the direct
+    connection IP, so 11 requests from one peer still hit the 10/minute cap
+    however many XFF values the attacker rotates through.
     """
     from starlette.datastructures import Headers
 

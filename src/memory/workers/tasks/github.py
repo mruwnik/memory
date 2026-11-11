@@ -10,6 +10,7 @@ import requests
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session as DBSession
 
+from memory.common.access_control import owner_may_file_into_project
 from memory.common.celery_app import (
     app,
     ENSURE_ALL_GITHUB_WEBHOOKS,
@@ -349,11 +350,27 @@ def _create_pr_data(issue_data: GithubIssueData) -> GithubPRData | None:
     return pr_data
 
 
+def fileable_project_id(session: Any, repo: GithubRepo, project: Project | None) -> int | None:
+    """``project``'s id if the repo's sync may file items under it, else None.
+
+    The sync runs on the tracking account's credentials, so it files only into
+    projects whose teams that account's owner belongs to.
+    """
+    if project is None:
+        return None
+    owner = repo.account.user if repo.account else None
+    if owner is None or not owner_may_file_into_project(session, owner, cast(int, project.id)):
+        logger.warning("GithubRepo %s may not file into project %s", repo.id, project.id)
+        return None
+    return cast(int, project.id)
+
+
 def _lookup_repo_project_id(session: Any, repo: GithubRepo) -> int | None:
     """Look up the project ID for a repo (not a milestone).
 
     Returns the project that has repo_id set but no milestone number,
-    which represents the repo-level project for access control.
+    which represents the repo-level project for access control, when the
+    repo's owner may file into it (see `fileable_project_id`).
     """
     project = (
         session.query(Project)
@@ -363,9 +380,7 @@ def _lookup_repo_project_id(session: Any, repo: GithubRepo) -> int | None:
         )
         .first()
     )
-    if project:
-        return cast(int, project.id)
-    return None
+    return fileable_project_id(session, repo, project)
 
 
 def _create_github_item(
@@ -677,7 +692,7 @@ def _lookup_milestone_id(
         .first()
     )
     if milestone:
-        return cast(int, milestone.id)
+        return fileable_project_id(session, repo, milestone)
 
     # Not found locally - try to fetch from GitHub
     if client is None:
@@ -696,7 +711,7 @@ def _lookup_milestone_id(
         if ms_data:
             milestone = _sync_milestone(session, repo, ms_data)
             session.commit()
-            return cast(int, milestone.id)
+            return fileable_project_id(session, repo, milestone)
         else:
             logger.warning(
                 f"Milestone #{milestone_number} not found on GitHub for {repo.repo_path}"

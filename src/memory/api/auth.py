@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import cache
 from typing import Any, TypeVar, cast
+from urllib.parse import urlsplit
 
 import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -17,6 +18,7 @@ from memory.common.db.connection import DBSession, get_session, make_session
 from memory.common.db.models import (
     APIKey,
     HumanUser,
+    OAuthClientInformation,
     OAuthRefreshToken,
     User,
     UserSession,
@@ -159,12 +161,15 @@ def get_token(request: Request) -> str | None:
 
 
 def create_user_session(
-    user_id: int, db: DBSession, valid_for: int = settings.SESSION_VALID_FOR
+    user_id: int,
+    db: DBSession,
+    valid_for: int = settings.SESSION_VALID_FOR,
+    from_setup: bool = False,
 ) -> str:
-    """Create a new session for a user"""
+    """Create a new session for a user; `from_setup` marks first-run setup's login."""
     expires_at = datetime.now(timezone.utc) + timedelta(days=valid_for)
 
-    session = UserSession(user_id=user_id, expires_at=expires_at)
+    session = UserSession(user_id=user_id, expires_at=expires_at, from_setup=from_setup)
     db.add(session)
     db.commit()
 
@@ -449,6 +454,101 @@ def get_interactive_user(
     return user
 
 
+DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def origin_of(url: str) -> tuple[str, str, int | None]:
+    """The (scheme, host, port) a browser loads ``url`` from: userinfo dropped,
+    host lowercased, the scheme's default port filled in."""
+    parts = urlsplit(url)
+    scheme = parts.scheme.lower()
+    return scheme, parts.hostname or "", parts.port or DEFAULT_PORTS.get(scheme)
+
+
+def has_userinfo(url: str) -> bool:
+    """Whether ``url`` carries a user or password before its host. No OAuth
+    client needs one, and it makes the URL read as a different host."""
+    return "@" in urlsplit(url).netloc
+
+
+def web_ui_origins() -> set[tuple[str, str, int | None]]:
+    """Where this server's own web UI runs: SERVER_URL, plus the dev
+    origins when ALLOW_LOCALHOST_CORS is on."""
+    dev = settings.LOCALHOST_CORS_ORIGINS if settings.ALLOW_LOCALHOST_CORS else []
+    return {origin_of(settings.SERVER_URL), *(origin_of(o) for o in dev)}
+
+
+# The web UI's OAuth callback is its root; browsers that registered before the
+# UI moved there still hold clients for /ui, which refresh but no longer authorize.
+WEB_UI_CALLBACK_PATHS = frozenset({"", "/", "/ui", "/ui/"})
+
+
+def on_web_ui_origin(uri: str) -> bool:
+    return origin_of(uri) in web_ui_origins()
+
+
+def is_web_ui_callback(uri: str) -> bool:
+    """Whether ``uri`` is exactly where the web UI receives its OAuth codes.
+
+    Other paths on the same origin serve content users upload (reports, files),
+    so a code sent there could be read by whoever wrote the page.
+    """
+    parts = urlsplit(uri)
+    return (
+        on_web_ui_origin(uri)
+        and not has_userinfo(uri)
+        and parts.path in WEB_UI_CALLBACK_PATHS
+        and not parts.query
+        and not parts.fragment
+    )
+
+
+def session_oauth_client(db: DBSession, session: UserSession) -> OAuthClientInformation | None:
+    """The OAuth client a session was issued to: through its authorization, or
+    through the refresh token issued with it (refreshed sessions have no
+    authorization of their own)."""
+    if session.oauth_state is not None:
+        return session.oauth_state.client
+    refresh = (
+        db.query(OAuthRefreshToken)
+        .filter(OAuthRefreshToken.access_token_session_id == session.id)
+        .first()
+    )
+    return refresh.client if refresh else None
+
+
+def is_web_ui_session(db: DBSession, session: UserSession) -> bool:
+    """Whether the session is a person's own login to the web UI.
+
+    The web UI is an OAuth client whose redirect URIs are exactly its callback
+    on this server, so its codes and tokens land nowhere else. Sessions from
+    other OAuth clients, and sessions agent runs act through, are not. A session
+    with no client counts only when first-run setup made it.
+    """
+    if session.api_key_id is not None:
+        return False
+    client = session_oauth_client(db, session)
+    if client is None:
+        return session.from_setup and session.oauth_state_id is None
+    uris = client.redirect_uris or []
+    return bool(uris) and all(is_web_ui_callback(str(uri)) for uri in uris)
+
+
+def require_web_ui_session(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: DBSession = Depends(get_session),
+) -> User:
+    """Some actions (creating API keys) are for a person at the web UI only:
+    not API keys, agent runs or other OAuth clients such as MCP connectors."""
+    if settings.DISABLE_AUTH:
+        return user
+    session = None if request_api_key(request, db) else get_user_session(request, db)
+    if session is None or not is_web_ui_session(db, session):
+        raise HTTPException(status_code=403, detail="Sign in to the web UI to do this")
+    return user
+
+
 def require_rest_access(
     request: Request,
     user: User = Depends(get_current_user),
@@ -666,7 +766,7 @@ def authenticate_user(email: str, password: str, db: DBSession) -> HumanUser | N
     return None
 
 
-@router.api_route("/logout", methods=["GET", "POST"])
+@router.post("/logout")
 def logout(request: Request, db: DBSession = Depends(get_session)):
     """Logout and clear session.
 

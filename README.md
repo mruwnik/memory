@@ -145,7 +145,7 @@ When connected, the assistant has access to tools organized by domain (core, tea
 If you put the API behind Traefik, nginx, Caddy, or any reverse proxy that terminates TLS, **you must tell uvicorn and the rate limiter which upstream IPs to trust**. Without this:
 
 - Uvicorn ignores `X-Forwarded-Proto`, so any HTTP redirect uses `http://` instead of `https://` and HTTPS clients break (this is a common cause of MCP clients failing to complete the OAuth handshake).
-- The SlowAPI rate limiter keys on the proxy's IP, so every user shares one bucket.
+- The rate limiter keys on the proxy's IP, so every user shares one bucket.
 
 Set both in `.env`:
 
@@ -268,6 +268,10 @@ token; a message they can all see is stored once.
   `MESSAGE_REACTION_*` events, `THREAD_CREATE`, `THREAD_UPDATE`); others are
   acknowledged and ignored. Servers first seen through a webhook bot collect
   everything it receives; turn collection off per server or channel as usual.
+  The signature only proves the bot's owner sent an event, so messages, edits
+  and reactions are read back from Discord with the bot's token and stored as
+  Discord returns them, and a delete lands once Discord no longer has the
+  message: a webhook bot needs a token that can read its channels' history.
 
 A DM to one of your bots, gateway or webhook, is collected by default when
 the person sending it shares a server with the bot: they're in the gateway's
@@ -352,7 +356,9 @@ connected in the Beeper app. Memory never connects networks or sends messages.
    with `api`, `worker` and `ingest-hub`. It needs about 400 MB of RAM.
 2. Allow it: `BEEPER_SERVER_URLS=http://beeper:23373` in `.env`. One Server
    holds one Beeper account; for more accounts run more Servers (each with its
-   own data volume) and list each URL.
+   own data volume) and list each URL. Any signed-in user can add the account
+   on a free Server; an admin can free a taken one with
+   `DELETE /beeper/accounts/<id>` (signs it out; then wipe the Server's volume).
 3. In **Sources → Beeper**, add an account on that Server, enter its email and
    the emailed code, then approve the device: compare the emoji with another
    Beeper device, or paste the account's recovery key. Memory refuses an email
@@ -431,10 +437,10 @@ MCP.call('method_name', { params })
 MCP.batch([
   { method: 'people_list_all', params: { limit: 10 } },
   { method: 'core_list_items', params: { limit: 5 } }
-]).then(([people, listed]) => { /* listed.items, listed.total, listed.has_more */ });
+]).then(([found, listed]) => { /* found.people, listed.items, listed.total, listed.has_more */ });
 ```
 
-Tools that read stored content (`core_search`, `core_fetch`, `core_list_items`, the Slack and Discord thread tools, `github_pr_diff`) hand agents text people wrote inside `<untrusted_item_…>` blocks, named by the result's `untrusted` preamble, with lists and dicts as JSON in a block whose field ends in `.json`. The client unwraps them, so a report gets the plain values; text is still text, so put it in the page with `textContent`, not `innerHTML`.
+Tools that read stored content (`core_search`, `core_fetch`, `core_list_items`, `core_search_observations`, the people, organizer, deadlines, journal and polling read tools, the Slack and Discord thread tools, `github_pr_diff`) hand agents text people wrote inside `<untrusted_item_…>` blocks, named by the result's `untrusted` preamble, with lists and dicts as JSON in a block whose field ends in `.json`. The client unwraps them, so a report gets the plain values; text is still text, so put it in the page with `textContent`, not `innerHTML`.
 
 Reports must be created with `allow_scripts=True` for this to load (set via the UI / API on the report record). The library uses the `access_token` cookie for auth, so reports inherit the viewing user's permissions.
 

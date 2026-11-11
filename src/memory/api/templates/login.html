@@ -44,6 +44,11 @@
             font-size: 0.9rem;
         }
 
+        .requester strong {
+            color: #333;
+            overflow-wrap: anywhere;
+        }
+
         .form-group {
             margin-bottom: 1.5rem;
         }
@@ -135,7 +140,11 @@
     <div class="login-container">
         <div class="login-header">
             <h1>Sign In</h1>
+            {% if requester %}
+            <p class="requester"><strong>{{ requester.name }}</strong> at <strong>{{ requester.host }}</strong> wants access to your Memory</p>
+            {% else %}
             <p>Access your Memory knowledge base</p>
+            {% endif %}
         </div>
 
         {% if error %}

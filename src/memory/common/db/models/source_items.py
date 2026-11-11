@@ -21,6 +21,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -35,6 +36,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from uuid import UUID as PyUUID
 
 from memory.common import discord_attachments, paths, settings
+from memory.common.images import open_image
 import memory.common.extract as extract
 import memory.common.summarizer as summarizer
 import memory.common.formatters.observation as observation
@@ -118,6 +120,8 @@ class MailMessage(SourceItem):
     recipients: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     folder: Mapped[str | None] = mapped_column(Text)
+    # The body extracted at ingest; NULL on mail stored before it was kept.
+    parsed_body: Mapped[str | None] = mapped_column(Text, nullable=True)
     tsv: Mapped[Any | None] = mapped_column(TSVECTOR)
 
     # Sync tracking for deletion detection
@@ -205,6 +209,8 @@ class MailMessage(SourceItem):
 
     @property
     def body(self) -> str:
+        if self.parsed_body is not None:
+            return self.parsed_body
         return self.parsed_content["body"]
 
     def format_content(self, content: dict[str, Any]) -> str:
@@ -247,14 +253,11 @@ class MailMessage(SourceItem):
         }
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
-        content = self.parsed_content
-        body = self.body
-
-        chunks = extract.extract_text(body, modality="mail")
+        chunks = extract.extract_text(self.body, modality="mail")
 
         def add_header(item: extract.MulitmodalChunk) -> extract.MulitmodalChunk:
             if isinstance(item, str):
-                return self.format_content(content | {"body": item}).strip()
+                return self.format_content({"body": item}).strip()
             return item
 
         for chunk in chunks:
@@ -551,7 +554,7 @@ class DiscordMessage(SourceItem):
             try:
                 full_path = settings.FILE_STORAGE_DIR / path
                 if full_path.exists():
-                    image = Image.open(full_path)
+                    image = open_image(full_path)
                     content["images"].append(image)
             except Exception:
                 pass  # Skip failed image loads
@@ -710,7 +713,7 @@ class SlackMessage(SourceItem):
             try:
                 full_path = settings.FILE_STORAGE_DIR / path
                 if full_path.exists():
-                    image = Image.open(full_path)
+                    image = open_image(full_path)
                     content["images"].append(image)
             except Exception:
                 pass  # Skip failed image loads
@@ -855,7 +858,7 @@ class BeeperMessage(SourceItem):
         images = []
         for path in self.images or []:
             try:
-                images.append(Image.open(settings.FILE_STORAGE_DIR / path))
+                images.append(open_image(settings.FILE_STORAGE_DIR / path))
             except OSError:
                 logger.info("Beeper message %s: an image could not be opened", self.id)
         return {"text": self.title, "images": images}
@@ -939,7 +942,7 @@ class Photo(SourceItem):
         return " | ".join(parts)
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
-        image = Image.open(settings.FILE_STORAGE_DIR / (self.filename or ""))
+        image = open_image(settings.FILE_STORAGE_DIR / (self.filename or ""))
         return [extract.DataChunk(data=[image])]
 
     @classmethod
@@ -1004,7 +1007,7 @@ class Comic(SourceItem):
         )
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
-        image = Image.open(settings.FILE_STORAGE_DIR / (self.filename or ""))
+        image = open_image(settings.FILE_STORAGE_DIR / (self.filename or ""))
         description = f"{self.title} by {self.author}"
         return [extract.DataChunk(data=[image, description])]
 
@@ -1419,7 +1422,11 @@ class MiscDoc(SourceItem):
             contents = (settings.FILE_STORAGE_DIR / self.filename).read_bytes()
         else:
             contents = self.content or ""
-        chunks = list(extract.extract_data_chunks(self.mime_type or "", contents))
+        chunks = list(
+            extract.extract_data_chunks(
+                self.mime_type or "", contents, max_image_pages=settings.MAX_DOC_EMBED_PAGES
+            )
+        )
 
         # Emit a text chunk carrying the bibliographic metadata so the doc is
         # findable by title/author/etc. Born-digital PDFs now extract per-page
@@ -1884,7 +1891,7 @@ class Report(SourceItem):
             file_path = settings.FILE_STORAGE_DIR / self.filename
             if not file_path.exists():
                 return []
-            return extract.doc_to_images(file_path)
+            return extract.extract_pdf(file_path, max_image_pages=settings.MAX_DOC_EMBED_PAGES)
 
         # HTML: worker already converted to markdown and extracted images
         return chunk_mixed(self.content or "", self.images or [])
@@ -2283,9 +2290,11 @@ class CalendarEvent(SourceItem):
     all_day: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     location: Mapped[str | None] = mapped_column(Text, nullable=True)
     recurrence_rule: Mapped[str | None] = mapped_column(Text, nullable=True)  # RRULE format
-    # Whether recurrence_rule yields any occurrence, checked by the sync (see
-    # common.calendar.recurrence_expandable). NULL: no rule, or not checked yet.
+    # Whether queries may expand recurrence_rule, and what expanding it cost in
+    # milliseconds, checked by the sync (see common.calendar.check_recurrence).
+    # NULL: no rule, or not checked yet.
     recurrence_expandable: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    recurrence_cost_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     # Sync metadata
     calendar_account_id: Mapped[int | None] = mapped_column(

@@ -30,7 +30,7 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.dialects.postgresql import ARRAY
-from sqlalchemy.orm import Mapped, mapped_column, object_session, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from memory.common.db.models.base import Base
 from memory.common.db.models.provider_keys import LLMKeyChoice
@@ -191,6 +191,15 @@ class SlackWorkspace(SyncStatusMixin, LLMKeyChoice, Base):
     sensitivity: Mapped[str] = mapped_column(String(20), nullable=False, server_default="basic")
     config_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
 
+    # The user who connected the workspace first. Only they or an admin may change its or
+    # its channels' settings, and their default key pays for LLM work on its messages.
+    # Ownership moves only when the owner or an admin hands it on. It is cleared when the
+    # owner is left with no credential for the workspace (they disconnect or delete their
+    # app) or their account is deleted; with no owner only admins manage the workspace.
+    owner_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
     # Relationships
     channels: Mapped[list[SlackChannel]] = relationship(
         "SlackChannel", back_populates="workspace", cascade="all, delete-orphan"
@@ -207,21 +216,7 @@ class SlackWorkspace(SyncStatusMixin, LLMKeyChoice, Base):
 
     @property
     def llm_registrant_id(self) -> int | None:
-        """The creator of the oldest Slack app synced into this workspace."""
-        session = object_session(self)
-        if session is None:
-            return None
-        return (
-            session.query(SlackApp.created_by_user_id)
-            .join(SlackUserCredentials, SlackUserCredentials.slack_app_id == SlackApp.id)
-            .filter(
-                SlackUserCredentials.workspace_id == self.id,
-                SlackApp.created_by_user_id.is_not(None),
-            )
-            .order_by(SlackApp.id)
-            .limit(1)
-            .scalar()
-        )
+        return self.owner_id
 
 
 class SlackUserCredentials(Base):
@@ -393,3 +388,22 @@ class SlackChannel(Base):
     @property
     def llm_key_holder(self) -> SlackWorkspace | None:
         return self.workspace
+
+
+class SlackChannelMember(Base):
+    """A connected user whose own Slack token lists a DM, group DM or private channel.
+
+    Recorded by the channel sync, so a workspace member who isn't its owner can see
+    the non-public channels they are in and switch off their collection.
+    """
+
+    __tablename__ = "slack_channel_members"
+
+    channel_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("slack_channels.id", ondelete="CASCADE"), primary_key=True
+    )
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+
+    __table_args__ = (Index("slack_channel_members_user_idx", "user_id"),)

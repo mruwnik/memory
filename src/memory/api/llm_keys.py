@@ -65,6 +65,23 @@ def apply_llm_key(
     holder.llm_key_id, holder.llm_disabled = key.id, False
 
 
+def charged_user_id(db: DBSession, holder: LLMKeyChoice) -> int | None:
+    """Whose key `holder`'s choice spends: the explicit key's owner, else the payer
+    of its default; None when LLM work is off."""
+    if holder.llm_disabled:
+        return None
+    key = chosen_key(db, holder)
+    return key.user_id if key is not None else payer_id(holder)
+
+
+def keep_llm_key_if_caller_pays(db: DBSession, user: User, holder: LLMKeyChoice) -> None:
+    """After `holder` changes hands, turn its LLM work off unless its choice charges
+    `user`, so no one else's key pays without them choosing it."""
+    if charged_user_id(db, holder) in (None, user.id):
+        return
+    holder.llm_key_id, holder.llm_disabled = None, True
+
+
 def llm_key_view(db: DBSession, viewer: User, holder: LLMKeyChoice) -> LLMKeyView:
     """What pays for `holder`'s items, resolved as ingest_key resolves it; another
     user's key is never named or identified."""

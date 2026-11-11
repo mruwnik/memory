@@ -77,7 +77,6 @@ def _create_google_doc(
         content=file_data["content"],
         google_file_id=file_data["file_id"],
         title=file_data["title"],
-        filename=file_data["title"],
         original_mime_type=file_data["original_mime_type"],
         folder_id=folder.id,
         folder_path=file_data["folder_path"],
@@ -125,7 +124,6 @@ def _update_existing_doc(
     existing.content = file_data["content"]
     existing.sha256 = create_content_hash(file_data["content"])
     existing.title = file_data["title"]
-    existing.filename = file_data["title"]
     existing.google_modified_at = file_data["modified_at"]
     existing.last_modified_by = file_data["last_modified_by"]
     existing.word_count = file_data["word_count"]

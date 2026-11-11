@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from memory.common import settings
-from memory.common.db.models import Report, SourceItem
+from memory.common.db.models import Photo, Report
 
 
 # === Serving endpoint tests ===
@@ -50,8 +50,8 @@ def test_serve_html_report_has_csp_headers(
     assert response.headers.get("x-content-type-options") == "nosniff"
 
 
-def test_serve_pdf_report_no_csp_headers(client: TestClient, user, db_session):
-    """PDF reports should not include CSP headers."""
+def test_serve_pdf_report_has_no_sandbox_csp(client: TestClient, user, db_session):
+    """PDF reports carry no sandbox CSP (Chrome's viewer refuses one), only the framing rule."""
     pdf_file = settings.REPORT_STORAGE_DIR / "test.pdf"
     pdf_file.write_bytes(b"%PDF-1.4 fake pdf")
 
@@ -69,7 +69,7 @@ def test_serve_pdf_report_no_csp_headers(client: TestClient, user, db_session):
     response = client.get("/reports/test.pdf")
 
     assert response.status_code == 200
-    assert "content-security-policy" not in response.headers
+    assert response.headers["content-security-policy"] == "frame-ancestors 'self'"
 
 
 def test_serve_report_404_not_found(client: TestClient, user):
@@ -192,13 +192,11 @@ def test_serve_report_non_html_active_types_are_attachments(
 
 
 def test_serve_file_download_forces_attachment(client: TestClient, db_session):
-    (settings.FILE_STORAGE_DIR / "pic.png").write_bytes(b"\x89PNG fake")
-    db_session.add(
-        SourceItem(modality="photo", filename="pic.png", sha256=b"\x07" * 32)
-    )
+    (settings.PHOTO_STORAGE_DIR / "pic.png").write_bytes(b"\x89PNG fake")
+    db_session.add(Photo(modality="photo", filename="photos/pic.png", sha256=b"\x07" * 32))
     db_session.commit()
 
-    response = client.get("/files/pic.png?download=true")
+    response = client.get("/files/photos/pic.png?download=true")
 
     assert response.status_code == 200, response.text
     assert response.headers["content-disposition"].startswith("attachment")

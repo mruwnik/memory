@@ -10,6 +10,7 @@ Provides endpoints for:
 import fcntl
 import json
 import logging
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -23,6 +24,7 @@ from memory.common import settings
 from memory.common.dates import parse_iso_datetime
 from memory.common.db.connection import make_session
 from memory.common.db.models import CodingProject, Session, TelemetryEvent, User
+from memory.common.session_transcripts import _append_to_index_locked, _stored_uuids_locked
 
 logger = logging.getLogger(__name__)
 
@@ -218,8 +220,17 @@ def get_or_create_session(
     return session
 
 
+def transcript_full(session: Session) -> HTTPException:
+    logger.warning(f"Session {session.id}: transcript is at MAX_SESSION_TRANSCRIPT_BYTES; events refused")
+    return HTTPException(
+        status_code=413,
+        detail=f"Session transcript is full ({settings.MAX_SESSION_TRANSCRIPT_BYTES} bytes)",
+    )
+
+
 def append_events_to_transcript(session: Session, events: list[SessionEvent]) -> list[SessionEvent]:
-    """Append events to the session's JSONL transcript file.
+    """Append events to the session's JSONL transcript file, refusing (413)
+    events that would grow it past MAX_SESSION_TRANSCRIPT_BYTES.
 
     Uses file locking to prevent concurrent write races.
 
@@ -243,26 +254,20 @@ def append_events_to_transcript(session: Session, events: list[SessionEvent]) ->
         # Acquire exclusive lock (blocks until available)
         fcntl.flock(f.fileno(), fcntl.LOCK_EX)
         try:
-            # Read existing UUIDs while holding lock
-            f.seek(0)
-            existing_uuids = set()
-            if event_ids:
-                for line in f:
-                    if line.strip():
-                        try:
-                            data = json.loads(line)
-                            if uuid := data.get("uuid"):
-                                existing_uuids.add(uuid)
-                        except json.JSONDecodeError:
-                            pass
+            size = os.fstat(f.fileno()).st_size
+            if event_ids and size >= settings.MAX_SESSION_TRANSCRIPT_BYTES:
+                raise transcript_full(session)
+            stored = _stored_uuids_locked(f, transcript_file, event_ids) if event_ids else set()
 
-            new_events = [event for event in events if event.uuid not in existing_uuids]
+            new_events = [event for event in events if event.uuid not in stored]
             if new_events:
+                text = "\n".join(json.dumps(e.model_dump(), default=str) for e in new_events) + "\n"
+                if size + len(text.encode()) > settings.MAX_SESSION_TRANSCRIPT_BYTES:
+                    raise transcript_full(session)
                 f.seek(0, 2)  # Seek to end
-                f.write(
-                    "\n".join(json.dumps(e.model_dump(), default=str) for e in new_events) + "\n"
-                )
+                f.write(text)
                 f.flush()
+                _append_to_index_locked(transcript_file, (e.uuid for e in new_events))
 
             return new_events
         finally:
@@ -349,14 +354,15 @@ def save_events(user_id, session_id, parent_id, cwd, source, events) -> int:
 
 
 @router.post("/ingest/batch", response_model=BatchIngestResponse)
-async def ingest_session_events_batch(
+def ingest_session_events_batch(
     request: BatchIngestRequest,
     user: User = Depends(require_rest_access),
 ) -> BatchIngestResponse:
     """
     Ingest multiple session events in a single request.
 
-    Idempotent - duplicate events (by UUID) are skipped.
+    Idempotent - duplicate events (by UUID) are skipped. Runs in the
+    threadpool: it reads the session's index of stored event uuids.
     """
     accepted = save_events(
         user.id,

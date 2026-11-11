@@ -34,6 +34,7 @@ from memory.parsers.email import parse_email_message
 from memory.workers.tasks.email import (
     FAILURE_HOLD_LIMIT,
     FIRST_SYNC_HOLD_LIMIT,
+    OVER_CONNECTION_BUDGET,
     SYNC_OVERLAP,
     QueueOutcome,
     get_cutoff_date,
@@ -1164,6 +1165,29 @@ def test_imap_sync_gives_up_on_failures_held_past_the_limit(
     assert test_email_account.sync_error == (
         "1 messages or folders could not be fetched or queued for over "
         f"{span}; the sync moved on without them"
+    )
+
+
+class OverBudgetProvider(MockEmailProvider):
+    """A connection already cut off at MAX_IMAP_CONNECTION_BYTES: every fetch fails."""
+
+    over_connection_budget = True
+
+
+def test_imap_sync_over_the_connection_budget_says_so_and_stops(db_session, test_email_account):
+    test_email_account.folders = ["INBOX", "Sent"]
+    test_email_account.last_sync_at = datetime.now(timezone.utc) - timedelta(days=1)
+    previous_sync = test_email_account.last_sync_at
+    db_session.commit()
+    provider = OverBudgetProvider({"INBOX": [{"uid": 1}], "Sent": [{"uid": 2}]}, unfetchable={1, 2})
+
+    result = run_imap_sync(test_email_account.id, provider)
+
+    db_session.refresh(test_email_account)
+    assert (result["messages_found"], test_email_account.last_sync_at) == (1, previous_sync)
+    assert test_email_account.sync_error == (
+        f"{OVER_CONNECTION_BUDGET}; 2 messages or folders could not be fetched or "
+        "queued; the next sync tries them again"
     )
 
 

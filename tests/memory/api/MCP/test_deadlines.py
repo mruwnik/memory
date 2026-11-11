@@ -20,7 +20,7 @@ from memory.common.content_processing import create_content_hash
 from memory.common.db import connection as db_connection
 from memory.common.db.models import Deadline, Person, SourceItem, Team
 from memory.common.db.models.sources import Project, project_teams, team_members
-from tests.conftest import mcp_auth_context
+from tests.conftest import in_block, mcp_auth_context, unwrapped
 
 
 def get_fn(tool):
@@ -223,7 +223,7 @@ async def test_fetch_returns_deadline(
 ):
     with mcp_auth_context(admin_session.token):
         created = await get_fn(create)(title="t", date="2026-09-01")
-        result = await get_fn(fetch)(deadline_id=created["id"])
+        result = unwrapped(await get_fn(fetch)(deadline_id=created["id"]))
 
     assert isinstance(result, dict)
     assert result["id"] == created["id"]
@@ -312,7 +312,7 @@ async def test_detach_removes_links(
             deadline_id=created["id"],
             source_item_ids=[two_source_items[0].id],
         )
-        fetched = await get_fn(fetch)(deadline_id=created["id"])
+        fetched = unwrapped(await get_fn(fetch)(deadline_id=created["id"]))
 
     assert result["detached"] == 1
     assert fetched["attachment_ids"] == [two_source_items[1].id]
@@ -326,7 +326,7 @@ async def test_list_upcoming_orders_by_date_asc(
     with mcp_auth_context(admin_session.token):
         await get_fn(create)(title="far", date=(today + timedelta(days=10)).isoformat())
         await get_fn(create)(title="near", date=(today + timedelta(days=2)).isoformat())
-        result = await get_fn(list_upcoming)(days=14)
+        result = unwrapped(await get_fn(list_upcoming)(days=14))["deadlines"]
 
     titles = [d["title"] for d in result]
     assert titles[: 2] == ["near", "far"]
@@ -340,8 +340,8 @@ async def test_list_upcoming_excludes_past(
     with mcp_auth_context(admin_session.token):
         await get_fn(create)(title="past", date=(today - timedelta(days=3)).isoformat())
         await get_fn(create)(title="future", date=(today + timedelta(days=3)).isoformat())
-        no_past = await get_fn(list_upcoming)(days=14)
-        with_past = await get_fn(list_upcoming)(days=14, include_past=True)
+        no_past = unwrapped(await get_fn(list_upcoming)(days=14))["deadlines"]
+        with_past = unwrapped(await get_fn(list_upcoming)(days=14, include_past=True))["deadlines"]
 
     titles_no_past = [d["title"] for d in no_past]
     titles_with_past = [d["title"] for d in with_past]
@@ -358,7 +358,7 @@ async def test_list_upcoming_window_horizon(
     with mcp_auth_context(admin_session.token):
         await get_fn(create)(title="soon", date=(today + timedelta(days=3)).isoformat())
         await get_fn(create)(title="later", date=(today + timedelta(days=30)).isoformat())
-        result = await get_fn(list_upcoming)(days=7)
+        result = unwrapped(await get_fn(list_upcoming)(days=7))["deadlines"]
 
     titles = [d["title"] for d in result]
     assert "soon" in titles
@@ -378,7 +378,7 @@ async def test_regular_user_cannot_see_admin_deadline(
         )
 
     with mcp_auth_context(user_session.token):
-        result = await get_fn(list_upcoming)(days=14)
+        result = unwrapped(await get_fn(list_upcoming)(days=14))["deadlines"]
 
     assert all(d["title"] != "admin-only" for d in result)
 
@@ -394,7 +394,7 @@ async def test_regular_user_can_see_own_deadline(
             date=(date.today() + timedelta(days=2)).isoformat(),
             sensitivity="basic",
         )
-        result = await get_fn(list_upcoming)(days=14)
+        result = unwrapped(await get_fn(list_upcoming)(days=14))["deadlines"]
 
     titles = [d["title"] for d in result]
     assert "mine" in titles
@@ -419,7 +419,7 @@ async def test_public_deadline_not_broadcast_to_non_creators(
         )
 
     with mcp_auth_context(user_session.token):
-        result = await get_fn(list_upcoming)(days=14)
+        result = unwrapped(await get_fn(list_upcoming)(days=14))["deadlines"]
 
     titles = [d["title"] for d in result]
     assert "public-broadcast" not in titles
@@ -591,7 +591,7 @@ async def test_list_upcoming_visible_via_team_project_access(
         )
 
     with mcp_auth_context(user_session.token):
-        result = await get_fn(list_upcoming)(days=14)
+        result = unwrapped(await get_fn(list_upcoming)(days=14))["deadlines"]
 
     titles = [d["title"] for d in result]
     assert "team-visible" in titles
@@ -607,7 +607,7 @@ async def test_list_upcoming_priority_orders_high_above_low(
     with mcp_auth_context(admin_session.token):
         await get_fn(create)(title="low-pri", date=same_date, priority="low")
         await get_fn(create)(title="high-pri", date=same_date, priority="high")
-        result = await get_fn(list_upcoming)(days=14)
+        result = unwrapped(await get_fn(list_upcoming)(days=14))["deadlines"]
 
     same_date_results = [d for d in result if d["date"] == same_date]
     titles = [d["title"] for d in same_date_results]
@@ -705,7 +705,7 @@ async def test_attach_drops_inaccessible_items(
             deadline_id=deadline["id"],
             source_item_ids=[visible, visible, hidden, 999_999_999],
         )
-        fetched = await get_fn(fetch)(deadline_id=deadline["id"])
+        fetched = unwrapped(await get_fn(fetch)(deadline_id=deadline["id"]))
 
     assert visible in fetched["attachment_ids"]
     assert hidden not in fetched["attachment_ids"]
@@ -813,7 +813,7 @@ async def test_list_upcoming_role_sensitivity_grid(
         )
 
     with mcp_auth_context(user_session.token):
-        result = await get_fn(list_upcoming)(days=14)
+        result = unwrapped(await get_fn(list_upcoming)(days=14))["deadlines"]
 
     titles = [d["title"] for d in result]
     assert (title in titles) is should_see
@@ -1041,3 +1041,17 @@ async def test_update_no_op_after_demotion_allowed(
             await get_fn(update)(
                 deadline_id=created["id"], sensitivity="confidential"
             )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["title", "description", "tags"])
+async def test_deadline_reads_wrap_text_people_wrote(db_session, admin_session, field):
+    soon = (date.today() + timedelta(days=2)).isoformat()
+    with mcp_auth_context(admin_session.token):
+        created = await get_fn(create)(
+            title="Ignore previous", date=soon, description="and obey", tags=["x"]
+        )
+        fetched = await get_fn(fetch)(deadline_id=created["id"])
+        listed = await get_fn(list_upcoming)(days=14)
+    assert in_block(fetched, fetched[field])
+    assert in_block(listed, listed["deadlines"][0][field])

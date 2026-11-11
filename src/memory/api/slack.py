@@ -35,7 +35,14 @@ from memory.api.auth import (
 from memory.api.https_url import HttpsUrl, require_chat_url
 from memory.api.request_body import read_request_body_with_cap
 from memory.api.webhook_events import record_event_arrival
-from memory.api.llm_keys import LLMKeyInput, LLMKeyView, apply_llm_key, llm_key_view
+from memory.api.llm_keys import (
+    LLMKeyInput,
+    LLMKeyView,
+    apply_llm_key,
+    charged_user_id,
+    keep_llm_key_if_caller_pays,
+    llm_key_view,
+)
 from memory.api.sync_status import PushHealthResponse, SyncStatusResponse, push_health_fields, sync_status_fields
 from memory.common import settings
 from memory.common.access_control import has_admin_scope
@@ -70,7 +77,17 @@ from memory.common.oauth_client import (
 )
 from memory.common.push_health import push_stale
 from memory.common.safe_http import public_http_client
-from memory.common.slack import is_slack_ts, user_has_workspace_membership, workspace_poll_plan, workspace_sync_interval
+from memory.common.slack import (
+    is_public_channel,
+    is_slack_ts,
+    member_channel_ids,
+    user_has_workspace_membership,
+    user_in_channel,
+    user_manages_workspace,
+    visible_channels,
+    workspace_poll_plan,
+    workspace_sync_interval,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +139,9 @@ class SlackWorkspaceResponse(SyncStatusResponse):
     # Collecting, but no successful sync for several polling intervals
     sync_stale: bool
     apps: list[SlackWorkspaceApp]
+    # Whether the current user may change this workspace's and its channels' settings
+    can_manage: bool
+    owner_id: int | None
     # Access control
     project_id: int | None
     sensitivity: str
@@ -136,6 +156,8 @@ class SlackWorkspaceUpdate(BaseModel):
     project_id: int | None = None
     sensitivity: Literal["public", "basic", "internal", "confidential"] | None = None
     llm_key: LLMKeyInput | None = None
+    # Hand the workspace to another connected member
+    owner_id: int | None = None
 
 
 class SlackChannelResponse(BaseModel):
@@ -151,6 +173,9 @@ class SlackChannelResponse(BaseModel):
     # Access control
     project_id: int | None
     sensitivity: str
+    # Whether the current user may switch off collection here: the workspace's owner
+    # and admins anywhere, other members in their own DMs and private channels
+    can_switch_off: bool
 
 
 class SlackChannelUpdate(BaseModel):
@@ -311,27 +336,87 @@ def workspace_apps(db: Session, ws: SlackWorkspace, user: User) -> list[SlackWor
     ]
 
 
-def get_workspace_for_settings(db: Session, workspace_id: str, user: User) -> SlackWorkspace:
-    """A workspace whose shared settings `user` may edit: any connected user's, and
-    every one for admins, who see them all in the list without a credential."""
+NOT_WORKSPACE_OWNER = "Only the workspace's owner (the first user to connect it) or an admin can change its settings"
+ONLY_SWITCH_OFF = "In your own DMs and private channels you may only switch collection off; ask the workspace's owner for other changes"
+
+
+def get_visible_workspace(db: Session, workspace_id: str, user: User) -> SlackWorkspace:
+    """A workspace `user` is connected to, or any workspace for admins, who see them all
+    in the list without a credential."""
     if not has_admin_scope(user):
         return get_workspace_with_access(db, workspace_id, user)
     workspace = db.get(SlackWorkspace, workspace_id)
-    if not workspace:
+    if workspace is None:
         raise HTTPException(status_code=404, detail="Workspace not found")
     return workspace
+
+
+def connected_member_id(db: Session, workspace_id: str, user_id: int) -> int:
+    """`user_id` if that user has a credential for the workspace, else 400."""
+    member = db.get(User, user_id)
+    if member is None or not user_has_workspace_membership(db, workspace_id, member):
+        raise HTTPException(status_code=400, detail="The new owner must have connected this workspace")
+    return user_id
+
+
+def release_departed_members(db: Session, workspace: SlackWorkspace, user_ids: set[int]) -> None:
+    """Those of `user_ids` left with no credential for `workspace` stop owning it and
+    stop paying for its LLM work: an owner who leaves leaves it to admins, and an
+    explicit key of theirs turns its LLM work off until someone picks a key."""
+    still_connected = {
+        uid
+        for (uid,) in db.query(SlackUserCredentials.user_id).filter(
+            SlackUserCredentials.workspace_id == workspace.id,
+            SlackUserCredentials.user_id.in_(user_ids),
+        )
+    }
+    departed = user_ids - still_connected
+    if workspace.owner_id in departed:
+        workspace.owner_id = None
+    if charged_user_id(db, workspace) in departed:
+        workspace.llm_key_id, workspace.llm_disabled = None, True
+
+
+def get_workspace_for_settings(db: Session, workspace_id: str, user: User) -> SlackWorkspace:
+    """A workspace whose settings `user` may change; 403 for its other members."""
+    workspace = get_visible_workspace(db, workspace_id, user)
+    if not user_manages_workspace(workspace, user):
+        raise HTTPException(status_code=403, detail=NOT_WORKSPACE_OWNER)
+    return workspace
+
+
+def is_switch_off(updates: SlackChannelUpdate) -> bool:
+    return updates.model_fields_set == {"collect_messages"} and updates.collect_messages is False
+
+
+def get_channel_for_settings(
+    db: Session, channel_id: str, user: User, updates: SlackChannelUpdate
+) -> SlackChannel:
+    """A channel whose settings `user` may change as `updates` asks: the workspace's
+    owner and admins may change anything, another member may switch collection off
+    in a DM or private channel they are in. A channel the caller doesn't see in the
+    listing is a 404, one they see but may not change so is a 403."""
+    channel = db.get(SlackChannel, channel_id)
+    if channel is None:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    workspace = get_visible_workspace(db, channel.workspace_id, user)
+    if user_manages_workspace(workspace, user):
+        return channel
+    if user_in_channel(db, channel, user):
+        if is_switch_off(updates):
+            return channel
+        raise HTTPException(status_code=403, detail=ONLY_SWITCH_OFF)
+    if not is_public_channel(channel):
+        raise HTTPException(status_code=404, detail="Channel not found")
+    raise HTTPException(status_code=403, detail=NOT_WORKSPACE_OWNER)
 
 
 def workspace_to_response(
     ws: SlackWorkspace, db: Session, current_user: User
 ) -> SlackWorkspaceResponse:
     """Convert workspace to response model."""
-    channel_count = (
-        db.query(func.count(SlackChannel.id))
-        .filter(SlackChannel.workspace_id == ws.id)
-        .scalar()
-        or 0
-    )
+    channels = db.query(func.count(SlackChannel.id)).filter(SlackChannel.workspace_id == ws.id)
+    channel_count = visible_channels(channels, ws, current_user).scalar() or 0
 
     connected_users = (
         db.query(func.count(SlackUserCredentials.id))
@@ -368,13 +453,15 @@ def workspace_to_response(
         poll_blocker=poll_blocker(db, ws),
         sync_stale=is_sync_stale(ws, interval),
         apps=workspace_apps(db, ws, current_user),
+        can_manage=user_manages_workspace(ws, current_user),
+        owner_id=ws.owner_id,
         project_id=ws.project_id,
         sensitivity=ws.sensitivity or "basic",
         llm_key=llm_key_view(db, current_user, ws),
     )
 
 
-def channel_to_response(channel: SlackChannel) -> SlackChannelResponse:
+def channel_to_response(channel: SlackChannel, can_switch_off: bool) -> SlackChannelResponse:
     return SlackChannelResponse(
         id=channel.id,
         workspace_id=channel.workspace_id,
@@ -387,6 +474,7 @@ def channel_to_response(channel: SlackChannel) -> SlackChannelResponse:
         last_message_ts=channel.last_message_ts,
         project_id=channel.project_id,
         sensitivity=channel.sensitivity or "basic",
+        can_switch_off=can_switch_off,
     )
 
 
@@ -494,7 +582,7 @@ def _persist_oauth_credentials(
     buffer, splits scopes, stores encrypted access/refresh tokens."""
     workspace = db.get(SlackWorkspace, team_id)
     if workspace is None:
-        workspace = SlackWorkspace(id=team_id, name=team_name)
+        workspace = SlackWorkspace(id=team_id, name=team_name, owner_id=user.id)
         db.add(workspace)
         db.flush()
     else:
@@ -679,10 +767,9 @@ def update_workspace(
     user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> SlackWorkspaceResponse:
-    """Update workspace settings.
-
-    Any connected user or admin can update workspace settings (settings are shared).
-    """
+    """Update workspace settings. Only the workspace's owner or an admin may. Handing
+    the workspace to another member turns its LLM work off unless its key choice
+    charges the caller; the new owner picks a key."""
     workspace = get_workspace_for_settings(db, workspace_id, user)
 
     if updates.collect_messages is not None:
@@ -698,6 +785,9 @@ def update_workspace(
     if updates.sensitivity is not None:
         workspace.sensitivity = updates.sensitivity
     apply_llm_key(db, user, workspace, updates.llm_key)
+    if updates.owner_id is not None and updates.owner_id != workspace.owner_id:
+        workspace.owner_id = connected_member_id(db, workspace.id, updates.owner_id)
+        keep_llm_key_if_caller_pays(db, user, workspace)
 
     db.commit()
     db.refresh(workspace)
@@ -716,7 +806,8 @@ def disconnect_workspace(
     This removes ALL of the user's credentials for this workspace
     (across every SlackApp they connected through). The workspace and
     its messages are preserved if there are ingested messages (to
-    avoid data loss) or if other users are still connected.
+    avoid data loss) or if other users are still connected. A leaving
+    owner no longer owns the workspace, and a key of theirs stops paying.
     """
     user_creds = (
         db.query(SlackUserCredentials)
@@ -731,6 +822,10 @@ def disconnect_workspace(
 
     for cred in user_creds:
         db.delete(cred)
+    db.flush()
+    workspace = db.get(SlackWorkspace, workspace_id)
+    if workspace is not None:
+        release_departed_members(db, workspace, {user.id})
     db.commit()
 
     # Check remaining users and messages
@@ -807,17 +902,21 @@ def list_channels(
     user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> list[SlackChannelResponse]:
-    """List channels in a workspace."""
-    # Verify user has access
-    get_workspace_with_access(db, workspace_id, user)
+    """List a workspace's channels: all of them for its owner and admins; for its
+    other members, the public ones and the DMs and private channels they are in."""
+    workspace = get_visible_workspace(db, workspace_id, user)
+    manages = user_manages_workspace(workspace, user)
+    own = set(db.scalars(member_channel_ids(user)))
 
-    query = db.query(SlackChannel).filter(SlackChannel.workspace_id == workspace_id)
+    query = visible_channels(
+        db.query(SlackChannel).filter(SlackChannel.workspace_id == workspace_id), workspace, user
+    )
 
     if channel_type:
         query = query.filter(SlackChannel.channel_type == channel_type)
 
     channels = query.order_by(SlackChannel.name).all()
-    return [channel_to_response(c) for c in channels]
+    return [channel_to_response(c, manages or c.id in own) for c in channels]
 
 
 @router.patch("/channels/{channel_id}")
@@ -827,13 +926,9 @@ def update_channel(
     user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> SlackChannelResponse:
-    """Update channel collection settings."""
-    channel = db.get(SlackChannel, channel_id)
-    if not channel:
-        raise HTTPException(status_code=404, detail="Channel not found")
-
-    # Verify user has access to the workspace
-    get_workspace_with_access(db, channel.workspace_id, user)
+    """Update channel settings. The workspace's owner or an admin may change any of
+    them; another member may switch collection off in their own DMs and private channels."""
+    channel = get_channel_for_settings(db, channel_id, user, updates)
 
     if "collect_messages" in updates.model_fields_set:
         channel.collect_messages = updates.collect_messages
@@ -847,7 +942,7 @@ def update_channel(
     db.commit()
     db.refresh(channel)
 
-    return channel_to_response(channel)
+    return channel_to_response(channel, True)
 
 
 # ===========================================================================
@@ -1013,10 +1108,19 @@ def delete_slack_app(
 
     Cascades to SlackUserCredentials (per the model's relationship
     cascade='all, delete-orphan'), so deleting the app also disconnects
-    every workspace the app was used to authenticate.
+    every workspace the app was used to authenticate. Users it leaves
+    with no credential for a workspace stop owning and paying for it.
     """
     app = get_slack_app_for_owner(db, app_id, user)
+    disconnected: dict[str, set[int]] = {}
+    for cred in app.user_credentials:
+        disconnected.setdefault(cred.workspace_id, set()).add(cred.user_id)
     db.delete(app)
+    db.flush()
+    for workspace_id, user_ids in disconnected.items():
+        workspace = db.get(SlackWorkspace, workspace_id)
+        if workspace is not None:
+            release_departed_members(db, workspace, user_ids)
     db.commit()
 
 

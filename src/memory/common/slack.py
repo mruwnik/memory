@@ -13,20 +13,23 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
-from sqlalchemy.orm import object_session
+from sqlalchemy import and_, or_, select
+from sqlalchemy.orm import Query, object_session
 
 from memory.common import settings
 from memory.common.db.connection import DBSession
 from memory.common.db.models.slack import (
     DEFAULT_SLACK_API_BASE_URL,
     SlackApp,
+    SlackChannel,
+    SlackChannelMember,
     SlackUserCredentials,
     SlackWorkspace,
 )
 from memory.common.chat_urls import chat_url_allowed
 from memory.common.db.models.users import User
 from memory.common.safe_http import public_http_client, public_sync_http_client
-from memory.common.access_control import UserLike
+from memory.common.access_control import UserLike, has_admin_scope
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +49,11 @@ def is_slack_ts(value: str | None) -> bool:
     return value is not None and SLACK_TS_PATTERN.fullmatch(value) is not None
 
 
-def rate_limit_wait(error: str, response: httpx.Response, attempt: int) -> int | None:
+def rate_limit_wait(
+    error: str, response: httpx.Response, attempt: int, retries: int = MAX_RATE_LIMIT_RETRIES
+) -> int | None:
     """Seconds to wait before retrying a rate-limited call, or None to give up."""
-    if error != "ratelimited" or attempt >= MAX_RATE_LIMIT_RETRIES:
+    if error != "ratelimited" or attempt >= retries:
         return None
     try:
         retry_after = int(response.headers.get("Retry-After", DEFAULT_RETRY_AFTER))
@@ -83,6 +88,60 @@ def user_has_workspace_membership(db: DBSession, workspace_id: str, user: UserLi
         )
         .first()
         is not None
+    )
+
+
+def user_manages_workspace(workspace: SlackWorkspace, user: UserLike) -> bool:
+    """Whether `user` may change the workspace's or its channels' settings: its owner
+    or an admin. Other members share the workspace's rows but not control of them."""
+    return has_admin_scope(user) or (user.id is not None and workspace.owner_id == user.id)
+
+
+# Every member of a workspace can see its public channels in Slack. DMs and private
+# channels are stored once per workspace, whichever member's token listed them.
+PUBLIC_CHANNEL = and_(SlackChannel.channel_type == "channel", SlackChannel.is_private.is_(False))
+
+
+def is_public_channel(channel: SlackChannel) -> bool:
+    return channel.channel_type == "channel" and not channel.is_private
+
+
+def member_channel_ids(user: UserLike):
+    """The non-public channels whose listing by `user`'s own token was recorded."""
+    return select(SlackChannelMember.channel_id).where(SlackChannelMember.user_id == user.id)
+
+
+def user_in_channel(db: DBSession, channel: SlackChannel, user: UserLike) -> bool:
+    return db.get(SlackChannelMember, (channel.id, user.id)) is not None
+
+
+def visible_channels(query: Query, workspace: SlackWorkspace, user: UserLike) -> Query:
+    """`query` over the workspace's channels, narrowed to the ones `user` may see:
+    all of them for its owner and admins; for other members, the public ones and
+    the DMs and private channels they are in."""
+    if user_manages_workspace(workspace, user):
+        return query
+    return query.filter(or_(PUBLIC_CHANNEL, SlackChannel.id.in_(member_channel_ids(user))))
+
+
+def record_channel_members(
+    db: DBSession, workspace_id: str, user_id: int, channel_ids: set[str]
+) -> None:
+    """Make `channel_ids` the non-public channels of the workspace that `user_id`'s
+    token lists, replacing what an earlier listing recorded."""
+    workspace_channels = select(SlackChannel.id).where(SlackChannel.workspace_id == workspace_id)
+    recorded = {
+        row.channel_id
+        for row in db.query(SlackChannelMember).filter(
+            SlackChannelMember.user_id == user_id,
+            SlackChannelMember.channel_id.in_(workspace_channels),
+        )
+    }
+    for channel_id in recorded - channel_ids:
+        db.delete(db.get(SlackChannelMember, (channel_id, user_id)))
+    db.add_all(
+        SlackChannelMember(channel_id=channel_id, user_id=user_id)
+        for channel_id in channel_ids - recorded
     )
 
 
@@ -155,10 +214,13 @@ class SlackClient:
         access_token: str,
         timeout: float = 30.0,
         base_url: str = DEFAULT_SLACK_API_BASE_URL,
+        rate_limit_retries: int = MAX_RATE_LIMIT_RETRIES,
     ):
         self.access_token = access_token
         self.timeout = timeout
         self.base_url = base_url
+        # Waits on a "ratelimited" answer before failing the call with it
+        self.rate_limit_retries = rate_limit_retries
         self._client: httpx.Client | None = None
 
     def __enter__(self) -> "SlackClient":
@@ -176,7 +238,7 @@ class SlackClient:
         if not self._client:
             raise RuntimeError("SlackClient must be used as context manager")
 
-        for attempt in range(MAX_RATE_LIMIT_RETRIES + 1):
+        for attempt in range(self.rate_limit_retries + 1):
             response = self._client.post(
                 api_url(self.base_url, method), data=kwargs if kwargs else None
             )
@@ -188,11 +250,11 @@ class SlackClient:
             error = data.get("error", "unknown_error")
 
             # Handle rate limiting with retry
-            retry_after = rate_limit_wait(error, response, attempt)
+            retry_after = rate_limit_wait(error, response, attempt, self.rate_limit_retries)
             if retry_after is not None:
                 logger.warning(
                     f"Slack rate limited on {method}, waiting {retry_after}s "
-                    f"(attempt {attempt + 1}/{MAX_RATE_LIMIT_RETRIES})"
+                    f"(attempt {attempt + 1}/{self.rate_limit_retries})"
                 )
                 time.sleep(retry_after)
                 continue
@@ -217,10 +279,14 @@ def slack_api_base_url(app: SlackApp) -> str:
     return app.api_base_url
 
 
-def slack_client_for(credentials: SlackUserCredentials) -> SlackClient:
+def slack_client_for(
+    credentials: SlackUserCredentials, rate_limit_retries: int = MAX_RATE_LIMIT_RETRIES
+) -> SlackClient:
     """A client for the API of the app the credential was issued through."""
     return SlackClient(
-        credentials.access_token or "", base_url=slack_api_base_url(credentials.slack_app)
+        credentials.access_token or "",
+        base_url=slack_api_base_url(credentials.slack_app),
+        rate_limit_retries=rate_limit_retries,
     )
 
 

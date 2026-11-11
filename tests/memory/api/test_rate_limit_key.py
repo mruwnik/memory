@@ -1,9 +1,8 @@
 """Tests for the API rate-limit key function (``app.rate_limit_key``).
 
-The threat model: SlowAPI's bundled ``get_remote_address`` honors
-``X-Forwarded-For`` whenever Uvicorn was started with
-``--proxy-headers``. With ``--forwarded-allow-ips=*`` (the Docker
-default) every remote attacker can rotate ``X-Forwarded-For`` per
+The threat model: a key that honors ``X-Forwarded-For`` from any peer
+(Uvicorn with ``--proxy-headers`` and ``--forwarded-allow-ips=*``, the
+Docker default) lets every remote attacker rotate ``X-Forwarded-For`` per
 request and mint a fresh limiter bucket — defeating every rate limit.
 
 ``app.rate_limit_key`` accepts ``X-Forwarded-For`` only when the
@@ -88,19 +87,26 @@ def test_rate_limit_key_honors_xff_from_trusted_proxy(make_request, peer, truste
     assert key == "203.0.113.7"
 
 
-def test_rate_limit_key_uses_first_xff_entry(make_request):
-    """RFC 7239 §5.2: the left-most XFF entry is the original client."""
+@pytest.mark.parametrize(
+    "xff, trusted, expected",
+    [
+        # An appending proxy keeps whatever the client sent on the left.
+        ("1.1.1.1, 203.0.113.7", "10.0.0.5", "203.0.113.7"),
+        ("9.9.9.9, 203.0.113.7, 10.0.0.99", "10.0.0.5,10.0.0.99", "203.0.113.7"),
+        ("203.0.113.7, 10.0.0.99", "10.0.0.5", "10.0.0.99"),
+        # Every hop trusted: the left-most is the client.
+        ("10.0.0.7, 10.0.0.6", "10.0.0.0/24", "10.0.0.7"),
+    ],
+)
+def test_rate_limit_key_takes_right_most_untrusted_hop(make_request, xff, trusted, expected):
+    """Only hops trusted proxies appended count; entries left of the first
+    untrusted one (from the right) are the client's to choose."""
     from memory.common.rate_limit import rate_limit_key
 
-    request = make_request(
-        "10.0.0.5",
-        {"X-Forwarded-For": "203.0.113.7, 10.0.0.99, 10.0.0.5"},
-    )
-    with patch(
-        "memory.common.settings.RATE_LIMIT_TRUSTED_PROXIES", "10.0.0.5"
-    ):
+    request = make_request("10.0.0.5", {"X-Forwarded-For": xff})
+    with patch("memory.common.settings.RATE_LIMIT_TRUSTED_PROXIES", trusted):
         key = rate_limit_key(cast(Any, request))
-    assert key == "203.0.113.7"
+    assert key == expected
 
 
 def test_rate_limit_key_falls_back_when_xff_empty(make_request):
@@ -172,3 +178,55 @@ def test_rate_limit_key_attacker_xff_rotation_is_no_op(make_request):
             )
             keys.add(rate_limit_key(cast(Any, request)))
     assert keys == {"203.0.113.7"}
+
+
+@pytest.mark.parametrize(
+    "peer, expected",
+    [
+        ("203.0.113.7", "203.0.113.7"),
+        ("2001:db8:1:2::1", "2001:db8:1:2::/64"),
+        ("2001:db8:1:2:ffff:ffff:ffff:ffff", "2001:db8:1:2::/64"),
+        ("2001:db8:1:3::1", "2001:db8:1:3::/64"),
+        ("::ffff:203.0.113.7", "203.0.113.7"),
+        ("64:ff9b::203.0.113.7", "203.0.113.7"),
+        ("64:ff9b::198.51.100.9", "198.51.100.9"),
+        ("64:ff9b:1:2::1", "64:ff9b:1:2::1"),
+        ("64:ff9b:1:2::2", "64:ff9b:1:2::2"),
+        # Teredo: server 65.54.227.120, client 192.0.2.45 stored inverted.
+        ("2001:0:4136:e378:8000:63bf:3fff:fdd2", "192.0.2.45"),
+        ("2002:cb00:7107::1", "203.0.113.7"),
+        ("testclient", "testclient"),
+    ],
+)
+def test_rate_limit_key_buckets_ipv6_by_64(make_request, peer, expected):
+    from memory.common.rate_limit import rate_limit_key
+
+    with patch("memory.common.settings.RATE_LIMIT_TRUSTED_PROXIES", ""):
+        assert rate_limit_key(cast(Any, make_request(peer))) == expected
+
+
+def test_rate_limit_key_buckets_forwarded_ipv6_by_64(make_request):
+    from memory.common.rate_limit import rate_limit_key
+
+    keys = set()
+    with patch("memory.common.settings.RATE_LIMIT_TRUSTED_PROXIES", "10.0.0.5"):
+        for i in range(10):
+            request = make_request("10.0.0.5", {"X-Forwarded-For": f"2001:db8:0:7::{i + 1:x}"})
+            keys.add(rate_limit_key(cast(Any, request)))
+    assert keys == {"2001:db8:0:7::/64"}
+
+
+@pytest.mark.parametrize(
+    "address, expected",
+    [
+        ("2001:db8:1:2::1", "2001:db8:1:2::1"),
+        ("2001:db8:1:2::2", "2001:db8:1:2::2"),
+        ("::ffff:203.0.113.7", "203.0.113.7"),
+        ("203.0.113.7", "203.0.113.7"),
+        ("testclient", "testclient"),
+    ],
+)
+def test_client_identity_is_the_exact_address(address, expected):
+    from memory.common.rate_limit import client_identity
+
+    assert client_identity(address) == expected

@@ -11,9 +11,9 @@ from typing import Sequence, Any, cast
 from celery.backends.database.models import Task as CeleryTaskMeta
 from qdrant_client.http.exceptions import ApiException, UnexpectedResponse
 from sqlalchemy import CursorResult, and_, delete, func, inspect as sa_inspect, or_, update
-from sqlalchemy import BigInteger, literal, select
+from sqlalchemy import BigInteger, exists, literal, select
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.orm import aliased, contains_eager, selectinload, with_polymorphic
+from sqlalchemy.orm import Session as DBSession, aliased, contains_eager, selectinload, with_polymorphic
 
 from memory.common import (
     collections,
@@ -66,6 +66,7 @@ from memory.common.celery_app import (
 )
 from memory.common.db.connection import make_session
 from memory.common.db.orphans import orphaned_source_ids
+from memory.common.session_transcripts import delete_transcript_files
 from memory.common.db.models import (
     ACCESS_CONTROLLED_SOURCE_MODELS,
     AgentDefinition,
@@ -76,10 +77,14 @@ from memory.common.db.models import (
     Event,
     JobStatus,
     LLMSpend,
+    OAuthClientInformation,
+    OAuthRefreshToken,
+    OAuthState,
     PendingJob,
     Session,
     SourceItem,
     TelemetryEvent,
+    UserSession,
 )
 from memory.common.db.models.source_item import EMBED_RETRY_BASE, MAX_EMBED_ATTEMPTS
 from memory.common.db.models.source_items import (
@@ -681,30 +686,62 @@ def update_metadata_for_source_items(item_type: str):
         return {"status": "success", "items": len(item_ids)}
 
 
+def prune_abandoned_oauth_states(session: DBSession, now: datetime) -> int:
+    """Delete OAuth authorization requests that expired before anyone logged in through them."""
+    result = session.execute(
+        delete(OAuthState).where(
+            OAuthState.expires_at < now.replace(tzinfo=None),
+            OAuthState.user_id.is_(None),
+        )
+    )
+    return cast(CursorResult, result).rowcount
+
+
+def prune_unused_oauth_clients(session: DBSession, now: datetime) -> int:
+    """Delete OAuth clients registered over OAUTH_UNUSED_CLIENT_DAYS ago that never
+    completed a login: no authorization request or refresh token refers to them.
+
+    A completed login keeps its authorization request until its user is deleted,
+    so clients people use are never pruned. Run after prune_abandoned_oauth_states.
+    """
+    cutoff = (now - timedelta(days=settings.OAUTH_UNUSED_CLIENT_DAYS)).timestamp()
+    client_id = OAuthClientInformation.client_id
+    result = session.execute(
+        delete(OAuthClientInformation)
+        .where(
+            OAuthClientInformation.client_id_issued_at < cutoff,
+            ~exists().where(OAuthState.client_id == client_id),
+            ~exists().where(OAuthRefreshToken.client_id == client_id),
+        )
+        .execution_options(synchronize_session=False)
+    )
+    return cast(CursorResult, result).rowcount
+
+
 @app.task(name=CLEANUP_EXPIRED_SESSIONS)
 @tracked_task
-def cleanup_expired_sessions():
-    """Clean up expired user sessions from the database."""
-    from memory.common.db.models import UserSession
-
-    logger.info("Cleaning up expired user sessions")
-
+def cleanup_expired_sessions() -> dict[str, int]:
+    """Delete expired sessions, abandoned OAuth authorization requests and OAuth
+    clients that never completed a login."""
     now = datetime.now(timezone.utc)
-    deleted = 0
-
     with make_session() as session:
-        expired_sessions = (
-            session.query(UserSession).filter(UserSession.expires_at < now).all()
-        )
-
-        for user_session in expired_sessions:
-            session.delete(user_session)
-            deleted += 1
-
+        sessions = cast(
+            CursorResult,
+            session.execute(
+                delete(UserSession).where(UserSession.expires_at < now.replace(tzinfo=None))
+            ),
+        ).rowcount
+        states = prune_abandoned_oauth_states(session, now)
+        clients = prune_unused_oauth_clients(session, now)
         session.commit()
 
-    logger.info(f"Deleted {deleted} expired user sessions")
-    return {"deleted": deleted}
+    logger.info(
+        "Deleted %d expired sessions, %d abandoned OAuth states, %d unused OAuth clients",
+        sessions,
+        states,
+        clients,
+    )
+    return {"sessions": sessions, "oauth_states": states, "oauth_clients": clients}
 
 
 @app.task(name=CLEANUP_OLD_CLAUDE_SESSIONS)
@@ -758,7 +795,7 @@ def cleanup_old_claude_sessions(max_age_days: int | None = None):
             transcript_file = settings.SESSIONS_STORAGE_DIR / coding_session.transcript_path
             if transcript_file.exists():
                 try:
-                    transcript_file.unlink()
+                    delete_transcript_files(transcript_file)
                     deleted_files += 1
                 except OSError as e:
                     logger.warning(f"Failed to delete transcript file {transcript_file}: {e}")

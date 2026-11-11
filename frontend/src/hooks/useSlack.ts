@@ -29,6 +29,9 @@ export interface SlackWorkspace extends SyncStatus {
   poll_blocker: string | null
   sync_stale: boolean
   apps: SlackWorkspaceApp[]
+  // Whether the current user may change this workspace's and its channels' settings:
+  // its owner (the first user to connect it) or an admin
+  can_manage: boolean
   // Access control
   project_id: number | null
   sensitivity: 'public' | 'basic' | 'internal' | 'confidential'
@@ -59,6 +62,8 @@ export interface SlackChannel {
   // Access control
   project_id: number | null
   sensitivity: 'public' | 'basic' | 'internal' | 'confidential'
+  // Whether the current user may switch off collection here, even without managing the workspace
+  can_switch_off: boolean
 }
 
 export interface SlackChannelUpdate {

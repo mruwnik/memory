@@ -157,6 +157,8 @@ SLACK_STORAGE_DIR = pathlib.Path(
 BEEPER_STORAGE_DIR = pathlib.Path(
     os.getenv("BEEPER_STORAGE_DIR", FILE_STORAGE_DIR / "beeper")
 )
+# A coding session's transcript file stops accepting events at this size.
+MAX_SESSION_TRANSCRIPT_BYTES = int(os.getenv("MAX_SESSION_TRANSCRIPT_BYTES", 256 * 1024 * 1024))
 SESSIONS_STORAGE_DIR = pathlib.Path(
     os.getenv("SESSIONS_STORAGE_DIR", FILE_STORAGE_DIR / "sessions")
 )
@@ -229,6 +231,26 @@ MAX_ATTACHMENT_EMBED_SIZE = int(
 # each page image (1.45MB for Letter, up to 6MB) is held until the item is
 # embedded, and a worker child has ~700MB.
 MAX_ATTACHMENT_EMBED_PAGES = int(os.getenv("MAX_ATTACHMENT_EMBED_PAGES", 50))
+# The same image-page cap for uploaded documents and PDF reports.
+MAX_DOC_EMBED_PAGES = int(os.getenv("MAX_DOC_EMBED_PAGES", 50))
+# Word documents (and other zipped office files) are measured before parsing,
+# by inflating each entry: past these totals they are refused. Markup is the
+# .xml/.rels entries, which pandoc and the Drive parser build in memory at
+# many times their size; the total also counts embedded media.
+MAX_OFFICE_MARKUP_BYTES = int(os.getenv("MAX_OFFICE_MARKUP_BYTES", 16 * 1024 * 1024))
+MAX_OFFICE_INFLATED_BYTES = int(os.getenv("MAX_OFFICE_INFLATED_BYTES", 256 * 1024 * 1024))
+MAX_OFFICE_ZIP_ENTRIES = int(os.getenv("MAX_OFFICE_ZIP_ENTRIES", 10_000))
+# A pandoc run (DOCX to PDF through xelatex, or to plain text) is killed,
+# with every process it started, after this many seconds.
+PANDOC_TIMEOUT_SECONDS = float(os.getenv("PANDOC_TIMEOUT_SECONDS", 120))
+# Data memory (RLIMIT_DATA) each process of a pandoc run (pandoc, xelatex, ...) may use; 0 for no limit.
+PANDOC_MEMORY_LIMIT_BYTES = int(os.getenv("PANDOC_MEMORY_LIMIT_BYTES", 2 * 1024 * 1024 * 1024))
+# Text chunks embedded per item on the server's Voyage key; past it, the first
+# chunks and the item's summary are kept.
+MAX_EMBEDDED_CHUNKS_PER_ITEM = int(os.getenv("MAX_EMBEDDED_CHUNKS_PER_ITEM", 500))
+# PDFs with more pages are not chunked at all: every page's text is extracted
+# and embedded on the server's Voyage key.
+MAX_PDF_PAGES = int(os.getenv("MAX_PDF_PAGES", 2000))
 
 # Qdrant settings
 QDRANT_HOST = os.getenv("QDRANT_HOST", "qdrant")
@@ -390,12 +412,32 @@ LOCALHOST_CORS_ORIGINS = [
 
 # API Rate limiting settings
 API_RATE_LIMIT_ENABLED = boolean_env("API_RATE_LIMIT_ENABLED", True)
-# Default rate limit: 100 requests per minute
+# Per-client limit on every API request (api/request_limits.py), except the
+# MCP endpoint and provider webhooks, which have their own budgets below.
 API_RATE_LIMIT_DEFAULT = os.getenv("API_RATE_LIMIT_DEFAULT", "100/minute")
+# Requests carrying a credential (bearer token or session cookie) count against
+# API_RATE_LIMIT_DEFAULT per credential instead of per address, and all of them
+# from one address against this, so made-up tokens can't each mint a bucket.
+API_RATE_LIMIT_CREDENTIALED_ADDRESS = os.getenv("API_RATE_LIMIT_CREDENTIALED_ADDRESS", "1000/minute")
+# /mcp: agents behind one address make many tool calls a minute.
+API_RATE_LIMIT_MCP = os.getenv("API_RATE_LIMIT_MCP", "1200/minute")
+# Signed webhook pushes (GitHub, Slack, Discord, transcripts) arrive from a
+# provider's few addresses on behalf of every account.
+API_RATE_LIMIT_WEBHOOKS = os.getenv("API_RATE_LIMIT_WEBHOOKS", "1000/minute")
+# Anonymous OAuth client registration and authorization requests each write a
+# row, so they get a tighter limit on top of the default.
+API_RATE_LIMIT_OAUTH_REGISTER = os.getenv("API_RATE_LIMIT_OAUTH_REGISTER", "20/hour")
+API_RATE_LIMIT_OAUTH_AUTHORIZE = os.getenv("API_RATE_LIMIT_OAUTH_AUTHORIZE", "10/minute")
+# OAuth clients that never completed a login are deleted this many days after
+# registering.
+OAUTH_UNUSED_CLIENT_DAYS = int(os.getenv("OAUTH_UNUSED_CLIENT_DAYS", 30))
 # Auth endpoints have stricter limits to prevent brute force.
 # Used by /oauth/login and /api/users/me/change-password — see
 # `memory.common.rate_limit`.
 API_RATE_LIMIT_AUTH = os.getenv("API_RATE_LIMIT_AUTH", "10/minute")
+# A correct password from an address that logged in to the account within
+# this many days is let through even while its failed-login bucket is full.
+LOGIN_KNOWN_ADDRESS_DAYS = int(os.getenv("LOGIN_KNOWN_ADDRESS_DAYS", 30))
 # Comma-separated set of immediate-hop IPs whose ``X-Forwarded-For`` the
 # rate limiter should trust. Anything else falls back to the direct
 # connection IP — preventing a remote attacker from rotating XFF to mint
@@ -438,6 +480,18 @@ MAX_TELEMETRY_PAYLOAD_BYTES = int(
     os.getenv("MAX_TELEMETRY_PAYLOAD_BYTES", 5 * 1024 * 1024)
 )
 
+# Request body caps, enforced before authentication (api/body_limit.py).
+# Routes anyone can reach without logging in (poll responses, login, OAuth
+# registration and token, password reset, setup) get the public cap; every
+# other route gets the default, except the uploads and webhooks below.
+REQUEST_BODY_MAX_BYTES = int(os.getenv("REQUEST_BODY_MAX_BYTES", 16 * 1024 * 1024))
+PUBLIC_REQUEST_BODY_MAX_BYTES = int(os.getenv("PUBLIC_REQUEST_BODY_MAX_BYTES", 256 * 1024))
+# Slack, Discord and transcript push webhooks.
+WEBHOOK_MAX_BODY_BYTES = int(os.getenv("WEBHOOK_MAX_BODY_BYTES", 1024 * 1024))
+# GitHub deliveries of the events read (issues, PRs, comments, checks, statuses)
+# are far smaller; GitHub itself sends up to 25 MB (e.g. large pushes).
+GITHUB_WEBHOOK_MAX_BODY_BYTES = int(os.getenv("GITHUB_WEBHOOK_MAX_BODY_BYTES", 5 * 1024 * 1024))
+
 # Per-request size caps for the authenticated content-upload endpoints
 # (``/books/upload``, ``/photos/upload``, ``/reports/upload``). All three
 # previously called ``await file.read()`` with no upper bound, which
@@ -465,6 +519,61 @@ MAX_REPORT_UPLOAD_BYTES = int(
 )
 MAX_MISC_UPLOAD_BYTES = int(
     os.getenv("MAX_MISC_UPLOAD_BYTES", 100 * 1024 * 1024)
+)
+# A book with more markup than this is not parsed: MuPDF lays it out in memory,
+# roughly 50 bytes of RAM per byte, so this refuses early a book that would run
+# into MUPDF_MEMORY_BYTES (the sandbox's limit, which still applies to anything
+# this misses). An EPUB counts the chapters its spine lists and the stylesheets
+# and SVG images its manifest declares, a MOBI its text records, any other
+# format but PDF its file size.
+MAX_EBOOK_INFLATED_BYTES = int(
+    os.getenv("MAX_EBOOK_INFLATED_BYTES", 10 * 1024 * 1024)
+)
+# A zipped book whose entries together inflate past this is not parsed, images
+# included: a decompression-bomb guard, far above any real book.
+MAX_EBOOK_ARCHIVE_BYTES = int(
+    os.getenv("MAX_EBOOK_ARCHIVE_BYTES", 200 * 1024 * 1024)
+)
+MAX_EBOOK_ZIP_ENTRIES = int(os.getenv("MAX_EBOOK_ZIP_ENTRIES", 10_000))
+# Every MuPDF parse or render of a PDF or book runs in a child process with
+# these limits, and is refused when it breaches one: its address space, its CPU
+# time, its wall-clock time, and the results it may hand back (page text plus
+# page images of up to 6MB each). A few KiB of valid PDF can make MuPDF draw
+# billions of objects, so no check of the file itself bounds its cost.
+MUPDF_MEMORY_BYTES = int(os.getenv("MUPDF_MEMORY_BYTES", 1536 * 1024 * 1024))
+MUPDF_CPU_SECONDS = int(os.getenv("MUPDF_CPU_SECONDS", 300))
+MUPDF_TIMEOUT_SECONDS = int(os.getenv("MUPDF_TIMEOUT_SECONDS", 360))
+MUPDF_OUTPUT_BYTES = int(os.getenv("MUPDF_OUTPUT_BYTES", 512 * 1024 * 1024))
+# Images fetched for one web page or HTML report: <img> tags past the count,
+# or once the byte total is stored, keep their remote URLs.
+MAX_DOCUMENT_IMAGES = int(os.getenv("MAX_DOCUMENT_IMAGES", 100))
+MAX_DOCUMENT_IMAGE_BYTES = int(
+    os.getenv("MAX_DOCUMENT_IMAGE_BYTES", 50 * 1024 * 1024)
+)
+# Socket timeout for user-configured IMAP servers: a stalled server
+# would otherwise hold a worker until the task's time limit.
+REMOTE_SERVER_TIMEOUT_SEC = int(os.getenv("REMOTE_SERVER_TIMEOUT_SEC", 60))
+# An IMAP message larger than this is not downloaded, and no single IMAP
+# command's response may be larger.
+MAX_EMAIL_BYTES = int(os.getenv("MAX_EMAIL_BYTES", 64 * 1024 * 1024))
+# Attachments kept per email; each becomes its own item, so the rest are dropped.
+MAX_EMAIL_ATTACHMENTS = int(os.getenv("MAX_EMAIL_ATTACHMENTS", 100))
+# Recipient addresses (To, Cc and Bcc together) kept per email.
+MAX_EMAIL_RECIPIENTS = int(os.getenv("MAX_EMAIL_RECIPIENTS", 500))
+# Characters of a Subject or From header kept and decoded; decoding MIME
+# encoded-words costs time superlinear in the header's length.
+MAX_EMAIL_HEADER_CHARS = int(os.getenv("MAX_EMAIL_HEADER_CHARS", 8192))
+# HTML (email bodies, fetched pages) is converted to markdown up to this many
+# characters; the rest only has its tags stripped. Conversion costs about
+# 10 µs and 100 bytes of RAM per character of tag-dense HTML.
+MAX_HTML_TO_MARKDOWN_CHARS = int(os.getenv("MAX_HTML_TO_MARKDOWN_CHARS", 150_000))
+# Wall-clock limit on one IMAP command's response, however steadily it trickles in.
+IMAP_COMMAND_TIMEOUT_SEC = int(os.getenv("IMAP_COMMAND_TIMEOUT_SEC", 600))
+# Bytes one IMAP connection (one account sync) may receive in all. A sync
+# re-downloads everything since its cutoff, and a first sync starts from the
+# beginning, so this must exceed the largest mailbox synced.
+MAX_IMAP_CONNECTION_BYTES = int(
+    os.getenv("MAX_IMAP_CONNECTION_BYTES", 16 * 1024 * 1024 * 1024)
 )
 # Max decoded base64 accepted inline through the add_content MCP tool; above
 # this the caller is handed a one-time upload URL instead of inlining bytes
@@ -531,6 +640,9 @@ CHAT_THREAD_REPLIES = int(os.getenv("CHAT_THREAD_REPLIES", 10))
 # interval, if longer) to catch missed events; one gone quiet is polled normally.
 PUSH_GAP_FILL_MINUTES = int(os.getenv("PUSH_GAP_FILL_MINUTES", 720))
 PUSH_STALE_HOURS = int(os.getenv("PUSH_STALE_HOURS", 24))
+# Read-backs a minute that one Slack app's or Discord bot's pushed deletes may make
+# with another user's app or bot token to confirm them; past it they are ignored.
+PUSH_CROSS_TOKEN_READS_PER_MINUTE = int(os.getenv("PUSH_CROSS_TOKEN_READS_PER_MINUTE", 30))
 
 # Extra https origins (e.g. https://chat.example.com) that non-admin users may
 # point Slack apps' OAuth/Web API URLs and Discord bots' REST URL at. Slack's

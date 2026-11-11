@@ -475,6 +475,7 @@ def sync_imap_messages(
     errors = 0
     deleted_messages = 0
     unavailable_folders: list[str] = []
+    over_budget = False
 
     def message_processor(
         account_id: int, message_id: str, folder: str, raw_email: str, received_at: datetime | None
@@ -498,7 +499,7 @@ def sync_imap_messages(
                 }
 
             # Close any transaction left open by the previous folder's
-            # delete pass before fetching this folder. fetch_email_since
+            # delete pass before fetching this folder. Fetching a folder
             # can take a long time on large folders, and a session left
             # idle-in-transaction during it gets killed by Postgres.
             db.commit()
@@ -510,6 +511,12 @@ def sync_imap_messages(
             messages_found += folder_stats["messages_found"]
             new_messages += folder_stats["new_messages"]
             errors += folder_stats["errors"]
+            if getattr(conn, "over_connection_budget", False):
+                # Every later read on this connection aborts, so stop here and
+                # hold the cutoff for the mail not fetched.
+                over_budget = True
+                errors += 1
+                break
             if folder_stats["unavailable"]:
                 unavailable_folders.append(folder)
                 continue
@@ -525,6 +532,7 @@ def sync_imap_messages(
         "errors": errors,
         "unavailable_folders": unavailable_folders,
         "folders_processed": len(folders_to_process),
+        "over_connection_budget": over_budget,
     }
 
 
@@ -628,6 +636,13 @@ def gives_up_on_failures(account: EmailAccount, errors: int, now: datetime) -> b
     return True
 
 
+OVER_CONNECTION_BUDGET = (
+    "the sync stopped at MAX_IMAP_CONNECTION_BYTES, the most one sync may download; "
+    "it starts from the same mail each time, so raise the setting above the "
+    "mailbox's size"
+)
+
+
 def failure_notes(
     errors: int, unavailable: list[str], gave_up_after: timedelta | None
 ) -> list[str]:
@@ -668,6 +683,8 @@ def sync_failures(
     notes = failure_notes(
         errors, stats.get("unavailable_folders", []), limit if gave_up else None
     )
+    if stats.get("over_connection_budget"):
+        notes.insert(0, OVER_CONNECTION_BUDGET)
     return "; ".join(notes) or None, gave_up or not errors
 
 

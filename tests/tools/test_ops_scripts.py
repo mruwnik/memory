@@ -10,6 +10,8 @@ import time
 
 import pytest
 
+from memory.common import settings
+
 REPO_ROOT = pathlib.Path(__file__).parents[2]
 KEY = "backup-passphrase-1"
 SECRETS = {
@@ -374,7 +376,7 @@ def test_logs_keeps_only_error_records_and_the_shape_of_tracebacks(box):
         f"{TS} CRITICAL: Application startup failed",
         "[worker]",
         f"{TS} [2026-10-24 10:00:05,000: ERROR/ForkPoolWorker-1] Task memory.workers.tasks.email.sync_account"
-        "[***] raised unexpected: ValueError('***')",
+        "[***] raised unexpected: ValueError",
         "[slack-sync-worker]", "[scheduler-worker]",
     ]
 
@@ -395,16 +397,46 @@ def test_logs_keeps_only_error_records_and_the_shape_of_tracebacks(box):
         ("no 'Bob's divorce' here", "no '***' here"),
         ("'utf-8' codec can't decode", "'***' codec can't decode"),
         ("Couldn't parse it", "Couldn't parse it"),
+        (f"KeyError({ITEM_TEXT.encode()!r})", "KeyError('***')"),
+        (repr(UnicodeDecodeError("utf-8", b"Projects/Layoff plan \xff.md\0b.md", 21, 22, "bad")),
+         "UnicodeDecodeError('***', '***', 21, 22, '***')"),
+        (f"read bytearray({ITEM_TEXT.encode()!r}) and rb'{ITEM_TEXT}' and B\"{ITEM_TEXT}\"",
+         "read bytearray('***') and '***' and '***'"),
+        (f"note f'{ITEM_TEXT}' and U'{ITEM_TEXT}'", "note '***' and '***'"),
+        ("Bob's rub' and it's", "Bob's rub' and it's"),
         ("x" * 400, ("x" * 400)[: 300 - len(ERROR) - 1]),
     ],
     ids=["password", "token", "bearer", "email", "url", "api-key", "quoted", "escaped-quotes", "unterminated",
-         "in-word-apostrophe", "apostrophe-inside-quote", "apostrophe-after-quote", "apostrophe-only", "long"],
+         "in-word-apostrophe", "apostrophe-inside-quote", "apostrophe-after-quote", "apostrophe-only",
+         "bytes", "unicode-decode-error", "bytearray-and-raw-bytes", "string-prefixes", "prefix-letters-in-words",
+         "long"],
 )
 def test_logs_scrubs_error_messages(box, message, expected):
     code, output = ops(box, "logs", FAKE_LOGS=write_logs(box, api=[f"{ERROR} {message}"]))
 
     assert code == 0, output
     assert output.splitlines() == ["[api]", f"{TS} {ERROR} {expected}", "[worker]", "[slack-sync-worker]", "[scheduler-worker]"]
+
+
+def test_logs_cuts_a_task_exception_to_its_type(box):
+    exception = repr(UnicodeDecodeError("utf-8", f"Projects/{ITEM_TEXT} \xff.md".encode("latin-1"), 9, 10, "bad"))
+    line = f"{WORKER_LOG[0].split(' raised ')[0]} raised unexpected: {exception}"
+
+    code, output = ops(box, "logs", FAKE_LOGS=write_logs(box, worker=[line]))
+
+    assert code == 0, output
+    assert output.splitlines()[2].endswith("raised unexpected: UnicodeDecodeError")
+    assert ITEM_TEXT not in output
+
+
+def test_logs_scrubs_a_quoted_file_name_that_is_not_utf8(box):
+    logs = pathlib.Path(write_logs(box))
+    (logs / "api").write_bytes(f"{TS} {ERROR} cannot open '{ITEM_TEXT} ".encode() + b"\xff\xfe.md' now\n")
+
+    code, output = ops(box, "logs", FAKE_LOGS=str(logs))
+
+    assert code == 0, output
+    assert output.splitlines()[1] == f"{TS} {ERROR} cannot open '***' now"
 
 
 def test_logs_prints_the_last_lines_per_service(box):
@@ -622,6 +654,84 @@ def test_restore_clears_stale_qdrant_collections_and_restores_files_with_app_own
     assert "exec -T qdrant bash -c" in log
     assert log.count("chown -R 1000:1000") == 2
     assert oct((box / "memory_files" / "ebooks").stat().st_mode & 0o777) == "0o755"
+
+
+PLANTED_GIT_CONFIG = "[core]\n\tfsmonitor = touch /tmp/pwned\n"
+
+
+@pytest.mark.parametrize(
+    "planted",
+    [
+        "notes/.git/config",  # plaintext beside the encrypted notes archive
+        "emails/planted.eml",
+        "anything-else/x",
+        ".git/config",
+        "ebooks/.git/config",
+        "ebooks/sub/.git/config",
+    ],
+)
+def test_restore_ignores_plaintext_outside_the_backup_layout(box, backup_set, planted):
+    add_file_backups(box, backup_set)
+    (backup_set / planted).parent.mkdir(parents=True, exist_ok=True)
+    (backup_set / planted).write_text(PLANTED_GIT_CONFIG)
+
+    code, output = ops(
+        box, "restore-latest-backup", "--yes", **RESTORE_ENV, BACKUP_SOURCE=str(backup_set)
+    )
+
+    assert code == 0, output
+    assert not (box / "memory_files" / planted).exists()
+    assert (box / "memory_files" / "ebooks" / "b.epub").read_text() == "book"
+
+
+def test_restore_extracts_only_archives_of_backed_up_directories(box, backup_set):
+    add_file_backups(box, backup_set)
+    shutil.copy(backup_set / "emails.tar.gz.ssl", backup_set / "evil.tar.gz.ssl")
+    (backup_set / "emails.tar.gz.ssl").unlink()
+
+    code, output = ops(
+        box, "restore-latest-backup", "--yes", **RESTORE_ENV, BACKUP_SOURCE=str(backup_set)
+    )
+
+    assert code == 0, output
+    assert not (box / "memory_files" / "emails").exists()
+    assert "ignored: 1 entries" in output
+
+
+def test_restore_from_s3_syncs_only_plain_directories_and_never_git(box, backup_set):
+    add_file_backups(box, backup_set)
+    (backup_set / "anything-else").mkdir()
+    (backup_set / "anything-else" / "x").write_text("planted")
+
+    code, output = ops(
+        box,
+        "restore-latest-backup",
+        "--yes",
+        **RESTORE_ENV,
+        S3_BACKUP_BUCKET="bucket",
+        S3_BACKUP_PREFIX="pfx",
+    )
+
+    assert code == 0, output
+    syncs = [line for line in calls(box).splitlines() if line.startswith("aws s3 sync")]
+    assert len(syncs) == 1
+    assert syncs[0].startswith("aws s3 sync s3://bucket/pfx/ebooks ")
+    assert syncs[0].endswith("--exclude .git/* --exclude */.git/*")
+
+
+def shell_list(script: str, name: str) -> list[str]:
+    match = re.search(rf"^{name}='([^']*)'", script, re.M)
+    assert match, f"{name} not found"
+    return match.group(1).split("|")
+
+
+def test_restore_layout_matches_the_backed_up_directories():
+    script = (REPO_ROOT / "tools" / "ops" / "restore-latest-backup.sh").read_text()
+    archived = shell_list(script, "ARCHIVED_DIRS")
+    plain = shell_list(script, "PLAIN_DIRS")
+
+    assert sorted(archived) == sorted(d.name for d in settings.PRIVATE_DIRS)
+    assert sorted(archived + plain) == sorted(d.name for d in settings.storage_dirs)
 
 
 def test_qdrant_data_is_tarred_before_it_is_replaced_and_kept(box, backup_set):

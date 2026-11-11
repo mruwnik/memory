@@ -8,6 +8,9 @@ paths share the same content-based routing from ``ingest_routing``.
 import hashlib
 import logging
 import pathlib
+import time
+
+import redis
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
@@ -19,6 +22,7 @@ from memory.common import ingest_routing
 from memory.common.db.connection import get_session
 from memory.common.db.models import JobType
 from memory.common.jobs import dispatch_job
+from memory.common.redis_pool import get_redis
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +111,14 @@ def build_task_kwargs(
     }
 
 
+def claim_upload_token(token: str, exp: int | None) -> bool:
+    """Mark an upload token used, until it would expire anyway. False when it
+    already was, so each upload link takes one upload."""
+    ttl = max(1, (exp or 0) - int(time.time()) + 1)
+    key = f"ingest-upload-used:{hashlib.sha256(token.encode()).hexdigest()}"
+    return bool(get_redis().set(key, 1, nx=True, ex=ttl))
+
+
 @router.api_route(
     "/ingest/upload", methods=["PUT", "POST"], response_model=IngestResponse
 )
@@ -123,6 +135,10 @@ async def ingest_upload(
     ``upload_url`` can upload with no session cookie. The token encodes the
     declared MIME, filename, tags, metadata, and the user who minted it.
 
+    Each token takes one upload: it is claimed before the body is read, so
+    a replayed link (from a log or a transcript) gets 409, and a failed upload
+    needs a new link from add_content.
+
     The add_content tool documents the call as a PUT; POST is accepted too so
     either verb reaches the same handler. The raw request body is read under a
     generous cap (the bucket and its specific cap are resolved from the bytes
@@ -134,6 +150,13 @@ async def ingest_upload(
         raise HTTPException(status_code=401, detail="Upload link expired")
     except ingest_tokens.IngestTokenError:
         raise HTTPException(status_code=403, detail="Invalid upload token")
+    try:
+        claimed = claim_upload_token(token, intent.exp)
+    except redis.RedisError:
+        logger.exception("Could not claim upload token")
+        raise HTTPException(status_code=503, detail="Uploads are unavailable, try again shortly")
+    if not claimed:
+        raise HTTPException(status_code=409, detail="Upload link already used")
 
     content = await read_request_body_with_cap(request, ingest_routing.max_ingest_bytes())
     try:

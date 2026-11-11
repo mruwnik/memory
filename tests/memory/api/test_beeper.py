@@ -8,7 +8,7 @@ from memory.common.celery_app import SYNC_BEEPER_ACCOUNT, SYNC_BEEPER_CHAT
 from memory.common.db.models import BeeperAccount, BeeperChat, BeeperNetwork, HumanUser
 from memory.common.db.models.beeper import BACKFILL_MAX_STALLS
 from memory.common.db.models.sources import Project
-from tests.memory.fake_beeper import URL, FakeBeeperServer
+from tests.memory.fake_beeper import HOMESERVER, URL, FakeBeeperServer
 
 EMAIL = "me@example.com"
 
@@ -240,8 +240,6 @@ def test_another_server_version_is_flagged(client, fake_beeper):
         ("post", "/beeper/accounts/{a}/verifications/v/sas-confirm", None),
         ("post", "/beeper/accounts/{a}/recovery-key", {"recovery_key": "k"}),
         ("post", "/beeper/accounts/{a}/refresh", None),
-        ("post", "/beeper/accounts/{a}/sign-out", None),
-        ("delete", "/beeper/accounts/{a}", None),
         ("patch", "/beeper/networks/{n}", {"collect_messages": True}),
         ("patch", "/beeper/chats/{c}", {"collect_messages": True}),
     ],
@@ -263,6 +261,55 @@ def test_only_the_owner_can_change_an_account(client, db_session, fake_beeper, m
 
     assert response.status_code == 404
     assert fake_beeper.paths == []
+
+
+def claimed_by_someone_else(db_session, fake_beeper) -> BeeperAccount:
+    owner = HumanUser(email="owner@example.com", name="Owner", password_hash="x")
+    db_session.add(owner)
+    db_session.flush()
+    account = BeeperAccount(created_by_user_id=owner.id, server_url=URL, homeserver=HOMESERVER)
+    account.token = fake_beeper.token
+    db_session.add(account)
+    db_session.commit()
+    return account
+
+
+def test_an_admin_releases_a_server_someone_else_claimed(client, db_session, fake_beeper):
+    """The client's user is an admin."""
+    account = claimed_by_someone_else(db_session, fake_beeper)
+    account_id = account.id
+
+    deleted = client.delete(f"/beeper/accounts/{account_id}")
+    db_session.expire_all()
+
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json()["signed_out"] is True
+    assert db_session.get(BeeperAccount, account_id) is None
+    assert client.get("/beeper/servers").json() == [{"url": URL, "in_use": False}]
+    assert add_account(client)["server_url"] == URL
+
+
+def test_an_admin_signs_out_someone_elses_account(client, db_session, fake_beeper):
+    account = claimed_by_someone_else(db_session, fake_beeper)
+
+    response = client.post(f"/beeper/accounts/{account.id}/sign-out")
+    db_session.expire_all()
+
+    assert response.status_code == 200, response.text
+    assert "POST /_matrix/client/v3/logout" in fake_beeper.paths
+    assert db_session.get(BeeperAccount, account.id).token is None
+
+
+@pytest.mark.parametrize("method, path", [("post", "/beeper/accounts/{a}/sign-out"), ("delete", "/beeper/accounts/{a}")])
+def test_members_cannot_release_someone_elses_account(member_client, db_session, fake_beeper, method, path):
+    account = claimed_by_someone_else(db_session, fake_beeper)
+
+    response = getattr(member_client, method)(path.format(a=account.id))
+    db_session.expire_all()
+
+    assert response.status_code == 404
+    assert fake_beeper.paths == []
+    assert db_session.get(BeeperAccount, account.id).token == fake_beeper.token
 
 
 def test_members_see_only_their_own_accounts(member_client, db_session, user, fake_beeper):

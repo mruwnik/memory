@@ -7,6 +7,7 @@ import pymupdf
 from PIL import Image
 import io
 import shutil
+import zipfile
 from unittest.mock import patch
 from memory.common import settings, summarizer
 from memory.common.extract import (
@@ -15,10 +16,10 @@ from memory.common.extract import (
     extract_text,
     extract_docx,
     extract_docx_text,
-    doc_to_images,
     extract_pdf,
     extract_image,
     extract_data_chunks,
+    read_pdf_pages,
     safe_image_open,
     docx_to_pdf,
     merge_metadata,
@@ -26,6 +27,9 @@ from memory.common.extract import (
     MAX_CHUNK_IMAGE_PIXELS,
     DataChunk,
 )
+from memory.parsers.google_drive import GoogleCredentials, GoogleDriveClient
+from tests.memory import book_files
+from tests.memory.office_files import docx_bytes
 
 
 REGULAMIN = pathlib.Path(__file__).parent.parent.parent / "data" / "regulamin.pdf"
@@ -115,8 +119,8 @@ def test_null_summary_puts_tags_on_the_content_chunks():
     ]
 
 
-def test_doc_to_images():
-    result = doc_to_images(REGULAMIN)
+def test_extract_pdf_page_images():
+    result = [c for c in extract_pdf(REGULAMIN) if c.mime_type == "image/jpeg"]
 
     assert len(result) == 2
     with pymupdf.open(REGULAMIN) as pdf:
@@ -139,7 +143,7 @@ def test_extract_pdf_born_digital_includes_text():
     images = [c for c in result if any(isinstance(d, Image.Image) for d in c.data)]
     texts = [c for c in result if any(isinstance(d, str) for d in c.data)]
 
-    assert len(images) == 2  # one per page, same as doc_to_images
+    assert len(images) == 2  # one per page
     assert texts  # the text layer is extracted
     for t in texts:
         assert isinstance(t.data[0], str) and t.data[0].strip()
@@ -175,21 +179,19 @@ def pdf_of_pages(*sizes: tuple[float, float]) -> bytes:
     return pdf_bytes
 
 
-@pytest.mark.parametrize("extract", [doc_to_images, extract_pdf])
 @pytest.mark.parametrize(
     "width, height", [(14400, 14400), (14400, 200), (200, 14400), (1500, 1334)]
 )
-def test_oversized_pdf_page_renders_within_chunk_image_cap(extract, width, height):
+def test_oversized_pdf_page_renders_within_chunk_image_cap(width, height):
     # At 72dpi a 200x200in page would be a 622MB raster.
-    [image] = page_images(extract(pdf_of_pages((width, height))))
+    [image] = page_images(extract_pdf(pdf_of_pages((width, height))))
 
     assert image.width * image.height <= MAX_CHUNK_IMAGE_PIXELS
     assert image.width / image.height == pytest.approx(width / height, rel=0.05)
 
 
-@pytest.mark.parametrize("extract", [doc_to_images, extract_pdf])
-def test_letter_pdf_page_renders_at_72dpi(extract):
-    [image] = page_images(extract(pdf_of_pages((612, 792))))
+def test_letter_pdf_page_renders_at_72dpi():
+    [image] = page_images(extract_pdf(pdf_of_pages((612, 792))))
 
     assert image.size == (612, 792)
 
@@ -197,12 +199,16 @@ def test_letter_pdf_page_renders_at_72dpi(extract):
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 
-@pytest.mark.parametrize("mime_type", ["application/pdf", DOCX_MIME])
+@pytest.mark.parametrize(
+    "mime_type, packed",
+    [("application/pdf", lambda pdf: pdf), (DOCX_MIME, docx_bytes)],
+    ids=["pdf", "docx"],
+)
 @pytest.mark.parametrize(
     "max_image_pages, image_pages", [(None, [0, 1, 2]), (2, [0, 1]), (0, [])]
 )
 def test_page_images_stop_at_max_image_pages_but_text_does_not(
-    mime_type, max_image_pages, image_pages
+    mime_type, packed, max_image_pages, image_pages
 ):
     doc = pymupdf.open()
     for number in range(3):
@@ -215,7 +221,9 @@ def test_page_images_stop_at_max_image_pages_but_text_does_not(
         return output_path
 
     with patch("memory.common.extract.docx_to_pdf", side_effect=convert):
-        chunks = extract_data_chunks(mime_type, pdf_bytes, max_image_pages=max_image_pages)
+        chunks = extract_data_chunks(
+            mime_type, packed(pdf_bytes), max_image_pages=max_image_pages
+        )
 
     assert [c.metadata["page"] for c in chunks if page_images([c])] == image_pages
     assert [c.data for c in chunks if not page_images([c])] == [
@@ -481,3 +489,94 @@ def test_extract_docx_leaves_no_pdf_beside_source(tmp_path):
     extract_docx(docx)
 
     assert (tmp_path / "doc.pdf").read_bytes() == b"precious"
+
+
+def test_extract_pdf_refuses_too_many_pages():
+    with patch.object(settings, "MAX_PDF_PAGES", 3), pytest.raises(ValueError):
+        extract_pdf(pdf_of_pages(*[(612, 792)] * 4))
+
+
+NOT_PDFS = [
+    book_files.epub(book_files.markup(2000)),
+    book_files.mobi(book_files.markup(2000)),
+    book_files.fb2(2000),
+    book_files.markup(2000),
+]
+NOT_PDF_IDS = ["epub", "mobi", "fb2", "html"]
+
+
+@pytest.mark.parametrize("data", NOT_PDFS, ids=NOT_PDF_IDS)
+def test_extract_pdf_refuses_bytes_that_are_not_a_pdf(data):
+    with pytest.raises(ValueError, match="Not a PDF"):
+        extract_data_chunks("application/pdf", data)
+
+
+@pytest.mark.parametrize("data", NOT_PDFS, ids=NOT_PDF_IDS)
+def test_extract_pdf_refuses_a_pdf_named_file_that_is_not_a_pdf(tmp_path, data):
+    path = tmp_path / "invoice.pdf"
+    path.write_bytes(data)
+    with pytest.raises(ValueError, match="Not a PDF"):
+        extract_pdf(path)
+
+
+def epub_holding_a_pdf_header() -> bytes:
+    """An EPUB whose second entry, stored, holds the PDF header within the first KiB."""
+    book = zipfile.ZipFile(io.BytesIO(book_files.epub(book_files.markup(2000))))
+    first, *rest = book.infolist()
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(first, book.read(first), zipfile.ZIP_STORED)
+        archive.writestr("%PDF-1.7.txt", b"%PDF-1.7", zipfile.ZIP_STORED)
+        for info in rest:
+            archive.writestr(info.filename, book.read(info))
+    return buffer.getvalue()
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        b"%PDF-1.7\n" + book_files.epub(book_files.markup(2000)),
+        book_files.mobi(book_files.markup(2000), name=b"%PDF-1.7"),
+        book_files.mobi(book_files.markup(2000), name=b"xx%PDF-1.7"),
+        b"%PDF-1.7\n" + book_files.fb2(2000),
+        b"%PDF-1.7\n" + book_files.markup(2000),
+        epub_holding_a_pdf_header(),
+        pdf_of_pages((612, 792)) + book_files.epub(book_files.markup(10)),
+        b"junk %PDF-1.7\n",
+    ],
+    ids=[
+        "header then epub", "mobi named a pdf", "mobi naming a pdf", "header then fb2",
+        "header then html", "epub holding a pdf header", "pdf with a zip appended", "header after junk",
+    ],
+)
+def test_content_with_another_formats_signature_never_reaches_mupdf(tmp_path, data):
+    path = tmp_path / "file.pdf"
+    path.write_bytes(data)
+    with patch("memory.common.extract.mupdf_sandbox.pdf_pages") as mupdf_pages:
+        for content in (data, path):
+            with pytest.raises(ValueError, match="Not a PDF"):
+                read_pdf_pages(content)
+    mupdf_pages.assert_not_called()
+
+
+@pytest.mark.parametrize("prefix", [b"", b"\0" * 1000, b"\r\n \t"])
+def test_read_pdf_pages_accepts_the_header_after_whitespace(prefix):
+    assert len(read_pdf_pages(prefix + pdf_of_pages((612, 792)))) == 1
+
+
+def drive_client() -> GoogleDriveClient:
+    return GoogleDriveClient(GoogleCredentials("token", None, None, []))
+
+
+@pytest.mark.parametrize("data", NOT_PDFS, ids=NOT_PDF_IDS)
+def test_drive_pdf_text_skips_files_that_are_not_pdfs(data):
+    assert drive_client()._extract_pdf_text(data) is None
+
+
+def test_drive_pdf_text_skips_pdfs_over_the_page_cap():
+    with patch.object(settings, "MAX_PDF_PAGES", 3):
+        assert drive_client()._extract_pdf_text(pdf_of_pages(*[(612, 792)] * 4)) is None
+
+
+def test_drive_pdf_text_reads_a_pdf():
+    assert drive_client()._extract_pdf_text(pdf_of_pages((612, 792))) == ""

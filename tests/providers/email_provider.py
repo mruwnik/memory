@@ -48,6 +48,8 @@ class MockEmailProvider:
         }
         self.current_folder = None
         self.is_connected = False
+        # UIDs whose body a FETCH returned, in order
+        self.fetched_bodies: List[int] = []
 
     def _generate_email_string(self, email_data: dict[str, Any]) -> str:
         """Generate a raw email string from the provided email data."""
@@ -156,6 +158,15 @@ class MockEmailProvider:
         ).encode()
         return ("OK", [(header, email_string.encode())])
 
+    def _size_response(self, emails: List[dict[str, Any]], uid_set: str):
+        """``UID FETCH <uid,uid,...> (UID RFC822.SIZE)``: one line per existing message."""
+        wanted = {int(uid) for uid in uid_set.split(",")}
+        return ("OK", [
+            f"{seqno} (UID {e['uid']} RFC822.SIZE {len(self._generate_email_string(e))})".encode()
+            for seqno, e in enumerate(emails, start=1)
+            if e["uid"] in wanted
+        ])
+
     def search(self, charset, *criteria):
         """Sequence-number SEARCH: returns 1-based message positions.
 
@@ -185,12 +196,15 @@ class MockEmailProvider:
             self.searched_at = datetime.now(timezone.utc)
             uids = [str(e["uid"]).encode() for e in emails]
             return ("OK", [b" ".join(uids) if uids else b""])
+        if cmd == "FETCH" and "BODY" not in args[1]:
+            return self._size_response(emails, str(args[0]))
         if cmd == "FETCH":
             target = int(args[0].decode() if isinstance(args[0], bytes) else args[0])
             if target in self.unfetchable:
                 return ("NO", [b"Server busy"])
             for seqno, email_data in enumerate(emails, start=1):
                 if email_data["uid"] == target:
+                    self.fetched_bodies.append(target)
                     return self._fetch_response(email_data, seqno)
             return ("NO", [b"Email not found"])
         raise ValueError(f"Unsupported uid command: {command}")

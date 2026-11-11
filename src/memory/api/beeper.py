@@ -276,7 +276,9 @@ def chat_view(chat: BeeperChat) -> ChatResponse:
 # --- Ownership ---
 
 
-def readable_account(db: Session, account_id: int, user: User) -> BeeperAccount:
+def owner_or_admin_account(db: Session, account_id: int, user: User) -> BeeperAccount:
+    """The account, for its creator or an admin: to view it, or to sign it out
+    or delete it (an admin freeing its Server for the person it is meant for)."""
     account = db.get(BeeperAccount, account_id)
     if account is None or not (account.created_by_user_id == user.id or has_admin_scope(user)):
         raise HTTPException(status_code=404, detail="Beeper account not found")
@@ -443,7 +445,7 @@ def get_account(
     user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> AccountResponse:
-    return account_view(readable_account(db, account_id, user))
+    return account_view(owner_or_admin_account(db, account_id, user))
 
 
 @router.patch("/accounts/{account_id}")
@@ -487,8 +489,8 @@ async def sign_out_account(
     user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> SignOutResponse:
-    """End the account's Beeper session; its token stops working."""
-    account = owned_account(db, account_id, user)
+    """End the account's Beeper session; its token stops working. Admins may sign out anyone's."""
+    account = owner_or_admin_account(db, account_id, user)
     await sign_out(account)
     account.setup_request_id = None
     db.commit()
@@ -502,8 +504,9 @@ async def delete_account(
     user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> dict:
-    """Sign the account out, then delete it with its networks, chats and messages."""
-    account = owned_account(db, account_id, user)
+    """Sign the account out, then delete it with its networks, chats and messages,
+    freeing its Server. Admins may delete anyone's."""
+    account = owner_or_admin_account(db, account_id, user)
     signed_out = True
     try:
         await sign_out(account)
@@ -673,7 +676,7 @@ def list_networks(
     user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> list[NetworkResponse]:
-    account = readable_account(db, account_id, user)
+    account = owner_or_admin_account(db, account_id, user)
     return [network_view(db, user, network) for network in sorted(account.networks, key=lambda n: n.id)]
 
 
@@ -713,7 +716,7 @@ def list_chats(
     network = db.get(BeeperNetwork, network_id)
     if network is None:
         raise HTTPException(status_code=404, detail="Beeper network not found")
-    readable_account(db, network.account_id, user)
+    owner_or_admin_account(db, network.account_id, user)
     chats = db.scalars(
         select(BeeperChat)
         .where(BeeperChat.network_id == network.id)

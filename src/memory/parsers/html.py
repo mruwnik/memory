@@ -9,11 +9,12 @@ from typing import Any
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
-from markdownify import markdownify as md
 from PIL import Image as PILImage
 
 from memory.common import paths, settings
 from memory.common.downloads import safe_get, stream_download_to_path
+from memory.common.images import open_image
+from memory.common.html_text import html_to_markdown
 from memory.common.ssrf import UnsafeURLError, validate_public_url
 
 logger = logging.getLogger(__name__)
@@ -279,7 +280,7 @@ def process_image(url: str, image_dir: pathlib.Path) -> PILImage.Image | None:
             return None
 
     try:
-        return PILImage.open(local_path)
+        return open_image(local_path)
     except IOError as e:
         logger.warning(f"Failed to open image as PIL Image {local_path}: {e}")
         return None
@@ -289,7 +290,10 @@ def process_images(
     content: Tag | None, base_url: str, image_dir: pathlib.Path
 ) -> tuple[Tag | None, dict[str, PILImage.Image]]:
     """
-    Process all images in content: download them, update URLs, and return PIL Images.
+    Process the images in content: download them, update URLs, and return PIL Images.
+
+    Only the first MAX_DOCUMENT_IMAGES ``<img>`` tags are fetched, and none once
+    MAX_DOCUMENT_IMAGE_BYTES have been stored; the rest keep their remote URLs.
 
     Returns:
         Tuple of (updated_content, dict_of_pil_images)
@@ -298,15 +302,15 @@ def process_images(
         return content, {}
 
     images = {}
+    tags = [
+        tag for tag in content.find_all("img") if isinstance(tag, Tag) and tag.get("src")
+    ]
+    stored_bytes = 0
 
-    for img_tag in content.find_all("img"):
-        if not isinstance(img_tag, Tag):
-            continue
-
+    for img_tag in tags[: settings.MAX_DOCUMENT_IMAGES]:
+        if stored_bytes >= settings.MAX_DOCUMENT_IMAGE_BYTES:
+            break
         src = img_tag.get("src", "")
-        if not src:
-            continue
-
         try:
             url = to_absolute_url(str(src), base_url)
             image = process_image(url, image_dir)
@@ -317,6 +321,7 @@ def process_images(
                 continue
 
             path = pathlib.Path(image.filename)  # type: ignore
+            stored_bytes += path.stat().st_size
             img_tag["src"] = paths.to_db_filename(path)
             images[img_tag["src"]] = image
         except Exception as e:
@@ -342,7 +347,7 @@ def convert_to_markdown(content: Tag | None, base_url: str) -> str:
             tag["href"] = to_absolute_url(str(href), base_url)
 
     # Convert to markdown
-    markdown = md(str(content), heading_style="ATX", bullets="-")
+    markdown = html_to_markdown(str(content), heading_style="ATX", bullets="-")
 
     # Clean up excessive newlines
     markdown = re.sub(r"\n{3,}", "\n\n", markdown)

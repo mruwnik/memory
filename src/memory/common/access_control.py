@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Any, FrozenSet, Protocol, runtime_checkable
 from sqlalchemy import any_, literal, select
 from sqlalchemy.orm import Query
 
-from memory.common import discord_attachments
+from memory.common import discord_attachments, paths
 from memory.common.db.models.sources import Project, Team, project_teams, team_members
 from memory.common.scopes import SCOPE_ADMIN, SCOPE_READ, SCOPE_WRITE
 
@@ -407,8 +407,11 @@ def get_accessible_source_item_by_filename(
     own copy of the query + admin check + project-role lookup, and they were
     starting to drift on details like ``has_admin_scope`` placement.
 
+    Only item types that keep files on disk count, and only for a path inside
+    that type's storage dir; hidden (dot-prefixed) segments are never served.
+
     Raises:
-        FileNotFoundError: if no SourceItem has this filename.
+        FileNotFoundError: if no SourceItem owns this filename.
         PermissionError:   if the SourceItem exists but the caller cannot
                            read it.
 
@@ -417,11 +420,17 @@ def get_accessible_source_item_by_filename(
     """
     from memory.common.db.models.source_item import SourceItem  # avoid circular import
 
+    if paths.is_hidden(filename):
+        raise FileNotFoundError(filename)
     # Several items can share a file (e.g. one user's copy of another's upload).
     # A Discord message's downloaded images are named in its images column, not filename.
-    items = session.query(SourceItem).filter(
-        SourceItem.filename == filename
-    ).all() or discord_image_holders(session, filename)
+    candidates = session.query(SourceItem).filter(
+        SourceItem.filename == filename,
+        SourceItem.type.in_(paths.item_storage_dirs()),
+    )
+    items = [
+        item for item in candidates if paths.is_item_file(item.type, filename)
+    ] or discord_image_holders(session, filename)
     if not items:
         raise FileNotFoundError(filename)
 
@@ -717,6 +726,24 @@ def get_accessible_team_ids(
     return get_user_team_ids(db, user)
 
 
+# Project roles that may change a project itself: team `lead` and `admin`.
+PROJECT_ADMIN_ROLES = frozenset({ProjectRole.MANAGER.value, ProjectRole.ADMIN.value})
+
+
+def user_can_administer_project(
+    db: "Session | scoped_session[Session]", user: UserLike, project_id: int
+) -> bool:
+    """Check if a user may change, re-team or delete a project.
+
+    Global admins may. Otherwise the user's best role on the project, through
+    the teams assigned to it, must be manager or admin. Contributors can read
+    the project and add content to it, but not change it.
+    """
+    if has_admin_scope(user):
+        return True
+    return get_user_project_roles(db, user).get(project_id) in PROJECT_ADMIN_ROLES
+
+
 def user_can_access_project(
     db: "Session | scoped_session[Session]", user: UserLike, project_id: int
 ) -> bool:
@@ -740,6 +767,25 @@ def user_can_access_project(
         .limit(1)
     ).first()
     return result is not None
+
+
+def owner_may_file_into_project(
+    db: "Session | scoped_session[Session]", owner: UserLike, project_id: int
+) -> bool:
+    """Whether a sync running on ``owner``'s credentials may file items under a project.
+
+    Filing an item under a project grants that project's teams access to it,
+    so the source's owner must belong to one of them, admins included: anyone
+    who can read a repo may bind it to their project, and the binding alone
+    must not route the tracker's items there. A project with no teams grants
+    no one, so filing into it is always allowed.
+    """
+    project_team_ids = set(
+        db.scalars(
+            select(project_teams.c.team_id).where(project_teams.c.project_id == project_id)
+        )
+    )
+    return not project_team_ids or bool(project_team_ids & get_user_team_ids(db, owner))
 
 
 def user_can_access_team(

@@ -40,7 +40,7 @@ const routes = (accounts: unknown[] = [], events: unknown[] = []) => ({
   '/calendar-accounts': { json: accounts },
   '/google-drive/accounts': { json: [gmailAccount] },
   '/mcp/projects_list_all': mcp({ projects: [], count: 0 }),
-  '/mcp/organizer_upcoming': mcp(events),
+  '/mcp/organizer_upcoming': mcp({ events }),
   '/auth/me': authMe,
   __default: { json: {} },
 })

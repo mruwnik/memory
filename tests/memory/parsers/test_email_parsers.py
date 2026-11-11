@@ -7,6 +7,7 @@ from datetime import datetime
 from email.utils import formatdate
 from unittest.mock import ANY
 import pytest
+from memory.common import settings
 from memory.common.db.models.source_items import mail_addresses
 from memory.parsers.email import (
     compute_message_hash,
@@ -379,3 +380,81 @@ def test_parse_email_generates_message_id_from_content(first, second, same):
 
     assert first_id.startswith("generated-")
     assert (first_id == second_id) is same
+
+
+def html_mail(html: str) -> str:
+    return (
+        "From: a@example.com\nTo: b@example.com\nSubject: hi\nMessage-ID: <big@example.com>\n"
+        "MIME-Version: 1.0\nContent-Type: text/html; charset=utf-8\n\n" + html
+    )
+
+
+@pytest.mark.parametrize("multipart", [False, True])
+def test_parse_email_converts_html_only_up_to_the_limit(monkeypatch, multipart):
+    monkeypatch.setattr(settings, "MAX_HTML_TO_MARKDOWN_CHARS", 45)
+    html = "<p><b>x</b></p>" * 10
+    msg = email.mime.multipart.MIMEMultipart("alternative")
+    msg.attach(email.mime.text.MIMEText(html, "html"))
+    raw = msg.as_string() if multipart else html_mail(html)
+
+    assert parse_email_message(raw)["body"] == "**x**\n\n**x**\n\n**x**\n\nx x x x x x x"
+
+
+def test_parse_email_survives_deeply_nested_html():
+    assert parse_email_message(html_mail("<div>" * 3000 + "hello"))["body"] == "hello"
+
+
+@pytest.mark.parametrize("count, kept", [(3, 3), (4, 3), (40, 3)])
+def test_parse_email_keeps_at_most_max_attachments(monkeypatch, count, kept):
+    monkeypatch.setattr(settings, "MAX_EMAIL_ATTACHMENTS", 3)
+    attachments = [{"filename": f"a{i}.txt", "content": b"x"} for i in range(count)]
+    msg = create_email_message(attachments=attachments)
+
+    result = parse_email_message(msg.as_string())
+
+    assert [a["filename"] for a in result["attachments"]] == [f"a{i}.txt" for i in range(kept)]
+
+
+@pytest.mark.parametrize("count, kept", [(2, 2), (3, 2), (50, 2)])
+def test_parse_email_keeps_at_most_max_recipients(monkeypatch, count, kept):
+    monkeypatch.setattr(settings, "MAX_EMAIL_RECIPIENTS", 2)
+    to_addrs = ", ".join(f"r{i}@example.com" for i in range(count))
+    msg = create_email_message(to_addrs=to_addrs)
+
+    result = parse_email_message(msg.as_string())
+
+    assert result["recipients"] == [f"r{i}@example.com" for i in range(kept)]
+
+
+def test_parse_email_logs_dropped_attachments_by_message_id(monkeypatch, caplog):
+    monkeypatch.setattr(settings, "MAX_EMAIL_ATTACHMENTS", 1)
+    attachments = [{"filename": f"secret{i}.txt", "content": b"x"} for i in range(3)]
+    msg = create_email_message(attachments=attachments, message_id="<many@example.com>")
+
+    parse_email_message(msg.as_string())
+
+    assert "Mail '<many@example.com>': keeping 1 of its 3 attachments" in caplog.text
+    assert "secret" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "name, value, expected",
+    [
+        ("Subject", "x" * 20, "x" * 10),
+        ("From", "a@example.com" + "x" * 20, "a@example."),
+    ],
+)
+def test_decode_mime_header_keeps_only_max_header_chars(monkeypatch, name, value, expected):
+    monkeypatch.setattr(settings, "MAX_EMAIL_HEADER_CHARS", 10)
+    assert decode_mime_header(name, value) == expected
+
+
+def test_parse_email_decodes_only_the_start_of_a_huge_subject():
+    raw = (
+        "From: a@example.com\nTo: b@example.com\nMessage-ID: <big@example.com>\n"
+        "Subject: " + "=?utf-8?q?a?= " * 30_000 + "\n\nbody"
+    )
+
+    result = parse_email_message(raw)
+
+    assert len(result["subject"]) <= settings.MAX_EMAIL_HEADER_CHARS

@@ -851,6 +851,7 @@ def mock_file_storage(tmp_path: Path):
         patch.object(settings, "EMAIL_SPOOL_DIR", email_spool_dir),
         patch.object(settings, "BEEPER_STORAGE_DIR", beeper_storage_dir),
         patch.object(settings, "DISCORD_STORAGE_DIR", tmp_path / "discord"),
+        patch.object(settings, "EBOOK_STORAGE_DIR", tmp_path / "ebooks"),
     ):
         yield
 
@@ -1213,6 +1214,14 @@ def shown(rendered: str, tag: str | None = None) -> str:
     if tag is None:
         tag, rendered = untrusted_tag(first), rest.lstrip("\n")
     return rendered.replace(tag, "T")
+
+
+def in_block(result: dict, value: Any) -> bool:
+    """Whether `value` is one block of the tag `result`'s preamble names."""
+    tag = untrusted_tag(result["untrusted"])
+    return isinstance(value, str) and bool(
+        re.fullmatch(rf"<{tag} id=\S+ field=[\w.]+>.*</{tag}>", value, re.DOTALL)
+    )
 
 
 def unwrapped(result: Any, tag: str | None = None) -> Any:

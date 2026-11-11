@@ -53,6 +53,7 @@ EDIT_DISCORD_MESSAGE = f"{DISCORD_ROOT}.edit_discord_message"
 UPDATE_REACTIONS = f"{DISCORD_ROOT}.update_reactions"
 DELETE_DISCORD_MESSAGES = f"{DISCORD_ROOT}.delete_discord_messages"
 HANDLE_DISCORD_EVENT = f"{DISCORD_ROOT}.handle_discord_event"
+REFRESH_DISCORD_REACTIONS = f"{DISCORD_ROOT}.refresh_discord_reactions"
 VERIFY_DISCORD_MESSAGES = f"{DISCORD_ROOT}.verify_discord_messages"
 BACKFILL_DISCORD_CHANNEL = f"{DISCORD_BACKFILL_ROOT}.backfill_channel"
 DISCOVER_DISCORD_THREADS = f"{DISCORD_BACKFILL_ROOT}.discover_threads"
@@ -533,6 +534,10 @@ def build_beat_schedule() -> dict:
         "clean-chunk-images": {
             "task": CLEAN_CHUNK_IMAGES,
             "schedule": crontab(hour="4", minute="35"),
+        },
+        "cleanup-expired-sessions": {
+            "task": CLEANUP_EXPIRED_SESSIONS,
+            "schedule": crontab(hour="4", minute="15"),
         },
         "cleanup-old-pending-jobs": {
             "task": CLEANUP_OLD_PENDING_JOBS,

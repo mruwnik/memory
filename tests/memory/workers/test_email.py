@@ -1,7 +1,12 @@
 import base64
+import contextlib
 import hashlib
 import imaplib
+import ipaddress
 import pathlib
+import socket
+import threading
+import time
 from datetime import datetime, timezone
 from typing import cast
 from unittest.mock import MagicMock, patch
@@ -9,7 +14,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import ssl
 
-from memory.common import embedding, settings
+from memory.common import embedding, paths, settings
 from memory.common.db.models import (
     EmailAccount,
     EmailAttachment,
@@ -17,6 +22,7 @@ from memory.common.db.models import (
     MailMessage,
 )
 from memory.parsers.email import Attachment, parse_email_message
+from memory.workers import email as email_module
 from memory.workers.email import (
     FolderUidsError,
     FolderUnavailableError,
@@ -28,7 +34,8 @@ from memory.workers.email import (
     delete_removed_emails,
     extract_email_uid,
     fetch_email,
-    fetch_email_since,
+    fetch_emails,
+    folder_uids_since,
     fetch_gmail_message,
     fetch_gmail_messages_by_ids,
     find_removed_emails,
@@ -38,12 +45,15 @@ from memory.workers.email import (
     gmail_gone_message_ids,
     imap_mailbox,
     imap_connection,
+    CappedIMAP4,
+    oversized_uids,
     list_gmail_message_ids,
     list_imap_folders,
     parse_folder_line,
     process_attachment,
     process_attachments,
     process_folder,
+    repeated_flags,
     search_folder,
     should_delete_email,
     vectorize_email,
@@ -181,6 +191,30 @@ def test_process_attachments_same_name_in_one_message_kept_apart(first, second):
     assert [
         (settings.FILE_STORAGE_DIR / cast(str, a.filename)).read_bytes() for a in stored
     ] == [b"first pdf", b"second pdf"]
+
+
+@pytest.mark.parametrize(
+    "values, expected",
+    [
+        ([], []),
+        (["a", "b", "c"], [False, False, False]),
+        (["a", "a", "b", "a"], [False, True, False, True]),
+    ],
+)
+def test_repeated_flags(values, expected):
+    assert repeated_flags(values) == expected
+
+
+def test_process_attachments_three_same_names_get_distinct_paths():
+    attachments = [
+        {"filename": "invoice.pdf", "content_type": "application/pdf", "size": 1, "content": c}
+        for c in [b"1", b"2", b"3"]
+    ]
+    message = MailMessage(message_id="<three@example.com>", sender="a@example.com", folder="INBOX")
+
+    stored = process_attachments(cast(list[Attachment], attachments), message)
+
+    assert len({a.filename for a in stored}) == 3
 
 
 def test_process_attachment_tags_skip_sender():
@@ -402,6 +436,12 @@ def test_fetch_email(email_provider):
     assert result is None
 
 
+def fetch_email_since(conn, folder: str, since_date: datetime):
+    fetched = list(fetch_emails(conn, folder_uids_since(conn, folder, since_date)))
+    emails = [email for email in fetched if email]
+    return emails, len(fetched) - len(emails)
+
+
 def test_fetch_email_since(email_provider):
     # Fetch emails from INBOX folder
     result, unfetched = fetch_email_since(email_provider, "INBOX", datetime(1970, 1, 1))
@@ -438,6 +478,188 @@ def test_fetch_email_since_raises_when_folder_unreadable():
 
     with pytest.raises(FolderUidsError):
         fetch_email_since(provider, "INBOX", datetime(1970, 1, 1))
+
+
+def test_fetch_emails_skips_messages_over_size_cap():
+    provider = MockEmailProvider({"INBOX": [{"uid": 1}, {"uid": 2, "body": "x" * 5000}, {"uid": 3}]})
+    provider.select("INBOX")
+
+    with patch.object(settings, "MAX_EMAIL_BYTES", 2000):
+        fetched = list(fetch_emails(cast(imaplib.IMAP4, provider), ["1", "2", "3"]))
+
+    assert [email and email[0] for email in fetched] == ["1", None, "3"]
+    assert provider.fetched_bodies == [1, 3]
+
+
+@contextlib.contextmanager
+def scripted_imap_server(untagged: bytes, trickled: bytes = b"", byte_delay: float = 0.0):
+    """A one-connection IMAP server on localhost: it greets, then answers every
+    command but CAPABILITY with ``untagged``, then ``trickled`` one byte every
+    ``byte_delay`` seconds, then a tagged OK."""
+    server = socket.create_server(("127.0.0.1", 0))
+
+    def serve():
+        conn, _ = server.accept()
+        with conn, conn.makefile("rb") as lines:
+            conn.sendall(b"* PREAUTH ready\r\n")
+            for line in lines:
+                tag, command = line.strip().split(b" ", 2)[:2]
+                if command == b"CAPABILITY":
+                    conn.sendall(b"* CAPABILITY IMAP4rev1\r\n" + tag + b" OK done\r\n")
+                    continue
+                conn.sendall(untagged)
+                for byte in trickled:
+                    time.sleep(byte_delay)
+                    conn.sendall(bytes([byte]))
+                conn.sendall(tag + b" OK done\r\n")
+
+    threading.Thread(target=serve, daemon=True).start()
+    try:
+        yield server.getsockname()[1]
+    finally:
+        server.close()
+
+
+def body_literals(count: int, size: int) -> bytes:
+    return b"".join(
+        b"* %d FETCH (UID %d BODY[] {%d}\r\n" % (n, n, size) + b"x" * size + b")\r\n"
+        for n in range(1, count + 1)
+    )
+
+
+def selected_connection(port: int) -> CappedIMAP4:
+    # The scripted server is on localhost, which the dial-time policy refuses.
+    loopback = [ipaddress.ip_address("127.0.0.1")]
+    with patch("memory.common.mail_connect.public_addresses", return_value=loopback):
+        conn = CappedIMAP4("127.0.0.1", port, timeout=5)
+    conn.state = "SELECTED"  # the scripted server skips SELECT
+    return conn
+
+
+SIZE_WITH_LITERAL = b"* 1 FETCH (UID 1 RFC822.SIZE {2}\r\n99)\r\n"
+
+
+def test_capped_connection_reads_response_within_budget():
+    with scripted_imap_server(body_literals(2, 1000)) as port, patch.object(settings, "MAX_EMAIL_BYTES", 2500):
+        status, data = selected_connection(port).uid("FETCH", "1:*", "(BODY.PEEK[])")
+
+    assert (status, [part[1] for part in data if isinstance(part, tuple)]) == ("OK", [b"x" * 1000] * 2)
+
+
+def test_capped_connection_aborts_when_literals_together_pass_the_cap():
+    # Each literal is under the cap; three of them in one response are not.
+    with scripted_imap_server(body_literals(3, 1000)) as port, patch.object(settings, "MAX_EMAIL_BYTES", 2500):
+        conn = selected_connection(port)
+        with pytest.raises(imaplib.IMAP4.abort):
+            conn.uid("FETCH", "1:*", "(BODY.PEEK[])")
+
+
+def test_capped_connection_aborts_a_response_past_its_deadline():
+    with scripted_imap_server(body_literals(1, 10)) as port:
+        conn = selected_connection(port)
+        with patch.object(settings, "IMAP_COMMAND_TIMEOUT_SEC", -1), pytest.raises(imaplib.IMAP4.abort):
+            conn.uid("FETCH", "1:*", "(BODY.PEEK[])")
+
+
+def test_size_fetch_refuses_a_literal(caplog):
+    with scripted_imap_server(SIZE_WITH_LITERAL) as port:
+        conn = selected_connection(port)
+        assert oversized_uids(conn, ["1"]) == set()
+
+    assert "IMAP server refused a size FETCH" in caplog.text
+    assert conn.refuse_literals is False
+
+
+def test_size_answer_with_a_literal_parses_outside_a_size_fetch():
+    with scripted_imap_server(SIZE_WITH_LITERAL) as port:
+        status, _ = selected_connection(port).uid("FETCH", "1", "(UID RFC822.SIZE)")
+
+    assert status == "OK"
+
+
+def junk_literals(count: int, size: int) -> bytes:
+    """Untagged responses of a type no command collects, so imaplib keeps them."""
+    return b"".join(b"* %d XJUNK {%d}\r\n" % (n, size) + b"x" * size + b"\r\n" for n in range(1, count + 1))
+
+
+def test_capped_connection_drops_leftover_responses_between_commands():
+    with scripted_imap_server(junk_literals(2, 1000)) as port, patch.object(settings, "MAX_EMAIL_BYTES", 2500):
+        conn = selected_connection(port)
+        conn.uid("FETCH", "1:*", "(BODY.PEEK[])")
+        after_one = list(conn.untagged_responses["XJUNK"])
+        conn.uid("FETCH", "1:*", "(BODY.PEEK[])")
+        conn.uid("FETCH", "1:*", "(BODY.PEEK[])")
+
+    assert conn.untagged_responses["XJUNK"] == after_one
+
+
+def test_capped_connection_aborts_past_its_connection_budget():
+    with (
+        scripted_imap_server(junk_literals(2, 1000)) as port,
+        patch.object(settings, "MAX_EMAIL_BYTES", 2500),
+        patch.object(settings, "MAX_IMAP_CONNECTION_BYTES", 5000),
+    ):
+        conn = selected_connection(port)
+        conn.uid("FETCH", "1:*", "(BODY.PEEK[])")
+        conn.uid("FETCH", "1:*", "(BODY.PEEK[])")
+        within_budget = conn.over_connection_budget
+        with pytest.raises(imaplib.IMAP4.abort):
+            conn.uid("FETCH", "1:*", "(BODY.PEEK[])")
+        past_budget = conn.over_connection_budget
+
+    assert (within_budget, past_budget) == (False, True)
+
+
+def test_capped_connection_reads_wait_no_longer_than_the_command_has_left():
+    with (
+        scripted_imap_server(body_literals(1, 10)) as port,
+        patch.object(settings, "REMOTE_SERVER_TIMEOUT_SEC", 60),
+        patch.object(settings, "IMAP_COMMAND_TIMEOUT_SEC", 2),
+    ):
+        conn = selected_connection(port)
+        conn.uid("FETCH", "1:*", "(BODY.PEEK[])")
+
+    assert 0 < (conn.sock.gettimeout() or 0) <= 2
+
+
+@pytest.mark.parametrize(
+    "untagged, trickled",
+    [
+        (b"* 1 FETCH (UID 1 BODY[] {80}\r\n", b"x" * 80 + b")\r\n"),
+        (b"", b"* 1 FETCH (UID 1 FLAGS (" + b"x" * 80 + b"))\r\n"),
+    ],
+    ids=["literal", "line"],
+)
+def test_capped_connection_aborts_a_trickled_response_at_its_deadline(untagged, trickled):
+    with (
+        scripted_imap_server(untagged, trickled, byte_delay=0.05) as port,
+        patch.object(settings, "REMOTE_SERVER_TIMEOUT_SEC", 60),
+        patch.object(settings, "IMAP_COMMAND_TIMEOUT_SEC", 1),
+    ):
+        conn = selected_connection(port)
+        started = time.monotonic()
+        with pytest.raises(imaplib.IMAP4.abort):
+            conn.uid("FETCH", "1:*", "(BODY.PEEK[])")
+
+    assert time.monotonic() - started < 2
+
+
+@pytest.mark.parametrize("line_length, outcome", [(40, "OK"), (41, "error")])
+def test_capped_connection_refuses_a_line_over_the_imap_line_limit(line_length, outcome):
+    # "* 1 FETCH (UID 1 FLAGS (" is 24 bytes, "))\r\n" is 4.
+    line = b"* 1 FETCH (UID 1 FLAGS (" + b"x" * (line_length - 28) + b"))\r\n"
+    with scripted_imap_server(line) as port, patch.object(email_module, "IMAP_MAX_LINE", 40):
+        conn = selected_connection(port)
+        result = run_fetch(conn)
+
+    assert result == outcome
+
+
+def run_fetch(conn: CappedIMAP4) -> str:
+    try:
+        return conn.uid("FETCH", "1:*", "(BODY.PEEK[])")[0]
+    except imaplib.IMAP4.error:
+        return "error"
 
 
 def test_process_folder(email_provider):
@@ -589,7 +811,7 @@ def test_vectorize_email_with_attachments(db_session, qdrant, mock_uuid4):
         mail_message_id=mail_message.id,
         size=200,
         content=None,
-        filename=str(file_path),
+        filename=paths.to_db_filename(file_path),
         modality="doc",
         sha256=b"test_hash2" + bytes(24),
         tags=["test"],
@@ -1439,8 +1661,9 @@ def test_gmail_gone_message_ids_makes_no_request_for_nothing():
     assert service.batch_sizes == []
 
 
-@patch("memory.workers.email.mail_connect")
-def test_imap_connection_uses_ssl_by_default(mock_connect):
+@patch("memory.workers.email.CappedIMAP4")
+@patch("memory.workers.email.CappedIMAP4SSL")
+def test_imap_connection_uses_ssl_by_default(ssl_connect, plain_connect):
     account = EmailAccount(
         name="t",
         email_address="t@example.com",
@@ -1453,16 +1676,18 @@ def test_imap_connection_uses_ssl_by_default(mock_connect):
     )
     with imap_connection(account):
         pass
-    kwargs = mock_connect.PublicIMAP4SSL.call_args.kwargs
+    kwargs = ssl_connect.call_args.kwargs
     assert kwargs["host"] == "imap.example.com"
     assert kwargs["port"] == 993
+    assert kwargs["timeout"] == settings.REMOTE_SERVER_TIMEOUT_SEC
     assert kwargs["ssl_context"].verify_mode == ssl.CERT_REQUIRED
     assert kwargs["ssl_context"].check_hostname is True
-    mock_connect.PublicIMAP4.assert_not_called()
+    plain_connect.assert_not_called()
 
 
-@patch("memory.workers.email.mail_connect")
-def test_imap_connection_starttls_when_ssl_disabled(mock_connect):
+@patch("memory.workers.email.CappedIMAP4")
+@patch("memory.workers.email.CappedIMAP4SSL")
+def test_imap_connection_starttls_when_ssl_disabled(ssl_connect, plain_connect):
     account = EmailAccount(
         name="t",
         email_address="t2@example.com",
@@ -1475,16 +1700,18 @@ def test_imap_connection_starttls_when_ssl_disabled(mock_connect):
     )
     with imap_connection(account):
         pass
-    mock_connect.PublicIMAP4.assert_called_once_with(host="imap.example.com", port=143)
-    mock_connect.PublicIMAP4SSL.assert_not_called()
-    conn = mock_connect.PublicIMAP4.return_value
+    plain_connect.assert_called_once_with(
+        host="imap.example.com", port=143, timeout=settings.REMOTE_SERVER_TIMEOUT_SEC
+    )
+    ssl_connect.assert_not_called()
+    conn = plain_connect.return_value
     assert [call[0] for call in conn.method_calls] == ["starttls", "login", "logout"]
     context = conn.starttls.call_args.kwargs["ssl_context"]
     assert context.verify_mode == ssl.CERT_REQUIRED
     assert context.check_hostname
 
 
-@patch("memory.workers.email.mail_connect.PublicIMAP4")
+@patch("memory.workers.email.CappedIMAP4")
 def test_imap_starttls_failure_never_sends_password(connect):
     account = EmailAccount(imap_server="imap.example.com", imap_port=143,
                            username="u", password="p", use_ssl=False)
@@ -1528,3 +1755,28 @@ def test_search_folder_tells_a_missing_folder_from_a_passing_refusal(
         search_folder(provider, folder, "ALL")
 
     assert isinstance(raised.value, FolderUnavailableError) is gone
+
+
+def test_stored_mail_body_is_read_without_reparsing(db_session, monkeypatch):
+    raw_email = (
+        "From: sender@example.com\nTo: recipient@example.com\nSubject: S\n"
+        "Message-ID: <stored-body@example.com>\nMIME-Version: 1.0\n"
+        "Content-Type: text/html\n\n<p>Hello <b>there</b></p>"
+    )
+    mail_message = create_mail_message(
+        db_session=db_session, folder="INBOX", tags=[], parsed_email=parse_email_message(raw_email)
+    )
+    db_session.commit()
+    db_session.expire_all()
+
+    def no_parse(*args, **kwargs):
+        raise AssertionError("the stored body was re-extracted")
+
+    monkeypatch.setattr("memory.parsers.email.parse_email_message", no_parse)
+    stored = db_session.get(MailMessage, mail_message.id)
+
+    assert stored.parsed_body == "Hello **there**"
+    assert (stored.body, stored.preview_text) == ("Hello **there**", "Hello **there**")
+    assert [chunk.data for chunk in stored._chunk_contents()] == [
+        ["Subject: S\nFrom: sender@example.com\nTo: recipient@example.com\nDate: \nBody:\nHello **there**"]
+    ]

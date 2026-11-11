@@ -198,7 +198,7 @@ export const useAuth = () => {
     const accessToken = getCookie('access_token')
     if (accessToken) {
       try {
-        await authedFetch('/auth/logout', {}, accessToken)
+        await authedFetch('/auth/logout', { method: 'POST' }, accessToken)
       } catch (error) {
         console.error('Logout failed:', error)
       }

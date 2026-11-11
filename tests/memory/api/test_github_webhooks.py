@@ -348,3 +348,44 @@ def test_webhook_secret_is_generated_write_only(client, db_session, account):
     assert cleared.json()["webhook_secret_hint"] is None
     db_session.refresh(account)
     assert account.webhook_secret is None
+
+
+@pytest.mark.parametrize(
+    "signature, has_secret",
+    [("", True), ("sha1=abc", True), ("sha256=" + "0" * 64, False)],
+)
+def test_unsigned_or_secretless_delivery_is_refused_before_reading(
+    client, db_session, account, monkeypatch, signature, has_secret
+):
+    from memory.api import github_webhooks
+
+    account.webhook_secret = SECRET if has_secret else None
+    db_session.commit()
+    reads = []
+    monkeypatch.setattr(github_webhooks, "read_request_body_with_cap", lambda *a: reads.append(a))
+
+    response = deliver(client, account.id, "ping", {"zen": "x"}, signature=signature or "")
+
+    assert (response.status_code, reads) == (401, [])
+
+
+def test_unknown_account_is_refused_before_reading(client, monkeypatch):
+    from memory.api import github_webhooks
+
+    reads = []
+    monkeypatch.setattr(github_webhooks, "read_request_body_with_cap", lambda *a: reads.append(a))
+
+    response = deliver(client, 987654, "ping", {"zen": "x"})
+
+    assert (response.status_code, reads) == (401, [])
+
+
+def test_delivery_over_the_configured_cap_is_refused(client, repo, monkeypatch):
+    from memory.common import settings
+
+    monkeypatch.setattr(settings, "GITHUB_WEBHOOK_MAX_BODY_BYTES", 256)
+    payload = pr_event() | {"padding": "x" * 512}
+
+    response = deliver(client, repo.account_id, "pull_request", payload)
+
+    assert response.status_code == 413

@@ -8,6 +8,9 @@ database and return an authenticated `GithubClient`, optionally ensuring a
 import logging
 from typing import Any, cast
 
+from sqlalchemy import func
+
+from memory.common.access_control import UserLike, has_admin_scope
 from memory.common.db.models.sources import GithubAccount, GithubRepo
 from memory.common.github import GithubClient, GithubCredentials
 
@@ -27,6 +30,33 @@ def account_credentials(account: GithubAccount) -> GithubCredentials:
 
 def account_client(account: GithubAccount) -> GithubClient:
     return GithubClient(account_credentials(account))
+
+
+def repo_name_matches(owner: str, name: str) -> Any:
+    """SQL condition matching a GithubRepo by exact owner/name, ignoring case.
+
+    GitHub owner and repo names are case-insensitive. Plain equality on the
+    lowered values, never LIKE, so ``%`` and ``_`` in user input match only
+    themselves.
+    """
+    return (func.lower(GithubRepo.owner) == owner.lower()) & (
+        func.lower(GithubRepo.name) == name.lower()
+    )
+
+
+def can_bind_repo(binder: UserLike, client: GithubClient, repo: GithubRepo) -> bool:
+    """Whether ``binder`` may bind ``repo``, tracked by any account, to a project.
+
+    Binding files every item the repo's sync stores under the project, so it
+    needs one of: the binder's credential has admin scope, the binder's own GitHub
+    account tracks the repo, or ``client`` (the binder's GitHub credentials) can
+    read the repo on GitHub.
+    """
+    if has_admin_scope(binder):
+        return True
+    if repo.account is not None and repo.account.user_id == binder.id:
+        return True
+    return client.fetch_repository_info(cast(str, repo.owner), cast(str, repo.name)) is not None
 
 
 def get_github_client(
@@ -56,11 +86,7 @@ def get_github_client(
     repo = (
         session.query(GithubRepo)
         .join(GithubAccount)
-        .filter(
-            GithubRepo.owner == owner,
-            GithubRepo.name == name,
-            GithubAccount.user_id == user_id,
-        )
+        .filter(repo_name_matches(owner, name), GithubAccount.user_id == user_id)
         .first()
     )
 
@@ -97,6 +123,7 @@ def ensure_github_repo(
     account_id: int,
     owner: str,
     repo_name: str,
+    binder: UserLike,
     description: str | None = None,
     create_if_missing: bool = False,
     private: bool = True,
@@ -111,25 +138,28 @@ def ensure_github_repo(
         account_id: ID of the GithubAccount to associate with
         owner: Repository owner (user or org)
         repo_name: Repository name
+        binder: The caller, with its credential's scopes (see `can_bind_repo`)
         description: Optional description (used if creating on GitHub)
         create_if_missing: If True, creates the repo on GitHub if it doesn't exist
         private: Whether to create as private (default: True)
 
     Returns:
         Tuple of (GithubRepo, repo_was_created_on_github, tracking_entry_was_created)
-        Returns (None, False, False) if the repo doesn't exist and create_if_missing=False
+        Returns (None, False, False) if the repo doesn't exist and create_if_missing=False,
+        or if another user tracks it and ``binder`` can't bind it
+        (see `can_bind_repo`).
     """
-    # Check if we already have a tracking entry (globally, not per-account)
-    # A repo should only be tracked once - access is controlled at project level
+    # A repo is tracked once, globally; whoever binds it to a project must
+    # show they may see it, since the tracker's sync then files into that project.
     existing_repo = (
-        session.query(GithubRepo)
-        .filter(
-            GithubRepo.owner.ilike(owner),
-            GithubRepo.name.ilike(repo_name),
-        )
-        .first()
+        session.query(GithubRepo).filter(repo_name_matches(owner, repo_name)).first()
     )
     if existing_repo:
+        if not can_bind_repo(binder, client, existing_repo):
+            logger.warning(
+                "User %s may not bind GithubRepo %s", binder.id, existing_repo.id
+            )
+            return None, False, False
         return existing_repo, False, False
 
     # Check if repo exists on GitHub

@@ -179,4 +179,4 @@ def create_account(data: AccountCreate, request: Request, db: Session = Depends(
     link_person_to_user(db, user)
     retire_setup_token()
     logger.warning("Setup created the first account, user_id=%s", user.id)
-    return {"session_id": create_user_session(user.id, db)}
+    return {"session_id": create_user_session(user.id, db, from_setup=True)}

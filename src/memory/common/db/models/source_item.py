@@ -36,10 +36,11 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.dialects.postgresql import BYTEA, JSONB
 from sqlalchemy import orm
-from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
+from sqlalchemy.orm import Mapped, Session, mapped_column, relationship, validates
 from sqlalchemy.types import Numeric
 
-from memory.common import settings
+from memory.common import paths, settings
+from memory.common.images import open_image
 import memory.common.extract as extract
 import memory.common.collections as collections
 import memory.common.chunker as chunker
@@ -180,6 +181,21 @@ def save_chunk_image(image: Image.Image, stem: str) -> pathlib.Path:
     return path
 
 
+def capped_chunks(item_id: int | None, chunks: Sequence[extract.DataChunk]) -> list[extract.DataChunk]:
+    """The first MAX_EMBEDDED_CHUNKS_PER_ITEM chunks, summaries always kept:
+    every chunk is embedded on the server's key, whoever sent the text."""
+    limit = settings.MAX_EMBEDDED_CHUNKS_PER_ITEM
+    if len(chunks) <= limit:
+        return list(chunks)
+    summaries = [c for c in chunks if c.metadata.get("type") == "summary"]
+    rest = [c for c in chunks if c.metadata.get("type") != "summary"]
+    kept = rest[: max(limit - len(summaries), 0)]
+    logger.warning(
+        f"Item {item_id}: embedding {len(kept)} of {len(rest)} chunks (MAX_EMBEDDED_CHUNKS_PER_ITEM)"
+    )
+    return kept + summaries
+
+
 def image_filenames(chunk_id: str, images: Sequence[Image.Image]) -> list[str]:
     for i, image in enumerate(images):
         # A shrunk image no longer matches the file it was read from.
@@ -203,7 +219,7 @@ def chunk_mixed(content: str, image_paths: Sequence[str]) -> list[extract.DataCh
 
     # A post whose downloaded image went missing is still worth finding by its text.
     paths = [settings.FILE_STORAGE_DIR / image for image in image_paths]
-    images = [Image.open(path) for path in paths if path.is_file()]
+    images = [open_image(path) for path in paths if path.is_file()]
 
     is_long = summarizer.needs_summary(content)
     result = summarizer.summarize_or_defer(content, {} if is_long else None)
@@ -316,7 +332,7 @@ class Chunk(Base):
         if self.images:
             chunks += self.images
         elif self.file_paths:
-            chunks += [Image.open(pathlib.Path(cp)) for cp in self.file_paths]
+            chunks += [open_image(pathlib.Path(cp)) for cp in self.file_paths]
         return chunks
 
     @property
@@ -334,7 +350,7 @@ class Chunk(Base):
         for file_path in files:
             if file_path.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
                 if file_path.exists():
-                    items.append(Image.open(file_path))
+                    items.append(open_image(file_path))
             elif file_path.suffix == ".bin":
                 items.append(file_path.read_bytes())
             else:
@@ -636,6 +652,13 @@ class SourceItem(AccessControlMixin, Base):
         Index("source_type_inserted_at_idx", "type", "inserted_at", "id"),
     )
 
+    @validates("filename")
+    def validate_filename(self, key: str, filename: str | None) -> str | None:
+        """``filename`` is a path under this type's storage dir, served by /files."""
+        if filename is None:
+            return None
+        return paths.check_item_filename(self.__mapper__.polymorphic_identity, filename)
+
     @property
     def vector_ids(self):
         """Get vector IDs from associated chunks."""
@@ -677,7 +700,7 @@ class SourceItem(AccessControlMixin, Base):
             chunks = []
 
         if self.filename and self.mime_type and self.mime_type.startswith("image/"):
-            chunks.append(extract.DataChunk(data=[Image.open(self.filename)]))
+            chunks.append(extract.DataChunk(data=[open_image(self.filename)]))
         return chunks
 
     def make_chunk(
@@ -724,7 +747,7 @@ class SourceItem(AccessControlMixin, Base):
 
     def data_chunks(self, metadata: dict[str, Any] | None = None) -> Sequence[Chunk]:
         metadata = metadata or {}
-        return [self.make_chunk(data, metadata) for data in self._chunk_contents()]
+        return [self.make_chunk(data, metadata) for data in capped_chunks(self.id, self._chunk_contents())]
 
     def as_payload(self) -> SourceItemPayload:
         """

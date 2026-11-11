@@ -30,7 +30,7 @@ import httpcore
 import httpx
 
 from memory.common import settings
-from memory.common.ssrf import UnsafeURLError
+from memory.common.ssrf import CLOUD_INTERNAL_NETWORKS, UnsafeURLError
 
 logger = logging.getLogger(__name__)
 
@@ -51,12 +51,13 @@ STACK_SERVICES = (
     "migrate",
     "backup",
 )
-ALWAYS_BLOCKED_NETWORKS = tuple(
+ALWAYS_BLOCKED_NETWORKS = CLOUD_INTERNAL_NETWORKS + tuple(
     ipaddress.ip_network(n)
     for n in (
         "0.0.0.0/8",
-        "100.100.100.200/32",  # Alibaba Cloud metadata
-        "fd00:ec2::254/128",  # AWS IMDS over IPv6
+        # RFC 8215 local-use NAT64. The IPv4 address may sit at any RFC 6052
+        # offset, and no public server is reached through a site-local prefix.
+        "64:ff9b:1::/48",
         # Default docker (172.17-31) and podman (10.88, 10.89) address pools.
         "172.16.0.0/12",
         "10.88.0.0/16",
@@ -86,10 +87,16 @@ class UnsupportedEncoding(httpx.DecodingError):
 
 
 def embedded_ipv4(address: IPAddress) -> ipaddress.IPv4Address | None:
+    """The IPv4 address a translation or tunnelling scheme routes `address`
+    to: v4-mapped, v4-compatible, well-known NAT64, 6to4 or the Teredo client."""
     if not isinstance(address, ipaddress.IPv6Address):
         return None
     if address.ipv4_mapped:
         return address.ipv4_mapped
+    if address.sixtofour:
+        return address.sixtofour
+    if address.teredo:
+        return address.teredo[1]
     if address in NAT64 or address in IPV4_COMPATIBLE:
         return ipaddress.IPv4Address(int(address) & 0xFFFFFFFF)
     return None
@@ -573,7 +580,18 @@ class PinnedSyncTransport(httpx.BaseTransport):
         self.pool.close()
 
 
-def public_sync_http_client(*, timeout=30.0, max_response_bytes=100 * 1024 * 1024) -> httpx.Client:
-    """Synchronous counterpart of public_http_client with strict public-only policy."""
-    return httpx.Client(transport=PinnedSyncTransport(max_response_bytes),
-                        timeout=timeout, trust_env=False, follow_redirects=False)
+def public_sync_http_client(
+    *,
+    timeout=30.0,
+    max_response_bytes=100 * 1024 * 1024,
+    policy: NetworkPolicy | None = None,
+) -> httpx.Client:
+    """Synchronous counterpart of public_http_client, public-only unless a
+    `policy` says otherwise. Redirects httpx follows go through the same
+    transport, so every hop is checked."""
+    return httpx.Client(
+        transport=PinnedSyncTransport(max_response_bytes, PinnedSyncBackend(policy)),
+        timeout=timeout,
+        trust_env=False,
+        follow_redirects=False,
+    )

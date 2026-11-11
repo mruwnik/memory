@@ -32,7 +32,7 @@ def reset_rate_limit_cache():
         ("10/MINUTE", (10, 60)),  # case-insensitive
     ],
 )
-def test_parse_limit_accepts_slowapi_style(spec, expected):
+def test_parse_limit_accepts_limits_spec_syntax(spec, expected):
     assert rate_limit.parse_limit(spec) == expected
 
 
@@ -88,18 +88,23 @@ def test_check_rate_limit_blocks_over_limit():
     assert results == [True, True, True, False, False]
 
 
-def test_check_rate_limit_fails_open_when_redis_unavailable():
-    """Redis outage must not lock users out of authentication."""
+def test_check_rate_limit_counts_in_process_when_redis_unavailable():
+    """A Redis outage keeps each key's limit without locking out other keys."""
     with patch.object(rate_limit, "rate_limit_redis", return_value=None):
-        for _ in range(100):
-            assert rate_limit.check_rate_limit("k", 10, 60) is True
+        results = [rate_limit.check_rate_limit("k", 10, 60) for _ in range(12)]
+        other = rate_limit.check_rate_limit("other", 10, 60)
+
+    assert results == [True] * 10 + [False] * 2
+    assert other is True
 
 
-def test_check_rate_limit_fails_open_on_redis_error():
+def test_check_rate_limit_counts_in_process_on_redis_error():
     client = MagicMock()
     client.pipeline.side_effect = Exception("redis down mid-request")
     with patch.object(rate_limit, "rate_limit_redis", return_value=client):
-        assert rate_limit.check_rate_limit("k", 10, 60) is True
+        results = [rate_limit.check_rate_limit("k", 2, 60) for _ in range(3)]
+
+    assert results == [True, True, False]
 
 
 def test_check_rate_limit_disabled_globally(monkeypatch):
@@ -151,20 +156,71 @@ def test_check_rate_limit_spec_parses_and_enforces():
 # ====== rate_limit_redis caching ======
 
 
-def test_rate_limit_redis_caches_failure_for_session(monkeypatch):
-    """If Redis is unavailable on first call, don't reconnect on every check."""
-    attempts = {"n": 0}
+class Clock:
+    def __init__(self) -> None:
+        self.now = 1000.0
 
-    def boom(*_a, **_kw):
-        attempts["n"] += 1
-        raise ConnectionError("nope")
+    def monotonic(self) -> float:
+        return self.now
 
-    monkeypatch.setattr(rate_limit.redis.Redis, "from_url", classmethod(boom))
 
+@pytest.fixture
+def clock(monkeypatch) -> Clock:
+    fake = Clock()
+    monkeypatch.setattr(rate_limit.time, "monotonic", fake.monotonic)
+    return fake
+
+
+@pytest.fixture
+def redis_down_then_up(monkeypatch) -> list[MagicMock]:
+    """Redis.from_url fails for the first connection, then returns a working client."""
+    healthy = _stub_client()
+    attempts: list[MagicMock] = []
+
+    def connect(*_a, **_kw):
+        attempts.append(healthy)
+        if len(attempts) == 1:
+            raise ConnectionError("loading")
+        return healthy
+
+    monkeypatch.setattr(rate_limit.redis.Redis, "from_url", classmethod(connect))
+    return attempts
+
+
+def test_rate_limit_redis_waits_before_retrying_a_failed_connection(redis_down_then_up, clock):
     assert rate_limit.rate_limit_redis() is None
+    clock.now += rate_limit.REDIS_RETRY_SECONDS - 1
     assert rate_limit.rate_limit_redis() is None
+
+    assert len(redis_down_then_up) == 1
+
+
+def test_rate_limit_redis_reconnects_after_the_retry_delay(redis_down_then_up, clock):
     assert rate_limit.rate_limit_redis() is None
-    assert attempts["n"] == 1
+    clock.now += rate_limit.REDIS_RETRY_SECONDS
+
+    assert rate_limit.rate_limit_redis() is redis_down_then_up[0]
+
+
+def test_redis_op_failure_backs_off_to_in_process_counting(monkeypatch, clock):
+    broken = MagicMock()
+    broken.pipeline.side_effect = Exception("connection reset")
+    monkeypatch.setattr(rate_limit.redis.Redis, "from_url", classmethod(lambda *_a, **_kw: broken))
+
+    rate_limit.check_rate_limit("k", 10, 60)
+    rate_limit.check_rate_limit("k", 10, 60)
+
+    assert broken.pipeline.call_count == 1
+
+
+def test_limit_holds_through_a_failed_first_connection(redis_down_then_up, clock):
+    """Login buckets keep counting while Redis is loading, and in Redis once it answers."""
+    during = [rate_limit.check_rate_limit("login:ip:1.2.3.4", 10, 60) for _ in range(12)]
+    clock.now += rate_limit.REDIS_RETRY_SECONDS
+    after = [rate_limit.check_rate_limit("login:ip:1.2.3.4", 10, 60) for _ in range(12)]
+
+    assert during == [True] * 10 + [False] * 2
+    assert after == [True] * 10 + [False] * 2
 
 
 def test_rate_limit_redis_caches_success(monkeypatch):

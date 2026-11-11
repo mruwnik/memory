@@ -6,6 +6,7 @@ from memory.api.MCP.servers import slack
 from memory.api.MCP.servers.slack import get_channel_history, list_channels, thread
 from memory.common.db import connection as db_connection
 from memory.common.db.models import (
+    APIKey,
     SlackApp,
     SlackChannel,
     SlackMessage,
@@ -180,3 +181,84 @@ async def test_list_channels_wraps_channel_and_workspace_names(db_session, slack
             "is_private": False,
         }
     ]
+
+
+@pytest.fixture
+def shared_workspace(db_session, regular_user, admin_user):
+    """T1, connected first by the admin and then by the regular user, holding a
+    public channel, a private channel and a DM."""
+    db_session.add(SlackWorkspace(id="T1", name="acme"))
+    db_session.flush()
+    for user in (admin_user, regular_user):
+        app = SlackApp(client_id=f"c{user.id}", name="app", created_by_user_id=user.id)
+        db_session.add(app)
+        db_session.flush()
+        credentials = SlackUserCredentials(slack_app_id=app.id, workspace_id="T1", user_id=user.id)
+        credentials.access_token = "xoxp-test"
+        db_session.add(credentials)
+        db_session.flush()
+    db_session.add_all(
+        [
+            SlackChannel(id="C1", workspace_id="T1", name="general", channel_type="channel"),
+            SlackChannel(id="G1", workspace_id="T1", name="secret", channel_type="private_channel", is_private=True),
+            SlackChannel(id="D1", workspace_id="T1", name="ceo", channel_type="dm", is_private=True),
+        ]
+    )
+    db_session.commit()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "session_fixture, expected",
+    [("user_session", ["C1"]), ("admin_session", ["C1", "D1", "G1"])],
+)
+async def test_list_channels_shows_other_members_private_channels_only_to_the_owner(
+    shared_workspace, request, session_fixture, expected
+):
+    session = request.getfixturevalue(session_fixture)
+    with mcp_auth_context(session.token):
+        result = await list_channels.fn(include_private=True, include_dms=True)
+
+    assert sorted(ch["id"] for ch in result["channels"]) == expected
+
+
+@pytest.fixture
+def admin_joined_second(db_session, regular_user, admin_user):
+    """T1, connected first by the regular user and then by the admin, so the admin
+    is a member but not its owner, holding a public channel and a DM."""
+    db_session.add(SlackWorkspace(id="T1", name="acme"))
+    db_session.flush()
+    for user in (regular_user, admin_user):
+        app = SlackApp(client_id=f"c{user.id}", name="app", created_by_user_id=user.id)
+        db_session.add(app)
+        db_session.flush()
+        credentials = SlackUserCredentials(slack_app_id=app.id, workspace_id="T1", user_id=user.id)
+        credentials.access_token = "xoxp-test"
+        db_session.add(credentials)
+        db_session.flush()
+    db_session.add_all(
+        [
+            SlackChannel(id="C1", workspace_id="T1", name="general", channel_type="channel"),
+            SlackChannel(id="D1", workspace_id="T1", name="ceo", channel_type="dm", is_private=True),
+        ]
+    )
+    db_session.commit()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "scopes, expected",
+    [(["read", "slack"], ["C1"]), (["*"], ["C1", "D1"])],
+    ids=["narrowed key", "admin key"],
+)
+async def test_list_channels_judges_admin_by_the_credential_not_the_user(
+    db_session, admin_user, admin_joined_second, scopes, expected
+):
+    key = APIKey.create(user_id=admin_user.id, scopes=scopes)
+    db_session.add(key)
+    db_session.commit()
+
+    with mcp_auth_context(key.key, scopes=scopes):
+        result = await list_channels.fn(include_private=True, include_dms=True)
+
+    assert sorted(ch["id"] for ch in result["channels"]) == expected

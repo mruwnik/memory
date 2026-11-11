@@ -1,8 +1,14 @@
+import json
+from unittest.mock import AsyncMock, Mock, patch
+
+import httpx
 import pytest
-from unittest.mock import Mock, patch
 import requests
 
-from memory.common import discord
+from memory.common import discord, settings
+from memory.common.content_processing import safe_task_execution
+from memory.common.db.models import DiscordBot, DiscordChannel, DiscordServer, HumanUser
+from memory.discord import rest
 
 BOT_ID = 42
 
@@ -110,143 +116,189 @@ def test_refresh_discord_metadata_for_a_bot_not_running(mock_post, mock_api_url)
         discord.refresh_discord_metadata(BOT_ID)
 
 
-@patch("memory.common.discord.send_to_channel")
-@patch("memory.common.settings.DISCORD_ERROR_CHANNEL", "errors")
-def test_send_error_message(mock_send):
-    """Test sending error message to error channel"""
-    mock_send.return_value = True
-
-    result = discord.send_error_message(BOT_ID, "Something broke")
-
-    assert result is True
-    mock_send.assert_called_once_with(BOT_ID, "errors", "Something broke")
+OPERATOR_CHANNEL = 2_000
+OTHER_CHANNEL = 1_000  # older than the operator's: a lower snowflake
 
 
-@patch("memory.common.discord.send_error_message")
-@patch("memory.common.settings.DISCORD_NOTIFICATIONS_ENABLED", True)
-def test_notify_task_failure_basic(mock_send_error):
-    """Test basic task failure notification"""
-    discord.notify_task_failure(
-        "test_task", "Something went wrong", bot_id=BOT_ID
+@pytest.fixture
+def discord_api():
+    sent: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(200, json={"id": "1"})
+
+    def client(**kwargs):
+        return httpx.AsyncClient(transport=httpx.MockTransport(handler), **kwargs)
+
+    with (
+        patch.object(rest, "public_http_client", side_effect=client),
+        patch.object(rest.asyncio, "sleep", new=AsyncMock()),
+    ):
+        yield sent
+
+
+def add_bot(db_session, email: str, application_id: int) -> DiscordBot:
+    owner = HumanUser(name=email, email=email, password_hash="x", scopes=["read", "write"])
+    db_session.add(owner)
+    db_session.flush()
+    bot = DiscordBot(
+        application_id=application_id, name=email, realtime="gateway", public_key="ab" * 32,
+        created_by_user_id=owner.id,
     )
-
-    mock_send_error.assert_called_once()
-    assert mock_send_error.call_args[0][0] == BOT_ID
-    message = mock_send_error.call_args[0][1]
-
-    assert "🚨 **Task Failed: test_task**" in message
-    assert "**Error:** Something went wrong" in message
+    bot.token = "tok-" + email
+    db_session.add(bot)
+    db_session.flush()
+    return bot
 
 
-@patch("memory.common.discord.send_error_message")
-@patch("memory.common.settings.DISCORD_NOTIFICATIONS_ENABLED", True)
-def test_notify_task_failure_with_args(mock_send_error):
-    """Test task failure notification with arguments"""
-    discord.notify_task_failure(
-        "test_task",
-        "Error occurred",
-        task_args=("arg1", 42),
-        task_kwargs={"key": "value", "number": 123},
-        bot_id=BOT_ID,
-    )
-
-    message = mock_send_error.call_args[0][1]
-
-    assert "**Args:** `('arg1', 42)" in message
-    assert "**Kwargs:** `{'key': 'value', 'number': 123}" in message
+def add_channel(
+    db_session, bot: DiscordBot | None, server_id: int, channel_id: int, verified: bool = True, channel_type: str = "text"
+) -> None:
+    db_session.merge(DiscordServer(id=server_id, name=f"s{server_id}", bot_id=bot and bot.id, verified=verified))
+    db_session.flush()
+    db_session.add(DiscordChannel(id=channel_id, server_id=server_id, name="ops-errors", channel_type=channel_type))
+    db_session.commit()
 
 
-@patch("memory.common.discord.send_error_message")
-@patch("memory.common.settings.DISCORD_NOTIFICATIONS_ENABLED", True)
-def test_notify_task_failure_with_traceback(mock_send_error):
-    """Test task failure notification with traceback"""
-    traceback = "Traceback (most recent call last):\n  File test.py, line 10\n    raise Exception('test')\nException: test"
-
-    discord.notify_task_failure(
-        "test_task", "Error occurred", traceback_str=traceback, bot_id=BOT_ID
-    )
-
-    message = mock_send_error.call_args[0][1]
-
-    assert "**Traceback:**" in message
-    assert "Exception: test" in message
+@pytest.fixture
+def alerts_on(monkeypatch):
+    monkeypatch.setattr(settings, "DISCORD_NOTIFICATIONS_ENABLED", True)
+    monkeypatch.setattr(settings, "DISCORD_ERROR_CHANNEL", "ops-errors")
 
 
-@patch("memory.common.discord.send_error_message")
-@patch("memory.common.settings.DISCORD_NOTIFICATIONS_ENABLED", True)
-def test_notify_task_failure_truncates_long_error(mock_send_error):
-    """Test that long error messages are truncated"""
-    long_error = "x" * 600
-
-    discord.notify_task_failure("test_task", long_error, bot_id=BOT_ID)
-
-    message = mock_send_error.call_args[0][1]
-
-    # Error should be truncated to 500 chars - check that the full 600 char string is not there
-    assert "**Error:** " + long_error[:500] in message
-    # The full 600-char error should not be present
-    error_section = message.split("**Error:** ")[1].split("\n")[0]
-    assert len(error_section) == 500
+def sent_paths(requests: list[httpx.Request]) -> list[tuple[str, str]]:
+    return [(r.url.path, r.headers["authorization"]) for r in requests]
 
 
-@patch("memory.common.discord.send_error_message")
-@patch("memory.common.settings.DISCORD_NOTIFICATIONS_ENABLED", True)
-def test_notify_task_failure_truncates_long_traceback(mock_send_error):
-    """Test that long tracebacks are truncated"""
-    long_traceback = "x" * 1000
+@pytest.mark.parametrize("verified", [True, False])
+def test_alert_ignores_same_named_channel_of_another_users_bot(db_session, discord_api, alerts_on, verified):
+    operator = add_bot(db_session, "operator@example.com", 7)
+    mallory = add_bot(db_session, "mallory@example.com", 8)
+    add_channel(db_session, operator, 1, OPERATOR_CHANNEL)
+    add_channel(db_session, mallory, 2, OTHER_CHANNEL, verified=verified)
 
-    discord.notify_task_failure(
-        "test_task", "Error", traceback_str=long_traceback, bot_id=BOT_ID
-    )
+    discord.notify_task_failure("sync_note", "ValueError", bot_id=operator.id)
 
-    message = mock_send_error.call_args[0][1]
-
-    # Traceback should show last 800 chars
-    assert long_traceback[-800:] in message
-    # The full 1000-char traceback should not be present
-    traceback_section = message.split("**Traceback:**\n```\n")[1].split("\n```")[0]
-    assert len(traceback_section) == 800
+    assert sent_paths(discord_api) == [
+        (f"/api/v10/channels/{OPERATOR_CHANNEL}/messages", "Bot tok-operator@example.com")
+    ]
 
 
-@patch("memory.common.discord.send_error_message")
-@patch("memory.common.settings.DISCORD_NOTIFICATIONS_ENABLED", True)
-def test_notify_task_failure_truncates_long_args(mock_send_error):
-    """Test that long task arguments are truncated"""
-    long_args = ("x" * 300,)
+def test_alert_ignores_channel_in_unverified_server_claimed_for_the_operator_bot(db_session, discord_api, alerts_on):
+    operator = add_bot(db_session, "operator@example.com", 7)
+    add_channel(db_session, operator, 1, OPERATOR_CHANNEL)
+    add_channel(db_session, operator, 2, OTHER_CHANNEL, verified=False)
 
-    discord.notify_task_failure(
-        "test_task", "Error", task_args=long_args, bot_id=BOT_ID
-    )
+    discord.notify_task_failure("sync_note", "ValueError", bot_id=operator.id)
 
-    message = mock_send_error.call_args[0][1]
-
-    # Args should be truncated to 200 chars
-    assert (
-        len(message.split("**Args:**")[1].split("\n")[0]) <= 210
-    )  # Some buffer for formatting
+    assert sent_paths(discord_api) == [
+        (f"/api/v10/channels/{OPERATOR_CHANNEL}/messages", "Bot tok-operator@example.com")
+    ]
 
 
-@patch("memory.common.discord.send_error_message")
-@patch("memory.common.settings.DISCORD_NOTIFICATIONS_ENABLED", True)
-def test_notify_task_failure_truncates_long_kwargs(mock_send_error):
-    """Test that long task kwargs are truncated"""
-    long_kwargs = {"key": "x" * 300}
+@pytest.mark.parametrize("operator_channels", [[], [1_500, OPERATOR_CHANNEL]])
+def test_alert_sends_nothing_without_exactly_one_named_channel(db_session, discord_api, alerts_on, operator_channels):
+    operator = add_bot(db_session, "operator@example.com", 7)
+    mallory = add_bot(db_session, "mallory@example.com", 8)
+    add_channel(db_session, mallory, 2, OTHER_CHANNEL)
+    for server_id, channel_id in enumerate(operator_channels, start=10):
+        add_channel(db_session, operator, server_id, channel_id)
 
-    discord.notify_task_failure(
-        "test_task", "Error", task_kwargs=long_kwargs, bot_id=BOT_ID
-    )
+    discord.notify_task_failure("sync_note", "ValueError", bot_id=operator.id)
 
-    message = mock_send_error.call_args[0][1]
+    assert discord_api == []
 
-    # Kwargs should be truncated to 200 chars
-    assert len(message.split("**Kwargs:**")[1].split("\n")[0]) <= 210
+
+@pytest.mark.parametrize("operator_channel_type", ["text", "news"])
+@pytest.mark.parametrize("other_type", ["thread", "voice", "forum"])
+def test_alert_ignores_same_named_threads_and_non_text_channels(
+    db_session, discord_api, alerts_on, operator_channel_type, other_type
+):
+    operator = add_bot(db_session, "operator@example.com", 7)
+    add_channel(db_session, operator, 1, OPERATOR_CHANNEL, channel_type=operator_channel_type)
+    add_channel(db_session, operator, 1, OTHER_CHANNEL, channel_type=other_type)
+
+    discord.notify_task_failure("sync_note", "ValueError", bot_id=operator.id)
+
+    assert sent_paths(discord_api) == [
+        (f"/api/v10/channels/{OPERATOR_CHANNEL}/messages", "Bot tok-operator@example.com")
+    ]
+
+
+@pytest.mark.parametrize("channel_type", ["thread", "voice", "forum"])
+def test_alert_never_goes_to_a_same_named_thread_alone(db_session, discord_api, alerts_on, channel_type):
+    operator = add_bot(db_session, "operator@example.com", 7)
+    add_channel(db_session, operator, 1, OTHER_CHANNEL, channel_type=channel_type)
+
+    discord.notify_task_failure("sync_note", "ValueError", bot_id=operator.id)
+
+    assert discord_api == []
+
+
+def test_alert_goes_to_configured_channel_id(db_session, discord_api, alerts_on, monkeypatch):
+    operator = add_bot(db_session, "operator@example.com", 7)
+    db_session.commit()
+    monkeypatch.setattr(settings, "DISCORD_ERROR_CHANNEL", "4242")
+
+    discord.notify_task_failure("sync_note", "ValueError", bot_id=operator.id)
+
+    assert sent_paths(discord_api) == [("/api/v10/channels/4242/messages", "Bot tok-operator@example.com")]
+
+
+def test_alert_uses_settings_bot(db_session, discord_api, alerts_on, monkeypatch):
+    operator = add_bot(db_session, "operator@example.com", 7)
+    add_channel(db_session, operator, 1, OPERATOR_CHANNEL)
+    monkeypatch.setattr(settings, "DISCORD_BOT_ID", operator.id)
+
+    discord.notify_task_failure("sync_note", "ValueError", task_id="abc-123", job_id=17)
+
+    assert [json.loads(r.content)["content"] for r in discord_api] == [
+        "🚨 **Task Failed: sync_note**\n**Error:** ValueError\n**Task id:** abc-123\n**Job id:** 17"
+    ]
+
+
+@pytest.mark.parametrize(
+    "task_id, job_id, expected",
+    [
+        (None, None, "🚨 **Task Failed: t**\n**Error:** KeyError"),
+        ("abc", None, "🚨 **Task Failed: t**\n**Error:** KeyError\n**Task id:** abc"),
+        (None, 5, "🚨 **Task Failed: t**\n**Error:** KeyError\n**Job id:** 5"),
+    ],
+)
+def test_failure_message_holds_ids_only(task_id, job_id, expected):
+    assert discord.failure_message("t", "KeyError", task_id, job_id) == expected
+
+
+@pytest.mark.parametrize(
+    "kwargs, expected",
+    [({"job_id": 9}, 9), ({"job_id": "9"}, None), ({"job_id": True}, None), ({}, None)],
+)
+def test_job_id_of(kwargs, expected):
+    assert discord.job_id_of(kwargs) == expected
+
+
+def test_failed_task_alert_carries_no_task_arguments(db_session, discord_api, alerts_on, monkeypatch):
+    operator = add_bot(db_session, "operator@example.com", 7)
+    add_channel(db_session, operator, 1, OPERATOR_CHANNEL)
+    monkeypatch.setattr(settings, "DISCORD_BOT_ID", operator.id)
+
+    @safe_task_execution
+    def sync_note(subject: str, content: str, job_id: int):
+        raise ValueError(f"bad row: {content}")
+
+    with pytest.raises(ValueError):
+        sync_note(subject="salary review", content="PRIVATE NOTE TEXT", job_id=3)
+
+    assert [json.loads(r.content)["content"] for r in discord_api] == [
+        "🚨 **Task Failed: sync_note**\n**Error:** ValueError\n**Job id:** 3"
+    ]
 
 
 @patch("memory.common.discord.send_error_message")
 @patch("memory.common.settings.DISCORD_NOTIFICATIONS_ENABLED", False)
 def test_notify_task_failure_disabled(mock_send_error):
-    """Test that notifications are not sent when disabled"""
-    discord.notify_task_failure("test_task", "Error occurred", bot_id=BOT_ID)
+    discord.notify_task_failure("test_task", "ValueError", bot_id=BOT_ID)
 
     mock_send_error.assert_not_called()
 
@@ -254,11 +306,10 @@ def test_notify_task_failure_disabled(mock_send_error):
 @patch("memory.common.discord.send_error_message")
 @patch("memory.common.settings.DISCORD_NOTIFICATIONS_ENABLED", True)
 def test_notify_task_failure_send_error_exception(mock_send_error):
-    """Test that exceptions in send_error_message don't propagate"""
+    """Exceptions while sending never reach the failing task."""
     mock_send_error.side_effect = Exception("Failed to send")
 
-    # Should not raise
-    discord.notify_task_failure("test_task", "Error occurred", bot_id=BOT_ID)
+    discord.notify_task_failure("test_task", "ValueError", bot_id=BOT_ID)
 
     mock_send_error.assert_called_once()
 

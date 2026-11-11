@@ -151,21 +151,22 @@ services:
     image: redis:7.2-alpine
     restart: unless-stopped
     networks: [kbnet]
-    # Enable AOF persistence for data durability
+    # The password reaches redis-server through a config file and redis-cli
+    # through REDISCLI_AUTH, never on a command line (visible in `ps`).
+    # AOF persistence for data durability.
+    environment:
+      REDISCLI_AUTH: ${REDIS_PASSWORD}
+    entrypoint: ["/bin/sh", "-c"]
     command:
-      [
-        "redis-server",
-        "--appendonly",
-        "yes",
-        "--appendfsync",
-        "everysec",
-        "--requirepass",
-        "${REDIS_PASSWORD}",
-      ]
+      - >-
+        umask 077 &&
+        password=$$(printf '%s' "$$REDISCLI_AUTH" | sed 's/[\\"]/\\&/g') &&
+        printf 'requirepass "%s"\nappendonly yes\nappendfsync everysec\n' "$$password" > /tmp/redis.conf &&
+        exec redis-server /tmp/redis.conf
     volumes:
       - redis_data:/data:rw
     healthcheck:
-      test: ["CMD", "redis-cli", "--pass", "${REDIS_PASSWORD}", "ping"]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -230,12 +231,13 @@ services:
       kbnet:
       beepernet:
     security_opt: ["no-new-privileges=true"]
-    # Healthy, not just started: the api reads its module flags from Postgres as it boots.
+    # Healthy, not just started: the api reads its module flags from Postgres as it boots,
+    # and its rate limits count in Redis.
     depends_on:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
       qdrant:
         condition: service_started
     environment:
