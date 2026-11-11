@@ -250,7 +250,7 @@ reports the markers.
 |---|---|---|
 | `SECRETS_ENCRYPTION_KEY` | `secrets/secrets_encryption_key.txt` | Every stored secret is re-encrypted in one transaction. Transfer links, password reset links and OAuth sign-ins in flight stop working |
 | `POSTGRES_PASSWORD` | `secrets/postgres_password.txt` | `ALTER ROLE` first, over the container's socket |
-| `REDIS_PASSWORD` | `.env` | Redis is recreated with the new `--requirepass` |
+| `REDIS_PASSWORD` | `.env` | Redis is recreated and writes the new password to its config file |
 | `BACKUP_ENCRYPTION_KEY` | `.env`, the file `BACKUP_ENCRYPTION_KEY_FILE` names, or `ops.env` on EC2 | New backups use the new key |
 | `TRANSFER_TOKEN_SECRET` | `.env`, only if set there | In-flight transfer and reset links stop working. Unset, it is derived from `SECRETS_ENCRYPTION_KEY` and changes with it |
 

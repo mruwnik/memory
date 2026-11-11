@@ -119,6 +119,7 @@ a new, empty `## Unreleased` above it.
 - OAuth registration and `/authorize` refuse a redirect URI with a user or password before its host (`https://x@host/...`); the allowlist and the web UI callback check compare the same (scheme, host, port), default ports included, so such a URI can no longer pass for another page on this server.
 - `tools/ops/logs.sh` scrubs bytes and other prefixed literals (`b'...'`, `rb"..."`, `bytearray(b'...')`) like plain quoted strings, and cuts Celery's "raised unexpected:" lines to the exception's type.
 - Admins can sign out and delete any user's Beeper account (`POST /beeper/accounts/<id>/sign-out`, `DELETE /beeper/accounts/<id>`), freeing an allowlisted Server someone else added an account on.
+- `tools/backup_databases.sh` hands BACKUP_ENCRYPTION_KEY to openssl through the environment, and the `redis` service gets REDIS_PASSWORD through a private config file and `REDISCLI_AUTH` instead of `--requirepass` / `redis-cli --pass`: neither secret shows in the host's process list any more. Redis is recreated on the next `docker compose up -d`.
 ### Required env vars
 None
 
