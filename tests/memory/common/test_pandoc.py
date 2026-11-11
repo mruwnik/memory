@@ -78,7 +78,8 @@ def test_docx_to_pdf_kills_pandoc_and_its_children_on_timeout(
         tmp_path / "pandoc", f"sleep 60 & echo $! > {pid_file}; sleep 60"
     )
     monkeypatch.setattr(extract, "PANDOC_PATH", script)
-    monkeypatch.setattr(settings, "PANDOC_TIMEOUT_SECONDS", 0.5)
+    # Long enough for the script to start and record its child on a loaded machine.
+    monkeypatch.setattr(settings, "PANDOC_TIMEOUT_SECONDS", 2)
 
     started = time.monotonic()
     with pytest.raises(PandocError):
