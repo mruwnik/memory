@@ -742,6 +742,25 @@ def user_can_access_project(
     return result is not None
 
 
+def owner_may_file_into_project(
+    db: "Session | scoped_session[Session]", owner: UserLike, project_id: int
+) -> bool:
+    """Whether a sync running on ``owner``'s credentials may file items under a project.
+
+    Filing an item under a project grants that project's teams access to it,
+    so the source's owner must belong to one of them (or be an admin). A
+    project with no teams grants no one, so filing into it is always allowed.
+    """
+    if has_admin_scope(owner):
+        return True
+    project_team_ids = set(
+        db.scalars(
+            select(project_teams.c.team_id).where(project_teams.c.project_id == project_id)
+        )
+    )
+    return not project_team_ids or bool(project_team_ids & get_user_team_ids(db, owner))
+
+
 def user_can_access_team(
     db: "Session | scoped_session[Session]", user: UserLike, team_id: int
 ) -> bool:

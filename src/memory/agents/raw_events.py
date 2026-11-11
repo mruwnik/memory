@@ -23,6 +23,7 @@ from memory.common.access_control import (
     UserProxy,
     credential_scopes,
     get_user_project_roles,
+    owner_may_file_into_project,
     user_can_access,
 )
 from memory.common.db.connection import DBSession
@@ -117,6 +118,15 @@ def chain_access(chain: list[Any]) -> tuple[int | None, str]:
     return project, sensitivity
 
 
+def fileable_project(db: DBSession, account: GithubAccount | None, project_id: int | None) -> int | None:
+    """``project_id`` when a GitHub sync on ``account`` files items there, as
+    memory.workers.tasks.github.fileable_project_id decides, else None."""
+    owner = account.user if account else None
+    if project_id is None or owner is None:
+        return None
+    return project_id if owner_may_file_into_project(db, owner, project_id) else None
+
+
 def snowflake(value: str | None) -> int | None:
     # isdigit alone takes "²", which int() refuses.
     return int(value) if value and value.isascii() and value.isdigit() else None
@@ -168,12 +178,15 @@ def container_of(db: DBSession, event: Event) -> Container | None:
             return None if repo_id is None else Container(False)
         account = db.get(GithubAccount, repo.account_id)
         # As memory.workers.tasks.github files an issue or PR: under its milestone's
-        # project, else the repo's.
+        # project, else the repo's, each only when the account's owner may file there.
         number = milestone_number(event.payload)
-        filed = Project.number.is_(None) if number is None else Project.number == number
-        project = db.scalar(select(Project.id).where(Project.repo_id == repo.id, filed))
-        if number is not None and project is None:
-            return None
+        milestone = None
+        if number is not None:
+            milestone = db.scalar(select(Project.id).where(Project.repo_id == repo.id, Project.number == number))
+            if milestone is None:
+                return None
+        repo_project = db.scalar(select(Project.id).where(Project.repo_id == repo.id, Project.number.is_(None)))
+        project = fileable_project(db, account, milestone) or fileable_project(db, account, repo_project)
         return Container(
             repo.active and bool(account and account.active), project, creator_id=chain_creator([repo], event)
         )
