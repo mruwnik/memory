@@ -1408,6 +1408,7 @@ def test_a_poll_claims_an_unclaimed_message(_mapping, db_session, unclaimed_mess
 
 
 SHARED_CHANNEL = "C0SHARED01"
+OLDER_TS = "1704067400.000100"
 REAL_TS = "1704067500.000100"
 REPLY_TS = "1704067600.000100"
 
@@ -1419,8 +1420,10 @@ class FakeSlack:
         self.messages = messages
         self.readable = readable
         self.channels = channels or {}
-        # Messages a token can't see in a channel it reads, as past a free plan's history limit.
+        # Messages one token can't see in a channel it reads.
         self.hidden: dict[str, set[str]] = {}
+        # A free plan's history window: older messages are hidden from every token.
+        self.history_starts: str | None = None
         self.outage: str | Exception | httpx.Response | None = None
         self.retry_after = "120"
         self.tokens: list[str] = []
@@ -1441,19 +1444,30 @@ class FakeSlack:
         method = request.url.path.rsplit("/", 1)[-1]
         if method == "conversations.info":
             return httpx.Response(200, json={"ok": True, "channel": self.channels[channel]})
-        window = [
-            m for m in self.messages.get(channel, [])
-            if float(form["oldest"]) <= float(m["ts"]) <= float(form["latest"])
-            and m["ts"] not in self.hidden.get(token, set())
-        ]
+        visible = [m for m in self.messages.get(channel, []) if self.visible(token, m)]
+        window = [m for m in visible if self.in_window(form, m["ts"])]
         if method == "conversations.history":
-            found = [m for m in window if m.get("thread_ts", m["ts"]) == m["ts"]]
+            found = sorted(
+                (m for m in window if m.get("thread_ts", m["ts"]) == m["ts"]), key=lambda m: float(m["ts"]), reverse=True
+            )
         else:
-            thread = [m for m in self.messages.get(channel, []) if m.get("thread_ts") == form["ts"]]
+            thread = [m for m in visible if m.get("thread_ts") == form["ts"]]
             if not thread:
                 return httpx.Response(200, json={"ok": False, "error": "thread_not_found"})
             found = thread[:1] + [m for m in window if m.get("thread_ts") == form["ts"] and m["ts"] != form["ts"]]
         return httpx.Response(200, json={"ok": True, "messages": found[: int(form["limit"])], "has_more": False})
+
+    def visible(self, token: str, message: dict) -> bool:
+        past_window = self.history_starts is not None and float(message["ts"]) < float(self.history_starts)
+        return not past_window and message["ts"] not in self.hidden.get(token, set())
+
+    @staticmethod
+    def in_window(form: dict[str, str], ts: str) -> bool:
+        """Slack's oldest/latest bounds: open-ended when absent, exclusive unless inclusive=true."""
+        oldest, latest, value = float(form.get("oldest", 0)), float(form.get("latest", "inf")), float(ts)
+        if form.get("inclusive") == "true":
+            return oldest <= value <= latest
+        return oldest < value < latest
 
 
 @pytest.fixture
@@ -1481,10 +1495,11 @@ def two_tenants(db_session, slack_app, slack_credentials, slack_channel, slack_u
 
 @pytest.fixture
 def fake_slack(slack_channel):
+    older = {"ts": OLDER_TS, "user": "U_B", "text": "an earlier message"}
     real = {"ts": REAL_TS, "user": "U_A", "text": "what U_A actually wrote"}
     reply = {"ts": REPLY_TS, "thread_ts": REAL_TS, "user": "U_A", "text": "U_A's actual reply"}
     slack_side = FakeSlack(
-        messages={SHARED_CHANNEL: [real | {"thread_ts": REAL_TS}, reply], slack_channel.id: [real]},
+        messages={SHARED_CHANNEL: [real | {"thread_ts": REAL_TS}, reply, older], slack_channel.id: [real]},
         readable={"xoxp-test-token": {slack_channel.id, SHARED_CHANNEL}, "xoxp-a": {SHARED_CHANNEL}},
         channels={
             SHARED_CHANNEL: {"id": SHARED_CHANNEL, "name": "shared", "is_private": False, "is_archived": False},
@@ -1662,11 +1677,33 @@ def sibling_app(db_session, two_tenants, slack_user):
     return app.id
 
 
+def hide_from_a(fake_slack: FakeSlack) -> None:
+    fake_slack.hidden = {"xoxp-a": {REAL_TS}}
+
+
+def delete_from_slack(fake_slack: FakeSlack) -> None:
+    fake_slack.messages[SHARED_CHANNEL] = [m for m in fake_slack.messages[SHARED_CHANNEL] if m["ts"] == OLDER_TS]
+
+
+def start_history_after_it(fake_slack: FakeSlack) -> None:
+    fake_slack.history_starts = REPLY_TS
+
+
+# hidden_from_A: only A's token misses the message; gone: deleted, older messages
+# stay; past_window: older than the workspace's history window, hidden from every token.
+SLACK_SIDES = {"hidden_from_A": hide_from_a, "gone": delete_from_slack, "past_window": start_history_after_it}
+
+
+def set_slack_side(fake_slack: FakeSlack, slack_side: str) -> None:
+    SLACK_SIDES[slack_side](fake_slack)
+
+
 @pytest.mark.parametrize(
     "pusher, slack_side, deleted",
     [
-        ("A", "hidden_from_A", False),  # A's history window hides it; B, which stored it, still sees it
+        ("A", "hidden_from_A", False),  # B, which stored it, still sees it
         ("A", "gone", True),  # B's token confirms it is gone
+        ("A", "past_window", False),  # B's token can't tell it from deleted
         ("sibling", "gone", True),
     ],
 )
@@ -1675,11 +1712,30 @@ def test_a_pushed_delete_is_confirmed_by_the_app_that_stored_the_message(
 ):
     stored(db_session, two_tenants["B"])
     fake_slack.readable["xoxp-sibling"] = {SHARED_CHANNEL}
-    fake_slack.hidden = {"hidden_from_A": {"xoxp-a": {REAL_TS}}, "gone": {}}[slack_side]
-    fake_slack.messages[SHARED_CHANNEL] = fake_slack.messages[SHARED_CHANNEL] * (slack_side != "gone")
+    set_slack_side(fake_slack, slack_side)
     apps = two_tenants | {"sibling": sibling_app}
 
     result = delete_pushed(apps[pusher], SHARED_CHANNEL)
+
+    assert (result["status"], len(stored_rows(db_session)) == 0) == ("deleted" if deleted else "ignored", deleted)
+
+
+@pytest.mark.parametrize(
+    "remaining, deleted",
+    [
+        ([REAL_TS], True),  # the thread's parent, older than the reply, is still there
+        ([], False),  # nothing older shows the history window reaches back past the reply
+    ],
+)
+def test_a_pushed_delete_of_another_apps_reply_needs_an_older_message_in_the_thread(
+    db_session, two_tenants, fake_slack, remaining, deleted
+):
+    stored(db_session, two_tenants["B"], message_ts=REPLY_TS, thread_ts=REAL_TS)
+    fake_slack.messages[SHARED_CHANNEL] = [
+        m for m in fake_slack.messages[SHARED_CHANNEL] if m["ts"] in remaining
+    ] + [{"ts": "1704067700.000100", "thread_ts": REAL_TS, "user": "U_A", "text": "a later reply"}]
+
+    result = delete_pushed(two_tenants["A"], SHARED_CHANNEL, message_ts=REPLY_TS)
 
     assert (result["status"], len(stored_rows(db_session)) == 0) == ("deleted" if deleted else "ignored", deleted)
 
@@ -1689,6 +1745,7 @@ def test_a_pushed_delete_is_confirmed_by_the_app_that_stored_the_message(
     [
         ("usable", "gone", True),  # B, the workspace's owner, confirms it is gone
         ("usable", "hidden_from_A", False),  # B's app still sees it
+        ("usable", "past_window", False),  # B's app can't tell it from deleted
         ("expired", "gone", False),  # no app of the owner can confirm
     ],
 )
@@ -1700,8 +1757,7 @@ def test_a_pushed_delete_of_a_message_whose_storing_app_is_gone_is_confirmed_by_
         "usable": None, "expired": datetime.now(timezone.utc) - timedelta(days=1)
     }[owner_token]
     db_session.commit()
-    fake_slack.hidden = {"hidden_from_A": {"xoxp-a": {REAL_TS}}, "gone": {}}[slack_side]
-    fake_slack.messages[SHARED_CHANNEL] = fake_slack.messages[SHARED_CHANNEL] * (slack_side != "gone")
+    set_slack_side(fake_slack, slack_side)
 
     result = delete_pushed(two_tenants["A"], SHARED_CHANNEL)
 

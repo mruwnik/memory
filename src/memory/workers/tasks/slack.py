@@ -1204,6 +1204,26 @@ def find_message(client: SlackClient, channel_id: str, message_ts: str, thread_t
     return next((m for m in listing.get("messages", []) if m.get("ts") == message_ts), None)
 
 
+def ts_key(ts: str) -> tuple[int, int]:
+    """A Slack timestamp as a sortable key, without float rounding."""
+    seconds, _, micros = ts.partition(".")
+    return int(seconds), int(micros or 0)
+
+
+def older_message(client: SlackClient, channel_id: str, message_ts: str, thread_ts: str | None) -> dict | None:
+    """A message older than ``message_ts`` in its channel or thread that the client's
+    token can read, or None. Finding one shows Slack's history window still reaches
+    back past ``message_ts``, so the message's absence means it was deleted."""
+    if thread_ts and thread_ts != message_ts:
+        listing = client.call("conversations.replies", channel=channel_id, ts=thread_ts, limit=1)
+    else:
+        listing = client.call(
+            "conversations.history", channel=channel_id, latest=message_ts, inclusive="false", limit=1
+        )
+    older = (m for m in listing.get("messages", []) if ts_key(m.get("ts", message_ts)) < ts_key(message_ts))
+    return next(older, None)
+
+
 # Slack errors that say "not now" rather than "this app can't read that".
 TRANSIENT_SLACK_ERRORS = frozenset(
     {"ratelimited", "internal_error", "fatal_error", "service_unavailable", "request_timeout"}
@@ -1397,8 +1417,11 @@ def mark_slack_message_deleted(
     The deletion is confirmed first with the token of the app that stored the
     message, the pusher's own when the same user owns both, or the workspace
     owner's when the storing app is gone (``delete_confirmer``): that token must read the channel, and Slack must no
-    longer have the message (or only its tombstone). Removes the SlackMessage
-    row, its Chunks and its Qdrant points. Message identity is
+    longer have the message (or only its tombstone). Slack answers the same for a
+    message past the workspace's history window as for a deleted one, so when the
+    confirming app isn't the pusher's, plain absence counts only if that token
+    still reads an older message there. Removes the SlackMessage row, its Chunks
+    and its Qdrant points. Message identity is
     ``(workspace_id, channel_id, message_ts)``.
 
     Confirming with another app's token spends its owner's Slack quota, so the
@@ -1427,6 +1450,17 @@ def mark_slack_message_deleted(
     if not seen.readable or (seen.found is not None and seen.found.get("subtype") != "tombstone"):
         logger.info(f"Slack app {slack_app_id} pushed a delete of {message_ts} that Slack doesn't confirm; ignored")
         return {"status": "ignored", "message_ts": message_ts}
+    if seen.found is None and not own_token:
+        try:
+            earlier = read_as_app(
+                workspace_id, channel_id, confirmer,
+                lambda client: older_message(client, channel_id, message_ts, thread_ts), 0,
+            )
+        except PushedMessageUnread as e:
+            raise self.retry(exc=e, countdown=PUSH_READ_BACK_DELAY * (self.request.retries + 1))
+        if earlier.found is None:
+            logger.info(f"Slack app {slack_app_id} pushed a delete of {message_ts} past the history window; ignored")
+            return {"status": "ignored", "message_ts": message_ts}
 
     with make_session() as session:
         identity = {"workspace_id": workspace_id, "channel_id": channel_id, "message_ts": message_ts}
