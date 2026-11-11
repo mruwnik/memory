@@ -396,6 +396,9 @@ API_RATE_LIMIT_DEFAULT = os.getenv("API_RATE_LIMIT_DEFAULT", "100/minute")
 # Used by /oauth/login and /api/users/me/change-password — see
 # `memory.common.rate_limit`.
 API_RATE_LIMIT_AUTH = os.getenv("API_RATE_LIMIT_AUTH", "10/minute")
+# A correct password from an address that logged in to the account within
+# this many days is let through even while its failed-login bucket is full.
+LOGIN_KNOWN_ADDRESS_DAYS = int(os.getenv("LOGIN_KNOWN_ADDRESS_DAYS", 30))
 # Comma-separated set of immediate-hop IPs whose ``X-Forwarded-For`` the
 # rate limiter should trust. Anything else falls back to the direct
 # connection IP — preventing a remote attacker from rotating XFF to mint

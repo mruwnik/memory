@@ -20,7 +20,7 @@ import ipaddress
 import logging
 import re
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import redis
 
@@ -155,7 +155,10 @@ def rate_limit_key(request: "Request") -> str:
 
     Trust ``X-Forwarded-For`` only when the *immediate* TCP peer is a
     configured trusted proxy (``RATE_LIMIT_TRUSTED_PROXIES``: addresses
-    or CIDRs, like Uvicorn's ``--forwarded-allow-ips``). The
+    or CIDRs, like Uvicorn's ``--forwarded-allow-ips``), and then only
+    the hops trusted proxies appended: the key is the right-most entry
+    that isn't itself a trusted proxy. Entries to its left were sent by
+    the client and can say anything. The
     ``"*"`` wildcard exists for parity with Uvicorn's
     ``--forwarded-allow-ips=*`` default but explicitly opts out of the
     spoofing protection — operators behind a real proxy should list its
@@ -166,9 +169,52 @@ def rate_limit_key(request: "Request") -> str:
     silently inherits the spoofing bypass.
     """
     immediate = request.client.host if request.client else "unknown"
-    if is_trusted_proxy(immediate):
-        xff = request.headers.get("x-forwarded-for", "")
-        if xff:
-            # Left-most entry is the original client per RFC 7239 §5.2.
-            return xff.split(",")[0].strip() or immediate
-    return immediate
+    if not is_trusted_proxy(immediate):
+        return immediate
+    hops = [h.strip() for h in request.headers.get("x-forwarded-for", "").split(",") if h.strip()]
+    untrusted = [h for h in hops if not is_trusted_proxy(h)]
+    if untrusted:
+        return untrusted[-1]
+    # Every hop is a trusted proxy (or "*" trusts all): the left-most is the client.
+    return hops[0] if hops else immediate
+
+
+def rate_limit_reached(key: str, spec: str) -> bool:
+    """Whether ``key``'s current window is already full, without counting a hit.
+    Fails open like check_rate_limit."""
+    if not settings.API_RATE_LIMIT_ENABLED:
+        return False
+    client = rate_limit_redis()
+    if client is None:
+        return False
+    limit, window = parse_limit(spec)
+    redis_key = f"rl:{key}:{int(time.time()) // window}"
+    try:
+        # redis-py types sync and async results together.
+        count = cast("bytes | None", client.get(redis_key))
+    except Exception as exc:
+        logger.warning("rate_limit: Redis op failed, failing open: %s", type(exc).__name__)
+        return False
+    return int(count or 0) >= limit
+
+
+def remember(key: str, ttl_seconds: int) -> None:
+    """Record ``key`` for ``ttl_seconds``; a Redis failure loses the record."""
+    client = rate_limit_redis()
+    if client is None:
+        return
+    try:
+        client.set(f"rl-mark:{key}", 1, ex=ttl_seconds)
+    except Exception as exc:
+        logger.warning("rate_limit: Redis op failed: %s", type(exc).__name__)
+
+
+def remembered(key: str) -> bool:
+    client = rate_limit_redis()
+    if client is None:
+        return False
+    try:
+        return bool(client.exists(f"rl-mark:{key}"))
+    except Exception as exc:
+        logger.warning("rate_limit: Redis op failed: %s", type(exc).__name__)
+        return False

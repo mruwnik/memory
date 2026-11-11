@@ -24,7 +24,13 @@ from memory.common.db.connection import make_session, get_engine
 from memory.common.db.models import OAuthState
 from memory.common.module_settings import boot_modules
 from memory.common.qdrant import get_qdrant_client
-from memory.common.rate_limit import check_rate_limit_spec, rate_limit_key
+from memory.common.rate_limit import (
+    check_rate_limit_spec,
+    rate_limit_key,
+    rate_limit_reached,
+    remember,
+    remembered,
+)
 from memory.common.version import db_revision, version_info
 
 logger = logging.getLogger(__name__)
@@ -143,10 +149,13 @@ async def login_page(request: Request):
 async def handle_login(request: Request):
     """Handle login form submission.
 
-    Rate-limited per (client IP, email) to bound credential-stuffing rate
-    against a single account even when the attacker rotates source IPs.
-    Uses authenticate_user so a missing user still incurs a dummy bcrypt
-    check, defeating timing-based email enumeration.
+    Every attempt counts against the client IP's bucket. Failed attempts
+    count against the account's bucket, which bounds guessing against one
+    account when the attacker rotates source IPs; while it is full, only
+    addresses that logged in to the account recently
+    (``LOGIN_KNOWN_ADDRESS_DAYS``) may try, so failures sent from elsewhere
+    can't lock the owner out. Uses authenticate_user so a missing user still
+    incurs a dummy bcrypt check, defeating timing-based email enumeration.
 
     The IP bucket key is derived via ``rate_limit_key`` (NOT
     ``request.client.host`` directly): the latter blindly trusts
@@ -172,24 +181,30 @@ async def handle_login(request: Request):
     # because that's the existing behaviour and CI auth code paths key on it.
     email_key = email_raw.lower()
     ip_key = rate_limit_key(request)
-    bucket_keys = [
-        f"login:ip:{ip_key}",
-        f"login:email:{email_key}" if email_key else None,
-    ]
-    for key in bucket_keys:
-        if key and not check_rate_limit_spec(key, settings.API_RATE_LIMIT_AUTH):
-            logger.warning("Login rate-limit exceeded for %s", key)
-            return login_form(
-                request,
-                oauth_params,
-                "Too many login attempts. Please wait a minute and try again.",
-            )
+    failures_key = f"login:email:{email_key}"
+    known_key = f"login:known:{email_key}:{ip_key}"
+    ip_limited = not check_rate_limit_spec(f"login:ip:{ip_key}", settings.API_RATE_LIMIT_AUTH)
+    account_limited = (
+        bool(email_key)
+        and rate_limit_reached(failures_key, settings.API_RATE_LIMIT_AUTH)
+        and not remembered(known_key)
+    )
+    if ip_limited or account_limited:
+        logger.warning("Login rate-limit exceeded (ip=%s, account=%s)", ip_limited, account_limited)
+        return login_form(
+            request,
+            oauth_params,
+            "Too many login attempts. Please wait a minute and try again.",
+        )
 
     with make_session() as session:
         user = authenticate_user(email_raw, password, session)
         if not user:
             logger.warning("Login failed - invalid credentials")
+            if email_key:
+                check_rate_limit_spec(failures_key, settings.API_RATE_LIMIT_AUTH)
             return login_form(request, oauth_params, "Invalid email or password")
+        remember(known_key, settings.LOGIN_KNOWN_ADDRESS_DAYS * 86400)
 
         redirect_url = await oauth_provider.complete_authorization(oauth_params, user)
         if redirect_url.startswith("http://anysphere.cursor-retrieval"):
