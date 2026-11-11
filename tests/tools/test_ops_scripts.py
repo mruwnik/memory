@@ -10,6 +10,8 @@ import time
 
 import pytest
 
+from memory.common import settings
+
 REPO_ROOT = pathlib.Path(__file__).parents[2]
 KEY = "backup-passphrase-1"
 SECRETS = {
@@ -622,6 +624,78 @@ def test_restore_clears_stale_qdrant_collections_and_restores_files_with_app_own
     assert "exec -T qdrant bash -c" in log
     assert log.count("chown -R 1000:1000") == 2
     assert oct((box / "memory_files" / "ebooks").stat().st_mode & 0o777) == "0o755"
+
+
+PLANTED_GIT_CONFIG = "[core]\n\tfsmonitor = touch /tmp/pwned\n"
+
+
+@pytest.mark.parametrize(
+    "planted",
+    [
+        "notes/.git/config",  # plaintext beside the encrypted notes archive
+        "emails/planted.eml",
+        "anything-else/x",
+        ".git/config",
+        "ebooks/.git/config",
+        "ebooks/sub/.git/config",
+    ],
+)
+def test_restore_ignores_plaintext_outside_the_backup_layout(box, backup_set, planted):
+    add_file_backups(box, backup_set)
+    (backup_set / planted).parent.mkdir(parents=True, exist_ok=True)
+    (backup_set / planted).write_text(PLANTED_GIT_CONFIG)
+
+    code, output = ops(
+        box, "restore-latest-backup", "--yes", **RESTORE_ENV, BACKUP_SOURCE=str(backup_set)
+    )
+
+    assert code == 0, output
+    assert not (box / "memory_files" / planted).exists()
+    assert (box / "memory_files" / "ebooks" / "b.epub").read_text() == "book"
+
+
+def test_restore_extracts_only_archives_of_backed_up_directories(box, backup_set):
+    add_file_backups(box, backup_set)
+    shutil.copy(backup_set / "emails.tar.gz.ssl", backup_set / "evil.tar.gz.ssl")
+    (backup_set / "emails.tar.gz.ssl").unlink()
+
+    code, output = ops(
+        box, "restore-latest-backup", "--yes", **RESTORE_ENV, BACKUP_SOURCE=str(backup_set)
+    )
+
+    assert code == 0, output
+    assert not (box / "memory_files" / "emails").exists()
+    assert "ignored: 1 entries" in output
+
+
+def test_restore_from_s3_syncs_only_plain_directories_and_never_git(box, backup_set):
+    add_file_backups(box, backup_set)
+    (backup_set / "anything-else").mkdir()
+    (backup_set / "anything-else" / "x").write_text("planted")
+
+    code, output = ops(
+        box,
+        "restore-latest-backup",
+        "--yes",
+        **RESTORE_ENV,
+        S3_BACKUP_BUCKET="bucket",
+        S3_BACKUP_PREFIX="pfx",
+    )
+
+    assert code == 0, output
+    syncs = [line for line in calls(box).splitlines() if line.startswith("aws s3 sync")]
+    assert len(syncs) == 1
+    assert syncs[0].startswith("aws s3 sync s3://bucket/pfx/ebooks ")
+    assert syncs[0].endswith("--exclude .git/* --exclude */.git/*")
+
+
+def test_restore_layout_matches_the_backed_up_directories():
+    script = (REPO_ROOT / "tools" / "ops" / "restore-latest-backup.sh").read_text()
+    archived = re.search(r"^ARCHIVED_DIRS='([^']*)'", script, re.M).group(1).split("|")
+    plain = re.search(r"^PLAIN_DIRS='([^']*)'", script, re.M).group(1).split("|")
+
+    assert sorted(archived) == sorted(d.name for d in settings.PRIVATE_DIRS)
+    assert sorted(archived + plain) == sorted(d.name for d in settings.storage_dirs)
 
 
 def test_qdrant_data_is_tarred_before_it_is_replaced_and_kept(box, backup_set):
