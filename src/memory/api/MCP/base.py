@@ -28,6 +28,8 @@ from memory.common.module_settings import boot_modules
 from memory.common.qdrant import get_qdrant_client
 from memory.common.rate_limit import (
     check_rate_limit_spec,
+    client_address,
+    client_identity,
     rate_limit_key,
     rate_limit_reached,
     remember,
@@ -212,7 +214,8 @@ async def handle_login(request: Request):
     email_key = email_raw.lower()
     ip_key = rate_limit_key(request)
     failures_key = f"login:email:{email_key}"
-    known_key = f"login:known:{email_key}:{ip_key}"
+    # The exemption is for this exact address, not every address counted with it.
+    known_key = f"login:known:{email_key}:{client_identity(client_address(request))}"
     ip_limited = not check_rate_limit_spec(f"login:ip:{ip_key}", settings.API_RATE_LIMIT_AUTH)
     account_limited = (
         bool(email_key)

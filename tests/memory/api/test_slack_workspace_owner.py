@@ -3,9 +3,11 @@ or its channels' settings, and other members see only its public channels."""
 
 import pytest
 
+from memory.agents.provider_keys import ingest_key
+from memory.agents.system import SUMMARISE
 from memory.api.slack import _persist_oauth_credentials
 from memory.common.access_control import get_user_project_roles, user_can_access
-from memory.common.db.models import User
+from memory.common.db.models import LLMProviderKey, User
 from memory.common.db.models.slack import SlackApp, SlackChannel, SlackUserCredentials, SlackWorkspace
 from memory.common.db.models.source_items import SlackMessage
 from tests.conftest import unique_sha256
@@ -240,3 +242,62 @@ def test_stranger_gets_404_for_a_public_channel(member_client, db_session, user,
     response = member_client.patch(f"/slack/channels/{shared['public'].id}", json={"sensitivity": "internal"})
 
     assert response.status_code == 404
+
+
+def own_key(db_session, user_id: int) -> int:
+    key = LLMProviderKey(user_id=user_id, provider="anthropic", label="mine", key_hint="x")
+    key.key = "sk-test"
+    db_session.add(key)
+    db_session.commit()
+    return key.id
+
+
+def test_handing_over_a_default_key_workspace_switches_llm_off(member_client, db_session, user, victim, shared):
+    db_session.query(SlackWorkspace).filter(SlackWorkspace.id == WORKSPACE).update({"owner_id": user.id})
+    db_session.commit()
+
+    response = member_client.patch(
+        f"/slack/workspaces/{WORKSPACE}",
+        json={"collect_messages": True, "llm_key": "default", "owner_id": victim.id},
+    )
+
+    workspace = db_session.get(SlackWorkspace, WORKSPACE)
+    db_session.refresh(workspace)
+    assert response.status_code == 200
+    assert (workspace.owner_id, workspace.llm_key_id, workspace.llm_disabled) == (victim.id, None, True)
+    assert ingest_key(db_session, shared["message"], SUMMARISE) is None
+
+
+def test_handing_over_keeps_the_callers_own_key(member_client, db_session, user, victim, shared):
+    db_session.query(SlackWorkspace).filter(SlackWorkspace.id == WORKSPACE).update({"owner_id": user.id})
+    db_session.commit()
+    key_id = own_key(db_session, user.id)
+
+    response = member_client.patch(f"/slack/workspaces/{WORKSPACE}", json={"llm_key": key_id, "owner_id": victim.id})
+
+    workspace = db_session.get(SlackWorkspace, WORKSPACE)
+    db_session.refresh(workspace)
+    assert response.status_code == 200
+    assert (workspace.owner_id, workspace.llm_key_id, workspace.llm_disabled) == (victim.id, key_id, False)
+
+
+def test_admin_taking_over_switches_off_the_old_owners_key(client, db_session, user, victim, shared):
+    key_id = own_key(db_session, victim.id)
+    db_session.query(SlackWorkspace).filter(SlackWorkspace.id == WORKSPACE).update({"llm_key_id": key_id})
+    db_session.commit()
+
+    response = client.patch(f"/slack/workspaces/{WORKSPACE}", json={"owner_id": user.id})
+
+    workspace = db_session.get(SlackWorkspace, WORKSPACE)
+    db_session.refresh(workspace)
+    assert response.status_code == 200
+    assert (workspace.owner_id, workspace.llm_key_id, workspace.llm_disabled) == (user.id, None, True)
+
+
+def test_admin_taking_over_on_default_keeps_llm_on(client, db_session, user, victim, shared):
+    response = client.patch(f"/slack/workspaces/{WORKSPACE}", json={"owner_id": user.id})
+
+    workspace = db_session.get(SlackWorkspace, WORKSPACE)
+    db_session.refresh(workspace)
+    assert response.status_code == 200
+    assert (workspace.owner_id, workspace.llm_key_id, workspace.llm_disabled) == (user.id, None, False)

@@ -8,6 +8,7 @@ from typing import Literal, cast
 
 from fastmcp import FastMCP
 
+from memory.agents.subscription_input import new_tag, preamble, untrusted_value, wrap_fields
 from memory.api.MCP.access import get_mcp_current_user
 from memory.api.MCP.visibility import READ_ONLY, require_scopes, visible_when
 from memory.common.dates import parse_iso_datetime_utc
@@ -17,6 +18,7 @@ from memory.common.db.models import (
     AvailabilityPoll,
     PollStatus,
 )
+from memory.common.db.models.polls import SlotAggregation
 from memory.api.polls import (
     poll_to_payload,
     aggregate_availability,
@@ -25,6 +27,18 @@ from memory.api.polls import (
 logger = logging.getLogger(__name__)
 
 polling_mcp = FastMCP("memory-polling")
+
+# Poll fields their creator wrote; respondents' names come from anyone with the link.
+POLL_TEXT_FIELDS = frozenset({"title", "description"})
+
+
+def wrapped_poll(tag: str, poll: AvailabilityPoll) -> dict:
+    return wrap_fields(tag, poll_to_payload(poll).model_dump(), POLL_TEXT_FIELDS)
+
+
+def wrapped_slot(tag: str, poll_id: int, slot: SlotAggregation) -> dict:
+    data = slot.model_dump()
+    return data | {"respondents": untrusted_value(tag, poll_id, "respondents", data["respondents"])}
 
 
 def get_current_user_id() -> int:
@@ -165,7 +179,7 @@ async def list_polls(
     status: Literal["open", "closed", "finalized", "cancelled"] | None = None,
     limit: int = 50,
     offset: int = 0,
-) -> list[dict]:
+) -> dict:
     """
     List availability polls created by the current user.
 
@@ -174,7 +188,8 @@ async def list_polls(
         limit: Maximum number of polls to return (default 50, max 200)
         offset: Number of polls to skip (default 0)
 
-    Returns: List of polls with id, slug, title, status, response_count, etc.
+    Returns: {"untrusted": how to read the text blocks, "polls": [...]}, each poll
+    with id, slug, title, status, response_count, etc.
     """
     limit = min(max(limit, 1), 200)
     offset = max(offset, 0)
@@ -191,7 +206,8 @@ async def list_polls(
         query = query.order_by(AvailabilityPoll.created_at.desc())
         polls = query.offset(offset).limit(limit).all()
 
-        return [poll_to_payload(p).model_dump() for p in polls]
+        tag = new_tag()
+        return {"untrusted": preamble(tag), "polls": [wrapped_poll(tag, p) for p in polls]}
 
 
 @polling_mcp.tool()
@@ -239,7 +255,8 @@ async def fetch(poll_id: int | None = None, slug: str | None = None) -> dict:
         poll_id: The poll ID (requires ownership)
         slug: The poll's public slug (anyone can view)
 
-    Returns: Poll details with aggregated availability per slot and best times.
+    Returns: Poll details with aggregated availability per slot and best times;
+    the poll's title and description and respondents' names are in untrusted blocks.
     """
     if poll_id is None and slug is None:
         raise ValueError("Must provide either poll_id or slug")
@@ -271,11 +288,13 @@ async def fetch(poll_id: int | None = None, slug: str | None = None) -> dict:
         else:
             best_slots = []
 
+        tag = new_tag()
         return {
-            "poll": poll_to_payload(poll).model_dump(),
+            "untrusted": preamble(tag),
+            "poll": wrapped_poll(tag, poll),
             "response_count": poll.response_count,
-            "aggregated": [s.model_dump() for s in aggregated],
-            "best_slots": [s.model_dump() for s in best_slots[:5]],
+            "aggregated": [wrapped_slot(tag, poll.id, s) for s in aggregated],
+            "best_slots": [wrapped_slot(tag, poll.id, s) for s in best_slots[:5]],
         }
 
 

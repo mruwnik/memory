@@ -161,12 +161,15 @@ def get_token(request: Request) -> str | None:
 
 
 def create_user_session(
-    user_id: int, db: DBSession, valid_for: int = settings.SESSION_VALID_FOR
+    user_id: int,
+    db: DBSession,
+    valid_for: int = settings.SESSION_VALID_FOR,
+    from_setup: bool = False,
 ) -> str:
-    """Create a new session for a user"""
+    """Create a new session for a user; `from_setup` marks first-run setup's login."""
     expires_at = datetime.now(timezone.utc) + timedelta(days=valid_for)
 
-    session = UserSession(user_id=user_id, expires_at=expires_at)
+    session = UserSession(user_id=user_id, expires_at=expires_at, from_setup=from_setup)
     db.add(session)
     db.commit()
 
@@ -504,16 +507,16 @@ def session_oauth_client(db: DBSession, session: UserSession) -> OAuthClientInfo
 def is_web_ui_session(db: DBSession, session: UserSession) -> bool:
     """Whether the session is a person's own login to the web UI.
 
-    The web UI is an OAuth client whose redirect URIs are on this server, so
-    its codes and tokens land nowhere else. Sessions from other OAuth clients,
-    and sessions acting through an API key (agent runs), are not. A session
-    with no client at all comes from first-run setup.
+    The web UI is an OAuth client whose redirect URIs are exactly its callback
+    on this server, so its codes and tokens land nowhere else. Sessions from
+    other OAuth clients, and sessions agent runs act through, are not. A session
+    with no client counts only when first-run setup made it.
     """
     if session.api_key_id is not None:
         return False
     client = session_oauth_client(db, session)
     if client is None:
-        return session.oauth_state_id is None
+        return session.from_setup and session.oauth_state_id is None
     uris = client.redirect_uris or []
     return bool(uris) and all(is_web_ui_callback(str(uri)) for uri in uris)
 

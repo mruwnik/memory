@@ -35,7 +35,13 @@ from memory.api.auth import (
 from memory.api.https_url import HttpsUrl, require_chat_url
 from memory.api.request_body import read_request_body_with_cap
 from memory.api.webhook_events import record_event_arrival
-from memory.api.llm_keys import LLMKeyInput, LLMKeyView, apply_llm_key, llm_key_view
+from memory.api.llm_keys import (
+    LLMKeyInput,
+    LLMKeyView,
+    apply_llm_key,
+    keep_llm_key_if_caller_pays,
+    llm_key_view,
+)
 from memory.api.sync_status import PushHealthResponse, SyncStatusResponse, push_health_fields, sync_status_fields
 from memory.common import settings
 from memory.common.access_control import has_admin_scope
@@ -742,7 +748,9 @@ def update_workspace(
     user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> SlackWorkspaceResponse:
-    """Update workspace settings. Only the workspace's owner or an admin may."""
+    """Update workspace settings. Only the workspace's owner or an admin may. Handing
+    the workspace to another member turns its LLM work off unless its key choice
+    charges the caller; the new owner picks a key."""
     workspace = get_workspace_for_settings(db, workspace_id, user)
 
     if updates.collect_messages is not None:
@@ -758,8 +766,9 @@ def update_workspace(
     if updates.sensitivity is not None:
         workspace.sensitivity = updates.sensitivity
     apply_llm_key(db, user, workspace, updates.llm_key)
-    if updates.owner_id is not None:
+    if updates.owner_id is not None and updates.owner_id != workspace.owner_id:
         workspace.owner_id = connected_member_id(db, workspace.id, updates.owner_id)
+        keep_llm_key_if_caller_pays(db, user, workspace)
 
     db.commit()
     db.refresh(workspace)

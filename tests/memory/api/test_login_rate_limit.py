@@ -82,3 +82,17 @@ def test_successful_logins_leave_the_failure_bucket_empty(
     fresh = log_in(app_client, "192.0.2.4", PASSWORD)
 
     assert (statuses, fresh.status_code) == ([302, 302, 302], 302)
+
+
+def test_known_address_exemption_is_for_that_exact_ipv6_address(
+    app_client, victim, fake_redis, authorized
+):
+    owner, neighbour = "2001:db8:5:6::1", "2001:db8:5:6::2"
+    assert log_in(app_client, owner, PASSWORD).status_code == 302
+    fill_failures(app_client, ATTACKER_IP, 3)
+
+    from_neighbour = log_in(app_client, neighbour, PASSWORD)
+    from_owner = log_in(app_client, owner, PASSWORD)
+
+    assert (from_neighbour.status_code, "Too many login attempts" in from_neighbour.text) == (200, True)
+    assert from_owner.status_code == 302
