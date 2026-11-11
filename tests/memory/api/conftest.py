@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from memory.api import request_limits
+from memory.common import rate_limit
 from memory.common.db.models import HumanUser, User
 
 
@@ -58,8 +59,10 @@ def app_client():
 def fresh_request_limits():
     """Every test client request shares one address, so each test starts with fresh counters."""
     request_limits.reset()
+    rate_limit.reset_cache()
     yield
     request_limits.reset()
+    rate_limit.reset_cache()
 
 
 @pytest.fixture
