@@ -189,6 +189,13 @@ def test_rate_limit_key_attacker_xff_rotation_is_no_op(make_request):
         ("2001:db8:1:2:ffff:ffff:ffff:ffff", "2001:db8:1:2::/64"),
         ("2001:db8:1:3::1", "2001:db8:1:3::/64"),
         ("::ffff:203.0.113.7", "203.0.113.7"),
+        ("64:ff9b::203.0.113.7", "203.0.113.7"),
+        ("64:ff9b::198.51.100.9", "198.51.100.9"),
+        ("64:ff9b:1:2::1", "64:ff9b:1:2::1"),
+        ("64:ff9b:1:2::2", "64:ff9b:1:2::2"),
+        # Teredo: server 65.54.227.120, client 192.0.2.45 stored inverted.
+        ("2001:0:4136:e378:8000:63bf:3fff:fdd2", "192.0.2.45"),
+        ("2002:cb00:7107::1", "203.0.113.7"),
         ("testclient", "testclient"),
     ],
 )
@@ -208,3 +215,19 @@ def test_rate_limit_key_buckets_forwarded_ipv6_by_64(make_request):
             request = make_request("10.0.0.5", {"X-Forwarded-For": f"2001:db8:0:7::{i + 1:x}"})
             keys.add(rate_limit_key(cast(Any, request)))
     assert keys == {"2001:db8:0:7::/64"}
+
+
+@pytest.mark.parametrize(
+    "address, expected",
+    [
+        ("2001:db8:1:2::1", "2001:db8:1:2::1"),
+        ("2001:db8:1:2::2", "2001:db8:1:2::2"),
+        ("::ffff:203.0.113.7", "203.0.113.7"),
+        ("203.0.113.7", "203.0.113.7"),
+        ("testclient", "testclient"),
+    ],
+)
+def test_client_identity_is_the_exact_address(address, expected):
+    from memory.common.rate_limit import client_identity
+
+    assert client_identity(address) == expected

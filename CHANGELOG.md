@@ -116,7 +116,7 @@ a new, empty `## Unreleased` above it.
 - Handing a Slack workspace to another member turns its LLM work off unless its key choice charges whoever made the change; the new owner picks a key (or "default" to pay with their own). Before, a workspace left on the default key started charging the new owner's key without their say.
 - Only the session first-run setup signs in with, besides web-UI logins, may create API keys; sessions agent runs act through no longer pass for it. A setup session from before this release has to sign in again to create an API key.
 - MCP `polling_fetch` returns the poll's title and description and respondents' names in untrusted blocks, and `polling_list_polls` returns `{untrusted, polls}` with titles and descriptions wrapped the same way. People reads also wrap a person's `identifier` and a tidbit's `tidbit_type` and `person_identifier`.
-- Rate limits key an IPv6 client by its /64 (an IPv4-mapped address by its IPv4 address), so a host that holds a whole IPv6 prefix can no longer use a fresh address per request to escape the request, login, registration and authorization limits.
+- Rate limits count an IPv6 client by its /64, so a host that holds a whole IPv6 prefix can no longer use a fresh address per request to escape the request, login, registration and authorization limits. Addresses that stand for an IPv4 one (IPv4-mapped, NAT64 `64:ff9b::/96`, Teredo, 6to4) count as that IPv4 address, and local-use NAT64 (`64:ff9b:1::/48`) addresses each count on their own. A login's remembered address, which lets the owner past a full failure bucket, stays the exact address.
 ### Required env vars
 None
 

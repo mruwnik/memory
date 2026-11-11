@@ -196,19 +196,54 @@ def client_address(request: "Request") -> str:
     return hops[0] if hops else immediate
 
 
+# NAT64 well-known prefix (RFC 6052): the client's IPv4 address is the last 32 bits.
+NAT64_WELL_KNOWN = ipaddress.IPv6Network("64:ff9b::/96")
+# Local-use NAT64 (RFC 8215): the IPv4 position depends on the operator's prefix
+# length, so such clients are keyed by their full address.
+NAT64_LOCAL_USE = ipaddress.IPv6Network("64:ff9b:1::/48")
+
+
+def client_identity(address: str) -> str:
+    """The exact client address, for checks about this one client (such as a
+    remembered login address): an IPv4-mapped IPv6 address as its IPv4 address,
+    anything else unchanged."""
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return address
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        return str(ip.ipv4_mapped)
+    return str(ip)
+
+
+def embedded_ipv4(ip: ipaddress.IPv6Address) -> ipaddress.IPv4Address | None:
+    """The IPv4 address a translated or tunnelled IPv6 address stands for."""
+    if ip.ipv4_mapped is not None:
+        return ip.ipv4_mapped
+    if ip in NAT64_WELL_KNOWN:
+        return ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
+    if ip.teredo is not None:
+        return ip.teredo[1]
+    return ip.sixtofour
+
+
 def address_bucket(address: str) -> str:
-    """The rate-limit key for a client address: an IPv4 address as is, an IPv6
-    address as its /64 (one host or VPS is routed a whole /64 and may use any
-    address in it), an IPv4-mapped IPv6 address as its IPv4 address. Anything
-    that isn't an IP address is returned unchanged."""
+    """The rate-limit counting key for a client address: an IPv4 address as is;
+    an IPv6 address that stands for an IPv4 one (IPv4-mapped, NAT64, Teredo,
+    6to4) as that IPv4 address, since those prefixes are shared by many clients;
+    a local-use NAT64 address as is; any other IPv6 address as its /64 (one host
+    or VPS is routed a whole /64 and may use any address in it). Anything that
+    isn't an IP address is returned unchanged."""
     try:
         ip = ipaddress.ip_address(address)
     except ValueError:
         return address
     if isinstance(ip, ipaddress.IPv4Address):
         return str(ip)
-    if ip.ipv4_mapped is not None:
-        return str(ip.ipv4_mapped)
+    if (ipv4 := embedded_ipv4(ip)) is not None:
+        return str(ipv4)
+    if ip in NAT64_LOCAL_USE:
+        return str(ip)
     return str(ipaddress.IPv6Network((int(ip) >> 64 << 64, 64)))
 
 
