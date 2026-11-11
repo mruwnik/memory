@@ -356,7 +356,9 @@ connected in the Beeper app. Memory never connects networks or sends messages.
    with `api`, `worker` and `ingest-hub`. It needs about 400 MB of RAM.
 2. Allow it: `BEEPER_SERVER_URLS=http://beeper:23373` in `.env`. One Server
    holds one Beeper account; for more accounts run more Servers (each with its
-   own data volume) and list each URL.
+   own data volume) and list each URL. Any signed-in user can add the account
+   on a free Server; an admin can free a taken one with
+   `DELETE /beeper/accounts/<id>` (signs it out; then wipe the Server's volume).
 3. In **Sources → Beeper**, add an account on that Server, enter its email and
    the emailed code, then approve the device: compare the emoji with another
    Beeper device, or paste the account's recovery key. Memory refuses an email

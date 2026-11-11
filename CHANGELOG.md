@@ -118,6 +118,7 @@ a new, empty `## Unreleased` above it.
 - `tools/ops/restore-latest-backup.sh` restores only the backup's own layout: the encrypted archives of the private directories (`emails`, `beeper`, `notes`, `photos`, `reports`, `misc`) and the plain `ebooks`, `comics`, `webpages`, `discord` and `slack` directories, never a `.git` directory from the plain ones. Anything else in the bucket is skipped and counted on an `ignored:` line. An instance that moved a storage directory to a different name with a `*_STORAGE_DIR` override restores that directory by hand.
 - OAuth registration and `/authorize` refuse a redirect URI with a user or password before its host (`https://x@host/...`); the allowlist and the web UI callback check compare the same (scheme, host, port), default ports included, so such a URI can no longer pass for another page on this server.
 - `tools/ops/logs.sh` scrubs bytes and other prefixed literals (`b'...'`, `rb"..."`, `bytearray(b'...')`) like plain quoted strings, and cuts Celery's "raised unexpected:" lines to the exception's type.
+- Admins can sign out and delete any user's Beeper account (`POST /beeper/accounts/<id>/sign-out`, `DELETE /beeper/accounts/<id>`), freeing an allowlisted Server someone else added an account on.
 ### Required env vars
 None
 
