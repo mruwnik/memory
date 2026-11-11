@@ -7,7 +7,9 @@ set -euo pipefail
 BUCKET="${S3_BACKUP_BUCKET:?S3 backups are off: set S3_BACKUP_BUCKET (and BACKUP_ENCRYPTION_KEY) to enable them}"
 PREFIX="${S3_BACKUP_PREFIX:-memory}/databases"
 REGION="${S3_BACKUP_REGION:-eu-central-1}"
-PASSWORD="${BACKUP_ENCRYPTION_KEY:?BACKUP_ENCRYPTION_KEY not set}"
+# openssl reads the key from the environment: an argument shows in every
+# user's process list.
+export BACKUP_ENCRYPTION_KEY="${BACKUP_ENCRYPTION_KEY:?BACKUP_ENCRYPTION_KEY not set}"
 MAX_BACKUPS="${MAX_BACKUPS:-30}"  # Keep last N backups; 0 never prunes
 
 # Install AWS CLI if not present (postgres:15 image doesn't include it)
@@ -83,7 +85,7 @@ backup_postgres() {
     export PGPASSWORD=$(cat "${POSTGRES_PASSWORD_FILE}")
     if pg_dump -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" "${POSTGRES_DB}" 2>/dev/null | \
        gzip | \
-       openssl enc -aes-256-cbc -salt -pbkdf2 -pass "pass:${PASSWORD}" | \
+       openssl enc -aes-256-cbc -salt -pbkdf2 -pass env:BACKUP_ENCRYPTION_KEY | \
        aws s3 cp - "${output_path}" --region "${REGION}"; then
         log "Postgres backup completed: ${output_path}"
         unset PGPASSWORD
@@ -130,7 +132,7 @@ backup_qdrant() {
     local output_path="s3://${BUCKET}/${PREFIX}/qdrant-${DATE_SIMPLE}.snapshot.enc"
     
     if wget -q -O - "${QDRANT_URL}/snapshots/${snapshot_name}" | \
-       openssl enc -aes-256-cbc -salt -pbkdf2 -pass "pass:${PASSWORD}" | \
+       openssl enc -aes-256-cbc -salt -pbkdf2 -pass env:BACKUP_ENCRYPTION_KEY | \
        aws s3 cp - "${output_path}" --region "${REGION}"; then
         log "Qdrant backup completed: ${output_path}"
         

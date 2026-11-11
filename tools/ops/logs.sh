@@ -33,10 +33,13 @@ HEADERS = (
 FRAME = re.compile(r'  File "[^"]+", line \d+, in [\w<>.]+')
 EXCEPTION_TYPE = re.compile(r"[A-Za-z_][\w.]*(?=:|$)")
 SCRUB = [
+    # Celery's "raised unexpected: <repr of the exception>": the type alone.
+    (re.compile(r"( raised unexpected: [\w.]+).*"), r"\1"),
     (re.compile(r"([a-z][a-z0-9+.-]*://)([^/\s@'\"]*@)?([^/\s?#'\"]*)[^\s'\"]*", re.I), r"\1\3"),
     # Reprs escape quotes with backslashes; an unclosed quote runs to the end;
-    # an apostrophe inside a word ("can't") is never a quote boundary.
-    (re.compile(r"\"(\\.|[^\"\\])*(\"|$)|(?<!\w)'(\\.|'(?=\w)|[^'\\])*?('(?!\w)|$)"), "'***'"),
+    # an apostrophe inside a word ("can't") is never a quote boundary; a quote
+    # may carry a literal's prefix (b'...', rb"...", f'...').
+    (re.compile(r"(?<!\w)[bBrRuUfF]{0,2}(\"(\\.|[^\"\\])*(\"|$)|'(\\.|'(?=\w)|[^'\\])*?('(?!\w)|$))|\"(\\.|[^\"\\])*(\"|$)"), "'***'"),
     (re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)+"), "<email>"),
     (re.compile(r"\b(bearer|basic)\s+\S+", re.I), r"\1 ***"),
     (re.compile(r"\b([\w-]*(token|secret|passw(or)?d|key|auth\w*|cookie|signature|credential|dsn)[\w-]*\s*[=:]\s*)[^\s,;&)]+", re.I), r"\1***"),

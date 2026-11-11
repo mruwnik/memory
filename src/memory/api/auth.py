@@ -454,12 +454,24 @@ def get_interactive_user(
     return user
 
 
-def origin_of(url: str) -> str:
+DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def origin_of(url: str) -> tuple[str, str, int | None]:
+    """The (scheme, host, port) a browser loads ``url`` from: userinfo dropped,
+    host lowercased, the scheme's default port filled in."""
     parts = urlsplit(url)
-    return f"{parts.scheme}://{parts.netloc}".lower()
+    scheme = parts.scheme.lower()
+    return scheme, parts.hostname or "", parts.port or DEFAULT_PORTS.get(scheme)
 
 
-def web_ui_origins() -> set[str]:
+def has_userinfo(url: str) -> bool:
+    """Whether ``url`` carries a user or password before its host. No OAuth
+    client needs one, and it makes the URL read as a different host."""
+    return "@" in urlsplit(url).netloc
+
+
+def web_ui_origins() -> set[tuple[str, str, int | None]]:
     """Where this server's own web UI runs: SERVER_URL, plus the dev
     origins when ALLOW_LOCALHOST_CORS is on."""
     dev = settings.LOCALHOST_CORS_ORIGINS if settings.ALLOW_LOCALHOST_CORS else []
@@ -484,6 +496,7 @@ def is_web_ui_callback(uri: str) -> bool:
     parts = urlsplit(uri)
     return (
         on_web_ui_origin(uri)
+        and not has_userinfo(uri)
         and parts.path in WEB_UI_CALLBACK_PATHS
         and not parts.query
         and not parts.fragment

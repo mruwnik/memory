@@ -62,13 +62,14 @@ src_cat() {
     fi
     aws s3 cp "s3://$BUCKET/$PREFIX/$1" - --region "$REGION"
 }
+# Never copies a .git directory: git runs what a repository's config names.
 src_sync() {
     mkdir -p "$2"
     if [[ -n $SOURCE ]]; then
-        cp -a "$SOURCE/$1/." "$2/"
+        tar -C "$SOURCE/$1" --exclude=.git -cf - . | tar -C "$2" -xf -
         return
     fi
-    aws s3 sync "s3://$BUCKET/$PREFIX/$1" "$2" --region "$REGION"
+    aws s3 sync "s3://$BUCKET/$PREFIX/$1" "$2" --region "$REGION" --exclude '.git/*' --exclude '*/.git/*'
 }
 decrypt() { openssl enc -d -aes-256-cbc -pbkdf2 -pass env:BACKUP_ENCRYPTION_KEY 2>/dev/null; }
 # Fetches $1 once, then decrypts it into $2 with the first backup key whose
@@ -92,13 +93,20 @@ for name in "postgres-$latest.sql.gz.enc" "qdrant-$latest.snapshot.enc"; do
     grep -qx "$name" <<<"$databases" \
         || { echo "incomplete backup set for $latest: $name is missing; refusing to restore" >&2; exit 1; }
 done
+# The worker's backup layout (settings.storage_dirs): PRIVATE_DIRS as encrypted
+# archives, the others synced in plain. Only these names are restored: anyone
+# who can write to the bucket can add objects, but cannot encrypt them.
+ARCHIVED_DIRS='emails|beeper|notes|photos|reports|misc'
+PLAIN_DIRS='ebooks|comics|webpages|discord|slack'
 top=$(src_ls "")
-file_archives=$(grep -E '\.tar\.gz\.(enc|ssl)$' <<<"$top" || true)
-file_dirs=$(grep -E '/$' <<<"$top" | grep -vx 'databases/' || true)
+file_archives=$(grep -E "^($ARCHIVED_DIRS)\.tar\.gz\.(enc|ssl)\$" <<<"$top" || true)
+file_dirs=$(grep -E "^($PLAIN_DIRS)/\$" <<<"$top" || true)
+ignored=$(grep -cvE "^(databases/|($ARCHIVED_DIRS)\.tar\.gz\.(enc|ssl)|($PLAIN_DIRS)/)\$" <<<"$top" || true)
 
 log "Restoring the backup set of $latest"
 echo "postgres-$latest.sql.gz.enc qdrant-$latest.snapshot.enc"
 echo "files: $(tr '\n' ' ' <<<"$file_archives $file_dirs")"
+[[ $ignored == 0 ]] || echo "ignored: $ignored entries that are not part of the backup layout"
 [[ $DRY_RUN == 1 ]] && exit 0
 
 # Everything is downloaded and checked before anything is stopped or dropped.

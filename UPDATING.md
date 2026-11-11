@@ -227,7 +227,7 @@ through fixed SSM documents). Output is numbers and states only, except for
 | `restart.sh [service]` | Restart one service or all |
 | `update-to.sh TAG` | `update.sh` with signature and age checks (`ALLOWED_SIGNERS`, `MIN_AGE_HOURS`), refusing a tag older than the checkout; prints step and result lines only |
 | `rollback.sh --yes` | The commands above, from the update state or `last-good`; refuses unless the record is for the current checkout, and skips the tag it leaves |
-| `restore-latest-backup.sh --yes` | Restore the newest complete S3 set (Qdrant, then Postgres, then files); first keeps a fresh `pre-restore-*.dump` and a `pre-restore-qdrant-*.tar.gz` |
+| `restore-latest-backup.sh --yes` | Restore the newest complete S3 set (Qdrant, then Postgres, then files); first keeps a fresh `pre-restore-*.dump` and a `pre-restore-qdrant-*.tar.gz`. Restores only the directories the worker backs up, never a plain `.git` |
 | `rotate-keys.sh --yes [--only=NAME,...]` | Rotate the keys Memory generates (below); first keeps a fresh `pre-rotate-*.dump` |
 | `disk-cleanup.sh` | Prune old images, build cache and dumps beyond `KEEP_BACKUPS` |
 | `reboot.sh --yes` | `shutdown -r +1` |
@@ -250,7 +250,7 @@ reports the markers.
 |---|---|---|
 | `SECRETS_ENCRYPTION_KEY` | `secrets/secrets_encryption_key.txt` | Every stored secret is re-encrypted in one transaction. Transfer links, password reset links and OAuth sign-ins in flight stop working |
 | `POSTGRES_PASSWORD` | `secrets/postgres_password.txt` | `ALTER ROLE` first, over the container's socket |
-| `REDIS_PASSWORD` | `.env` | Redis is recreated with the new `--requirepass` |
+| `REDIS_PASSWORD` | `.env` | Redis is recreated and writes the new password to its config file |
 | `BACKUP_ENCRYPTION_KEY` | `.env`, the file `BACKUP_ENCRYPTION_KEY_FILE` names, or `ops.env` on EC2 | New backups use the new key |
 | `TRANSFER_TOKEN_SECRET` | `.env`, only if set there | In-flight transfer and reset links stop working. Unset, it is derived from `SECRETS_ENCRYPTION_KEY` and changes with it |
 

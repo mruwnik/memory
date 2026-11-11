@@ -2,6 +2,7 @@
 about the client asking for access."""
 
 import uuid
+from urllib.parse import urlsplit
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -25,6 +26,11 @@ def web_ui_redirect() -> str:
 
 def report_redirect() -> str:
     return settings.SERVER_URL.rstrip("/") + "/reports/abc_x.html"
+
+
+def with_userinfo(url: str, userinfo: str) -> str:
+    parts = urlsplit(url)
+    return parts._replace(netloc=f"{userinfo}@{parts.netloc}").geturl()
 
 
 @pytest.fixture
@@ -289,3 +295,62 @@ def test_authorize_refuses_stored_client_redirecting_elsewhere_on_this_server(
     )
 
     assert response.headers["location"].startswith(settings.SERVER_URL.rstrip("/") + lands_on)
+
+
+@pytest.mark.parametrize("userinfo", ["x", "x:y", "user%40example.com"])
+@pytest.mark.parametrize("path", ["/", "/reports/abc_x.html", "/files/x.html", "/anything?next=1"])
+def test_registration_refuses_userinfo_on_this_server(client, userinfo, path):
+    redirect = with_userinfo(settings.SERVER_URL.rstrip("/") + path, userinfo)
+
+    response = client.post("/register", json=registration(redirect))
+
+    assert response.status_code == 400, response.text
+    assert response.json()["error"] == "invalid_redirect_uri"
+
+
+def test_registration_refuses_userinfo_on_an_allowed_host(client):
+    response = client.post("/register", json=registration(with_userinfo(THIRD_PARTY, "x")))
+
+    assert response.status_code == 400, response.text
+
+
+@pytest.mark.parametrize("path", ["/", "/reports/abc_x.html"])
+def test_authorize_refuses_stored_client_with_userinfo(client, db_session, path):
+    redirect = with_userinfo(settings.SERVER_URL.rstrip("/") + path, "x")
+    client_id = register_client(db_session, redirect, "React Memory App")
+    db_session.commit()
+
+    response = client.get(
+        "/authorize",
+        params={
+            "client_id": client_id,
+            "redirect_uri": redirect,
+            "response_type": "code",
+            "code_challenge": "x" * 43,
+            "code_challenge_method": "S256",
+            "state": "s",
+        },
+        follow_redirects=False,
+    )
+
+    assert "/oauth/login" not in response.headers.get("location", "")
+    assert "error=unauthorized_client" in response.headers["location"]
+
+
+@pytest.mark.parametrize(
+    "uri, expected",
+    [
+        ("https://memory.example.com/", True),
+        ("https://memory.example.com:443/", True),
+        ("HTTPS://Memory.Example.com/ui", True),
+        ("https://x@memory.example.com/", False),
+        ("https://memory.example.com:8443/", False),
+        ("https://memory.example.com.evil.com/", False),
+        ("http://memory.example.com/", False),
+    ],
+)
+def test_web_ui_callback_compares_the_origin_a_browser_loads(monkeypatch, uri, expected):
+    monkeypatch.setattr(settings, "SERVER_URL", "https://memory.example.com")
+    monkeypatch.setattr(settings, "ALLOW_LOCALHOST_CORS", False)
+
+    assert auth.is_web_ui_callback(uri) is expected
