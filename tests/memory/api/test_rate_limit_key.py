@@ -1,9 +1,8 @@
 """Tests for the API rate-limit key function (``app.rate_limit_key``).
 
-The threat model: SlowAPI's bundled ``get_remote_address`` honors
-``X-Forwarded-For`` whenever Uvicorn was started with
-``--proxy-headers``. With ``--forwarded-allow-ips=*`` (the Docker
-default) every remote attacker can rotate ``X-Forwarded-For`` per
+The threat model: a key that honors ``X-Forwarded-For`` from any peer
+(Uvicorn with ``--proxy-headers`` and ``--forwarded-allow-ips=*``, the
+Docker default) lets every remote attacker rotate ``X-Forwarded-For`` per
 request and mint a fresh limiter bucket — defeating every rate limit.
 
 ``app.rate_limit_key`` accepts ``X-Forwarded-For`` only when the

@@ -46,11 +46,8 @@ local_limiter = FixedWindowRateLimiter(MemoryStorage())
 
 
 def parse_limit(spec: str) -> tuple[int, int]:
-    """Parse a rate-limit spec like "10/minute" → (10, 60).
-
-    Accepts the same shorthand format SlowAPI does so we don't have to
-    bifurcate the configuration vocabulary.
-    """
+    """Parse a rate-limit spec like "10/minute" → (10, 60), in the ``limits``
+    package's spec syntax."""
     match = _LIMIT_RE.fullmatch(spec)
     if not match:
         raise ValueError(f"Invalid rate-limit spec: {spec!r}")
@@ -154,7 +151,7 @@ def cross_token_reads_allowed(source: str, pusher_id: int, reads: int = 1) -> bo
 
 
 def check_rate_limit_spec(key: str, spec: str) -> bool:
-    """Convenience wrapper: parse the SlowAPI-style spec then enforce."""
+    """Convenience wrapper: parse the spec then enforce."""
     limit, window = parse_limit(spec)
     return check_rate_limit(key, limit, window)
 
@@ -184,10 +181,9 @@ def is_trusted_proxy(host: str) -> bool:
 def client_address(request: "Request") -> str:
     """The client's address, believing ``X-Forwarded-For`` only from trusted proxies.
 
-    SlowAPI's bundled ``get_remote_address`` (and any Uvicorn started with
-    ``--proxy-headers``) honors ``X-Forwarded-For`` regardless of the
-    immediate TCP peer — so a remote attacker can rotate XFF to mint a
-    fresh bucket per request and defeat the rate limit.
+    A key that honors ``X-Forwarded-For`` from any peer (as Uvicorn does with
+    ``--proxy-headers``) lets a remote attacker rotate XFF to mint a fresh
+    bucket per request and defeat the rate limit.
 
     Trust ``X-Forwarded-For`` only when the *immediate* TCP peer is a
     configured trusted proxy (``RATE_LIMIT_TRUSTED_PROXIES``: addresses

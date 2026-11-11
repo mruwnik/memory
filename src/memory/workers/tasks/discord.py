@@ -8,12 +8,14 @@ This module provides tasks for:
 """
 
 import asyncio
+import contextlib
 import hashlib
 import logging
 from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
+import redis
 from sqlalchemy import BigInteger, or_
 from sqlalchemy import cast as sql_cast
 from sqlalchemy import exc as sqlalchemy_exc
@@ -26,6 +28,7 @@ from memory.common.celery_app import (
     DELETE_DISCORD_MESSAGES,
     EDIT_DISCORD_MESSAGE,
     HANDLE_DISCORD_EVENT,
+    REFRESH_DISCORD_REACTIONS,
     UPDATE_REACTIONS,
     VERIFY_DISCORD_MESSAGES,
     app,
@@ -38,6 +41,7 @@ from memory.common.db.models.events import CAUSING_EVENT, reject_raw_event
 from memory.common.people import DBSession, json_string
 from memory.common.reactions import ReactionAction, Reactions, apply_reaction
 from memory.common.rate_limit import cross_token_reads_allowed
+from memory.common.redis_pool import get_redis
 from memory.common.content_processing import (
     clear_item_chunks,
     create_task_result,
@@ -649,6 +653,58 @@ def refresh_reactions(bot_id: int, bot_ids: set[int], message_id: int) -> dict[s
     return {"status": "updated", "message_id": message_id}
 
 
+# A pushed reaction event re-reads the message's whole reaction list, so a burst of
+# clicks on one message needs one read, made once the burst has landed.
+REACTION_REFRESH_DELAY_SECONDS = 10
+# The mark outlives its countdown by this much, so one lost with a dead worker lapses.
+REACTION_QUEUED_GRACE_SECONDS = 15 * 60
+
+
+def reaction_refresh_key(bot_id: int, message_id: int) -> str:
+    return f"memory:discord:reaction-refresh-queued:{bot_id}:{message_id}"
+
+
+def queue_reaction_refresh(bot_id: int, bot_ids: set[int], message_id: int) -> dict[str, Any]:
+    """Refresh the message's reactions with this bot's token REACTION_REFRESH_DELAY_SECONDS
+    from now, unless such a refresh is already waiting. Without Redis it refreshes now."""
+    key = reaction_refresh_key(bot_id, message_id)
+    try:
+        queued = get_redis().set(
+            key, 1, nx=True, ex=REACTION_REFRESH_DELAY_SECONDS + REACTION_QUEUED_GRACE_SECONDS
+        )
+    except redis.RedisError:
+        logger.warning("Redis unavailable; refreshing reactions of message %s now", message_id)
+        return refresh_reactions(bot_id, bot_ids, message_id)
+    if not queued:
+        return {"status": "coalesced", "message_id": message_id}
+    try:
+        refresh_discord_reactions.apply_async(args=[bot_id, message_id], countdown=REACTION_REFRESH_DELAY_SECONDS)
+    except Exception:
+        # Nothing was queued, so nothing may wait on the mark.
+        with contextlib.suppress(redis.RedisError):
+            get_redis().delete(key)
+        raise
+    return {"status": "queued", "message_id": message_id}
+
+
+@app.task(name=REFRESH_DISCORD_REACTIONS, bind=True, max_retries=PUSH_RETRIES)
+@tracked_task
+def refresh_discord_reactions(self, bot_id: int, message_id: int) -> dict[str, Any]:
+    """Run a refresh queue_reaction_refresh queued; reaction events from here on
+    queue another. Retried while Discord can't answer or the message isn't stored."""
+    with contextlib.suppress(redis.RedisError):
+        get_redis().delete(reaction_refresh_key(bot_id, message_id))
+    with make_session() as session:
+        bot = session.get(DiscordBot, bot_id)
+        if bot is None:
+            return {"status": "skipped", "reason": "unknown_bot"}
+        bot_ids = discord_events.owner_bot_ids(session, bot)
+    try:
+        return refresh_reactions(bot_id, bot_ids, message_id)
+    except PushNotReady as e:
+        raise self.retry(exc=e, countdown=PUSH_RETRY_SECONDS * (self.request.retries + 1))
+
+
 REACTION_EVENTS: dict[str, ReactionAction] = {
     "MESSAGE_REACTION_ADD": "add",
     "MESSAGE_REACTION_REMOVE": "remove",
@@ -847,7 +903,7 @@ def apply_discord_event(bot_id: int, event_type: str, data: dict, pushed: bool) 
         return delete_discord_messages(message_ids(event_type, data), sorted(bot_ids))
 
     if event_type in REACTION_EVENTS and pushed:
-        return refresh_reactions(bot.id, bot_ids, int(data["message_id"]))
+        return queue_reaction_refresh(bot.id, bot_ids, int(data["message_id"]))
     if action := REACTION_EVENTS.get(event_type):
         user_id = data.get("user_id")
         return update_reactions(

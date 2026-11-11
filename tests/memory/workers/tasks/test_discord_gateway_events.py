@@ -5,8 +5,10 @@ from datetime import datetime, timezone
 from typing import cast
 from unittest.mock import ANY, patch
 
+import fakeredis
 import httpx
 import pytest
+import redis
 from celery import Task
 from celery.exceptions import Retry
 
@@ -163,6 +165,19 @@ def message_create(**overrides) -> dict:
         "attachments": [],
         "embeds": [],
     } | overrides
+
+
+@pytest.fixture(autouse=True)
+def fake_redis():
+    """Redis for the reaction-refresh marks; a queued refresh runs at once, as if
+    its delay had passed."""
+    fake = fakeredis.FakeRedis()
+    task = cast(Task, discord.refresh_discord_reactions)
+    with (
+        patch.object(discord, "get_redis", return_value=fake),
+        patch.object(task, "apply_async", side_effect=lambda args, countdown: task.run(*args)),
+    ):
+        yield fake
 
 
 def handle(bot, event_type, data, pushed=True):
@@ -1780,9 +1795,8 @@ TRANSIENT = [httpx.Response(429, json={"retry_after": 600}), httpx.Response(502)
         ("MESSAGE_CREATE", message_create(id="62"), "62"),
         ("MESSAGE_UPDATE", message_create(**PUSHED_AS), MESSAGE),
         ("MESSAGE_DELETE", {"id": MESSAGE, "channel_id": CHANNEL}, MESSAGE),
-        ("MESSAGE_REACTION_ADD", REACTION, MESSAGE),
     ],
-    ids=["create", "edit", "delete", "reaction"],
+    ids=["create", "edit", "delete"],
 )
 @pytest.mark.parametrize("answer", TRANSIENT, ids=["rate limited", "server error", "connection dropped"])
 @pytest.mark.parametrize("retries, countdown", [(0, 60), (2, 180)])
@@ -1805,16 +1819,63 @@ def test_a_push_discord_cannot_confirm_now_is_retried(
     assert (db_session.query(DiscordMessage).count(), message.content, message.reactions) == (1, LONG_TEXT, None)
 
 
+@pytest.mark.parametrize("answer", TRANSIENT, ids=["rate limited", "server error", "connection dropped"])
+@pytest.mark.parametrize("retries, countdown", [(0, 60), (2, 180)])
+def test_a_reaction_refresh_discord_cannot_answer_now_is_retried(
+    db_session, discord_api, webhook_bot, qdrant, answer, retries, countdown
+):
+    victims_server(db_session, webhook_bot)
+    discord_api.post(message_create())
+    handle(webhook_bot, "MESSAGE_CREATE", message_create(), pushed=False)
+    discord_api.channels[(HOOKED_TOKEN, f"{CHANNEL}/messages/{MESSAGE}")] = answer
+    task = cast(Task, discord.refresh_discord_reactions)
+
+    with task_request(task, retries=retries), patch.object(task, "retry", side_effect=Retry()) as retry:
+        with pytest.raises(Retry):
+            task.run(webhook_bot.id, int(MESSAGE))
+
+    retry.assert_called_once_with(exc=ANY, countdown=countdown)
+    assert isinstance(retry.call_args.kwargs["exc"], discord.PushNotReady)
+    assert stored(db_session).reactions is None
+
+
 def test_a_pushed_reaction_to_a_message_not_stored_yet_is_retried(db_session, discord_api, webhook_bot, qdrant):
     victims_server(db_session, webhook_bot)
-    task = cast(Task, discord.handle_discord_event)
+    task = cast(Task, discord.refresh_discord_reactions)
 
     with task_request(task, retries=0), patch.object(task, "retry", side_effect=Retry()) as retry:
         with pytest.raises(Retry):
-            task.run(webhook_bot.id, "MESSAGE_REACTION_ADD", REACTION)
+            task.run(webhook_bot.id, int(MESSAGE))
 
     retry.assert_called_once_with(exc=ANY, countdown=60)
     assert discord_api.requests == []
+
+
+def test_a_burst_of_pushed_reactions_queues_one_refresh(db_session, discord_api, webhook_bot, qdrant):
+    victims_server(db_session, webhook_bot)
+    relay(discord_api, webhook_bot, "MESSAGE_CREATE", message_create())
+    task = cast(Task, discord.refresh_discord_reactions)
+
+    with patch.object(task, "apply_async") as queue:
+        burst = [relay(discord_api, webhook_bot, "MESSAGE_REACTION_ADD", REACTION)["status"] for _ in range(3)]
+        task.run(webhook_bot.id, int(MESSAGE))
+        after = relay(discord_api, webhook_bot, "MESSAGE_REACTION_REMOVE", REACTION)["status"]
+
+    assert (burst, after) == (["queued", "coalesced", "coalesced"], "queued")
+    assert queue.call_args_list[0].kwargs == {
+        "args": [webhook_bot.id, int(MESSAGE)], "countdown": discord.REACTION_REFRESH_DELAY_SECONDS
+    }
+    assert stored(db_session).reactions == {"🔥": ["11"]}
+
+
+def test_a_pushed_reaction_refreshes_at_once_without_redis(db_session, discord_api, webhook_bot, qdrant, fake_redis):
+    victims_server(db_session, webhook_bot)
+    relay(discord_api, webhook_bot, "MESSAGE_CREATE", message_create())
+
+    with patch.object(fake_redis, "set", side_effect=redis.ConnectionError("down")):
+        result = relay(discord_api, webhook_bot, "MESSAGE_REACTION_ADD", REACTION)
+
+    assert (result["status"], stored(db_session).reactions) == ("updated", {"🔥": ["11"]})
 
 
 def test_a_pushed_create_of_a_stored_message_is_not_read_again(db_session, discord_api, webhook_bot, qdrant):
