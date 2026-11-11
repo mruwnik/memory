@@ -2510,7 +2510,8 @@ def sent(minutes: int) -> str:
 
 
 @pytest.fixture
-def pushing_app(db_session, slack_app, slack_channel, slack_user):
+def pushing_app(db_session, slack_app, slack_channel, slack_user, slack_credentials):
+    """An app whose events reach the channel; its owner has a Slack identity to be notified on."""
     slack_app.created_by_user_id = slack_user.id
     slack_app.last_event_at = minutes_ago(1)
     slack_channel.push_since = minutes_ago(120)
