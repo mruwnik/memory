@@ -1,9 +1,11 @@
+import struct
 import zipfile
 from unittest.mock import MagicMock, patch
 
 import pytest
 import pymupdf
 
+from memory.common import settings
 from memory.parsers.ebook import (
     Peekable,
     extract_epub_metadata,
@@ -12,7 +14,7 @@ from memory.parsers.ebook import (
     extract_sections,
     parse_ebook,
     Section,
-    epub_markup_bytes,
+    check_parse_size,
 )
 
 
@@ -396,19 +398,42 @@ def test_parse_ebook_full_content_generation(mock_open, mock_doc, tmp_path):
         assert ebook.full_content == "Content of section 1\n\nContent of section 2"
 
 
-def write_epub(path, chapter_bytes: int):
+def write_epub(path, entries: dict[str, bytes]):
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr(zipfile.ZipInfo("mimetype"), "application/epub+zip", zipfile.ZIP_STORED)
-        z.writestr("a.xhtml", "<html><body>" + "a " * (chapter_bytes // 2) + "</body></html>")
-        z.writestr("cover.jpg", b"\x00" * 4096)
+        for name, content in entries.items():
+            z.writestr(name, content)
 
 
-def test_parse_ebook_refuses_oversized_markup(tmp_path):
+def understate_size(path, real: int, declared: int):
+    """Rewrite an entry's uncompressed size in its local and central headers."""
+    data = path.read_bytes()
+    real_field, declared_field = struct.pack("<I", real), struct.pack("<I", declared)
+    assert data.count(real_field) == 2
+    path.write_bytes(data.replace(real_field, declared_field))
+
+
+def lying_epub(path):
+    write_epub(path, {"a.xhtml": b"a" * 200_003})
+    understate_size(path, 200_003, 1000)
+
+
+@pytest.mark.parametrize(
+    "make_book",
+    [
+        pytest.param(lambda p: write_epub(p, {"a.xhtml": b"a " * 100_000}), id="markup"),
+        pytest.param(lambda p: write_epub(p, {"content.dat": b"a " * 100_000}), id="markup-other-name"),
+        pytest.param(lambda p: write_epub(p, {f"{n}.xhtml": b"" for n in range(60)}), id="entry-count"),
+        pytest.param(lying_epub, id="understated-size"),
+    ],
+)
+def test_parse_ebook_refuses_book_too_large_to_parse(tmp_path, make_book):
     path = tmp_path / "bomb.epub"
-    write_epub(path, 200_000)
+    make_book(path)
 
     with (
-        patch("memory.parsers.ebook.settings.MAX_EBOOK_MARKUP_BYTES", 100_000),
+        patch.object(settings, "MAX_EBOOK_INFLATED_BYTES", 100_000),
+        patch.object(settings, "MAX_EBOOK_ZIP_ENTRIES", 50),
         patch("memory.parsers.ebook.pymupdf.open") as mupdf_open,
         pytest.raises(ValueError),
     ):
@@ -416,9 +441,9 @@ def test_parse_ebook_refuses_oversized_markup(tmp_path):
     mupdf_open.assert_not_called()
 
 
-@pytest.mark.parametrize("chapter_bytes", [1000, 50_000])
-def test_epub_markup_bytes_counts_markup_only(tmp_path, chapter_bytes):
+def test_check_parse_size_accepts_book_under_the_caps(tmp_path):
     path = tmp_path / "book.epub"
-    write_epub(path, chapter_bytes)
+    write_epub(path, {"a.xhtml": b"a " * 40_000, "cover.jpg": b"\x00" * 4096})
 
-    assert epub_markup_bytes(path) == chapter_bytes + len("<html><body></body></html>")
+    with patch.object(settings, "MAX_EBOOK_INFLATED_BYTES", 100_000):
+        check_parse_size(path)

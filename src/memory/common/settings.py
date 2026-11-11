@@ -471,12 +471,14 @@ MAX_REPORT_UPLOAD_BYTES = int(
 MAX_MISC_UPLOAD_BYTES = int(
     os.getenv("MAX_MISC_UPLOAD_BYTES", 100 * 1024 * 1024)
 )
-# An EPUB whose markup (xhtml, html, xml, css, svg) inflates past this is not
-# parsed: MuPDF lays all of it out in memory, roughly 50 bytes of worker RAM per
-# byte of markup, so a small compressed upload can OOM a worker.
-MAX_EBOOK_MARKUP_BYTES = int(
-    os.getenv("MAX_EBOOK_MARKUP_BYTES", 10 * 1024 * 1024)
+# An EPUB whose entries inflate past this in total is not parsed: MuPDF lays
+# its markup out in memory, roughly 50 bytes of worker RAM per byte, so a small
+# compressed upload can OOM a worker. Images count too, since any entry can hold
+# markup; raise it for image-heavy books if workers have the memory.
+MAX_EBOOK_INFLATED_BYTES = int(
+    os.getenv("MAX_EBOOK_INFLATED_BYTES", 10 * 1024 * 1024)
 )
+MAX_EBOOK_ZIP_ENTRIES = int(os.getenv("MAX_EBOOK_ZIP_ENTRIES", 10_000))
 # Images fetched for one web page or HTML report: <img> tags past the count,
 # or once the byte total is stored, keep their remote URLs.
 MAX_DOCUMENT_IMAGES = int(os.getenv("MAX_DOCUMENT_IMAGES", 100))

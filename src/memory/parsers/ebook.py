@@ -149,30 +149,44 @@ def extract_sections(doc) -> list[Section]:
     return sections
 
 
-# The parts of an EPUB that MuPDF lays out as pages; their inflated size sets
-# the parse's time and memory.
-EPUB_MARKUP_SUFFIXES = (".xhtml", ".html", ".htm", ".xml", ".opf", ".ncx", ".css", ".svg")
+# Bytes inflated per read while measuring a zipped book.
+INFLATE_CHUNK = 64 * 1024
 
 
-def epub_markup_bytes(path: Path) -> int:
-    """The declared inflated size of the markup in the zip at ``path``."""
-    with zipfile.ZipFile(path) as archive:
-        return sum(
-            info.file_size
-            for info in archive.infolist()
-            if info.filename.lower().endswith(EPUB_MARKUP_SUFFIXES)
-        )
+def inflated_bytes(archive: zipfile.ZipFile, limit: int) -> int:
+    """The bytes every entry of ``archive`` really inflates to, counting no
+    further than just past ``limit``. Entry headers are not trusted: zipfile
+    stops at an entry's declared size and raises BadZipFile when its CRC then
+    doesn't match."""
+    total = 0
+    for info in archive.infolist():
+        with archive.open(info) as entry:
+            while chunk := entry.read(INFLATE_CHUNK):
+                total += len(chunk)
+                if total > limit:
+                    return total
+    return total
 
 
 def check_parse_size(path: Path) -> None:
-    """Raise ValueError for a zipped book whose markup exceeds MAX_EBOOK_MARKUP_BYTES."""
+    """Raise ValueError for a zipped book with more than MAX_EBOOK_ZIP_ENTRIES
+    entries, or whose entries inflate past MAX_EBOOK_INFLATED_BYTES.
+
+    Every entry counts, whatever its name: MuPDF reads any entry the package
+    file points at, and lays out its markup in memory.
+    """
     if not zipfile.is_zipfile(path):
         return
-    size = epub_markup_bytes(path)
-    if size > settings.MAX_EBOOK_MARKUP_BYTES:
-        raise ValueError(
-            f"Book text inflates to {size} bytes (limit {settings.MAX_EBOOK_MARKUP_BYTES})"
-        )
+    limit = settings.MAX_EBOOK_INFLATED_BYTES
+    try:
+        with zipfile.ZipFile(path) as archive:
+            if len(archive.infolist()) > settings.MAX_EBOOK_ZIP_ENTRIES:
+                raise ValueError(f"Book has more than {settings.MAX_EBOOK_ZIP_ENTRIES} entries")
+            size = inflated_bytes(archive, limit)
+    except zipfile.BadZipFile as e:
+        raise ValueError("Book is not a valid zip archive") from e
+    if size > limit:
+        raise ValueError(f"Book inflates to more than {limit} bytes")
 
 
 def parse_ebook(file_path: str | Path) -> Ebook:
