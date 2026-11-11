@@ -1,7 +1,9 @@
 import logging
+import struct
 import zipfile
+import zlib
 from dataclasses import dataclass, field
-from typing import Any, cast
+from typing import Any, BinaryIO, Iterator, cast
 from pathlib import Path
 
 import pymupdf
@@ -149,23 +151,45 @@ def extract_sections(doc) -> list[Section]:
     return sections
 
 
-# Bytes inflated per read while measuring a zipped book.
+# Bytes read per step while measuring a zipped book.
 INFLATE_CHUNK = 64 * 1024
+LOCAL_HEADER = struct.Struct("<4s5H3L2H")
+LOCAL_HEADER_SIGNATURE = b"PK\x03\x04"
 
 
-def inflated_bytes(archive: zipfile.ZipFile, limit: int) -> int:
-    """The bytes every entry of ``archive`` really inflates to, counting no
-    further than just past ``limit``. Entry headers are not trusted: zipfile
-    stops at an entry's declared size and raises BadZipFile when its CRC then
-    doesn't match."""
-    total = 0
-    for info in archive.infolist():
-        with archive.open(info) as entry:
-            while chunk := entry.read(INFLATE_CHUNK):
-                total += len(chunk)
-                if total > limit:
-                    return total
-    return total
+def stored_chunks(file: BinaryIO, info: zipfile.ZipInfo) -> Iterator[bytes]:
+    """The compressed bytes of ``info``, read from after its local header."""
+    file.seek(info.header_offset)
+    header = file.read(LOCAL_HEADER.size)
+    if len(header) < LOCAL_HEADER.size or header[:4] != LOCAL_HEADER_SIGNATURE:
+        raise ValueError("Book has a damaged zip entry")
+    *_, name_length, extra_length = LOCAL_HEADER.unpack(header)
+    file.seek(name_length + extra_length, 1)
+    left = info.compress_size
+    while left > 0:
+        chunk = file.read(min(INFLATE_CHUNK, left))
+        if not chunk:
+            raise ValueError("Book has a truncated zip entry")
+        left -= len(chunk)
+        yield chunk
+
+
+def inflated_size(chunks: Iterator[bytes], method: int, budget: int) -> int:
+    """The bytes ``chunks`` really inflate to, counting no further than just past
+    ``budget``. Only stored and deflated entries are measured."""
+    if method == zipfile.ZIP_STORED:
+        return sum(len(chunk) for chunk in chunks)
+    if method != zipfile.ZIP_DEFLATED:
+        raise ValueError("Book has a zip entry in an unsupported compression method")
+    inflater = zlib.decompressobj(-zlib.MAX_WBITS)
+    size = 0
+    for data in chunks:
+        while data and size <= budget:
+            size += len(inflater.decompress(data, budget - size + 1))
+            data = inflater.unconsumed_tail
+        if size > budget or inflater.eof:
+            return size
+    return size + len(inflater.flush())
 
 
 def check_parse_size(path: Path) -> None:
@@ -173,20 +197,33 @@ def check_parse_size(path: Path) -> None:
     entries, or whose entries inflate past MAX_EBOOK_INFLATED_BYTES.
 
     Every entry counts, whatever its name: MuPDF reads any entry the package
-    file points at, and lays out its markup in memory.
+    file points at, and lays out its markup in memory. Entries are measured by
+    inflating their data, since their declared sizes and CRCs are the
+    uploader's to choose; one that inflates to other than its declared size is
+    refused.
     """
     if not zipfile.is_zipfile(path):
         return
     limit = settings.MAX_EBOOK_INFLATED_BYTES
     try:
-        with zipfile.ZipFile(path) as archive:
-            if len(archive.infolist()) > settings.MAX_EBOOK_ZIP_ENTRIES:
-                raise ValueError(f"Book has more than {settings.MAX_EBOOK_ZIP_ENTRIES} entries")
-            size = inflated_bytes(archive, limit)
+        archive = zipfile.ZipFile(path)
     except zipfile.BadZipFile as e:
         raise ValueError("Book is not a valid zip archive") from e
-    if size > limit:
-        raise ValueError(f"Book inflates to more than {limit} bytes")
+    with archive, path.open("rb") as file:
+        entries = archive.infolist()
+        if len(entries) > settings.MAX_EBOOK_ZIP_ENTRIES:
+            raise ValueError(f"Book has more than {settings.MAX_EBOOK_ZIP_ENTRIES} entries")
+        total = 0
+        for info in entries:
+            try:
+                size = inflated_size(stored_chunks(file, info), info.compress_type, limit - total)
+            except zlib.error as e:
+                raise ValueError("Book has a zip entry that does not inflate") from e
+            total += size
+            if total > limit:
+                raise ValueError(f"Book inflates to more than {limit} bytes")
+            if size != info.file_size:
+                raise ValueError("Book has a zip entry whose size does not match its header")
 
 
 def parse_ebook(file_path: str | Path) -> Ebook:

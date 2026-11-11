@@ -1,5 +1,6 @@
 import struct
 import zipfile
+import zlib
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -418,6 +419,24 @@ def lying_epub(path):
     understate_size(path, 200_003, 1000)
 
 
+def zip_of_one_entry(name: bytes, data: bytes, crc: int, size: int) -> bytes:
+    """A deflated single-entry zip whose headers declare ``crc`` and ``size``."""
+    local = struct.pack("<4s5H3L2H", b"PK\x03\x04", 20, 0, 8, 0, 0, crc, len(data), size, len(name), 0)
+    central = struct.pack(
+        "<4s6H3L5H2L", b"PK\x01\x02", 20, 20, 0, 8, 0, 0, crc, len(data), size, len(name), 0, 0, 0, 0, 0, 0
+    )
+    entry, directory = local + name + data, central + name
+    end = struct.pack("<4s4H2LH", b"PK\x05\x06", 0, 0, 1, 1, len(directory), len(entry), 0)
+    return entry + directory + end
+
+
+def prefix_describing_epub(path):
+    """Size and CRC describe the stream's first 1000 bytes; it inflates to 200,003."""
+    deflater = zlib.compressobj(9, zlib.DEFLATED, -zlib.MAX_WBITS)
+    data = deflater.compress(b"a" * 200_003) + deflater.flush()
+    path.write_bytes(zip_of_one_entry(b"a.xhtml", data, zlib.crc32(b"a" * 1000), 1000))
+
+
 @pytest.mark.parametrize(
     "make_book",
     [
@@ -425,6 +444,7 @@ def lying_epub(path):
         pytest.param(lambda p: write_epub(p, {"content.dat": b"a " * 100_000}), id="markup-other-name"),
         pytest.param(lambda p: write_epub(p, {f"{n}.xhtml": b"" for n in range(60)}), id="entry-count"),
         pytest.param(lying_epub, id="understated-size"),
+        pytest.param(prefix_describing_epub, id="headers-describe-a-prefix"),
     ],
 )
 def test_parse_ebook_refuses_book_too_large_to_parse(tmp_path, make_book):
@@ -447,3 +467,12 @@ def test_check_parse_size_accepts_book_under_the_caps(tmp_path):
 
     with patch.object(settings, "MAX_EBOOK_INFLATED_BYTES", 100_000):
         check_parse_size(path)
+
+
+def test_zip_of_one_entry_fools_zipfile(tmp_path):
+    # The prefix-describing book reads back as its 1000-byte prefix through zipfile.
+    path = tmp_path / "book.epub"
+    prefix_describing_epub(path)
+
+    with zipfile.ZipFile(path) as archive:
+        assert archive.read("a.xhtml") == b"a" * 1000
