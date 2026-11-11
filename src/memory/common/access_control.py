@@ -717,6 +717,24 @@ def get_accessible_team_ids(
     return get_user_team_ids(db, user)
 
 
+# Project roles that may change a project itself: team `lead` and `admin`.
+PROJECT_ADMIN_ROLES = frozenset({ProjectRole.MANAGER.value, ProjectRole.ADMIN.value})
+
+
+def user_can_administer_project(
+    db: "Session | scoped_session[Session]", user: UserLike, project_id: int
+) -> bool:
+    """Check if a user may change, re-team or delete a project.
+
+    Global admins may. Otherwise the user's best role on the project, through
+    the teams assigned to it, must be manager or admin. Contributors can read
+    the project and add content to it, but not change it.
+    """
+    if has_admin_scope(user):
+        return True
+    return get_user_project_roles(db, user).get(project_id) in PROJECT_ADMIN_ROLES
+
+
 def user_can_access_project(
     db: "Session | scoped_session[Session]", user: UserLike, project_id: int
 ) -> bool:

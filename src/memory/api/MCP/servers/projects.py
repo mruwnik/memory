@@ -24,9 +24,9 @@ from memory.api.MCP.visibility import READ_ONLY, require_scopes, visible_when
 from memory.common.access_control import (
     UserLike,
     filter_projects_query,
-    get_user_project_roles,
     get_user_team_ids,
     has_admin_scope,
+    user_can_administer_project,
 )
 from memory.common.scopes import SCOPE_PROJECTS, SCOPE_PROJECTS_WRITE
 from memory.common.db.connection import make_session
@@ -72,37 +72,6 @@ projects_mcp = FastMCP("memory-projects")
 # positive integers, and 0 is unambiguous. The two conventions coexist intentionally;
 # unifying them would add complexity without benefit.
 _UNSET = "__UNSET__"
-
-
-# Team roles `lead` and `admin` map to project roles `manager` and `admin`
-# respectively (see access_control.role_mapping). These are the two roles
-# considered "authoritative" for administering a project — a `member`
-# (project role `contributor`) can read but cannot delete or wholesale-
-# replace the team list. Centralised here so delete() and update_project()
-# stay in lockstep.
-_PROJECT_ADMIN_ROLES = frozenset({"manager", "admin"})
-
-
-def caller_can_administer_project(session, user, project_id: int) -> bool:
-    """Return True iff ``user`` may delete or wholesale-replace teams on ``project_id``.
-
-    A caller is authoritative for a project if any of the following hold:
-
-    1. They have the global admin scope (``"*"``) — superadmin bypass.
-    2. They hold ``lead`` or ``admin`` role in at least one team currently
-       assigned to the project (i.e. their *project role* is ``manager``
-       or ``admin``).
-
-    A bare ``member`` / ``contributor`` is NOT authoritative; they can read
-    the project (filter_projects_query lets them through) but they cannot
-    administer it. The previous behaviour conflated read access with
-    administer authority, letting a contributor on any one of N assigned
-    teams delete the project or kick the other teams off it.
-    """
-    if has_admin_scope(user):
-        return True
-    project_roles = get_user_project_roles(session, user)
-    return project_roles.get(project_id) in _PROJECT_ADMIN_ROLES
 
 
 def _project_error_response(exc: ProjectError) -> dict:
@@ -575,7 +544,9 @@ async def upsert(
                defaults to milestone title.
         team_ids: List of team IDs to assign. Required for new projects.
                   On update, replaces all existing team assignments.
-        project_id: ID of existing project to update (omit for create)
+        project_id: ID of existing project to update (omit for create). Changing an
+                    existing project, including through repo/milestone, needs lead or
+                    admin role on one of its teams.
         description: Optional project description
         state: Project state ('open' or 'closed')
         parent_id: Optional parent project ID for hierarchy
@@ -804,6 +775,14 @@ async def update_project(
 
     if not project:
         return {"error": f"Project not found: {project_id}", "project": None}
+    if not user_can_administer_project(session, user, project.id):
+        return {
+            "error": (
+                "Forbidden: changing a project requires lead or admin role on one "
+                "of its teams."
+            ),
+            "project": None,
+        }
 
     # Conflict checks for new args
     if clear_repo and repo is not None:
@@ -928,9 +907,10 @@ async def update_project(
         if parent_id == project_id:
             return {"error": "Project cannot be its own parent", "project": None}
 
-        parent = session.get(Project, parent_id)
-        if not parent:
-            return {"error": f"Parent project not found: {parent_id}", "project": None}
+        error = validate_parent_project(session, user, parent_id)
+        if error:
+            return error
+        parent = cast(Project, session.get(Project, parent_id))
 
         # Check for circular reference. The previous loop only exited when
         # the parent chain hit ``project_id`` (the would-be cycle through
@@ -1000,23 +980,7 @@ async def update_project(
                 "project": None,
             }
 
-        # Non-admins must already have authority on the project via at least
-        # one *current* team. Without this, a bare contributor on team A could
-        # call upsert(team_ids=[their_own_team]) and use the wholesale-replace
-        # to kick every other team off the project (de-facto hijack).
-        # Read access alone (i.e. being a member of one of the new team_ids)
-        # is not sufficient for replacement.
         if not has_admin_scope(user):
-            if not caller_can_administer_project(session, user, project.id):
-                return {
-                    "error": (
-                        "Forbidden: replacing the team list requires lead or "
-                        "admin role on at least one of the project's current "
-                        "teams."
-                    ),
-                    "project": None,
-                }
-
             user_team_ids = get_user_team_ids(session, user)
             accessible_team_ids = set(team_ids) & user_team_ids
             if not accessible_team_ids:
@@ -1278,8 +1242,8 @@ async def delete(
 
         # Authority check: read access via team membership is necessary but
         # not sufficient for delete. Require lead/admin on a current team
-        # (or global admin scope). See caller_can_administer_project.
-        if not caller_can_administer_project(session, user, project.id):
+        # (or global admin scope). See user_can_administer_project.
+        if not user_can_administer_project(session, user, project.id):
             logger.warning(
                 "Project delete rejected: user %s lacks lead/admin role on any "
                 "team of project %s",
