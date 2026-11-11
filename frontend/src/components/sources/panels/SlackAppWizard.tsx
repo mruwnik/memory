@@ -552,6 +552,9 @@ export const SlackAppWizard = ({
             <p className="text-sm text-slate-700">
               Your Slack app is configured and live.
             </p>
+            <p className="text-sm text-slate-700">
+              A newly connected workspace starts paused: nothing is collected until you click Resume on it.
+            </p>
             <FormActions>
               <Button variant="primary"
                 type="button"

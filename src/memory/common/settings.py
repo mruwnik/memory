@@ -681,7 +681,7 @@ BACKUP_ENCRYPTION_KEY = secret_env("BACKUP_ENCRYPTION_KEY")
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
 GOOGLE_REDIRECT_URI = os.getenv(
-    "GOOGLE_REDIRECT_URI", f"{SERVER_URL}/auth/callback/google"
+    "GOOGLE_REDIRECT_URI", f"{SERVER_URL}/google-drive/callback"
 )
 # Drive files listed as larger than this are not downloaded: one PDF is held in memory while its text is extracted.
 GOOGLE_DRIVE_MAX_FILE_BYTES = int(os.getenv("GOOGLE_DRIVE_MAX_FILE_BYTES", 50 * 1024 * 1024))

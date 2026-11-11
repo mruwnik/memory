@@ -22,6 +22,25 @@ a new, empty `## Unreleased` above it.
 
 ## Unreleased
 
+### Changes
+- Fix: the Discord Add bot form says the bot needs the Message Content and Server Members intents turned on in the Developer Portal.
+- Fix: the Slack connect wizard's last step says a newly connected workspace starts paused and collects nothing until you click Resume.
+
+### Required env vars
+None
+
+### Manual steps
+None
+
+### Other changes for operators
+- Fix: an unset `GOOGLE_REDIRECT_URI` now defaults to `{SERVER_URL}/google-drive/callback`, the route that serves the Google OAuth callback, instead of the unserved `/auth/callback/google`. Instances that set it explicitly are unaffected; the Google Cloud console's authorized redirect URI must match.
+
+### Migrations
+None
+
+### Post-deploy commands
+None
+
 ## v0.5.4 (2026-11-11)
 
 ### Changes

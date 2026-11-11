@@ -162,6 +162,7 @@ describe('DiscordPanel add bot', () => {
 
     expect(within(dialog).getByRole('button', { name: 'WebSocket gateway' })).toHaveAttribute('aria-pressed', 'true')
     expect(within(dialog).queryByLabelText('Public key')).not.toBeInTheDocument()
+    expect(within(dialog).getByText(/Message Content and Server Members/)).toBeInTheDocument()
     await user.type(within(dialog).getByLabelText('Bot name'), '  My Bot  ')
     await user.type(within(dialog).getByLabelText('Bot token'), 'tok123')
     await user.click(within(dialog).getByRole('button', { name: 'Add bot' }))

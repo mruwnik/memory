@@ -376,6 +376,7 @@ describe('SlackAppWizard - polling transitions', () => {
 
     await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS)
     await vi.waitFor(() => expect(screen.getByText(/configured and live/)).toBeInTheDocument())
+    expect(screen.getByText(/starts paused.*Resume/)).toBeInTheDocument()
     expect(getApp).toHaveBeenCalledWith(5)
     expect(onComplete).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'Done' }))

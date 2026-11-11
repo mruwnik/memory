@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 from unittest.mock import Mock, patch
+from urllib.parse import urlparse
 
 import pytest
 from starlette.requests import Request
@@ -33,6 +34,12 @@ def test_get_available_scopes_returns_all_scopes():
     assert "gmail_send" in result["scopes"]
     assert "gmail_read" in result["scopes"]
     assert "calendar" in result["scopes"]
+
+
+def test_default_redirect_uri_is_the_callback_route():
+    assert urlparse(settings.GOOGLE_REDIRECT_URI).path == google_drive.router.url_path_for(
+        "google_callback"
+    )
 
 
 def test_available_scopes_have_required_fields():

@@ -543,7 +543,7 @@ const AddBotForm = ({ onAdd, onCancel }: AddBotFormProps) => {
         <Field label="Application ID (optional)" hint="Read from the token when left empty">
           <Input type="text" inputMode="numeric" value={applicationId} onChange={e => setApplicationId(e.target.value)} />
         </Field>
-        <Field label="Bot token" hint="From the Discord Developer Portal under Bot → Token">
+        <Field label="Bot token" hint="From the Discord Developer Portal under Bot → Token. On that page, also turn on the Message Content and Server Members intents">
           <Input type="password" value={token} onChange={e => setToken(e.target.value)} placeholder="Paste your Discord bot token" required />
         </Field>
 
