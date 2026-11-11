@@ -175,7 +175,7 @@ def slack_admin(db, caller, other):
 PAYERS = [(own_email, "regular_client")]
 ADMINS = [(admin_on_email, "client"), (slack_admin, "client")]
 CO_USERS = [(slack_co_user, "regular_client")]
-VIEWERS = PAYERS + ADMINS + CO_USERS
+VIEWERS = PAYERS + ADMINS
 
 
 def on_their_key(db, user, admin_user, make, provider="anthropic"):
@@ -226,22 +226,21 @@ def test_only_the_default_payer_or_an_admin_may_choose_default(
 
 
 @pytest.mark.parametrize("make,client_fixture", CO_USERS)
-def test_a_co_user_cannot_reach_default_through_their_own_key(
-    request, db_session, user, admin_user, make, client_fixture
+@pytest.mark.parametrize("value", ["mine", "none", "default"])
+def test_a_co_user_cannot_change_the_key(
+    request, db_session, user, admin_user, make, client_fixture, value
 ):
-    """The payer turned LLM work off; picking your own key first mustn't unlock Default."""
+    """A Slack workspace's settings, its LLM key among them, are its owner's."""
     caller = request.getfixturevalue(client_fixture)
     mine = key(db_session, user.id, "mine")
-    row, url = make(db_session, user, admin_user)
-    row.llm_disabled = True
-    db_session.commit()
+    row, url, theirs = on_their_key(db_session, user, admin_user, make)
+    values = {"mine": mine.id, "none": "none", "default": "default"}
 
-    assert caller.patch(url, json={"llm_key": mine.id}).status_code == 200
-    response = caller.patch(url, json={"llm_key": "default"})
+    response = caller.patch(url, json={"llm_key": values[value]})
 
     assert response.status_code == 403, response.text
     db_session.refresh(row)
-    assert (row.llm_disabled, row.llm_key_id) == (False, mine.id)
+    assert (row.llm_disabled, row.llm_key_id) == (False, theirs.id)
 
 
 @pytest.mark.parametrize(
@@ -264,18 +263,6 @@ def test_the_view_says_who_may_choose_default(
     view = llm_key_view(db_session, request.getfixturevalue(viewer), row)
 
     assert view.can_choose_default == expected
-
-
-@pytest.mark.parametrize("make,client_fixture", CO_USERS)
-def test_anyone_may_echo_an_unchanged_default(
-    request, db_session, user, admin_user, make, client_fixture
-):
-    caller = request.getfixturevalue(client_fixture)
-    _, url = make(db_session, user, admin_user)
-
-    response = caller.patch(url, json={"llm_key": "default"})
-
-    assert response.status_code == 200, response.text
 
 
 @pytest.mark.parametrize("make,client_fixture", VIEWERS)
