@@ -201,12 +201,15 @@ def add_discord_message(
             existing_msg.content = content  # type: ignore
             if edited_at_dt:
                 existing_msg.edited_at = edited_at_dt
-            if saved_image_paths:
-                existing_msg.images = saved_image_paths  # type: ignore
+            if images is not None:
+                # An image whose download failed this time keeps its earlier copy.
+                held = set(existing_msg.images or []) | set(saved_image_paths)
+                names = (discord_attachments.stored_image_name(url, message_id) for url in images)
+                existing_msg.images = [name for name in names if name in held] or None  # type: ignore
             if embeds is not None:
-                existing_msg.embeds = embeds  # type: ignore
+                existing_msg.embeds = embeds or None  # type: ignore
             if attachments is not None:
-                existing_msg.attachments = attachments  # type: ignore
+                existing_msg.attachments = attachments or None  # type: ignore
             if reactions is not None:
                 existing_msg.reactions = reactions  # type: ignore
 
@@ -235,8 +238,8 @@ def add_discord_message(
             message_type=message_type,
             is_pinned=is_pinned,
             images=saved_image_paths or None,
-            embeds=embeds,
-            attachments=attachments,
+            embeds=embeds or None,
+            attachments=attachments or None,
             reactions=reactions,
         )
 
@@ -413,8 +416,8 @@ def rewrite_message(session: DBSession, message: DiscordMessage, data: dict) -> 
         "message_type": kwargs["message_type"],
         "is_pinned": kwargs["is_pinned"],
         "images": images or None,
-        "embeds": kwargs["embeds"],
-        "attachments": kwargs["attachments"],
+        "embeds": kwargs["embeds"] or None,
+        "attachments": kwargs["attachments"] or None,
     }
     message.reactions = None
     if all(getattr(message, field) == value for field, value in fields.items()):

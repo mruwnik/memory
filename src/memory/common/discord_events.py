@@ -128,7 +128,11 @@ def message_type(data: dict) -> str:
 
 
 def message_task_kwargs(data: dict, bot_id: int, is_edit: bool = False) -> dict:
-    """A full gateway/REST message object as ``ADD_DISCORD_MESSAGE`` kwargs."""
+    """A gateway/REST message object as ``ADD_DISCORD_MESSAGE`` kwargs.
+    ``images``, ``attachments`` and ``embeds`` are None when the payload leaves
+    them out (a partial MESSAGE_UPDATE keeps the stored ones) and empty when it
+    lists none (the message has none now)."""
+    listed = data.get("attachments") is not None
     attachments = data.get("attachments") or []
     images = [a["url"] for a in attachments if discord_attachments.is_image(a.get("content_type")) and a.get("url")]
     files = [
@@ -148,9 +152,9 @@ def message_task_kwargs(data: dict, bot_id: int, is_edit: bool = False) -> dict:
         "thread_id": snowflake((data.get("thread") or {}).get("id")),
         "message_type": message_type(data),
         "is_pinned": bool(data.get("pinned")),
-        "images": images or None,
-        "embeds": data.get("embeds") or None,
-        "attachments": files or None,
+        "images": images if listed else None,
+        "embeds": data.get("embeds"),
+        "attachments": files if listed else None,
         "is_edit": is_edit,
     }
 

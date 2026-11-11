@@ -1386,6 +1386,38 @@ def stored_images(urls: list[str]) -> list[str] | None:
 FIRE = {"🔥": ["11"]}
 
 
+EMBED = {"type": "rich", "title": "a link preview"}
+KEPT = (stored_images([CDN]), [discord_attachments.record("a.png", "image/png", 1, CDN)], [EMBED])
+NONE = (None, None, None)
+WITHOUT_FILES = {k: v for k, v in message_create(content=EDITED).items() if k not in ("attachments", "embeds")}
+
+
+@pytest.mark.parametrize(
+    "update, pushed, files",
+    [
+        (message_create(content=EDITED), True, NONE),
+        (message_create(content=EDITED), False, NONE),
+        (WITHOUT_FILES, True, KEPT),
+        (WITHOUT_FILES, False, KEPT),
+        ({"id": MESSAGE, "channel_id": CHANNEL, "content": EDITED}, True, KEPT),
+        ({"id": MESSAGE, "channel_id": CHANNEL, "content": EDITED}, False, KEPT),
+    ],
+    ids=["pushed, none left", "gateway, none left", "pushed, not named", "gateway, not named", "pushed, content only", "gateway, content only"],
+)
+def test_an_edit_drops_attachments_and_embeds_only_when_it_lists_none(
+    db_session, discord_api, webhook_bot, qdrant, update, pushed, files
+):
+    original = message_create(attachments=[image_attachment(CDN)], embeds=[EMBED])
+    with patch.object(discord, "download_and_save_images", side_effect=lambda urls, _: stored_images(urls)):
+        relay(discord_api, webhook_bot, "MESSAGE_CREATE", original)
+        discord_api.happen("MESSAGE_UPDATE", update)
+        handle(webhook_bot, "MESSAGE_UPDATE", update, pushed=pushed)
+
+    message = stored(db_session)
+    assert message.content == EDITED
+    assert (message.images, message.attachments, message.embeds) == files
+
+
 @pytest.fixture
 def discord_storage():
     """Discord's image directory under the tests' storage root; settings derives it once, at import."""
