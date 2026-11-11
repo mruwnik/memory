@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from collections.abc import Buffer as ReadableBuffer
-from typing import Callable, Generator, Iterable, Iterator, Sequence, cast
+from typing import Callable, Generator, Hashable, Iterable, Iterator, Sequence, cast
 
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -71,6 +71,16 @@ def process_attachment(
     )
 
 
+def repeated_flags(values: Sequence[Hashable]) -> list[bool]:
+    """For each value, whether it already occurred earlier in the sequence."""
+    seen: set[Hashable] = set()
+    flags = []
+    for value in values:
+        flags.append(value in seen)
+        seen.add(value)
+    return flags
+
+
 def process_attachments(
     attachments: list[Attachment], message: MailMessage
 ) -> list[EmailAttachment]:
@@ -87,9 +97,10 @@ def process_attachments(
     names = [message.safe_filename(a["filename"]) for a in attachments]
     # A repeated name gets a content-hash tag: stable across reingests, and two
     # copies of the same file may share a path.
+    repeated = repeated_flags(names)
     tags = [
-        hashlib.sha256(a.get("content") or b"").hexdigest()[:8] if name in names[:i] else ""
-        for i, (a, name) in enumerate(zip(attachments, names))
+        hashlib.sha256(a.get("content") or b"").hexdigest()[:8] if again else ""
+        for a, again in zip(attachments, repeated)
     ]
     return [
         attachment

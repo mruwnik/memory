@@ -6,8 +6,9 @@ import logging
 import pathlib
 from datetime import datetime
 from email.utils import getaddresses, parsedate_to_datetime
-from typing import TypedDict
+from typing import TypedDict, cast
 
+from memory.common import settings
 from memory.common.html_text import html_to_markdown
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,20 @@ class EmailMessage(TypedDict):
 RawEmailResponse = tuple[str | None, bytes, datetime | None]
 
 
+def message_ref(msg: email.message.Message) -> str:  # type: ignore
+    """The message's Message-ID, shortened, for log lines."""
+    return repr(str(msg.get("Message-ID") or "")[:100])
+
+
+def kept(items: list, limit: int, kind: str, msg: email.message.Message) -> list:  # type: ignore
+    """The first ``limit`` items, logging when some are dropped."""
+    if len(items) > limit:
+        logger.warning(
+            "Mail %s: keeping %d of its %d %s", message_ref(msg), limit, len(items), kind
+        )
+    return items[:limit]
+
+
 def extract_recipients(msg: email.message.Message) -> list[str]:  # type: ignore
     """
     Extract email recipient addresses from message headers.
@@ -45,7 +60,8 @@ def extract_recipients(msg: email.message.Message) -> list[str]:  # type: ignore
     ``split(",")`` corrupts addresses whose display name contains a comma
     (``"Doe, John" <j@x>`` becomes two bogus recipients). Returns the bare
     address (``j@x``) so a mailbox is stored under one canonical form rather
-    than smeared across display-name variants.
+    than smeared across display-name variants. At most MAX_EMAIL_RECIPIENTS
+    are returned, as each one is looked up among the people.
 
     Args:
         msg: Email message object
@@ -54,7 +70,8 @@ def extract_recipients(msg: email.message.Message) -> list[str]:  # type: ignore
         List of recipient email addresses
     """
     headers = [value for field in ["To", "Cc", "Bcc"] if (value := msg.get(field))]
-    return [addr for _name, addr in getaddresses(headers) if addr]
+    addresses = [addr for _name, addr in getaddresses(headers) if addr]
+    return kept(addresses, settings.MAX_EMAIL_RECIPIENTS, "recipients", msg)
 
 
 def header_addresses(value: str) -> list[str]:
@@ -159,9 +176,43 @@ def extract_body(msg: email.message.Message) -> str:  # type: ignore
         return plain_body.strip()
 
 
+def attachment_parts(msg: email.message.Message) -> list[email.message.Message]:  # type: ignore
+    """The parts of a multipart message that are named attachments."""
+    if not msg.is_multipart():
+        return []
+    return [
+        part
+        for part in msg.walk()
+        if "attachment" in part.get("Content-Disposition", "") and part.get_filename()
+    ]
+
+
+def decode_attachment(part: email.message.Message) -> Attachment | None:  # type: ignore
+    """An attachment part's metadata and decoded content; None when it has no content."""
+    filename = part.get_filename()
+    try:
+        content = part.get_payload(decode=True)
+    except Exception:
+        logger.exception("Error extracting attachment content")
+        return None
+    if not isinstance(content, bytes):
+        logger.warning(f"Attachment {filename} has no content, skipping")
+        return None
+    return cast(
+        Attachment,
+        {
+            "filename": filename,
+            "content_type": part.get_content_type(),
+            "size": len(content),
+            "content": content,
+        },
+    )
+
+
 def extract_attachments(msg: email.message.Message) -> list[Attachment]:  # type: ignore
     """
-    Extract attachment metadata and content from email.
+    Extract attachment metadata and content from email. Only the first
+    MAX_EMAIL_ATTACHMENTS are decoded, since each becomes its own item.
 
     Args:
         msg: Email message object
@@ -169,33 +220,8 @@ def extract_attachments(msg: email.message.Message) -> list[Attachment]:  # type
     Returns:
         List of attachment dictionaries with metadata and content
     """
-    if not msg.is_multipart():
-        return []
-
-    attachments = []
-    for part in msg.walk():
-        content_disposition = part.get("Content-Disposition", "")
-        if "attachment" not in content_disposition:
-            continue
-
-        if filename := part.get_filename():
-            try:
-                content = part.get_payload(decode=True)
-                if content is None:
-                    logger.warning(f"Attachment {filename} has no content, skipping")
-                    continue
-                attachments.append(
-                    {
-                        "filename": filename,
-                        "content_type": part.get_content_type(),
-                        "size": len(content),
-                        "content": content,
-                    }
-                )
-            except Exception:
-                logger.exception("Error extracting attachment content")
-
-    return attachments
+    parts = kept(attachment_parts(msg), settings.MAX_EMAIL_ATTACHMENTS, "attachments", msg)
+    return [attachment for part in parts if (attachment := decode_attachment(part))]
 
 
 def compute_message_hash(msg_id: str, subject: str, sender: str, body: str) -> bytes:

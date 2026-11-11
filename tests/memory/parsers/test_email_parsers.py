@@ -402,3 +402,36 @@ def test_parse_email_converts_html_only_up_to_the_limit(monkeypatch, multipart):
 
 def test_parse_email_survives_deeply_nested_html():
     assert parse_email_message(html_mail("<div>" * 3000 + "hello"))["body"] == "hello"
+
+
+@pytest.mark.parametrize("count, kept", [(3, 3), (4, 3), (40, 3)])
+def test_parse_email_keeps_at_most_max_attachments(monkeypatch, count, kept):
+    monkeypatch.setattr(settings, "MAX_EMAIL_ATTACHMENTS", 3)
+    attachments = [{"filename": f"a{i}.txt", "content": b"x"} for i in range(count)]
+    msg = create_email_message(attachments=attachments)
+
+    result = parse_email_message(msg.as_string())
+
+    assert [a["filename"] for a in result["attachments"]] == [f"a{i}.txt" for i in range(kept)]
+
+
+@pytest.mark.parametrize("count, kept", [(2, 2), (3, 2), (50, 2)])
+def test_parse_email_keeps_at_most_max_recipients(monkeypatch, count, kept):
+    monkeypatch.setattr(settings, "MAX_EMAIL_RECIPIENTS", 2)
+    to_addrs = ", ".join(f"r{i}@example.com" for i in range(count))
+    msg = create_email_message(to_addrs=to_addrs)
+
+    result = parse_email_message(msg.as_string())
+
+    assert result["recipients"] == [f"r{i}@example.com" for i in range(kept)]
+
+
+def test_parse_email_logs_dropped_attachments_by_message_id(monkeypatch, caplog):
+    monkeypatch.setattr(settings, "MAX_EMAIL_ATTACHMENTS", 1)
+    attachments = [{"filename": f"secret{i}.txt", "content": b"x"} for i in range(3)]
+    msg = create_email_message(attachments=attachments, message_id="<many@example.com>")
+
+    parse_email_message(msg.as_string())
+
+    assert "Mail '<many@example.com>': keeping 1 of its 3 attachments" in caplog.text
+    assert "secret" not in caplog.text
