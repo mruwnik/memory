@@ -12,6 +12,7 @@ import defusedxml.ElementTree as DefusedElementTree
 import pymupdf
 
 from memory.common import settings
+from memory.common.zip_limits import check_office_zip
 
 logger = logging.getLogger(__name__)
 
@@ -366,8 +367,10 @@ class GoogleDriveClient:
             return None
 
     def _extract_docx_text(self, docx_bytes: bytes) -> str:
-        """Extract text from Word document."""
+        """Extract text from Word document: empty when it can't be read or is
+        over the office file size limits (see zip_limits.check_office_zip)."""
         try:
+            check_office_zip(io.BytesIO(docx_bytes))
             # Using defusedxml to prevent XXE attacks from untrusted DOCX files
             with zipfile.ZipFile(io.BytesIO(docx_bytes)) as zf:
                 with zf.open("word/document.xml") as doc_xml:
