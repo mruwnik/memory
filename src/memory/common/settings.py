@@ -243,7 +243,7 @@ MAX_OFFICE_ZIP_ENTRIES = int(os.getenv("MAX_OFFICE_ZIP_ENTRIES", 10_000))
 # A pandoc run (DOCX to PDF through xelatex, or to plain text) is killed,
 # with every process it started, after this many seconds.
 PANDOC_TIMEOUT_SECONDS = float(os.getenv("PANDOC_TIMEOUT_SECONDS", 120))
-# Address space each process of a pandoc run (pandoc, xelatex, ...) may map; 0 for no limit.
+# Data memory (RLIMIT_DATA) each process of a pandoc run (pandoc, xelatex, ...) may use; 0 for no limit.
 PANDOC_MEMORY_LIMIT_BYTES = int(os.getenv("PANDOC_MEMORY_LIMIT_BYTES", 2 * 1024 * 1024 * 1024))
 # Text chunks embedded per item on the server's Voyage key; past it, the first
 # chunks and the item's summary are kept.

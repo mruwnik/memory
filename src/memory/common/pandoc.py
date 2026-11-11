@@ -30,11 +30,17 @@ def kill_group(pid: int) -> None:
 
 
 def limit_memory() -> None:
-    """Cap the address space of the process about to exec pandoc; xelatex and
-    the other processes it starts inherit the cap. Runs in the forked child."""
+    """Cap the data memory of the process about to exec pandoc; xelatex and
+    the other processes it starts inherit the cap. Runs in the forked child.
+
+    RLIMIT_DATA, not RLIMIT_AS: pandoc's GHC runtime reserves a large heap
+    address range up front with a PROT_NONE mapping, which RLIMIT_AS counts.
+    Since Linux 4.7 RLIMIT_DATA counts private writable mappings only, so it
+    bounds the memory actually used without refusing that reservation.
+    """
     limit = settings.PANDOC_MEMORY_LIMIT_BYTES
     if limit > 0:
-        resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
+        resource.setrlimit(resource.RLIMIT_DATA, (limit, limit))
 
 
 def run_pandoc(pandoc: str, args: Sequence[str]) -> bytes:
@@ -42,8 +48,8 @@ def run_pandoc(pandoc: str, args: Sequence[str]) -> bytes:
 
     pandoc starts in its own session, so on a timeout of
     PANDOC_TIMEOUT_SECONDS it is killed together with every process it
-    started (xelatex and its helpers). Each of those processes may map at
-    most PANDOC_MEMORY_LIMIT_BYTES.
+    started (xelatex and its helpers). Each of those processes may use at
+    most PANDOC_MEMORY_LIMIT_BYTES of data memory.
     """
     timeout = settings.PANDOC_TIMEOUT_SECONDS
     with subprocess.Popen(
