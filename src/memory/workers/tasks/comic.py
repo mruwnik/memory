@@ -1,6 +1,9 @@
 import logging
+import mimetypes
+import pathlib
 from datetime import datetime
 from typing import Callable, cast
+from urllib.parse import urlparse
 
 from dateutil import parser as dateutil_parser
 
@@ -38,6 +41,18 @@ XKCD_RSS_URL = "https://xkcd.com/atom.xml"
 # Hard cap on comic image size (10 MB). XKCD/SMBC comics are typically
 # well under 1 MB; this is a DoS guard for attacker-controlled image URLs.
 MAX_COMIC_IMAGE_SIZE = 10 * 1024 * 1024
+
+COMIC_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp"})
+
+
+def comic_image_path(image_url: str, author: str, title: str) -> pathlib.Path | None:
+    """Where a comic's image is stored: ``<author>/<title><ext>`` under
+    COMIC_STORAGE_DIR, or None when the URL's path has no image extension."""
+    extension = pathlib.PurePosixPath(urlparse(image_url).path).suffix.lower()
+    if extension not in COMIC_IMAGE_EXTENSIONS:
+        return None
+    name = f"{clean_filename(author) or 'unknown'}/{clean_filename(title) or 'untitled'}{extension}"
+    return paths.validate_path_within_directory(settings.COMIC_STORAGE_DIR, name)
 
 
 def find_new_urls(base_url: str, rss_url: str) -> set[str]:
@@ -106,6 +121,11 @@ def sync_comic(
         if existing_comic:
             return {"status": "already_exists", "comic_id": existing_comic.id}
 
+    filename = comic_image_path(image_url, author, title)
+    if filename is None:
+        return {"status": "failed", "error": f"Not an image URL: {image_url}"}
+    mime_type = mimetypes.guess_type(filename.name)[0]
+
     # ``stream_download_to_bytes`` validates the URL against SSRF, caps body
     # size, and revalidates each redirect hop. ``image_url`` is parsed from
     # third-party comic pages — attacker-influenceable.
@@ -117,15 +137,6 @@ def sync_comic(
             "status": "failed",
             "error": f"Failed to download image: {image_url}",
         }
-
-    # Strip query string from extension (e.g., "png?v=123" -> "png")
-    file_type = image_url.split(".")[-1].split("?")[0]
-    mime_type = f"image/{file_type}"
-    filename = (
-        settings.COMIC_STORAGE_DIR
-        / clean_filename(author)
-        / f"{clean_filename(title)}.{file_type}"
-    )
 
     filename.parent.mkdir(parents=True, exist_ok=True)
     filename.write_bytes(image_bytes)

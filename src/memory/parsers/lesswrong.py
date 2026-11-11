@@ -6,7 +6,7 @@ from typing import Any, Generator, TypedDict, NotRequired
 
 from bs4 import BeautifulSoup
 from PIL import Image as PILImage
-from memory.common import settings
+from memory.common import paths, settings
 from memory.common.ssrf import validate_public_url
 import requests
 from markdownify import markdownify
@@ -284,7 +284,7 @@ def extract_body(post: dict[str, Any]) -> tuple[str, dict[str, PILImage.Image]]:
         return "", {}
 
     url = post.get("pageUrl", "")
-    image_dir = settings.FILE_STORAGE_DIR / "lesswrong" / url
+    image_dir = paths.validate_path_within_directory(settings.FILE_STORAGE_DIR / "lesswrong", url)
 
     soup = BeautifulSoup(body, "html.parser")
     soup, images = process_images(soup, url, image_dir)

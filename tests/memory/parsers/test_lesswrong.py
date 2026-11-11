@@ -679,3 +679,12 @@ def test_graphql_errors_without_data_raise(mock_post, _validate):
     mock_post.return_value = Mock(json=Mock(return_value={"data": None, "errors": ["bad"]}))
     with pytest.raises(ValueError, match="no data"):
         fetch_comment_counts(["a"])
+
+
+@pytest.mark.parametrize("page_url", ["/../../escape", "https://lesswrong.com/../../../escape"])
+@patch("memory.parsers.lesswrong.process_images")
+def test_extract_body_refuses_page_url_outside_image_dir(mock_process_images, page_url):
+    with pytest.raises(ValueError):
+        extract_body({"htmlBody": "<p>x</p>", "pageUrl": page_url})
+
+    mock_process_images.assert_not_called()
