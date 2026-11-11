@@ -6,7 +6,6 @@ import os
 import secrets
 from typing import cast
 
-import redis
 
 # Allow Google to return additional scopes (like 'openid') without raising an error
 os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
@@ -17,12 +16,9 @@ from pydantic import BaseModel, Field
 
 from memory.common import settings
 from memory.common.celery_app import SYNC_GOOGLE_FOLDER, app as celery_app
-from memory.common.data_source_access import (
-    enqueue_access_control_propagation,
-    mark_access_control_changed_if_needed,
-)
 from memory.common.db.connection import DBSession, get_session, make_session
 from memory.common.db.models import User
+from memory.common.redis_pool import get_redis
 from memory.common.db.models.sources import (
     GoogleAccount,
     GoogleFolder,
@@ -151,26 +147,22 @@ class GoogleOAuthState:
     KEY_PREFIX = "google_oauth_state:"
 
     @classmethod
-    def redis_client(cls) -> redis.Redis:
-        return redis.from_url(settings.REDIS_URL)
-
-    @classmethod
     def create(cls, user_id: int) -> str:
         state = secrets.token_urlsafe(32)
         key = f"{cls.KEY_PREFIX}{state}"
-        cls.redis_client().setex(key, cls.STATE_TTL_SECONDS, str(user_id))
+        get_redis().setex(key, cls.STATE_TTL_SECONDS, str(user_id))
         return state
 
     @classmethod
     def owner(cls, state: str) -> int | None:
         """The user a live state was issued to, without consuming it."""
-        result = cls.redis_client().get(f"{cls.KEY_PREFIX}{state}")
+        result = get_redis().get(f"{cls.KEY_PREFIX}{state}")
         return int(cast(bytes, result)) if result is not None else None
 
     @classmethod
     def consume(cls, state: str) -> bool:
         """Use up a state; only one of two racing callbacks gets True."""
-        return bool(cls.redis_client().delete(f"{cls.KEY_PREFIX}{state}"))
+        return bool(get_redis().delete(f"{cls.KEY_PREFIX}{state}"))
 
 
 class OAuthConfigResponse(BaseModel):
@@ -754,7 +746,6 @@ def update_folder(
     if not folder:
         raise HTTPException(status_code=404, detail="Folder not found")
 
-    snap_pid, snap_sens = folder.project_id, folder.sensitivity
     if updates.folder_name is not None:
         folder.folder_name = updates.folder_name
     if updates.recursive is not None:
@@ -778,17 +769,8 @@ def update_folder(
         folder.sensitivity = updates.sensitivity
     apply_llm_key(db, user, folder, updates.llm_key)
 
-    access_changed = mark_access_control_changed_if_needed(
-        folder,
-        snapshot_project_id=snap_pid,
-        snapshot_sensitivity=snap_sens,
-    )
-
     db.commit()
     db.refresh(folder)
-
-    if access_changed:
-        enqueue_access_control_propagation("google_folder", folder)
 
     return folder_to_response(folder, db, user)
 

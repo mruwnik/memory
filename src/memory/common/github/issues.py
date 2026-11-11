@@ -17,6 +17,7 @@ from .types import (
     GithubReviewComment,
     compute_content_hash,
     parse_github_date,
+    parse_required_github_date,
 )
 
 if TYPE_CHECKING:
@@ -370,10 +371,10 @@ class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
                 if a is not None
             ],
             milestone_number=self._extract_nested(issue, "milestone", "number"),
-            created_at=parse_github_date(issue["createdAt"]),  # type: ignore
+            created_at=parse_required_github_date(issue["createdAt"]),
             closed_at=parse_github_date(issue.get("closedAt")),
             merged_at=None,
-            github_updated_at=parse_github_date(issue["updatedAt"]),  # type: ignore
+            github_updated_at=parse_required_github_date(issue["updatedAt"]),
             comment_count=len(comments),
             comments=comments,
             diff_summary=None,
@@ -494,10 +495,10 @@ class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
                 if a is not None
             ],
             milestone_number=self._extract_nested(pr, "milestone", "number"),
-            created_at=parse_github_date(pr["createdAt"]),  # type: ignore
+            created_at=parse_required_github_date(pr["createdAt"]),
             closed_at=parse_github_date(pr.get("closedAt")),
             merged_at=parse_github_date(pr.get("mergedAt")),
-            github_updated_at=parse_github_date(pr["updatedAt"]),  # type: ignore
+            github_updated_at=parse_required_github_date(pr["updatedAt"]),
             comment_count=len(comments),
             comments=comments,
             diff_summary=diff_summary,
@@ -722,8 +723,8 @@ class IssuesMixin(GithubClientCore if TYPE_CHECKING else object):
             description=ms.get("description"),
             state=ms["state"].lower(),  # GraphQL returns OPEN/CLOSED
             due_on=parse_github_date(ms.get("dueOn")),
-            github_created_at=parse_github_date(ms["createdAt"]),  # type: ignore
-            github_updated_at=parse_github_date(ms["updatedAt"]),  # type: ignore
+            github_created_at=parse_required_github_date(ms["createdAt"]),
+            github_updated_at=parse_required_github_date(ms["updatedAt"]),
             closed_at=parse_github_date(ms.get("closedAt")),
         )
 

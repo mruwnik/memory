@@ -117,7 +117,7 @@ def _stub_redis_client() -> MagicMock:
 def test_rate_limit_passes_under_threshold():
     client = _stub_redis_client()
     request = _make_request(ip="10.0.0.1")
-    with patch.object(rate_limit, "get_redis", return_value=client):
+    with patch.object(rate_limit, "rate_limit_redis", return_value=client):
         for _ in range(5):
             # 10/minute → 5 requests fine
             enforce_poll_response_rate_limit(request, "slug-a")
@@ -128,7 +128,7 @@ def test_rate_limit_429_when_exceeded():
     request = _make_request(ip="10.0.0.2")
 
     # Burn through the 10/minute allowance
-    with patch.object(rate_limit, "get_redis", return_value=client):
+    with patch.object(rate_limit, "rate_limit_redis", return_value=client):
         for _ in range(10):
             enforce_poll_response_rate_limit(request, "slug-b")
 
@@ -146,7 +146,7 @@ def test_rate_limit_keyed_per_ip_and_slug():
     request_a = _make_request(ip="10.0.0.10")
     request_b = _make_request(ip="10.0.0.20")
 
-    with patch.object(rate_limit, "get_redis", return_value=client):
+    with patch.object(rate_limit, "rate_limit_redis", return_value=client):
         # Burn IP A's bucket on slug-1
         for _ in range(10):
             enforce_poll_response_rate_limit(request_a, "slug-1")
@@ -159,7 +159,7 @@ def test_rate_limit_keyed_per_ip_and_slug():
 def test_rate_limit_fails_open_when_redis_down():
     """Redis outage must not lock public poll responses out entirely."""
     request = _make_request()
-    with patch.object(rate_limit, "get_redis", return_value=None):
+    with patch.object(rate_limit, "rate_limit_redis", return_value=None):
         for _ in range(50):
             # No HTTPException — fail open
             enforce_poll_response_rate_limit(request, "slug-x")
@@ -200,7 +200,7 @@ def test_rate_limit_does_not_trust_xff_from_untrusted_peer():
         requests_with_spoofed_xff.append(request)
 
     with (
-        patch.object(rate_limit, "get_redis", return_value=client),
+        patch.object(rate_limit, "rate_limit_redis", return_value=client),
         # Trust no proxies — the typical default for a public-facing API.
         patch("memory.common.settings.RATE_LIMIT_TRUSTED_PROXIES", ""),
     ):
@@ -234,7 +234,7 @@ def test_rate_limit_honors_xff_from_trusted_proxy():
     request_bob.headers = Headers({"X-Forwarded-For": "203.0.113.8"})
 
     with (
-        patch.object(rate_limit, "get_redis", return_value=client),
+        patch.object(rate_limit, "rate_limit_redis", return_value=client),
         patch("memory.common.settings.RATE_LIMIT_TRUSTED_PROXIES", proxy_ip),
     ):
         # Burn Alice's 10/minute allowance

@@ -577,7 +577,7 @@ def test_backup_all_releases_real_lock_when_work_raises(backup_settings):
 
     with (
         patch.object(backup, "aws_credentials_available", return_value=True),
-        patch.object(backup.redis, "from_url", return_value=fake),
+        patch.object(backup, "get_redis", return_value=fake),
         patch.object(
             backup,
             "backup_to_s3",

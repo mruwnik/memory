@@ -1,7 +1,9 @@
 """Tests for GitHub issue/PR syncing tasks."""
 
+import threading
+
 import pytest
-from sqlalchemy import update
+from sqlalchemy import func, select, update
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, Mock, patch
 
@@ -593,6 +595,31 @@ def test_sync_github_item_existing_unchanged(
     result = github.sync_github_item(github_repo.id, serialized)
 
     assert result["status"] == "unchanged"
+
+
+def test_sync_item_waits_for_a_concurrent_sync_of_the_same_item(
+    mock_issue_data, github_repo, db_session, db_engine
+):
+    data = mock_issue_data | {"milestone_number": None}
+    existing = github._create_github_item(github_repo, data, None, None)
+    existing.embed_status = "STORED"
+    db_session.add(existing)
+    db_session.commit()
+    results = []
+    worker = threading.Thread(
+        target=lambda: results.append(github.sync_item(github_repo.id, data, []))
+    )
+    key = func.hashtextextended("github_item:testorg/testrepo:issue:42", 0)
+
+    with db_engine.connect() as other:
+        other.execute(select(func.pg_advisory_xact_lock(key)))
+        worker.start()
+        worker.join(timeout=1)
+        waited = worker.is_alive()
+        other.rollback()
+    worker.join(timeout=30)
+
+    assert (waited, [r["status"] for r in results]) == (True, ["unchanged"])
 
 
 def test_sync_github_item_existing_updated(github_repo, db_session, qdrant):
@@ -1434,6 +1461,14 @@ def test_serialize_deserialize_with_pr_data(mock_pr_data_with_extended):
     assert deserialized["pr_data"]["deletions"] == 10
     assert len(deserialized["pr_data"]["files"]) == 2
     assert deserialized["pr_data"]["diff"] == mock_pr_data_with_extended["pr_data"]["diff"]
+
+
+@pytest.mark.parametrize("missing", ["created_at", "github_updated_at"])
+def test_deserialize_issue_data_raises_on_missing_required_date(mock_issue_data, missing):
+    serialized = serialize_issue_data(mock_issue_data) | {missing: None}
+
+    with pytest.raises(ValueError, match="Missing required GitHub date"):
+        _deserialize_issue_data(serialized)
 
 
 def test_serialize_deserialize_without_pr_data(mock_issue_data):

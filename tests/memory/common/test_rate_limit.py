@@ -73,14 +73,14 @@ def _stub_client(initial_count: int = 0) -> MagicMock:
 
 def test_check_rate_limit_allows_under_limit():
     client = _stub_client()
-    with patch.object(rate_limit, "get_redis", return_value=client):
+    with patch.object(rate_limit, "rate_limit_redis", return_value=client):
         for _ in range(5):
             assert rate_limit.check_rate_limit("k", limit=5, window_seconds=60) is True
 
 
 def test_check_rate_limit_blocks_over_limit():
     client = _stub_client()
-    with patch.object(rate_limit, "get_redis", return_value=client):
+    with patch.object(rate_limit, "rate_limit_redis", return_value=client):
         results = [
             rate_limit.check_rate_limit("k", limit=3, window_seconds=60)
             for _ in range(5)
@@ -90,7 +90,7 @@ def test_check_rate_limit_blocks_over_limit():
 
 def test_check_rate_limit_fails_open_when_redis_unavailable():
     """Redis outage must not lock users out of authentication."""
-    with patch.object(rate_limit, "get_redis", return_value=None):
+    with patch.object(rate_limit, "rate_limit_redis", return_value=None):
         for _ in range(100):
             assert rate_limit.check_rate_limit("k", 10, 60) is True
 
@@ -98,7 +98,7 @@ def test_check_rate_limit_fails_open_when_redis_unavailable():
 def test_check_rate_limit_fails_open_on_redis_error():
     client = MagicMock()
     client.pipeline.side_effect = Exception("redis down mid-request")
-    with patch.object(rate_limit, "get_redis", return_value=client):
+    with patch.object(rate_limit, "rate_limit_redis", return_value=client):
         assert rate_limit.check_rate_limit("k", 10, 60) is True
 
 
@@ -106,7 +106,7 @@ def test_check_rate_limit_disabled_globally(monkeypatch):
     """API_RATE_LIMIT_ENABLED=False must not even contact Redis."""
     monkeypatch.setattr(rate_limit.settings, "API_RATE_LIMIT_ENABLED", False)
     client = MagicMock()
-    with patch.object(rate_limit, "get_redis", return_value=client):
+    with patch.object(rate_limit, "rate_limit_redis", return_value=client):
         assert rate_limit.check_rate_limit("k", 1, 60) is True
     client.pipeline.assert_not_called()
 
@@ -125,7 +125,7 @@ def test_check_rate_limit_keys_are_per_window(monkeypatch):
 
     pipe.incr.side_effect = capture_incr
 
-    with patch.object(rate_limit, "get_redis", return_value=client):
+    with patch.object(rate_limit, "rate_limit_redis", return_value=client):
         with patch.object(rate_limit, "time") as mock_time:
             mock_time.time.return_value = 0
             rate_limit.check_rate_limit("user", 10, 60)  # window 0
@@ -141,17 +141,17 @@ def test_check_rate_limit_keys_are_per_window(monkeypatch):
 
 def test_check_rate_limit_spec_parses_and_enforces():
     client = _stub_client()
-    with patch.object(rate_limit, "get_redis", return_value=client):
+    with patch.object(rate_limit, "rate_limit_redis", return_value=client):
         results = [
             rate_limit.check_rate_limit_spec("k", "2/minute") for _ in range(4)
         ]
     assert results == [True, True, False, False]
 
 
-# ====== get_redis caching ======
+# ====== rate_limit_redis caching ======
 
 
-def test_get_redis_caches_failure_for_session(monkeypatch):
+def test_rate_limit_redis_caches_failure_for_session(monkeypatch):
     """If Redis is unavailable on first call, don't reconnect on every check."""
     attempts = {"n": 0}
 
@@ -161,13 +161,13 @@ def test_get_redis_caches_failure_for_session(monkeypatch):
 
     monkeypatch.setattr(rate_limit.redis.Redis, "from_url", classmethod(boom))
 
-    assert rate_limit.get_redis() is None
-    assert rate_limit.get_redis() is None
-    assert rate_limit.get_redis() is None
+    assert rate_limit.rate_limit_redis() is None
+    assert rate_limit.rate_limit_redis() is None
+    assert rate_limit.rate_limit_redis() is None
     assert attempts["n"] == 1
 
 
-def test_get_redis_caches_success(monkeypatch):
+def test_rate_limit_redis_caches_success(monkeypatch):
     client = MagicMock()
     client.ping.return_value = True
     attempts = {"n": 0}
@@ -178,7 +178,7 @@ def test_get_redis_caches_success(monkeypatch):
 
     monkeypatch.setattr(rate_limit.redis.Redis, "from_url", classmethod(make))
 
-    a = rate_limit.get_redis()
-    b = rate_limit.get_redis()
+    a = rate_limit.rate_limit_redis()
+    b = rate_limit.rate_limit_redis()
     assert a is b
     assert attempts["n"] == 1

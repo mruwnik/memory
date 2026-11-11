@@ -40,6 +40,7 @@ import memory.common.summarizer as summarizer
 import memory.common.formatters.observation as observation
 from memory.common.db.models.base import Base
 from memory.common.db.models.discord import DM_CHANNEL_TYPES
+from memory.common.github.types import GithubFileChange, GithubReview, GithubReviewComment
 from memory.common.db.models.source_item import (
     SourceItem,
     SourceItemPayload,
@@ -1650,7 +1651,7 @@ class GithubPRData(Base):
 
     # File changes as structured data
     # [{filename, status, additions, deletions, patch?}]
-    files: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
+    files: Mapped[list[GithubFileChange] | None] = mapped_column(JSONB, nullable=True)
 
     # Stats
     additions: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -1659,11 +1660,13 @@ class GithubPRData(Base):
 
     # Reviews (structured)
     # [{id, user, state, body, submitted_at, commit_oid}]
-    reviews: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
+    reviews: Mapped[list[GithubReview] | None] = mapped_column(JSONB, nullable=True)
 
     # Review comments (line-by-line code comments)
     # [{user, body, path, line, diff_hunk, created_at}]
-    review_comments: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
+    review_comments: Mapped[list[GithubReviewComment] | None] = mapped_column(
+        JSONB, nullable=True
+    )
 
     # Relationship back to GithubItem
     github_item: Mapped[GithubItem] = relationship("GithubItem", back_populates="pr_data")

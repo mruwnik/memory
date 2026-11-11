@@ -317,7 +317,7 @@ def queue_message(
         # Enqueue by keyword (not positionally) so tracked_task's _build_job_params
         # captures these in the PendingJob params — which is what lets a manual
         # retry of a failed job reconstruct the call (including spool_name).
-        process_message.delay(  # type: ignore[attr-defined]
+        process_message.delay(
             account_id=account_id,
             message_id=message_id,
             folder=folder,

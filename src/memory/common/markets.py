@@ -213,6 +213,17 @@ def calculate_liquidity_score(
     return volume_score
 
 
+def round_probability(probability: float | None) -> float | None:
+    """Round a probability to 3 places; 0 is a real probability, only None is missing."""
+    return None if probability is None else round(probability, 3)
+
+
+def manifold_probability(item: dict) -> float | None:
+    """The resolution probability once set (0 included), else the current one."""
+    resolved = item.get("resolutionProbability")
+    return item.get("probability") if resolved is None else resolved
+
+
 def parse_outcome_prices(outcome_prices: str | list) -> list:
     """Parse Polymarket outcome prices from string or list format."""
     if isinstance(outcome_prices, str):
@@ -240,9 +251,7 @@ async def format_manifold_market(session: aiohttp.ClientSession, market: Market)
     if market.get("outcomeType") != "BINARY":
         details = await get_manifold_details(session, market["id"])
         market["answers"] = {
-            answer["text"]: round(
-                answer.get("resolutionProbability") or answer.get("probability") or 0, 3
-            )
+            answer["text"]: round(manifold_probability(answer) or 0, 3)
             for answer in details["answers"]
         }
     if creationTime := market.get("createdTime"):
@@ -380,7 +389,7 @@ async def get_manifold_resolved(
                 continue
 
         resolution = m.get("resolution", "")
-        final_prob = m.get("resolutionProbability") or m.get("probability")
+        final_prob = manifold_probability(m)
 
         was_correct = None
         if m.get("outcomeType") == "BINARY" and final_prob is not None:
@@ -394,7 +403,7 @@ async def get_manifold_resolved(
             "source": "manifold",
             "question": m.get("question", ""),
             "resolution": resolution,
-            "final_probability": round(final_prob, 3) if final_prob else None,
+            "final_probability": round_probability(final_prob),
             "resolved_at": (
                 datetime.fromtimestamp(resolved_at / 1000, tz=timezone.utc).isoformat()
                 if resolved_at
@@ -455,7 +464,7 @@ async def search_polymarket_markets(
                 "question": event.get("title", ""),
                 "url": f"https://polymarket.com/event/{event.get('slug', '')}",
                 "volume": volume,
-                "probability": round(prob, 3) if prob else None,
+                "probability": round_probability(prob),
                 "createdAt": created_at,
                 "liquidity_score": liquidity_score,
             })

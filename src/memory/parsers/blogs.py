@@ -6,6 +6,7 @@ from typing import cast
 
 from bs4 import BeautifulSoup, Tag
 
+from memory.common.dates import parse_iso_datetime
 from memory.parsers.html import (
     BaseHTMLParser,
     Article,
@@ -284,10 +285,11 @@ class ExUrbeParser(BaseHTMLParser):
     ]
 
     def _extract_date(self, soup: BeautifulSoup) -> datetime | None:
-        """Extract date, handling ordinal formats like 'Mar 5th, 2025'."""
-        date = soup.select_one(".published")
-        if date:
-            return date.attrs.get("content")  # type: ignore
+        """Prefer the ISO `content` attribute of `.published`, else parse the text."""
+        element = soup.select_one(".published")
+        content = element.get("content") if element else None
+        if isinstance(content, str) and (date := parse_iso_datetime(content)):
+            return date
         return super()._extract_date(soup)
 
 

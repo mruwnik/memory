@@ -32,6 +32,7 @@ from sqlalchemy.exc import IntegrityError, InterfaceError, OperationalError
 
 from memory.common import paths, settings
 from memory.common.redis_lock import Lock, distributed_lock
+from memory.common.redis_pool import get_redis
 from memory.common.downloads import stream_download_to_path
 from memory.common.celery_app import (
     ADD_SLACK_MESSAGE,
@@ -113,11 +114,6 @@ SKIPPED_SUBTYPES = frozenset({"channel_join", "channel_leave", "bot_message"})
 SLACK_FILE_MAX_BYTES = int(os.getenv("SLACK_FILE_MAX_BYTES", 100 * 1024 * 1024))
 
 
-def get_redis_client() -> redis.Redis:
-    """Get Redis client for locking and short-lived caches in this module."""
-    return redis.from_url(settings.REDIS_URL)
-
-
 def channel_sync_lock_key(channel_id: str) -> str:
     return f"slack_channel_sync:{channel_id}"
 
@@ -144,7 +140,7 @@ def is_channel_sync_locked(channel_id: str) -> bool:
 
     Used to skip enqueueing redundant work; does NOT claim ownership.
     """
-    client = get_redis_client()
+    client = get_redis()
     return client.exists(channel_sync_lock_key(channel_id)) > 0  # type: ignore[operator]
 
 
@@ -154,7 +150,7 @@ def get_cached_user_mapping(workspace_id: str, token: str, base_url: str) -> dic
     Caches the result for 5 minutes to avoid N API calls when processing
     multiple messages from the same workspace.
     """
-    redis_client = redis.from_url(settings.REDIS_URL)
+    redis_client = get_redis()
     cache_key = f"slack_users:{workspace_id}"
 
     # Try cache first
@@ -682,7 +678,7 @@ class ChannelHistorySync:
         if not self.lock.extend():
             raise ChannelSyncInterrupted(self.channel_id)
         self.read += 1
-        redis_client = get_redis_client()
+        redis_client = get_redis()
         key = message_failures_key(self.channel_id, message["ts"])
         pipe = redis_client.pipeline()
         pipe.incr(key)
@@ -1291,12 +1287,12 @@ def update_slack_reactions(
                 return {"status": "updated", "message_ts": message_ts}
     except OperationalError:
         logger.info(f"Reaction update for Slack message {message_ts} hit a lock conflict; retrying")
-        update_slack_reactions.apply_async(kwargs=retry_kwargs, countdown=1)  # type: ignore[attr-defined]
+        update_slack_reactions.apply_async(kwargs=retry_kwargs, countdown=1)
         return {"status": "retrying", "message_ts": message_ts}
 
     if attempt >= REACTION_RETRIES:
         return {"status": "not_found", "message_ts": message_ts}
-    update_slack_reactions.apply_async(  # type: ignore[attr-defined]
+    update_slack_reactions.apply_async(
         kwargs=retry_kwargs, countdown=REACTION_RETRY_SECONDS * (attempt + 1)
     )
     return {"status": "retrying", "message_ts": message_ts}

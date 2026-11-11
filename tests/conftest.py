@@ -245,7 +245,7 @@ class MockRedis:
         # Real ``redis.Redis.from_url`` accepts socket timeouts and other
         # connection kwargs. Swallow them silently — they're irrelevant
         # to the in-memory mock and rejecting them blows up callers
-        # (notably ``rate_limit.get_redis``) with TypeError.
+        # (notably ``rate_limit.rate_limit_redis``) with TypeError.
         return cls()
 
     @classmethod

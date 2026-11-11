@@ -11,9 +11,7 @@ from dataclasses import dataclass
 from typing import cast
 from urllib.parse import urlsplit
 
-import redis
-
-from memory.common import settings
+from memory.common.redis_pool import get_redis
 
 GIT_SYNC_STATUS_KEY = "memory:notes:git_sync_status"
 
@@ -154,7 +152,7 @@ def read_vault_git(root: pathlib.Path) -> VaultGit:
 
 def last_sync() -> dict | None:
     """The last sync's {ok, failed_step, hint, at}, or None before the first one."""
-    raw = redis.from_url(settings.REDIS_URL).get(GIT_SYNC_STATUS_KEY)
+    raw = get_redis().get(GIT_SYNC_STATUS_KEY)
     return json.loads(cast(bytes, raw)) if raw else None
 
 

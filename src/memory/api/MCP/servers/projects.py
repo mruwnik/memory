@@ -12,15 +12,17 @@ back into the legacy `{"error": str(e), "project": None}` dict shape.
 
 import logging
 from datetime import datetime
+from collections.abc import Callable
 from typing import Any, Literal, cast
 
 from fastmcp import FastMCP
 from sqlalchemy import func
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import Session as DBSession, selectinload
 
 from memory.api.MCP.access import get_mcp_current_user
 from memory.api.MCP.visibility import READ_ONLY, require_scopes, visible_when
 from memory.common.access_control import (
+    UserLike,
     filter_projects_query,
     get_user_project_roles,
     get_user_team_ids,
@@ -33,6 +35,7 @@ from memory.common.db.models.journal import JournalEntry, build_journal_access_f
 from memory.common.project import (
     ProjectCreationResult,
     ProjectError,
+    ProjectState,
     create_milestone_project as _create_milestone_project,
     create_repo_project as _create_repo_project,
     create_standalone_project as _create_standalone_project,
@@ -341,8 +344,8 @@ async def fetch(
 
 
 def _validate_create_inputs(
-    session: Any,
-    user: Any,
+    session: DBSession,
+    user: UserLike,
     team_ids: list[int] | None,
     parent_id: int | None,
     owner_id: int | None,
@@ -375,14 +378,14 @@ def _validate_create_inputs(
 
 async def _run_create(
     *,
-    session: Any,
-    user: Any,
+    session: DBSession,
+    user: UserLike,
     kind: Literal["standalone", "repo", "milestone"],
     team_ids: list[int] | None,
     parent_id: int | None,
     owner_id: int | None,
     due_on: str | None,
-    create_call: Any,
+    create_call: Callable[[list[Team], datetime | None], ProjectCreationResult],
 ) -> dict:
     """Shared dispatcher for the three MCP creation wrappers.
 
@@ -405,12 +408,12 @@ async def _run_create(
 
 
 async def create_standalone_project(
-    session: Any,
-    user: Any,
+    session: DBSession,
+    user: UserLike,
     title: str,
     team_ids: list[int] | None,
     description: str | None,
-    state: str,
+    state: ProjectState,
     parent_id: int | None,
     owner_id: int | None = None,
     due_on: str | None = None,
@@ -445,12 +448,12 @@ async def create_standalone_project(
 
 
 async def create_repo_project(
-    session: Any,
-    user: Any,
+    session: DBSession,
+    user: UserLike,
     repo_path: str,
     team_ids: list[int] | None,
     description: str | None,
-    state: str,
+    state: ProjectState,
     parent_id: int | None,
     title_override: str | None,
     owner_id: int | None = None,
@@ -487,8 +490,8 @@ async def create_repo_project(
 
 
 async def create_milestone_project(
-    session: Any,
-    user: Any,
+    session: DBSession,
+    user: UserLike,
     repo_path: str,
     milestone_title: str,
     team_ids: list[int] | None,

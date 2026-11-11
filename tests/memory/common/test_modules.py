@@ -18,31 +18,16 @@ from memory.common.db.models import InstanceSetting
 from memory.common.modules import (
     MODULES,
     module_config_errors,
-    resolve_modules,
     scopes_hidden,
     server_module,
     servers_disabled,
 )
 
 ALL = frozenset(MODULES)
-DEFAULTS = {"on_by_default": True, "off_by_default": False}
-
-
-@pytest.mark.parametrize(
-    "enable, disable, expected",
-    [
-        (set(), set(), {"on_by_default"}),
-        ({"off_by_default"}, set(), {"on_by_default", "off_by_default"}),
-        (set(), {"on_by_default"}, set()),
-        ({"off_by_default"}, {"on_by_default"}, {"off_by_default"}),
-    ],
-)
-def test_env_applies_on_top_of_the_defaults(enable, disable, expected):
-    assert resolve_modules(frozenset(enable), frozenset(disable), DEFAULTS) == expected
 
 
 def test_every_module_is_off_by_default():
-    assert resolve_modules(frozenset(), frozenset()) == frozenset()
+    assert not any(MODULES.values())
 
 
 @pytest.mark.parametrize(

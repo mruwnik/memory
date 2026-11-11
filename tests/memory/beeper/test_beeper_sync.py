@@ -283,7 +283,7 @@ def test_a_failed_cleanup_does_not_hide_the_broker_error(no_celery_dispatch, mon
         raise redis.RedisError("redis is down")
 
     no_celery_dispatch.side_effect = ConnectionError("broker is down")
-    monkeypatch.setattr(type(state.client()), "delete", redis_down)
+    monkeypatch.setattr(type(state.get_redis()), "delete", redis_down)
 
     with pytest.raises(ConnectionError):
         state.queue_chat_sync(1)

@@ -141,6 +141,24 @@ def test_get_job_by_external_id(client: TestClient, job_for_user):
     assert data["external_id"] == job_for_user.external_id
 
 
+def test_get_job_by_external_id_ignores_another_users_newer_job(
+    client: TestClient, db_session, job_for_user, other_user
+):
+    db_session.add(
+        PendingJob(
+            job_type=JobType.MEETING.value,
+            external_id=job_for_user.external_id,
+            params={},
+            user_id=other_user.id,
+        )
+    )
+    db_session.commit()
+
+    response = client.get(f"/api/jobs/external/{job_for_user.external_id}")
+
+    assert (response.status_code, response.json()["id"]) == (200, job_for_user.id)
+
+
 def test_get_job_by_external_id_with_type_filter(client: TestClient, db_session, user):
     """Test getting a job by external ID with job type filter."""
     # Create jobs with same external_id but different types

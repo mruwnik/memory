@@ -34,6 +34,7 @@ from .types import (
     GithubReviewComment,
     compute_content_hash,
     parse_github_date,
+    parse_required_github_date,
     serialize_issue_data,
 )
 
@@ -68,6 +69,7 @@ __all__ = [
     "GithubIssueData",
     # Utilities
     "parse_github_date",
+    "parse_required_github_date",
     "compute_content_hash",
     "access_message",
     "not_found_message",

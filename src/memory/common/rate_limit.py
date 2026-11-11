@@ -54,8 +54,12 @@ def parse_limit(spec: str) -> tuple[int, int]:
     return count, window
 
 
-def get_redis() -> redis.Redis | None:
-    """Return a cached Redis client, or None if Redis is unavailable."""
+def rate_limit_redis() -> redis.Redis | None:
+    """Return a cached Redis client, or None if Redis is unavailable.
+
+    Separate from `memory.common.redis_pool.get_redis`: rate limiting fails
+    open, so this client has 1s socket timeouts and is pinged once.
+    """
     global _redis_client
     if _redis_client is False:
         return None
@@ -95,7 +99,7 @@ def check_rate_limit(key: str, limit: int, window_seconds: int) -> bool:
     """
     if not settings.API_RATE_LIMIT_ENABLED:
         return True
-    client = get_redis()
+    client = rate_limit_redis()
     if client is None:
         return True
     bucket = int(time.time()) // window_seconds

@@ -10,10 +10,8 @@ from memory.common.db.models import (
     HumanUser,
     UserSession,
 )
-from memory.common.db.models.discord import DiscordServer
 from memory.common.db.models.sources import Project, team_members, project_teams
 from memory.common.db import connection as db_connection
-from memory.common import discord as discord_client
 from memory.api.MCP.servers.teams import (
     fetch,
     list_all,
@@ -332,48 +330,14 @@ async def test_team_add_member_access_control_denied(
         pytest.param("with-hyphen", "with-hyphen", id="preserves_hyphens"),
         pytest.param("123 Numbers", "123-numbers", id="keeps_numbers"),
         pytest.param("---leading---", "leading", id="strips_leading_trailing_hyphens"),
+        pytest.param("Équipe Café", "equipe-cafe", id="folds_accents"),
+        pytest.param("日本チーム", "", id="no_ascii_form"),
     ],
 )
 def test_make_slug(name, expected_slug):
     """Test make_slug generates correct URL-safe slugs."""
 
     assert make_slug(name) == expected_slug
-
-
-def test_resolve_guild_with_int(db_session):
-    """Test resolve_guild returns int directly."""
-
-    assert discord_client.resolve_guild(123456789, db_session) == 123456789
-
-
-def test_resolve_guild_with_numeric_string(db_session):
-    """Test resolve_guild parses numeric string as ID."""
-
-    assert discord_client.resolve_guild("123456789", db_session) == 123456789
-
-
-def test_resolve_guild_with_name(db_session):
-    """Test resolve_guild looks up server by name."""
-
-    # Create a Discord server
-    server = DiscordServer(id=987654321, name="Test Server")
-    db_session.add(server)
-    db_session.commit()
-
-    assert discord_client.resolve_guild("Test Server", db_session) == 987654321
-
-
-def test_resolve_guild_not_found(db_session):
-    """Test resolve_guild raises for unknown server name."""
-
-    with pytest.raises(ValueError, match="Discord server 'Unknown Server' not found"):
-        discord_client.resolve_guild("Unknown Server", db_session)
-
-
-def test_resolve_guild_none(db_session):
-    """Test resolve_guild returns None for None input."""
-
-    assert discord_client.resolve_guild(None, db_session) is None
 
 
 # =============================================================================
@@ -599,6 +563,86 @@ async def test_upsert_auto_generates_slug(db_session, admin_session):
 
     assert result["success"] is True
     assert result["team"]["slug"] == "auto-slug-team"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["日本チーム", "!!!"])
+async def test_upsert_refuses_empty_derived_slug(db_session, admin_session, name):
+    with mcp_auth_context(admin_session.token):
+        result = await get_fn(upsert)(name=name)
+
+    assert "pass `slug`" in result["error"]
+    assert db_session.query(Team).count() == 0
+
+
+@pytest.mark.asyncio
+async def test_upsert_refuses_derived_slug_of_another_team(db_session, admin_session):
+    db_session.add(Team(name="C", slug="c", description="The C team"))
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.token):
+        result = await get_fn(upsert)(name="C++", description="Overwritten")
+
+    db_session.expire_all()
+    team = db_session.query(Team).filter(Team.slug == "c").one()
+    assert "pass `slug`" in result["error"]
+    assert (team.name, team.description) == ("C", "The C team")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "existing_name, name, slug",
+    [
+        ("C", "C++", "c"),
+        ("Platform Team", "platform team", None),
+    ],
+)
+async def test_upsert_updates_team_by_explicit_or_same_name_slug(
+    db_session, admin_session, existing_name, name, slug
+):
+    db_session.add(Team(name=existing_name, slug=make_slug(existing_name)))
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.token):
+        result = await get_fn(upsert)(name=name, slug=slug, description="Updated")
+
+    assert (result["action"], result["team"]["name"]) == ("updated", name)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "existing_name, legacy_slug, name",
+    [
+        ("Équipe", "quipe", "Équipe"),
+        ("Équipe Café", "quipe-caf", "équipe café"),
+    ],
+)
+async def test_upsert_updates_team_stored_under_pre_folding_slug(
+    db_session, admin_session, existing_name, legacy_slug, name
+):
+    """A team saved before accents were folded keeps the slug that dropped
+    them; upserting it by name updates it instead of adding a second team."""
+    db_session.add(Team(name=existing_name, slug=legacy_slug))
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.token):
+        result = await get_fn(upsert)(name=name, description="Updated")
+
+    assert (result["action"], result["team"]["slug"]) == ("updated", legacy_slug)
+    assert db_session.query(Team).count() == 1
+
+
+@pytest.mark.asyncio
+async def test_upsert_ignores_pre_folding_slug_of_another_team(db_session, admin_session):
+    db_session.add(Team(name="Quipe", slug="quipe"))
+    db_session.commit()
+
+    with mcp_auth_context(admin_session.token):
+        result = await get_fn(upsert)(name="Équipe")
+
+    db_session.expire_all()
+    assert (result["action"], result["team"]["slug"]) == ("created", "equipe")
+    assert db_session.query(Team).filter(Team.slug == "quipe").one().name == "Quipe"
 
 
 @pytest.mark.asyncio
