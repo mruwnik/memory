@@ -396,6 +396,11 @@ class UserSession(Base):
     api_key_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("api_keys.id", ondelete="CASCADE"), nullable=True, index=True
     )
+    # Set on the session first-run setup signs in with: the one web-UI login
+    # that goes through no OAuth client.
+    from_setup: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
 
     # Relationship to user
     user: Mapped[User] = relationship("User", back_populates="sessions")

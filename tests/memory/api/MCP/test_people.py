@@ -2243,6 +2243,12 @@ async def test_upsert_queues_tidbit_for_admin_in_any_project(
         (list_all, {"search": "Alice"}, lambda r: r["people"][0]["contact_info"]),
         (tidbit_list, {"identifier": "alice_chen"}, lambda r: r["tidbits"][0]["content"]),
         (tidbit_list, {"identifier": "alice_chen"}, lambda r: r["tidbits"][0]["tags"]),
+        (fetch, {"identifier": "alice_chen"}, lambda r: r["identifier"]),
+        (fetch, {"identifier": "alice_chen"}, lambda r: r["tidbits"][0]["tidbit_type"]),
+        (fetch, {"identifier": "alice_chen"}, lambda r: r["tidbits"][0]["person_identifier"]),
+        (list_all, {"search": "Alice"}, lambda r: r["people"][0]["identifier"]),
+        (tidbit_list, {"identifier": "alice_chen"}, lambda r: r["tidbits"][0]["tidbit_type"]),
+        (tidbit_list, {"identifier": "alice_chen"}, lambda r: r["tidbits"][0]["person_identifier"]),
     ],
 )
 async def test_people_reads_wrap_text_people_wrote(

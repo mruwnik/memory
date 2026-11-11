@@ -537,6 +537,13 @@ REMOTE_SERVER_TIMEOUT_SEC = int(os.getenv("REMOTE_SERVER_TIMEOUT_SEC", 60))
 # An IMAP message larger than this is not downloaded, and no single IMAP
 # command's response may be larger.
 MAX_EMAIL_BYTES = int(os.getenv("MAX_EMAIL_BYTES", 64 * 1024 * 1024))
+# Attachments kept per email; each becomes its own item, so the rest are dropped.
+MAX_EMAIL_ATTACHMENTS = int(os.getenv("MAX_EMAIL_ATTACHMENTS", 100))
+# Recipient addresses (To, Cc and Bcc together) kept per email.
+MAX_EMAIL_RECIPIENTS = int(os.getenv("MAX_EMAIL_RECIPIENTS", 500))
+# Characters of a Subject or From header kept and decoded; decoding MIME
+# encoded-words costs time superlinear in the header's length.
+MAX_EMAIL_HEADER_CHARS = int(os.getenv("MAX_EMAIL_HEADER_CHARS", 8192))
 # HTML (email bodies, fetched pages) is converted to markdown up to this many
 # characters; the rest only has its tags stripped. Conversion costs about
 # 10 µs and 100 bytes of RAM per character of tag-dense HTML.

@@ -53,7 +53,7 @@ describe('usePolls.createPoll', () => {
 describe('usePolls.listPolls', () => {
   it('returns the polls array and forwards status', async () => {
     const polls = [poll(), poll({ id: 2 })]
-    const fetchMock = mockFetchRoutes({ polling_list_polls: mcpResult(polls) })
+    const fetchMock = mockFetchRoutes({ polling_list_polls: mcpResult({ polls }) })
     const { listPolls } = setup()
 
     const out = await listPolls('open')

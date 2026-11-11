@@ -73,7 +73,7 @@ def test_claiming_creates_a_signed_in_admin(setup_client, db_session):
     assert verify_password(ACCOUNT["password"], user.password_hash or "")
     assert db_session.query(Person).filter_by(user_id=user.id).count() == 1
     session = db_session.get(UserSession, hash_token(response.json()["session_id"]))
-    assert session is not None and session.user_id == user.id
+    assert session is not None and (session.user_id, session.from_setup) == (user.id, True)
 
 
 def test_claiming_makes_the_one_human_a_single_user_install_allows(

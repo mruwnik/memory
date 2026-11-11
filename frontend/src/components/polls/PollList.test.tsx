@@ -49,7 +49,8 @@ function mockMcp(handlers: Record<string, unknown | Error>) {
       if (payload instanceof Error) {
         return mockResponse({ status: 500, json: { detail: payload.message } })
       }
-      return mockResponse({ json: mcpEnvelopeJson(payload) })
+      const result = method === 'polling_list_polls' ? { polls: payload } : payload
+      return mockResponse({ json: mcpEnvelopeJson(result) })
     }
     return mockResponse({ status: 404, json: { detail: 'not found' } })
   })
@@ -207,7 +208,7 @@ describe('PollList - status filter', () => {
       const tool = mcpToolFromRequest(input, init)
       if (tool !== 'polling_list_polls') return mockResponse({ json: { user_id: 1, scopes: ['*'] } })
       if (String(init?.body).includes('"closed"')) {
-        return mockResponse({ json: mcpEnvelopeJson([makePoll({ id: 2, title: 'Closed poll', status: 'closed' })]) })
+        return mockResponse({ json: mcpEnvelopeJson({ polls: [makePoll({ id: 2, title: 'Closed poll', status: 'closed' })] }) })
       }
       return new Promise<Response>(resolve => { finishAll = resolve })
     })
@@ -215,7 +216,7 @@ describe('PollList - status filter', () => {
     renderWithRouter(<PollList />)
     await user.selectOptions(screen.getByRole('combobox', { name: 'Status' }), 'closed')
     expect(await screen.findByText('Closed poll')).toBeInTheDocument()
-    finishAll(mockResponse({ json: mcpEnvelopeJson([makePoll({ title: 'Stale poll' })]) }))
+    finishAll(mockResponse({ json: mcpEnvelopeJson({ polls: [makePoll({ title: 'Stale poll' })] }) }))
     await new Promise(resolve => setTimeout(resolve, 50))
     expect(screen.queryByText('Stale poll')).not.toBeInTheDocument()
     expect(screen.getByText('Closed poll')).toBeInTheDocument()

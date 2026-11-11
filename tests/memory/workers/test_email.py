@@ -51,6 +51,7 @@ from memory.workers.email import (
     process_attachment,
     process_attachments,
     process_folder,
+    repeated_flags,
     search_folder,
     should_delete_email,
     vectorize_email,
@@ -188,6 +189,30 @@ def test_process_attachments_same_name_in_one_message_kept_apart(first, second):
     assert [
         (settings.FILE_STORAGE_DIR / cast(str, a.filename)).read_bytes() for a in stored
     ] == [b"first pdf", b"second pdf"]
+
+
+@pytest.mark.parametrize(
+    "values, expected",
+    [
+        ([], []),
+        (["a", "b", "c"], [False, False, False]),
+        (["a", "a", "b", "a"], [False, True, False, True]),
+    ],
+)
+def test_repeated_flags(values, expected):
+    assert repeated_flags(values) == expected
+
+
+def test_process_attachments_three_same_names_get_distinct_paths():
+    attachments = [
+        {"filename": "invoice.pdf", "content_type": "application/pdf", "size": 1, "content": c}
+        for c in [b"1", b"2", b"3"]
+    ]
+    message = MailMessage(message_id="<three@example.com>", sender="a@example.com", folder="INBOX")
+
+    stored = process_attachments(cast(list[Attachment], attachments), message)
+
+    assert len({a.filename for a in stored}) == 3
 
 
 def test_process_attachment_tags_skip_sender():
