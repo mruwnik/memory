@@ -495,3 +495,35 @@ def test_sync_google_doc_skips_a_file_without_text(mock_process, drive_client, d
 
     assert result["status"] == "skipped"
     mock_process.assert_not_called()
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="S-W8: Drive docs are one row per Google file across all users "
+    "(global google_file_id lookup and sha256), so the second user syncing a "
+    "shared file gets no doc of their own; needs a per-owner design decision",
+)
+def test_every_user_syncing_a_shared_file_gets_a_doc(
+    db_session, regular_user, admin_user, drive_client, sample_file_data
+):
+    folders = [
+        GoogleFolder(
+            account=GoogleAccount(user_id=user.id, name="Drive", email=f"{user.id}@x.com"),
+            folder_id=f"f{user.id}",
+            folder_name="Shared",
+        )
+        for user in (regular_user, admin_user)
+    ]
+    db_session.add_all(folders)
+    db_session.commit()
+    drive_client.fetch_file.return_value = sample_file_data
+
+    with patch("memory.common.content_processing.push_chunks_to_qdrant"):
+        for folder in folders:
+            sync_listed_doc(folder)
+
+    db_session.expire_all()
+    stored = db_session.query(GoogleDoc).filter_by(
+        google_file_id=sample_file_data["file_id"]
+    )
+    assert {doc.folder_id for doc in stored} == {folder.id for folder in folders}

@@ -7,7 +7,9 @@ from typing import Any, NamedTuple, NotRequired, TypedDict, cast
 
 from caldav.collection import Calendar
 from caldav.davclient import DAVClient
+from caldav.lib import error as caldav_error
 from googleapiclient.discovery import build
+import httpx
 
 from memory.common.calendar import recurrence_expandable, strip_rrule_prefix
 from memory.common.celery_app import (
@@ -26,6 +28,7 @@ from memory.common.content_processing import (
 )
 from memory.common.jobs import tracked_task
 from memory.common.people import link_people, reconcile_people
+from memory.workers.caldav_session import CALDAV_TIMEOUT_SEC, pin_session
 
 logger = logging.getLogger(__name__)
 
@@ -91,12 +94,15 @@ def _get_vevent_attr(vevent: Any, attr: str, default: Any = None) -> Any:
     return value
 
 
-def _create_event_hash(event_data: EventData) -> bytes:
+def _create_event_hash(account_id: int, event_data: EventData) -> bytes:
     """Create a hash for deduplication based on event content.
 
-    Includes external_id to distinguish recurring events with same content.
+    Includes external_id to distinguish recurring events with same content,
+    and the account: sha256 is unique across all items, and every invitee's
+    account holds its own copy of a shared event.
     """
     content = (
+        f"{account_id}:"
         f"{event_data.get('external_id', '')}"
         f"{event_data.get('title', '')}"
         f"{event_data.get('start_time', '')}"
@@ -146,7 +152,7 @@ def _create_calendar_event(
 
     return CalendarEvent(
         modality="calendar",
-        sha256=_create_event_hash(event_data),
+        sha256=_create_event_hash(cast(int, account.id), event_data),
         content=event_data.get("description", ""),
         event_title=event_data["title"],
         start_time=event_data["start_time"],
@@ -243,7 +249,36 @@ def parse_caldav_event(vevent: Any, calendar_name: str) -> EventData:
     )
 
 
+class CalDAVSyncError(Exception):
+    """A failed CalDAV fetch. Its text is shown to the account's owner, so it
+    never carries the server's response or a URL the server named; the
+    original exception is chained for the logs."""
+
+
+def caldav_error_text(exc: Exception) -> str:
+    if isinstance(exc, caldav_error.AuthorizationError):
+        return "The CalDAV server refused the username or password"
+    if isinstance(exc, httpx.TransportError):
+        return "Could not reach the CalDAV server"
+    return "The CalDAV server's response could not be used"
+
+
 def fetch_caldav_events(
+    url: str,
+    username: str,
+    password: str,
+    calendar_ids: list[str],
+    since: datetime,
+    until: datetime,
+) -> FetchedEvents:
+    """Fetch events from a CalDAV server, raising CalDAVSyncError on failure."""
+    try:
+        return read_caldav_events(url, username, password, calendar_ids, since, until)
+    except Exception as e:
+        raise CalDAVSyncError(caldav_error_text(e)) from e
+
+
+def read_caldav_events(
     url: str,
     username: str,
     password: str,
@@ -260,8 +295,15 @@ def fetch_caldav_events(
     A calendar or event that fails to load is skipped and makes the result
     incomplete, as does finding no calendar to sync.
     """
-    client = DAVClient(url=url, username=username, password=password)
-    principal = client.principal()
+    client = DAVClient(
+        url=url,
+        username=username,
+        password=password,
+        timeout=int(CALDAV_TIMEOUT_SEC),
+        # Discovery would make requests outside the pinned session.
+        enable_rfc6764=False,
+    )
+    principal = pin_session(client).principal()
     events: list[EventData] = []
     calendars_read = 0
     complete = True

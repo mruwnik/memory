@@ -43,6 +43,19 @@ class UnsafeURLError(ValueError):
 # http and https only — block file://, gopher://, ftp://, data:, javascript: etc.
 ALLOWED_SCHEMES = frozenset({"http", "https"})
 
+# Cloud-internal endpoints that sit at globally routable or non-special
+# addresses, so the stdlib range properties don't catch them.
+CLOUD_INTERNAL_NETWORKS = tuple(
+    ipaddress.ip_network(n)
+    for n in (
+        "100.100.100.200/32",  # Alibaba Cloud metadata
+        "168.63.129.16/32",  # Azure WireServer
+        "192.0.0.0/24",  # IETF protocol assignments; Oracle Cloud metadata at .192
+        "fd00:ec2::254/128",  # AWS IMDS over IPv6
+        "fec0::/10",  # deprecated IPv6 site-local
+    )
+)
+
 
 def is_safe_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     """Return True iff ``ip`` is a routable public address.
@@ -59,6 +72,7 @@ def is_safe_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
         or ip.is_multicast
         or ip.is_reserved
         or ip.is_unspecified
+        or any(ip in net for net in CLOUD_INTERNAL_NETWORKS)
     )
 
 

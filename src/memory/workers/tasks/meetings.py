@@ -609,6 +609,12 @@ def meeting_content(
     return transcript
 
 
+def meeting_sha256(content: str, creator_id: int | None) -> bytes:
+    """sha256 is unique across all items, so each owner's copy of a transcript
+    is keyed by its owner too."""
+    return hashlib.sha256(f"{creator_id}:{content}".encode()).digest()
+
+
 def create_meeting_record(
     session: DBSession,
     transcript: str,
@@ -636,7 +642,7 @@ def create_meeting_record(
         external_id=external_id,
         calendar_event_uid=calendar_event_uid,
         content=full_transcript,
-        sha256=hashlib.sha256(full_transcript.encode()).digest(),
+        sha256=meeting_sha256(full_transcript, creator_id),
         tags=["meeting"] + (tags or []),
         extraction_status="processing",
         transcript_account_id=transcript_account_id,
@@ -1022,7 +1028,7 @@ def process_meeting(
 
         existing = find_meeting(session, external_id)
         content = meeting_content(transcript, attendee_names, attendee_emails, attendee_pairs)
-        sha256 = hashlib.sha256(content.encode()).digest()
+        sha256 = meeting_sha256(content, creator_id)
         replacing = bool(
             existing
             and replace
