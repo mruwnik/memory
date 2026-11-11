@@ -33,21 +33,48 @@ def epub(chapter: bytes, repeats: int = 1) -> bytes:
     return buffer.getvalue()
 
 
-def mobi(text: bytes, name: bytes = b"book") -> bytes:
-    """An uncompressed PalmDoc MOBI holding `text`."""
-    size = 4096
-    records = [text[i : i + size] for i in range(0, len(text), size)]
-    palmdoc = struct.pack(">HHIHHHH", 1, 0, len(text), len(records), size, 0, 0)
+def palmdb(
+    records: list[bytes],
+    compression: int = 1,
+    name: bytes = b"book",
+    signature: bytes = b"BOOKMOBI",
+    offsets: list[int] | None = None,
+) -> bytes:
+    """A PalmDB book whose record 0 says `records` are its text, compressed as `compression`."""
+    text_length = sum(len(record) for record in records)
+    palmdoc = struct.pack(">HHIHHHH", compression, 0, text_length, len(records), 4096, 0, 0)
     header0 = b"MOBI" + struct.pack(">III", 232, 2, 65001) + b"\0" * (232 - 16)
     all_records = [palmdoc + header0, *records]
     header = name.ljust(32, b"\0") + struct.pack(">HHIIIIII", 0, 0, 0, 0, 0, 0, 0, 0)
-    header += b"BOOKMOBI" + struct.pack(">IIH", 0, 0, len(all_records))
+    header += signature + struct.pack(">IIH", 0, 0, len(all_records))
     offset = len(header) + 8 * len(all_records) + 2
-    table = b""
-    for index, record in enumerate(all_records):
-        table += struct.pack(">II", offset, 2 * index)
+    starts = []
+    for record in all_records:
+        starts.append(offset)
         offset += len(record)
+    table = b"".join(
+        struct.pack(">II", start, 2 * index)
+        for index, start in enumerate(offsets or starts)
+    )
     return header + table + b"\0\0" + b"".join(all_records)
+
+
+def mobi(text: bytes, name: bytes = b"book", signature: bytes = b"BOOKMOBI") -> bytes:
+    """An uncompressed PalmDoc MOBI holding `text`."""
+    records = [text[i : i + 4096] for i in range(0, len(text), 4096)]
+    return palmdb(records, name=name, signature=signature)
+
+
+def palmdoc_record() -> bytes:
+    """A PalmDoc-compressed record of `<p>a</p>` repeated, inflating about 5x past 4096 bytes."""
+    literal = b"<p>a</p>"
+    copy = struct.pack(">H", 0x8000 | (len(literal) << 3) | 7)
+    return literal + copy * ((4096 - len(literal)) // 2)
+
+
+def palmdoc_repeats(records: int) -> bytes:
+    """A PalmDoc-compressed MOBI of `records` copies of palmdoc_record()."""
+    return palmdb([palmdoc_record()] * records, compression=2)
 
 
 def fb2(paragraphs: int) -> bytes:

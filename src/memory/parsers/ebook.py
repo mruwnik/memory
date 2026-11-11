@@ -8,6 +8,12 @@ from pathlib import Path
 
 import pymupdf
 from memory.common import paths, settings
+from memory.common.file_magic import (
+    PALMDB_BOOK_SIGNATURES,
+    PDF_MAGIC_WINDOW,
+    has_pdf_magic,
+    palmdb_signature,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +161,14 @@ def extract_sections(doc) -> list[Section]:
 INFLATE_CHUNK = 64 * 1024
 LOCAL_HEADER = struct.Struct("<4s5H3L2H")
 LOCAL_HEADER_SIGNATURE = b"PK\x03\x04"
+# A PalmDB header is 78 bytes, ending in the record count; the record table follows.
+PALMDB_HEADER_SIZE = 78
+# Record 0 of a PalmDoc/MOBI book starts with compression, unused, text length,
+# text record count, record size, encryption and unknown.
+PALMDOC_HEADER = struct.Struct(">HHIHHHH")
+# Uncompressed and PalmDoc: MuPDF reads no other compression.
+PALMDOC_COMPRESSIONS = (1, 2)
+PALMDOC_RECORD_SIZE = 4096
 
 
 def stored_chunks(file: BinaryIO, info: zipfile.ZipInfo) -> Iterator[bytes]:
@@ -192,7 +206,7 @@ def inflated_size(chunks: Iterator[bytes], method: int, budget: int) -> int:
     return size + len(inflater.flush())
 
 
-def check_parse_size(path: Path) -> None:
+def check_zip_size(path: Path) -> None:
     """Raise ValueError for a zipped book with more than MAX_EBOOK_ZIP_ENTRIES
     entries, or whose entries inflate past MAX_EBOOK_INFLATED_BYTES.
 
@@ -202,8 +216,6 @@ def check_parse_size(path: Path) -> None:
     uploader's to choose; one that inflates to other than its declared size is
     refused.
     """
-    if not zipfile.is_zipfile(path):
-        return
     limit = settings.MAX_EBOOK_INFLATED_BYTES
     try:
         archive = zipfile.ZipFile(path)
@@ -224,6 +236,67 @@ def check_parse_size(path: Path) -> None:
                 raise ValueError(f"Book inflates to more than {limit} bytes")
             if size != info.file_size:
                 raise ValueError("Book has a zip entry whose size does not match its header")
+
+
+def palmdb_records(data: bytes) -> list[bytes]:
+    """The records of a PalmDB file, refusing a damaged record table."""
+    if len(data) < PALMDB_HEADER_SIZE:
+        raise ValueError("Book has a damaged PalmDB header")
+    (count,) = struct.unpack_from(">H", data, PALMDB_HEADER_SIZE - 2)
+    table_end = PALMDB_HEADER_SIZE + 8 * count
+    if table_end > len(data):
+        raise ValueError("Book has a damaged PalmDB header")
+    offsets = [
+        struct.unpack_from(">I", data, PALMDB_HEADER_SIZE + 8 * index)[0]
+        for index in range(count)
+    ] + [len(data)]
+    if offsets[0] < table_end or offsets != sorted(offsets):
+        raise ValueError("Book has a damaged PalmDB record table")
+    return [data[start:end] for start, end in zip(offsets, offsets[1:])]
+
+
+def check_palmdb_size(path: Path) -> None:
+    """Raise ValueError for a MOBI/PalmDoc book whose text is more than
+    MAX_EBOOK_INFLATED_BYTES, or that MuPDF couldn't read.
+
+    MuPDF lays out the text of the first ``text_count`` records (record 0's
+    count), at most one record size each however the record decompresses, so
+    that bounds the text it reads. Images live in other records.
+    """
+    limit = settings.MAX_EBOOK_INFLATED_BYTES
+    records = palmdb_records(path.read_bytes())
+    if len(records) < 2 or len(records[0]) < PALMDOC_HEADER.size:
+        raise ValueError("Book has no text records")
+    compression, _, _, text_count, record_size, *_ = PALMDOC_HEADER.unpack_from(records[0])
+    if compression not in PALMDOC_COMPRESSIONS:
+        raise ValueError("Book uses an unsupported MOBI compression")
+    if record_size != PALMDOC_RECORD_SIZE:
+        raise ValueError("Book has an unsupported text record size")
+    if min(text_count, len(records) - 1) * PALMDOC_RECORD_SIZE > limit:
+        raise ValueError(f"Book text is more than {limit} bytes")
+
+
+def check_parse_size(path: Path) -> None:
+    """Raise ValueError for a book whose markup is too large for MuPDF to lay out.
+
+    A zip (EPUB and other packages) is measured by inflating its entries, a
+    MOBI/PalmDoc file by its text records, and any other format but PDF,
+    which MuPDF doesn't lay out, by its size. MuPDF picks the format from the
+    content, so the file name and declared type don't matter.
+    """
+    if zipfile.is_zipfile(path):
+        check_zip_size(path)
+        return
+    with path.open("rb") as file:
+        head = file.read(PDF_MAGIC_WINDOW)
+    if has_pdf_magic(head):
+        return
+    if palmdb_signature(head) in PALMDB_BOOK_SIGNATURES:
+        check_palmdb_size(path)
+        return
+    limit = settings.MAX_EBOOK_INFLATED_BYTES
+    if path.stat().st_size > limit:
+        raise ValueError(f"Book is more than {limit} bytes")
 
 
 def parse_ebook(file_path: str | Path) -> Ebook:

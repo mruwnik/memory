@@ -21,6 +21,7 @@ from PIL import Image
 
 from memory.common import settings
 from memory.common.celery_app import SYNC_BOOK, SYNC_MISC_DOC, SYNC_PHOTO
+from memory.common.file_magic import MOBI_SIGNATURE, palmdb_signature
 
 
 @dataclass(frozen=True)
@@ -74,8 +75,6 @@ def is_image_bytes(content: bytes) -> bool:
 
 
 EPUB_MIMETYPE = b"application/epub+zip"
-# A PalmDB header's type and creator, at offset 60: MOBI, AZW and AZW3 books.
-MOBI_SIGNATURE = b"BOOKMOBI"
 
 
 def is_epub(content: bytes) -> bool:
@@ -95,7 +94,7 @@ def is_ebook_bytes(content: bytes) -> bool:
     every chapter, unbounded in time and memory, and this runs in the API.
     The book worker does the parsing.
     """
-    return is_epub(content) or content[60:68] == MOBI_SIGNATURE
+    return is_epub(content) or palmdb_signature(content) == MOBI_SIGNATURE
 
 
 def detect_bucket(declared_type: str, content: bytes) -> BucketSpec:

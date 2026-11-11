@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from typing import Any, Generator, Sequence, cast
 
 from memory.common import chunker, settings, summarizer
+from memory.common.file_magic import PDF_MAGIC_WINDOW, has_pdf_magic
 from memory.parsers import ebook
 import pymupdf  # PyMuPDF
 from PIL import Image
@@ -216,15 +217,6 @@ def page_text_chunks(page: pymupdf.Page, modality: str) -> list[DataChunk]:
 # is treated as image-only (a scan, or a near-blank/figure page): below this a
 # get_text() chunk would just be noise (page numbers, stray ligatures, "").
 MIN_PDF_PAGE_TEXT_CHARS = 16
-
-
-# A PDF's header comment; readers accept it anywhere in the first 1024 bytes.
-PDF_MAGIC = b"%PDF-"
-PDF_MAGIC_WINDOW = 1024
-
-
-def has_pdf_magic(head: bytes) -> bool:
-    return PDF_MAGIC in head[:PDF_MAGIC_WINDOW]
 
 
 def open_pdf(content: bytes | pathlib.Path) -> pymupdf.Document:
