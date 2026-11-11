@@ -1,5 +1,7 @@
 """Beeper message text is stored as plain text, without channel membership notices."""
 
+import time
+
 import pytest
 
 from memory.beeper import ingest
@@ -52,6 +54,57 @@ def pill(user_id: str, text: str = "") -> str:
 )
 def test_html_text_becomes_plain_text(text, expected):
     assert ingest.plain_text(text, {ALICE: "Alice Smith"}.get) == expected
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("<b>x</b>", True),
+        ("<B class='y'>x</b >", True),
+        ("<b>x</i>", False),
+        ("</b><b>", False),
+        ("<b><i>x</i>", True),
+        ("<h2>t</h2>", True),
+        ("<h2>t</h3>", False),
+        ("<abbr>t</abbr>", False),
+    ],
+)
+def test_has_paired_tag(text, expected):
+    assert ingest.has_paired_tag(text) is expected
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("<mx-reply>q</mx-reply>a", "a"),
+        ("a<MX-REPLY>q</mx-reply>b<mx-reply>r</mx-reply>c", "abc"),
+        ("a<mx-reply>q</mx-reply>b<mx-reply>open", "ab<mx-reply>open"),
+        ("<mx-reply><mx-reply>q</mx-reply>a", "a"),
+    ],
+)
+def test_drop_replies(text, expected):
+    assert ingest.drop_replies(text) == expected
+
+
+def test_deeply_nested_html_text_becomes_its_text():
+    assert ingest.plain_text("<div>" * 3000 + "<b>deep</b>" + "</div>" * 3000, {}.get) == "deep"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "<b>" * 30_000,
+        "<b>x" * 25_000 + "</i>",
+        "<mx-reply>" * 10_000,
+        "<p><b>x</b></p>" * 6_000,
+    ],
+    ids=["unclosed", "mismatched-closer", "unclosed-replies", "formatted"],
+)
+def test_html_detection_is_linear_in_the_text(text):
+    start = time.perf_counter()
+    ingest.plain_text(text, {}.get)
+    # Quadratic matching took seconds on these; linear takes milliseconds.
+    assert time.perf_counter() - start < 0.5
 
 
 @pytest.fixture
