@@ -22,6 +22,12 @@ a new, empty `## Unreleased` above it.
 
 ## Unreleased
 
+### Changes
+- Fix: Discord thread messages are filed under their parent channel's project and sensitivity, so people who can read the channel can find and fetch them. Before, a thread took its server's project (none, unless the server had one) and `basic` sensitivity, which hid thread messages from everyone but admins, or showed a confidential channel's threads at `basic`. Changing a channel's project or sensitivity now re-files its threads' messages too.
+
+### Post-deploy commands
+- Optional, re-runnable: messages already stored in threads are re-filed by the daily access-control sweep (05:30). To re-file them at once, run the full sweep, which walks every item: `docker compose exec -T worker python - maintenance reconcile-access-control < tools/run_celery_task.py`.
+
 ## v0.5.5 (2026-11-11)
 
 ### Changes

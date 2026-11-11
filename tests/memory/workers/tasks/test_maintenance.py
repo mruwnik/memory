@@ -20,6 +20,10 @@ from memory.common import settings
 from memory.common.db.models import (
     ACCESS_CONTROLLED_SOURCE_MODELS,
     Chunk,
+    DiscordChannel,
+    DiscordMessage,
+    DiscordServer,
+    DiscordUser,
     SourceItem,
     MailMessage,
     EmailAttachment,
@@ -1434,6 +1438,42 @@ def test_update_source_access_control_reresolves_when_source_moves(
     db_session.refresh(msg)
     assert msg.project_id == project_b.id
     assert msg.project_id_inherited is True
+
+
+@pytest.mark.parametrize(
+    "server_project, parent_sensitivity",
+    [(False, "basic"), (True, "confidential")],
+    ids=["server has no project", "server project with confidential parent"],
+)
+def test_a_thread_message_gets_exactly_its_parent_channels_access(
+    db_session, qdrant, server_project, parent_sensitivity
+):
+    """A thread's messages are filed under its parent channel's project and
+    sensitivity, and re-resolve when the parent's access changes."""
+    channel_project = Project(title="Channel Project", state="open")
+    other_project = Project(title="Server Project", state="open")
+    db_session.add_all([channel_project, other_project])
+    db_session.flush()
+    db_session.add_all([
+        DiscordServer(id=1, name="server", project_id=other_project.id if server_project else None),
+        DiscordUser(id=5, username="author"),
+    ])
+    db_session.flush()
+    parent = DiscordChannel(id=2, server_id=1, name="general", channel_type="text", sensitivity=parent_sensitivity)
+    thread = DiscordChannel(id=3, server_id=1, name="a thread", channel_type="thread", parent_id=2)
+    message = DiscordMessage(
+        sha256=unique_sha256(), modality="message", content="in the thread", message_id=10,
+        channel_id=3, server_id=1, author_id=5, sent_at=datetime.now(timezone.utc),
+    )
+    db_session.add_all([parent, thread, message])
+    db_session.commit()
+
+    parent.project_id = channel_project.id
+    db_session.commit()
+    update_source_access_control("discord_channel", parent.id, parent.config_version)
+    db_session.refresh(message)
+
+    assert (message.project_id, message.sensitivity) == (channel_project.id, parent_sensitivity)
 
 
 def test_update_source_access_control_crosses_batch_boundary(

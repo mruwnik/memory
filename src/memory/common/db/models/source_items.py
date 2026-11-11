@@ -574,21 +574,9 @@ class DiscordMessage(SourceItem):
         return [*extract.extract_text(text, modality="message"), *image_chunks]
 
     def get_data_source_chain(self) -> list[Any]:
-        """Return [channel, server] (filtered for None) for access-control resolution.
-
-        Returning the chain rather than a single source lets
-        :meth:`resolve_access_control` pick ``project_id`` and
-        ``sensitivity`` independently — a channel with
-        ``sensitivity=confidential`` but no ``project_id`` no longer
-        silently drops its sensitivity intent in favour of the server's
-        looser default.
-        """
-        if not self.channel:
-            return []
-        chain: list[Any] = [self.channel]
-        if self.channel.server is not None:
-            chain.append(self.channel.server)
-        return chain
+        """The channel's access chain: [channel, server], a thread's channel
+        being its parent, so project and sensitivity resolve independently."""
+        return list(self.channel.access_chain) if self.channel else []
 
     @property
     def llm_registrant_id(self) -> int | None:

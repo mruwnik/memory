@@ -894,9 +894,11 @@ def get_items_for_source(
             SlackMessage.channel_id.in_(channel_ids), offset, limit,
         )
     elif source_type == "discord_channel":
+        # A thread's messages are filed under its parent channel.
+        threads = select(DiscordChannel.id).where(DiscordChannel.parent_id == source_id)
         return paginate_source_items(
             session, DiscordMessage,
-            DiscordMessage.channel_id == source_id, offset, limit,
+            or_(DiscordMessage.channel_id == source_id, DiscordMessage.channel_id.in_(threads)), offset, limit,
         )
     elif source_type == "discord_server":
         # Get all messages in channels belonging to this server

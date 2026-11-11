@@ -20,6 +20,7 @@ from memory.common.db.models import (
     GithubAccount,
     GithubRepo,
     HumanUser,
+    Project,
     SlackApp,
     SlackChannel,
     SlackWorkspace,
@@ -410,6 +411,24 @@ def test_a_discord_delivery_knows_only_channels_its_bots_owner_may_push_into(db_
     [event] = db_session.query(Event).filter_by(kind="raw").all()
 
     assert (raw_events.container_of(db_session, event) is not None) is known
+
+
+def test_a_discord_thread_delivery_is_filed_as_its_parent_channel(db_session, user):
+    project = Project(title="Channel Project", state="open")
+    db_session.add_all([project, DiscordBot(id=1, application_id=1, name="Mine", created_by_user_id=user.id)])
+    db_session.flush()
+    db_session.add(DiscordServer(id=11, name="mine", bot_id=1, verified=True))
+    db_session.flush()
+    db_session.add_all([
+        DiscordChannel(id=900, name="c", channel_type="text", server_id=11, project_id=project.id, sensitivity="confidential"),
+        DiscordChannel(id=901, name="t", channel_type="thread", server_id=11, parent_id=900),
+    ])
+    raw(db_session, user.id, "d1", source="discord", account_id=1, container="901", outcome="stored")
+    db_session.commit()
+
+    [event] = db_session.query(Event).filter_by(kind="raw").all()
+
+    assert raw_events.container_of(db_session, event) == raw_events.Container(False, project.id, "confidential")
 
 
 def test_a_container_of_non_ascii_digits_has_no_name(client, db_session, user):

@@ -202,8 +202,9 @@ class DiscordChannel(Base):
     __tablename__ = "discord_channels"
     # source_type key for the access-control reconciliation pipeline.
     data_source_type: ClassVar[str] = "discord_channel"
-    # Its content inherits from its server too, so moving it re-resolves that content.
-    access_chain_fields: ClassVar[tuple[str, ...]] = ("server_id",)
+    # Its content inherits from its server too, and a thread's from its parent,
+    # so moving it re-resolves that content.
+    access_chain_fields: ClassVar[tuple[str, ...]] = ("server_id", "parent_id")
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)  # Discord channel snowflake ID
     server_id: Mapped[int | None] = mapped_column(
@@ -273,6 +274,13 @@ class DiscordChannel(Base):
         if self.server:
             return self.server.collect_messages
         return self.is_direct
+
+    @property
+    def access_chain(self) -> list[DiscordChannel | DiscordServer]:
+        """Where its messages' project and sensitivity come from, most specific
+        first: a thread is filed exactly as its stored parent channel is."""
+        channel = self.parent or self
+        return [level for level in (channel, channel.server) if level is not None]
 
     @property
     def is_direct(self) -> bool:

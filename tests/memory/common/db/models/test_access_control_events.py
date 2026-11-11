@@ -146,8 +146,10 @@ def test_ac_change_advances_updated_at(db_session, test_user, no_celery_dispatch
 
 
 @pytest.mark.transactional_db
-def test_moving_a_discord_channel_to_another_server_dispatches(db_session, no_celery_dispatch):
-    """A channel's content inherits from its server, so a new server re-resolves it."""
+@pytest.mark.parametrize("field, value", [("server_id", 2), ("parent_id", 4)])
+def test_moving_a_discord_channel_to_another_server_or_parent_dispatches(db_session, no_celery_dispatch, field, value):
+    """A channel's content inherits from its server, and a thread's from its
+    parent, so a new server or parent re-resolves it."""
     db_session.add_all([DiscordServer(id=1, name="one"), DiscordServer(id=2, name="two")])
     db_session.flush()
     channel = DiscordChannel(id=3, server_id=1, name="general", channel_type="text")
@@ -155,7 +157,7 @@ def test_moving_a_discord_channel_to_another_server_dispatches(db_session, no_ce
     db_session.commit()
     no_celery_dispatch.reset_mock()
 
-    channel.server_id = 2
+    setattr(channel, field, value)
     db_session.commit()
 
     assert no_celery_dispatch.call_args.kwargs["args"] == ["discord_channel", 3, channel.config_version]

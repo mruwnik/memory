@@ -197,7 +197,7 @@ def container_of(db: DBSession, event: Event) -> Container | None:
         channel = db.get(DiscordChannel, channel_id)
         if channel is not None and not pushes_reach(db, event, channel):
             return None
-        chain = [channel, channel.server] if channel else []
+        chain = list(channel.access_chain) if channel else []
     else:
         return None
     if channel is None:
