@@ -3,12 +3,14 @@
 import asyncio
 import hashlib
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from memory.api.MCP import visibility
+from memory.common import calendar
 
 
 # Mock FastMCP - this creates a decorator factory that passes through the function unchanged
@@ -1346,19 +1348,24 @@ async def test_upcoming_admin_can_view_another_users_calendar(
 
 
 @pytest.mark.asyncio
-async def test_upcoming_expands_events_off_the_event_loop(db_session, _mock_admin_user):
-    # Synced before the expandability check, so it is still expanded: no date
-    # satisfies the rule, which takes dateutil seconds to find out.
+async def test_upcoming_expands_events_off_the_event_loop(db_session, _mock_admin_user, monkeypatch):
     db_session.add(
         CalendarEvent(
             modality="calendar",
             sha256=b"n" * 32,
-            event_title="Never",
+            event_title="Slow",
             start_time=datetime(2020, 1, 1, 9, 0, tzinfo=timezone.utc),
-            recurrence_rule="FREQ=DAILY;BYMONTH=2;BYMONTHDAY=30",
+            recurrence_rule="FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=30",
         )
     )
     db_session.commit()
+    expand = calendar.occurrences_within
+
+    def blocking(*args):
+        time.sleep(0.5)
+        return expand(*args)
+
+    monkeypatch.setattr(calendar, "occurrences_within", blocking)
     ticks = 0
 
     async def tick():

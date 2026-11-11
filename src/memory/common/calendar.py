@@ -41,10 +41,15 @@ RRULE_ERRORS = (ValueError, TypeError, OverflowError, KeyError)
 # can mean millions of steps. This cap still covers a daily series 130 years old.
 MAX_OCCURRENCES_VISITED = 50_000
 # A visit costs microseconds when the rule's filters match most periods, but
-# dateutil steps through every period between matches, so a sparse rule (29
-# February, under DAILY or HOURLY) pays for each period skipped. This bounds an
-# event's expansion in time: past it, the occurrences found so far are kept.
+# dateutil steps through every period between matches. Rules whose day filters
+# skip most days under DAILY or HOURLY are rewritten (see coarsened), and this
+# bounds what remains: past it, an event keeps the occurrences found so far.
 EXPANSION_BUDGET_SECONDS = 0.25
+# Shared by every recurring event one query expands; events left when it is
+# spent are skipped.
+QUERY_EXPANSION_BUDGET_SECONDS = 2.0
+# Day filters that can leave months or years between matching days.
+SPARSE_DAY_PARTS = ("BYMONTHDAY", "BYYEARDAY", "BYWEEKNO")
 # Under these frequencies a rule that matches once a day costs dateutil tens
 # of thousands of periods per occurrence. Calendars don't send them (Google
 # refuses them), so rules using them are refused.
@@ -90,6 +95,35 @@ def is_bounded_rule(parts: dict[str, str]) -> bool:
     return interval.isdigit() and int(interval) >= 1
 
 
+def coarsened(parts: dict[str, str]) -> dict[str, str] | None:
+    """The rule under the coarsest FREQ that yields the same occurrences, or
+    None if it can't be rewritten and is too costly as given.
+
+    HOURLY, DAILY or WEEKLY with BYMONTHDAY, BYYEARDAY or BYWEEKNO makes
+    dateutil step through every hour or day between matching days, which can be
+    years, or to year 9999 when no day matches. With INTERVAL=1 every matching
+    day is an occurrence, so the same set comes from YEARLY with the same
+    filters (and, for HOURLY, every hour of the day unless BYHOUR names them),
+    which steps a year at a time. INTERVAL above 1, BYSETPOS, an ordinal BYDAY
+    (e.g. 1MO), or WEEKLY without BYDAY (which means DTSTART's weekday) mean
+    something else under YEARLY, so those rules are refused.
+    """
+    freq = parts.get("FREQ", "").upper()
+    if freq not in ("HOURLY", "DAILY", "WEEKLY"):
+        return parts
+    if not any(p in parts for p in SPARSE_DAY_PARTS):
+        return parts
+    interval = parts.get("INTERVAL", "1")
+    weekdays = [day.strip() for day in parts.get("BYDAY", "").split(",") if day.strip()]
+    if not interval.isdigit() or int(interval) != 1 or "BYSETPOS" in parts:
+        return None
+    if any(not day.isalpha() for day in weekdays) or (freq == "WEEKLY" and not weekdays):
+        return None
+    every_hour = {"BYHOUR": ",".join(map(str, range(24)))}
+    hours = every_hour if freq == "HOURLY" and "BYHOUR" not in parts else {}
+    return parts | {"FREQ": "YEARLY"} | hours
+
+
 def with_utc_until(parts: dict[str, str]) -> dict[str, str]:
     """Rewrite a DATE or floating UNTIL as UTC, which dateutil requires with an
     aware DTSTART.
@@ -106,13 +140,18 @@ def with_utc_until(parts: dict[str, str]) -> dict[str, str]:
 
 
 def occurrences_within(
-    rule: rrule | rruleset, start_range: datetime, end_range: datetime, event_id: int
+    rule: rrule | rruleset,
+    start_range: datetime,
+    end_range: datetime,
+    event_id: int,
+    deadline: float | None = None,
 ) -> list[datetime]:
     """Occurrences of the rule within the range, visiting at most
     MAX_OCCURRENCES_VISITED from its start and stopping once
-    EXPANSION_BUDGET_SECONDS have passed."""
+    EXPANSION_BUDGET_SECONDS have passed or at ``deadline`` (time.monotonic)."""
     starts: list[datetime] = []
-    deadline = time.monotonic() + EXPANSION_BUDGET_SECONDS
+    own_deadline = time.monotonic() + EXPANSION_BUDGET_SECONDS
+    deadline = own_deadline if deadline is None else min(deadline, own_deadline)
     # One past the cap, to tell a series that ends there from one cut short.
     for visited, occurrence in enumerate(islice(rule, MAX_OCCURRENCES_VISITED + 1), start=1):
         if occurrence > end_range:
@@ -133,6 +172,9 @@ def build_rule(recurrence_rule: str, start_time: datetime) -> rrule | rruleset |
     or can't be expanded in bounded time."""
     parts = rule_parts(strip_rrule_prefix(recurrence_rule))
     if parts is None or not is_bounded_rule(parts):
+        return None
+    parts = coarsened(parts)
+    if parts is None:
         return None
     rule_text = ";".join(f"{k}={v}" for k, v in with_utc_until(parts).items())
     try:
@@ -161,7 +203,10 @@ def recurrence_expandable(recurrence_rule: str | None, start_time: datetime) -> 
 
 
 def occurrence_starts(
-    event: CalendarEvent, start_range: datetime, end_range: datetime
+    event: CalendarEvent,
+    start_range: datetime,
+    end_range: datetime,
+    deadline: float | None = None,
 ) -> list[datetime]:
     """Start times of the event's occurrences within the range.
 
@@ -173,7 +218,7 @@ def occurrence_starts(
         logger.warning("Skipping unsupported recurrence rule on calendar event %s", event.id)
         return []
     try:
-        return occurrences_within(rule, start_range, end_range, event.id)
+        return occurrences_within(rule, start_range, end_range, event.id, deadline)
     except RRULE_ERRORS:
         logger.warning("Skipping malformed recurrence rule on calendar event %s", event.id)
         return []
@@ -183,6 +228,7 @@ def expand_recurring_event(
     event: CalendarEvent,
     start_range: datetime,
     end_range: datetime,
+    deadline: float | None = None,
 ) -> list[tuple[datetime, datetime | None]]:
     """Expand a recurring event into occurrences within the given range.
 
@@ -197,12 +243,15 @@ def expand_recurring_event(
     duration = event.end_time - event.start_time if event.end_time else None
     return [
         (occ_start, occ_start + duration if duration else None)
-        for occ_start in occurrence_starts(event, start_range, end_range)
+        for occ_start in occurrence_starts(event, start_range, end_range, deadline)
     ]
 
 
 def expand_or_skip(
-    event: CalendarEvent, start_range: datetime, end_range: datetime
+    event: CalendarEvent,
+    start_range: datetime,
+    end_range: datetime,
+    deadline: float | None = None,
 ) -> list[tuple[datetime, datetime | None]]:
     """expand_recurring_event, where an unexpected error loses only this event.
 
@@ -210,10 +259,34 @@ def expand_or_skip(
     does not list.
     """
     try:
-        return expand_recurring_event(event, start_range, end_range)
+        return expand_recurring_event(event, start_range, end_range, deadline)
     except Exception:
         logger.exception("Unable to expand recurring calendar event %s", event.id)
         return []
+
+
+def expand_within_budget(
+    events: list[CalendarEvent], start_range: datetime, end_range: datetime
+) -> list[tuple[CalendarEvent, datetime, datetime | None]]:
+    """(event, start, end) for each occurrence of the recurring events in the range,
+    all sharing QUERY_EXPANSION_BUDGET_SECONDS. Events left once it is spent are
+    skipped, with a warning naming their ids."""
+    deadline = time.monotonic() + QUERY_EXPANSION_BUDGET_SECONDS
+    occurrences: list[tuple[CalendarEvent, datetime, datetime | None]] = []
+    for index, event in enumerate(events):
+        if time.monotonic() > deadline:
+            skipped = [e.id for e in events[index:]]
+            logger.warning(
+                "Calendar query ran out of time; skipped %d recurring events, first ids %s",
+                len(skipped),
+                skipped[:20],
+            )
+            return occurrences
+        occurrences.extend(
+            (event, start, end)
+            for start, end in expand_or_skip(event, start_range, end_range, deadline)
+        )
+    return occurrences
 
 
 def event_to_dict(
@@ -316,9 +389,8 @@ def get_events_in_range(
             results.append((e.start_time, event_to_dict(e)))
 
     # Expand recurring events
-    for e in recurring:
-        for occ_start, occ_end in expand_or_skip(e, start_date, end_date):
-            results.append((occ_start, event_to_dict(e, occ_start, occ_end)))
+    for e, occ_start, occ_end in expand_within_budget(recurring, start_date, end_date):
+        results.append((occ_start, event_to_dict(e, occ_start, occ_end)))
 
     # Sort by start time and apply limit
     results.sort(key=lambda x: x[0])
