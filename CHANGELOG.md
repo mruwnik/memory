@@ -22,6 +22,8 @@ a new, empty `## Unreleased` above it.
 
 ## Unreleased
 
+## v0.5.6 (2026-11-11)
+
 ### Changes
 - Fix: Discord thread messages are filed under their parent channel's project and sensitivity, so people who can read the channel can find and fetch them. Before, a thread took its server's project (none, unless the server had one) and `basic` sensitivity, which hid thread messages from everyone but admins, or showed a confidential channel's threads at `basic`. Changing a channel's project or sensitivity now re-files its threads' messages too.
 
