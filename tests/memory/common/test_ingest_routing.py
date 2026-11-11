@@ -135,11 +135,11 @@ def _zip_without_mimetype() -> bytes:
 @pytest.mark.parametrize(
     "content, bucket",
     [
-        (_minimal_epub(), "book"),
-        (_mobi(), "book"),
-        (_pdf(), "misc"),
-        (_zip_without_mimetype(), "misc"),
-        (b"<svg xmlns='http://www.w3.org/2000/svg'><text>x</text></svg>", "misc"),
+        pytest.param(_minimal_epub(), "book", id="epub"),
+        pytest.param(_mobi(), "book", id="mobi"),
+        pytest.param(_pdf(), "misc", id="pdf"),
+        pytest.param(_zip_without_mimetype(), "misc", id="zip"),
+        pytest.param(b"<svg xmlns='http://www.w3.org/2000/svg'><text>x</text></svg>", "misc", id="svg"),
     ],
 )
 def test_routing_never_opens_the_document(content, bucket):
