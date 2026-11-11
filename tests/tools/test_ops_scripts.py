@@ -376,7 +376,7 @@ def test_logs_keeps_only_error_records_and_the_shape_of_tracebacks(box):
         f"{TS} CRITICAL: Application startup failed",
         "[worker]",
         f"{TS} [2026-10-24 10:00:05,000: ERROR/ForkPoolWorker-1] Task memory.workers.tasks.email.sync_account"
-        "[***] raised unexpected: ValueError('***')",
+        "[***] raised unexpected: ValueError",
         "[slack-sync-worker]", "[scheduler-worker]",
     ]
 
@@ -397,16 +397,46 @@ def test_logs_keeps_only_error_records_and_the_shape_of_tracebacks(box):
         ("no 'Bob's divorce' here", "no '***' here"),
         ("'utf-8' codec can't decode", "'***' codec can't decode"),
         ("Couldn't parse it", "Couldn't parse it"),
+        (f"KeyError({ITEM_TEXT.encode()!r})", "KeyError('***')"),
+        (repr(UnicodeDecodeError("utf-8", b"Projects/Layoff plan \xff.md\0b.md", 21, 22, "bad")),
+         "UnicodeDecodeError('***', '***', 21, 22, '***')"),
+        (f"read bytearray({ITEM_TEXT.encode()!r}) and rb'{ITEM_TEXT}' and B\"{ITEM_TEXT}\"",
+         "read bytearray('***') and '***' and '***'"),
+        (f"note f'{ITEM_TEXT}' and U'{ITEM_TEXT}'", "note '***' and '***'"),
+        ("Bob's rub' and it's", "Bob's rub' and it's"),
         ("x" * 400, ("x" * 400)[: 300 - len(ERROR) - 1]),
     ],
     ids=["password", "token", "bearer", "email", "url", "api-key", "quoted", "escaped-quotes", "unterminated",
-         "in-word-apostrophe", "apostrophe-inside-quote", "apostrophe-after-quote", "apostrophe-only", "long"],
+         "in-word-apostrophe", "apostrophe-inside-quote", "apostrophe-after-quote", "apostrophe-only",
+         "bytes", "unicode-decode-error", "bytearray-and-raw-bytes", "string-prefixes", "prefix-letters-in-words",
+         "long"],
 )
 def test_logs_scrubs_error_messages(box, message, expected):
     code, output = ops(box, "logs", FAKE_LOGS=write_logs(box, api=[f"{ERROR} {message}"]))
 
     assert code == 0, output
     assert output.splitlines() == ["[api]", f"{TS} {ERROR} {expected}", "[worker]", "[slack-sync-worker]", "[scheduler-worker]"]
+
+
+def test_logs_cuts_a_task_exception_to_its_type(box):
+    exception = repr(UnicodeDecodeError("utf-8", f"Projects/{ITEM_TEXT} \xff.md".encode("latin-1"), 9, 10, "bad"))
+    line = f"{WORKER_LOG[0].split(' raised ')[0]} raised unexpected: {exception}"
+
+    code, output = ops(box, "logs", FAKE_LOGS=write_logs(box, worker=[line]))
+
+    assert code == 0, output
+    assert output.splitlines()[2].endswith("raised unexpected: UnicodeDecodeError")
+    assert ITEM_TEXT not in output
+
+
+def test_logs_scrubs_a_quoted_file_name_that_is_not_utf8(box):
+    logs = pathlib.Path(write_logs(box))
+    (logs / "api").write_bytes(f"{TS} {ERROR} cannot open '{ITEM_TEXT} ".encode() + b"\xff\xfe.md' now\n")
+
+    code, output = ops(box, "logs", FAKE_LOGS=str(logs))
+
+    assert code == 0, output
+    assert output.splitlines()[1] == f"{TS} {ERROR} cannot open '***' now"
 
 
 def test_logs_prints_the_last_lines_per_service(box):
