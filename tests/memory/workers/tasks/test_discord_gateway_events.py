@@ -57,12 +57,12 @@ UNKNOWN_CHANNEL, UNKNOWN_MESSAGE = discord_error(404, 10003), discord_error(404,
 class FakeDiscord:
     """Discord's REST API as each bot's token sees it.
 
-    ``channels[(token, path)]`` is what GET /channels/<path> returns to that token: a body, or an error response
-    (None: an unknown channel). A token reads the messages of each channel it reads as Discord holds them now:
+    ``channels[(token, path)]`` is what GET /channels/<path> returns to that token: a body, an error response
+    (None: an unknown channel), or an exception the connection fails with. A token reads the messages of each channel it reads as Discord holds them now:
     ``messages[channel id][message id]``, whose reactions are the users in ``reactors[(channel id, message id)]``.
     """
 
-    def __init__(self, channels: dict[tuple[str, str], dict | httpx.Response | None]):
+    def __init__(self, channels: dict[tuple[str, str], dict | httpx.Response | Exception | None]):
         self.channels = channels
         self.messages: dict[str, dict[str, dict]] = {}
         self.reactors: dict[tuple[str, str], dict[str, list[str]]] = {}
@@ -76,6 +76,8 @@ class FakeDiscord:
             answer = self.channels.get((token, path)) or UNKNOWN_CHANNEL
         else:
             answer = self.read(token, path, request.url.params)
+        if isinstance(answer, Exception):
+            raise answer
         return answer if isinstance(answer, httpx.Response) else httpx.Response(200, json=answer)
 
     def read(self, token: str, path: str, params: httpx.QueryParams) -> dict | list | httpx.Response:
@@ -933,7 +935,7 @@ def test_a_push_naming_no_server_into_a_stored_server_channel_takes_its_stored_s
 
     db_session.expire_all()
     assert [m.server_id for m in db_session.query(DiscordMessage)] == [int(GUILD)] * stored_count
-    assert discord_api.requests == []
+    assert [r.url.path for r in discord_api.requests] == [f"/api/v10/channels/{CHANNEL}/messages/{MESSAGE}"] * stored_count
 
 
 def test_a_push_reusing_a_stored_message_id_never_touches_its_images(db_session, user_owned_bot, attacker_bot, qdrant):
@@ -1212,7 +1214,7 @@ def test_a_new_channel_is_stored_as_the_bots_token_lists_it(db_session, user_own
     thread = db_session.get(DiscordChannel, int(THREAD))
     assert (thread.name, thread.channel_type, thread.parent_id, thread.server_id) == ("a thread", "thread", int(CHANNEL), int(GUILD))
     assert stored(db_session).channel_id == int(THREAD)
-    assert [r.url.path for r in discord_api.requests] == [f"/api/v10/channels/{THREAD}"]
+    assert [r.url.path for r in discord_api.requests] == [f"/api/v10/channels/{THREAD}", f"/api/v10/channels/{THREAD}/messages/{MESSAGE}"]
 
 
 def channel_stored_under_the_attackers_server(db_session, victim, attacker) -> None:
@@ -1573,3 +1575,227 @@ def test_a_refusal_never_overwrites_a_delivery_since_untracked(db_session, user_
     discord.handle_discord_event(bot_id=attacker_bot.id, event_type="MESSAGE_CREATE", data=message_create(), caused_by=raw_id)
 
     assert [e.outcome for e in db_session.query(Event).filter_by(kind="raw").populate_existing()] == ["not_collected"]
+
+
+# --- A push is applied as Discord confirms it ------------------------------
+# The bot holding a server signs its own pushes, so a pushed message is stored as the pushing bot's token reads it
+# from Discord, a pushed reaction refreshes the reactions Discord lists, and a pushed delete only lands once the
+# token of the bot that delivered the message finds it gone.
+
+
+def held_server_with_a_message(db_session, discord_api, holder, deliverer) -> None:
+    """The holder's verified server, with a message Discord holds that the deliverer's gateway stored."""
+    victims_server(db_session, holder)
+    discord_api.post(message_create())
+    handle(deliverer, "MESSAGE_CREATE", message_create(), pushed=False)
+
+
+def tokens_asked(discord_api) -> set[str]:
+    return {r.headers["authorization"].removeprefix("Bot ") for r in discord_api.requests}
+
+
+def raw_outcomes(db_session) -> list[str]:
+    return [e.outcome for e in db_session.query(Event).filter_by(kind="raw").populate_existing()]
+
+
+@pytest.mark.parametrize("event_type", ["MESSAGE_CREATE", "MESSAGE_UPDATE"])
+@pytest.mark.parametrize(
+    "answer",
+    [UNKNOWN_MESSAGE, UNKNOWN_CHANNEL, discord_error(403, 50001), discord_error(401, 0), {"id": MESSAGE, "content": "x"}],
+    ids=["unknown message", "unknown channel", "no access", "token rejected", "not a message"],
+)
+def test_a_holders_push_of_a_message_discord_does_not_confirm_is_refused(
+    db_session, discord_api, webhook_bot, qdrant, event_type, answer
+):
+    victims_server(db_session, webhook_bot)
+    discord_api.channels[(HOOKED_TOKEN, f"{CHANNEL}/messages/{MESSAGE}")] = answer
+    raw_id = delivery(db_session, webhook_bot)
+
+    result = discord.handle_discord_event(
+        bot_id=webhook_bot.id, event_type=event_type, data=message_create(**PUSHED_AS), caused_by=raw_id
+    )
+
+    assert result == {"status": "skipped", "reason": "unconfirmed_message"}
+    assert (db_session.query(DiscordMessage).count(), raw_outcomes(db_session)) == (0, ["rejected"])
+
+
+@pytest.mark.parametrize("event_type", ["MESSAGE_CREATE", "MESSAGE_UPDATE"])
+def test_a_pushed_message_is_stored_as_discord_holds_it(db_session, discord_api, webhook_bot, qdrant, event_type):
+    victims_server(db_session, webhook_bot)
+    discord_api.post(message_create(attachments=[image_attachment(CDN)]))
+
+    with patch.object(discord, "download_and_save_images", return_value=[]) as download:
+        handle(webhook_bot, event_type, message_create(**PUSHED_AS, attachments=[image_attachment(f"{CDN}?forged")]))
+
+    message = stored(db_session)
+    assert (message.content, message.author_id, message.edited_at) == (LONG_TEXT, int(AUTHOR), None)
+    assert [p.contact_info for p in message.people] == [{"discord": AUTHOR}]
+    assert db_session.get(DiscordUser, int(FORGER["id"])) is None
+    download.assert_called_once_with([CDN], int(MESSAGE))
+    assert tokens_asked(discord_api) == {HOOKED_TOKEN}
+
+
+@pytest.mark.parametrize(
+    "edit",
+    [
+        {"id": MESSAGE, "channel_id": CHANNEL, "content": FORGED_TEXT, "edited_timestamp": FUTURE},
+        {"id": MESSAGE, "content": FORGED_TEXT, "edited_timestamp": FUTURE},
+        message_create(**PUSHED_AS),
+    ],
+    ids=["partial", "naming no channel", "full"],
+)
+def test_a_holders_forged_edit_of_another_owners_message_keeps_what_discord_holds(
+    db_session, discord_api, webhook_bot, user_owned_bot, qdrant, edit
+):
+    held_server_with_a_message(db_session, discord_api, webhook_bot, user_owned_bot)
+
+    handle(webhook_bot, "MESSAGE_UPDATE", edit)
+
+    message = stored(db_session)
+    assert (message.content, message.author_id, message.edited_at) == (LONG_TEXT, int(AUTHOR), None)
+
+
+def test_an_honest_edit_naming_no_channel_is_read_from_the_stored_one(db_session, discord_api, webhook_bot, qdrant):
+    victims_server(db_session, webhook_bot)
+    relay(discord_api, webhook_bot, "MESSAGE_CREATE", message_create())
+    discord_api.post(message_create(content=EDITED, edited_timestamp="2026-11-05T13:00:00+00:00"))
+
+    handle(webhook_bot, "MESSAGE_UPDATE", {"id": MESSAGE, "content": EDITED})
+
+    message = stored(db_session)
+    assert (message.content, message.edited_at) == (EDITED, EDITED_AT)
+
+
+DELETES = [("MESSAGE_DELETE", {"id": MESSAGE, "channel_id": CHANNEL}), ("MESSAGE_DELETE_BULK", {"ids": [MESSAGE], "channel_id": CHANNEL})]
+
+
+@pytest.mark.parametrize("event_type, data", DELETES)
+@pytest.mark.parametrize(
+    "holder_reads, deliverer_reads, kept",
+    [
+        (UNKNOWN_MESSAGE, UNKNOWN_MESSAGE, 0),
+        (UNKNOWN_MESSAGE, message_create(), 1),
+        (UNKNOWN_MESSAGE, discord_error(403, 50001), 1),
+        (UNKNOWN_MESSAGE, discord_error(401, 0), 1),
+    ],
+    ids=["gone", "the deliverer still reads it", "the deliverer can't reach it", "the deliverer's token is rejected"],
+)
+def test_a_holders_pushed_delete_is_confirmed_by_the_bot_that_delivered_the_message(
+    db_session, discord_api, webhook_bot, user_owned_bot, qdrant, event_type, data, holder_reads, deliverer_reads, kept
+):
+    held_server_with_a_message(db_session, discord_api, webhook_bot, user_owned_bot)
+    discord_api.channels[(HOOKED_TOKEN, f"{CHANNEL}/messages/{MESSAGE}")] = holder_reads
+    discord_api.channels[(SECOND_TOKEN, f"{CHANNEL}/messages/{MESSAGE}")] = deliverer_reads
+
+    handle(webhook_bot, event_type, data)
+
+    assert db_session.query(DiscordMessage).count() == kept
+    assert tokens_asked(discord_api) == {SECOND_TOKEN}
+
+
+def deliverer_gone(db_session, bot) -> None:
+    db_session.query(DiscordMessage).update({"bot_id": None})
+    db_session.commit()
+
+
+def deliverer_paused(db_session, bot) -> None:
+    bot.is_active = False
+    db_session.commit()
+
+
+@pytest.mark.parametrize("event_type, data", DELETES)
+@pytest.mark.parametrize(
+    "deliverer, kept, asked",
+    [(deliverer_gone, 0, {HOOKED_TOKEN}), (deliverer_paused, 1, set())],
+    ids=["its bot is gone: the holder confirms", "its bot is paused: no one confirms"],
+)
+def test_a_pushed_delete_whose_deliverer_cannot_answer(
+    db_session, discord_api, webhook_bot, user_owned_bot, qdrant, event_type, data, deliverer, kept, asked
+):
+    held_server_with_a_message(db_session, discord_api, webhook_bot, user_owned_bot)
+    deliverer(db_session, user_owned_bot)
+    discord_api.happen(event_type, data)
+
+    handle(webhook_bot, event_type, data)
+
+    assert (db_session.query(DiscordMessage).count(), tokens_asked(discord_api)) == (kept, asked)
+
+
+@pytest.mark.parametrize("event_type, data", FORGED[4:], ids=["reaction", "unreaction", "clear", "clear emoji"])
+def test_a_holders_forged_reaction_stores_the_reactions_discord_lists(
+    db_session, discord_api, webhook_bot, user_owned_bot, qdrant, event_type, data
+):
+    held_server_with_a_message(db_session, discord_api, webhook_bot, user_owned_bot)
+    discord_api.happen("MESSAGE_REACTION_ADD", REACTION)
+    handle(user_owned_bot, "MESSAGE_REACTION_ADD", REACTION, pushed=False)
+
+    handle(webhook_bot, event_type, data)
+
+    assert stored(db_session).reactions == FIRE
+
+
+def test_a_pushed_reaction_reads_every_page_of_users(db_session, discord_api, webhook_bot, qdrant):
+    victims_server(db_session, webhook_bot)
+    relay(discord_api, webhook_bot, "MESSAGE_CREATE", message_create())
+    users = [str(user) for user in range(1, 251)]
+    discord_api.reactors[(CHANNEL, MESSAGE)] = {"🔥": users, "party:5": ["7"]}
+
+    handle(webhook_bot, "MESSAGE_REACTION_ADD", REACTION)
+
+    assert stored(db_session).reactions == {"🔥": users, "party:5": ["7"]}
+
+
+TRANSIENT = [httpx.Response(429, json={"retry_after": 600}), httpx.Response(502), httpx.ConnectError("down")]
+
+
+@pytest.mark.parametrize(
+    "event_type, data, message_id",
+    [
+        ("MESSAGE_CREATE", message_create(id="62"), "62"),
+        ("MESSAGE_UPDATE", message_create(**PUSHED_AS), MESSAGE),
+        ("MESSAGE_DELETE", {"id": MESSAGE, "channel_id": CHANNEL}, MESSAGE),
+        ("MESSAGE_REACTION_ADD", REACTION, MESSAGE),
+    ],
+    ids=["create", "edit", "delete", "reaction"],
+)
+@pytest.mark.parametrize("answer", TRANSIENT, ids=["rate limited", "server error", "connection dropped"])
+@pytest.mark.parametrize("retries, countdown", [(0, 60), (2, 180)])
+def test_a_push_discord_cannot_confirm_now_is_retried(
+    db_session, discord_api, webhook_bot, qdrant, event_type, data, message_id, answer, retries, countdown
+):
+    victims_server(db_session, webhook_bot)
+    discord_api.post(message_create())
+    handle(webhook_bot, "MESSAGE_CREATE", message_create(), pushed=False)
+    discord_api.channels[(HOOKED_TOKEN, f"{CHANNEL}/messages/{message_id}")] = answer
+    task = cast(Task, discord.handle_discord_event)
+
+    with task_request(task, retries=retries), patch.object(task, "retry", side_effect=Retry()) as retry:
+        with pytest.raises(Retry):
+            task.run(webhook_bot.id, event_type, data)
+
+    retry.assert_called_once_with(exc=ANY, countdown=countdown)
+    assert isinstance(retry.call_args.kwargs["exc"], discord.PushNotReady)
+    message = stored(db_session)
+    assert (db_session.query(DiscordMessage).count(), message.content, message.reactions) == (1, LONG_TEXT, None)
+
+
+def test_a_pushed_reaction_to_a_message_not_stored_yet_is_retried(db_session, discord_api, webhook_bot, qdrant):
+    victims_server(db_session, webhook_bot)
+    task = cast(Task, discord.handle_discord_event)
+
+    with task_request(task, retries=0), patch.object(task, "retry", side_effect=Retry()) as retry:
+        with pytest.raises(Retry):
+            task.run(webhook_bot.id, "MESSAGE_REACTION_ADD", REACTION)
+
+    retry.assert_called_once_with(exc=ANY, countdown=60)
+    assert discord_api.requests == []
+
+
+def test_a_pushed_create_of_a_stored_message_is_not_read_again(db_session, discord_api, webhook_bot, qdrant):
+    victims_server(db_session, webhook_bot)
+    relay(discord_api, webhook_bot, "MESSAGE_CREATE", message_create())
+    discord_api.requests.clear()
+
+    result = handle(webhook_bot, "MESSAGE_CREATE", message_create(**PUSHED_AS))
+
+    assert (result["status"], stored(db_session).content, discord_api.requests) == ("already_exists", LONG_TEXT, [])
