@@ -492,8 +492,17 @@ LARGE_TEXT = book_files.markup(25_000)  # 200,025 bytes
         book_files.palmdb([LARGE_TEXT[:4096]] * 2, offsets=[2000, 1000, 100]),
         book_files.fb2(25_000),
         LARGE_TEXT,
+        book_files.mobi(LARGE_TEXT) + book_files.epub(b"<html/>"),
+        book_files.mobi(LARGE_TEXT, name=b"%PDF-1.7"),
+        b"x" + book_files.epub(b"<html/>"),
+        b"junk %PDF-1.7\n" + LARGE_TEXT,
+        b"%PDF-1.7\n" + book_files.fb2(25_000),
     ],
-    ids=["mobi", "palmdoc", "compressed mobi", "huff mobi", "damaged record table", "fb2", "html"],
+    ids=[
+        "mobi", "palmdoc", "compressed mobi", "huff mobi", "damaged record table", "fb2", "html",
+        "mobi with a zip appended", "mobi named a pdf", "zip after junk", "pdf header after junk",
+        "pdf header then fb2",
+    ],
 )
 def test_parse_ebook_refuses_unzipped_book_too_large_to_parse(tmp_path, data):
     path = tmp_path / "book.pdf"
@@ -514,7 +523,7 @@ def test_parse_ebook_refuses_unzipped_book_too_large_to_parse(tmp_path, data):
         book_files.mobi(book_files.markup(10_000)),
         book_files.palmdoc_repeats(2),
         book_files.fb2(10_000),
-        b"%PDF-1.7\n" + LARGE_TEXT,
+        b"%PDF-1.7\n" + b"0" * 200_000,
     ],
     ids=["mobi", "compressed mobi", "fb2", "pdf"],
 )

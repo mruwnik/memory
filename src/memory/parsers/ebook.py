@@ -16,7 +16,7 @@ from memory.common import paths, settings
 from memory.common.file_magic import (
     PALMDB_BOOK_SIGNATURES,
     PDF_MAGIC_WINDOW,
-    has_pdf_magic,
+    looks_like_pdf,
     palmdb_signature,
 )
 
@@ -211,6 +211,11 @@ def inflated_size(chunks: Iterator[bytes], method: int, budget: int) -> int:
     return size + len(inflater.flush())
 
 
+def head_is_zip(file: BinaryIO) -> bool:
+    file.seek(0)
+    return file.read(len(LOCAL_HEADER_SIGNATURE)) == LOCAL_HEADER_SIGNATURE
+
+
 def check_zip_size(path: Path) -> None:
     """Raise ValueError for a zipped book with more than MAX_EBOOK_ZIP_ENTRIES
     entries, or whose entries inflate past MAX_EBOOK_INFLATED_BYTES.
@@ -219,7 +224,8 @@ def check_zip_size(path: Path) -> None:
     file points at, and lays out its markup in memory. Entries are measured by
     inflating their data, since their declared sizes and CRCs are the
     uploader's to choose; one that inflates to other than its declared size is
-    refused. An EPUB's spine is then charged for each chapter it lists.
+    refused, and so is an archive that doesn't start the file (MuPDF and
+    zipfile could read different entries). An EPUB's spine is then charged for each chapter it lists.
     """
     limit = settings.MAX_EBOOK_INFLATED_BYTES
     try:
@@ -228,6 +234,8 @@ def check_zip_size(path: Path) -> None:
         raise ValueError("Book is not a valid zip archive") from e
     with archive, path.open("rb") as file:
         entries = archive.infolist()
+        if not head_is_zip(file) or all(info.header_offset for info in entries):
+            raise ValueError("Book has data before its zip archive")
         if len(entries) > settings.MAX_EBOOK_ZIP_ENTRIES:
             raise ValueError(f"Book has more than {settings.MAX_EBOOK_ZIP_ENTRIES} entries")
         total = 0
@@ -378,20 +386,21 @@ def check_palmdb_size(path: Path) -> None:
 def check_parse_size(path: Path) -> None:
     """Raise ValueError for a book whose markup is too large for MuPDF to lay out.
 
-    A zip (EPUB and other packages) is measured by inflating its entries, a
-    MOBI/PalmDoc file by its text records, and any other format but PDF,
-    which MuPDF doesn't lay out, by its size. MuPDF picks the format from the
-    content, so the file name and declared type don't matter.
+    Every check that applies runs: a zip directory anywhere is measured by
+    inflating its entries (and refused unless the archive starts the file), a
+    MOBI/PalmDoc signature by the text records, and anything that is neither,
+    nor a PDF, by its size. MuPDF picks the format from the content, so the
+    file name and declared type don't matter.
     """
-    if zipfile.is_zipfile(path):
-        check_zip_size(path)
-        return
     with path.open("rb") as file:
         head = file.read(PDF_MAGIC_WINDOW)
-    if has_pdf_magic(head):
-        return
-    if palmdb_signature(head) in PALMDB_BOOK_SIGNATURES:
+    zipped = zipfile.is_zipfile(path)
+    palmdb = palmdb_signature(head) in PALMDB_BOOK_SIGNATURES
+    if zipped:
+        check_zip_size(path)
+    if palmdb:
         check_palmdb_size(path)
+    if zipped or palmdb or looks_like_pdf(head):
         return
     limit = settings.MAX_EBOOK_INFLATED_BYTES
     if path.stat().st_size > limit:
