@@ -1,12 +1,17 @@
 import logging
+import posixpath
 import struct
 import zipfile
 import zlib
 from dataclasses import dataclass, field
 from typing import Any, BinaryIO, Iterator, cast
 from pathlib import Path
+from urllib.parse import unquote
+from xml.etree import ElementTree
 
+import defusedxml.ElementTree as DefusedElementTree
 import pymupdf
+from defusedxml import DefusedXmlException
 from memory.common import paths, settings
 from memory.common.file_magic import (
     PALMDB_BOOK_SIGNATURES,
@@ -214,7 +219,7 @@ def check_zip_size(path: Path) -> None:
     file points at, and lays out its markup in memory. Entries are measured by
     inflating their data, since their declared sizes and CRCs are the
     uploader's to choose; one that inflates to other than its declared size is
-    refused.
+    refused. An EPUB's spine is then charged for each chapter it lists.
     """
     limit = settings.MAX_EBOOK_INFLATED_BYTES
     try:
@@ -236,6 +241,100 @@ def check_zip_size(path: Path) -> None:
                 raise ValueError(f"Book inflates to more than {limit} bytes")
             if size != info.file_size:
                 raise ValueError("Book has a zip entry whose size does not match its header")
+        check_epub_spine(archive)
+
+
+def local_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1].rsplit(":", 1)[-1]
+
+
+def local_attribute(element: ElementTree.Element, name: str) -> str | None:
+    return next(
+        (value for key, value in element.attrib.items() if local_name(key) == name), None
+    )
+
+
+def elements_named(root: ElementTree.Element, name: str) -> list[ElementTree.Element]:
+    return [element for element in root.iter() if local_name(element.tag) == name]
+
+
+def parse_package_xml(archive: zipfile.ZipFile, info: zipfile.ZipInfo) -> ElementTree.Element:
+    try:
+        return DefusedElementTree.fromstring(archive.read(info))
+    except (ElementTree.ParseError, DefusedXmlException) as e:
+        raise ValueError("Book has an unreadable package file") from e
+
+
+def entry_candidates(base: str, href: str) -> set[str]:
+    """The lowercased entry names MuPDF may read for ``href`` in the package at ``base``.
+
+    MuPDF appends the href to the package's folder (a leading / included),
+    percent-decodes it and matches entry names ignoring case.
+    """
+    return {
+        posixpath.normpath(f"{base}/{path}").lstrip("/").lower()
+        for path in (href, unquote(href))
+    }
+
+
+def spine_cost(
+    archive: zipfile.ZipFile, package: zipfile.ZipInfo, by_name: dict[str, list[zipfile.ZipInfo]]
+) -> list[int]:
+    """The inflated size of each file the package's spine makes MuPDF lay out.
+
+    Repeated entries count each time. Every spine and manifest element is read,
+    and an itemref that can't be resolved costs the largest entry.
+    """
+    root = parse_package_xml(archive, package)
+    base = posixpath.dirname(package.filename)
+    largest = max((info.file_size for infos in by_name.values() for info in infos), default=0)
+    hrefs: dict[str, list[str]] = {}
+    for item in elements_named(root, "item"):
+        item_id, href = local_attribute(item, "id"), local_attribute(item, "href")
+        if item_id is not None and href is not None:
+            hrefs.setdefault(item_id, []).append(href)
+
+    def cost(idref: str | None) -> int:
+        sizes = [
+            info.file_size
+            for href in hrefs.get(idref or "", [])
+            for name in entry_candidates(base, href)
+            for info in by_name.get(name, [])
+        ]
+        return max(sizes, default=largest)
+
+    return [cost(local_attribute(ref, "idref")) for ref in elements_named(root, "itemref")]
+
+
+EPUB_CONTAINER = "meta-inf/container.xml"
+
+
+def check_epub_spine(archive: zipfile.ZipFile) -> None:
+    """Raise ValueError for an EPUB whose spine makes MuPDF lay out more than
+    MAX_EBOOK_INFLATED_BYTES, or lists more than MAX_EBOOK_ZIP_ENTRIES chapters.
+
+    A spine may list one file many times, and MuPDF lays it out each time.
+    Every package file the container names is read. Entry sizes must already
+    have been checked against their inflated data.
+    """
+    by_name: dict[str, list[zipfile.ZipInfo]] = {}
+    for info in archive.infolist():
+        by_name.setdefault(info.filename.lower(), []).append(info)
+    if EPUB_CONTAINER not in by_name:
+        return
+    container = parse_package_xml(archive, by_name[EPUB_CONTAINER][0])
+    costs: list[int] = []
+    for rootfile in elements_named(container, "rootfile"):
+        names = entry_candidates("", local_attribute(rootfile, "full-path") or "")
+        packages = [info for name in names for info in by_name.get(name, [])]
+        if not packages:
+            raise ValueError("Book's container names a missing package file")
+        for package in packages:
+            costs += spine_cost(archive, package, by_name)
+    if len(costs) > settings.MAX_EBOOK_ZIP_ENTRIES:
+        raise ValueError(f"Book's spine lists more than {settings.MAX_EBOOK_ZIP_ENTRIES} chapters")
+    if sum(costs) > settings.MAX_EBOOK_INFLATED_BYTES:
+        raise ValueError(f"Book's chapters add up to more than {settings.MAX_EBOOK_INFLATED_BYTES} bytes")
 
 
 def palmdb_records(data: bytes) -> list[bytes]:

@@ -7,7 +7,7 @@ import zipfile
 CONTAINER = (
     "<?xml version='1.0'?><container version='1.0' "
     "xmlns='urn:oasis:names:tc:opendocument:xmlns:container'><rootfiles>"
-    "<rootfile full-path='content.opf' media-type='application/oebps-package+xml'/>"
+    "<rootfile full-path='{}' media-type='application/oebps-package+xml'/>"
     "</rootfiles></container>"
 )
 
@@ -16,21 +16,39 @@ def markup(paragraphs: int) -> bytes:
     return b"<html><body>" + b"<p>a</p>" * paragraphs + b"</body></html>"
 
 
-def epub(chapter: bytes, repeats: int = 1) -> bytes:
-    """An EPUB of one chapter that the spine lists `repeats` times."""
+def epub_package(
+    entries: dict[str, bytes],
+    manifest: list[tuple[str, str]],
+    spine: list[str],
+    opf_path: str = "content.opf",
+    container_path: str | None = None,
+) -> bytes:
+    """An EPUB of `entries` whose package lists `manifest` (id, href) and `spine` idrefs."""
     opf = (
         "<?xml version='1.0'?><package xmlns='http://www.idpf.org/2007/opf' version='3.0'>"
         "<metadata xmlns:dc='http://purl.org/dc/elements/1.1/'><dc:title>t</dc:title></metadata>"
-        "<manifest><item id='c' href='c.xhtml' media-type='application/xhtml+xml'/></manifest>"
-        "<spine>" + "<itemref idref='c'/>" * repeats + "</spine></package>"
+        "<manifest>"
+        + "".join(
+            f"<item id='{item_id}' href='{href}' media-type='application/xhtml+xml'/>"
+            for item_id, href in manifest
+        )
+        + "</manifest><spine>"
+        + "".join(f"<itemref idref='{idref}'/>" for idref in spine)
+        + "</spine></package>"
     )
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("mimetype", "application/epub+zip", zipfile.ZIP_STORED)
-        archive.writestr("META-INF/container.xml", CONTAINER)
-        archive.writestr("content.opf", opf)
-        archive.writestr("c.xhtml", chapter)
+        archive.writestr("META-INF/container.xml", CONTAINER.format(container_path or opf_path))
+        archive.writestr(opf_path, opf)
+        for name, data in entries.items():
+            archive.writestr(name, data)
     return buffer.getvalue()
+
+
+def epub(chapter: bytes, repeats: int = 1) -> bytes:
+    """An EPUB of one chapter that the spine lists `repeats` times."""
+    return epub_package({"c.xhtml": chapter}, [("c", "c.xhtml")], ["c"] * repeats)
 
 
 def palmdb(
