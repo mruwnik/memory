@@ -5,7 +5,7 @@ passed to the next member whenever the owner disconnected or was deleted. It is
 now a column, filled here from that same oldest credential.
 
 Revision ID: 20261226_slack_workspace_owner
-Revises: 20261225_null_gdoc_filename
+Revises: 20261226_mail_parsed_body
 Create Date: 2026-11-11
 """
 
@@ -16,7 +16,7 @@ from alembic import op
 
 
 revision: str = "20261226_slack_workspace_owner"
-down_revision: Union[str, None] = "20261225_null_gdoc_filename"
+down_revision: Union[str, None] = "20261226_mail_parsed_body"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
