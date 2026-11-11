@@ -28,8 +28,8 @@ def test_docx_to_pdf_failure_keeps_document_text_out_of_error_log(
     def fail(*args, **kwargs):
         raise RuntimeError(f"! LaTeX Error. l.12 {SECRET}")
 
-    monkeypatch.setattr(extract, "HAS_PANDOC", True)
-    monkeypatch.setattr(extract, "pypandoc", SimpleNamespace(convert_file=fail))
+    monkeypatch.setattr(extract, "PANDOC_PATH", "pandoc")
+    monkeypatch.setattr(extract, "run_pandoc", fail)
 
     with caplog.at_level(logging.ERROR), pytest.raises(RuntimeError):
         extract.docx_to_pdf(pathlib.Path(tmp_path / "a.docx"), tmp_path / "a.pdf")

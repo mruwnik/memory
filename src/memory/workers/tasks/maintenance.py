@@ -66,6 +66,7 @@ from memory.common.celery_app import (
 )
 from memory.common.db.connection import make_session
 from memory.common.db.orphans import orphaned_source_ids
+from memory.common.session_transcripts import delete_transcript_files
 from memory.common.db.models import (
     ACCESS_CONTROLLED_SOURCE_MODELS,
     AgentDefinition,
@@ -794,7 +795,7 @@ def cleanup_old_claude_sessions(max_age_days: int | None = None):
             transcript_file = settings.SESSIONS_STORAGE_DIR / coding_session.transcript_path
             if transcript_file.exists():
                 try:
-                    transcript_file.unlink()
+                    delete_transcript_files(transcript_file)
                     deleted_files += 1
                 except OSError as e:
                     logger.warning(f"Failed to delete transcript file {transcript_file}: {e}")

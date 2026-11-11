@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from PIL import Image
 
 from memory.common import settings
+from memory.common.images import open_image
 from memory.common.celery_app import SYNC_BOOK, SYNC_MISC_DOC, SYNC_PHOTO
 from memory.common.file_magic import MOBI_SIGNATURE, palmdb_signature
 
@@ -65,7 +66,7 @@ def is_image_bytes(content: bytes) -> bool:
     of OOM-ing the worker).
     """
     try:
-        with Image.open(io.BytesIO(content)) as im:
+        with open_image(io.BytesIO(content)) as im:
             im.verify()
         return True
     except Image.DecompressionBombError:

@@ -3,13 +3,14 @@
 import inspect
 import json
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import patch
 from uuid import UUID, uuid4
 
 import pytest
 
 from memory.api import sessions
-from memory.common import settings
+from memory.common import session_transcripts, settings
 from memory.common.db.models.sessions import CodingProject, Session
 
 
@@ -317,3 +318,47 @@ def test_ingest_batch_refuses_a_full_transcript_before_reading_it(
 
 def test_ingest_batch_runs_off_the_event_loop():
     assert not inspect.iscoroutinefunction(sessions.ingest_session_events_batch)
+
+
+def fail_parse(*args, **kwargs):
+    raise AssertionError("the transcript was parsed")
+
+
+def test_ingest_batch_dedupes_without_parsing_the_transcript(
+    client, user, sessions_storage_dir, monkeypatch
+):
+    session_id = str(uuid4())
+    first, second = event(), event()
+    ingest(client, session_id, [first])
+    monkeypatch.setattr(sessions, "json", SimpleNamespace(dumps=json.dumps, loads=fail_parse))
+    monkeypatch.setattr(session_transcripts, "transcript_uuids", fail_parse)
+
+    response = ingest(client, session_id, [first, second])
+
+    assert (response.json()["accepted"], response.json()["duplicates"]) == (1, 1)
+
+
+def test_ingest_batch_builds_a_missing_uuid_index_from_the_transcript(
+    client, db_session, user, sessions_storage_dir
+):
+    session_id = str(uuid4())
+    first, second = event(), event()
+    ingest(client, session_id, [first])
+    transcript = sessions_storage_dir / db_session.get(Session, UUID(session_id)).transcript_path
+    session_transcripts.uuid_index_path(transcript).unlink()
+
+    response = ingest(client, session_id, [first, second])
+
+    assert (response.json()["accepted"], response.json()["duplicates"]) == (1, 1)
+    index = session_transcripts.uuid_index_path(transcript).read_text().splitlines()
+    assert index == [json.dumps(first["uuid"]), json.dumps(second["uuid"])]
+
+
+@pytest.mark.parametrize("uuid", ["with\nnewline", '"quoted"', "plain"])
+def test_ingest_batch_dedupes_any_uuid_text(client, user, sessions_storage_dir, uuid):
+    session_id = str(uuid4())
+    ingest(client, session_id, [event(uuid=uuid)])
+
+    response = ingest(client, session_id, [event(uuid=uuid), event(uuid=f"{uuid}x")])
+
+    assert (response.json()["accepted"], response.json()["duplicates"]) == (1, 1)
