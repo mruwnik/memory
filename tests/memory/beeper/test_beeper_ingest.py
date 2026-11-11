@@ -102,8 +102,9 @@ def test_deeply_nested_html_text_becomes_its_text():
 def test_html_detection_is_linear_in_the_text(text):
     start = time.perf_counter()
     ingest.plain_text(text, {}.get)
-    # Quadratic matching took seconds on these; linear takes milliseconds.
-    assert time.perf_counter() - start < 0.5
+    # Quadratic matching took ~10 s on these; linear takes under 0.1 s, and
+    # several times that on a loaded machine.
+    assert time.perf_counter() - start < 3
 
 
 @pytest.fixture
