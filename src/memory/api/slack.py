@@ -70,7 +70,15 @@ from memory.common.oauth_client import (
 )
 from memory.common.push_health import push_stale
 from memory.common.safe_http import public_http_client
-from memory.common.slack import user_has_workspace_membership, workspace_poll_plan, workspace_sync_interval
+from memory.common.slack import (
+    is_public_channel,
+    is_slack_ts,
+    user_has_workspace_membership,
+    user_manages_workspace,
+    visible_channels,
+    workspace_poll_plan,
+    workspace_sync_interval,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +130,8 @@ class SlackWorkspaceResponse(SyncStatusResponse):
     # Collecting, but no successful sync for several polling intervals
     sync_stale: bool
     apps: list[SlackWorkspaceApp]
+    # Whether the current user may change this workspace's and its channels' settings
+    can_manage: bool
     # Access control
     project_id: int | None
     sensitivity: str
@@ -311,27 +321,48 @@ def workspace_apps(db: Session, ws: SlackWorkspace, user: User) -> list[SlackWor
     ]
 
 
-def get_workspace_for_settings(db: Session, workspace_id: str, user: User) -> SlackWorkspace:
-    """A workspace whose shared settings `user` may edit: any connected user's, and
-    every one for admins, who see them all in the list without a credential."""
+NOT_WORKSPACE_OWNER = "Only the workspace's owner (the first user to connect it) or an admin can change its settings"
+
+
+def get_visible_workspace(db: Session, workspace_id: str, user: User) -> SlackWorkspace:
+    """A workspace `user` is connected to, or any workspace for admins, who see them all
+    in the list without a credential."""
     if not has_admin_scope(user):
         return get_workspace_with_access(db, workspace_id, user)
     workspace = db.get(SlackWorkspace, workspace_id)
-    if not workspace:
+    if workspace is None:
         raise HTTPException(status_code=404, detail="Workspace not found")
     return workspace
+
+
+def get_workspace_for_settings(db: Session, workspace_id: str, user: User) -> SlackWorkspace:
+    """A workspace whose settings `user` may change; 403 for its other members."""
+    workspace = get_visible_workspace(db, workspace_id, user)
+    if not user_manages_workspace(workspace, user):
+        raise HTTPException(status_code=403, detail=NOT_WORKSPACE_OWNER)
+    return workspace
+
+
+def get_channel_for_settings(db: Session, channel_id: str, user: User) -> SlackChannel:
+    """A channel whose settings `user` may change. A channel the caller doesn't see in
+    the listing is a 404, one they see but don't manage is a 403."""
+    channel = db.get(SlackChannel, channel_id)
+    if channel is None:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    workspace = get_visible_workspace(db, channel.workspace_id, user)
+    if user_manages_workspace(workspace, user):
+        return channel
+    if not is_public_channel(channel):
+        raise HTTPException(status_code=404, detail="Channel not found")
+    raise HTTPException(status_code=403, detail=NOT_WORKSPACE_OWNER)
 
 
 def workspace_to_response(
     ws: SlackWorkspace, db: Session, current_user: User
 ) -> SlackWorkspaceResponse:
     """Convert workspace to response model."""
-    channel_count = (
-        db.query(func.count(SlackChannel.id))
-        .filter(SlackChannel.workspace_id == ws.id)
-        .scalar()
-        or 0
-    )
+    channels = db.query(func.count(SlackChannel.id)).filter(SlackChannel.workspace_id == ws.id)
+    channel_count = visible_channels(channels, ws, current_user).scalar() or 0
 
     connected_users = (
         db.query(func.count(SlackUserCredentials.id))
@@ -368,6 +399,7 @@ def workspace_to_response(
         poll_blocker=poll_blocker(db, ws),
         sync_stale=is_sync_stale(ws, interval),
         apps=workspace_apps(db, ws, current_user),
+        can_manage=user_manages_workspace(ws, current_user),
         project_id=ws.project_id,
         sensitivity=ws.sensitivity or "basic",
         llm_key=llm_key_view(db, current_user, ws),
@@ -679,10 +711,7 @@ def update_workspace(
     user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> SlackWorkspaceResponse:
-    """Update workspace settings.
-
-    Any connected user or admin can update workspace settings (settings are shared).
-    """
+    """Update workspace settings. Only the workspace's owner or an admin may."""
     workspace = get_workspace_for_settings(db, workspace_id, user)
 
     if updates.collect_messages is not None:
@@ -807,11 +836,13 @@ def list_channels(
     user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> list[SlackChannelResponse]:
-    """List channels in a workspace."""
-    # Verify user has access
-    get_workspace_with_access(db, workspace_id, user)
+    """List a workspace's channels: all of them for its owner and admins, the public
+    ones for its other members."""
+    workspace = get_visible_workspace(db, workspace_id, user)
 
-    query = db.query(SlackChannel).filter(SlackChannel.workspace_id == workspace_id)
+    query = visible_channels(
+        db.query(SlackChannel).filter(SlackChannel.workspace_id == workspace_id), workspace, user
+    )
 
     if channel_type:
         query = query.filter(SlackChannel.channel_type == channel_type)
@@ -827,13 +858,8 @@ def update_channel(
     user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> SlackChannelResponse:
-    """Update channel collection settings."""
-    channel = db.get(SlackChannel, channel_id)
-    if not channel:
-        raise HTTPException(status_code=404, detail="Channel not found")
-
-    # Verify user has access to the workspace
-    get_workspace_with_access(db, channel.workspace_id, user)
+    """Update channel settings. Only the workspace's owner or an admin may."""
+    channel = get_channel_for_settings(db, channel_id, user)
 
     if "collect_messages" in updates.model_fields_set:
         channel.collect_messages = updates.collect_messages
@@ -1197,6 +1223,16 @@ def channel_event_payload(event_type: str, channel: str | PushedChannel | None) 
     return None
 
 
+def malformed_ts(required: str | None, *optional: str | None) -> bool:
+    """Whether the required timestamp is missing or malformed, or an optional one is malformed."""
+    return not is_slack_ts(required) or any(ts is not None and not is_slack_ts(ts) for ts in optional)
+
+
+def rejected_ts(slack_app_id: int, event_type: str) -> SlackDispatch:
+    logger.warning(f"Rejecting event with malformed ts slack_app_id={slack_app_id} event_type={event_type}")
+    return "rejected_ts", None, {}
+
+
 def plan_event_callback(envelope: SlackEnvelope, slack_app_id: int) -> SlackDispatch:
     """Branch on event.type to the celery task that applies it.
 
@@ -1206,8 +1242,9 @@ def plan_event_callback(envelope: SlackEnvelope, slack_app_id: int) -> SlackDisp
     different format, or a malformed event from a buggy Slack app could put
     arbitrary strings into our Celery task kwargs (workspace_id flows through
     to a SlackMessage Text column with no DB-level shape constraint). We
-    validate workspace_id and channel_id here so garbage gets rejected at the
-    dispatcher rather than wasting Celery cycles + log spam in add_slack_message.
+    validate workspace_id, channel_id and message timestamps here so garbage
+    gets rejected at the dispatcher rather than wasting Celery cycles + log
+    spam in add_slack_message. A timestamp also names a directory on disk.
     """
     event = envelope.event
     event_type, subtype = event.type, event.subtype
@@ -1240,6 +1277,8 @@ def plan_event_callback(envelope: SlackEnvelope, slack_app_id: int) -> SlackDisp
 
     if event_type == "message":
         if subtype == "message_deleted":
+            if malformed_ts(event.deleted_ts or event.ts):
+                return rejected_ts(slack_app_id, event_type)
             return "mark_deleted", MARK_SLACK_MESSAGE_DELETED, {
                 "workspace_id": workspace_id,
                 "channel_id": channel_id,
@@ -1249,6 +1288,8 @@ def plan_event_callback(envelope: SlackEnvelope, slack_app_id: int) -> SlackDisp
         # Both "message" and "message_changed" go through ADD_SLACK_MESSAGE,
         # which carries the merge logic from B-pre-1/B-pre-2.
         message = event if subtype != "message_changed" else event.message or PushedMessage()
+        if malformed_ts(message.ts, message.thread_ts, message.edited and message.edited.ts):
+            return rejected_ts(slack_app_id, event_type)
         return "add_message", ADD_SLACK_MESSAGE, {
             "workspace_id": workspace_id,
             "channel_id": channel_id,
@@ -1265,6 +1306,8 @@ def plan_event_callback(envelope: SlackEnvelope, slack_app_id: int) -> SlackDisp
         }
 
     if reacted:
+        if malformed_ts(event.item and event.item.ts):
+            return rejected_ts(slack_app_id, event_type)
         return "update_reactions", UPDATE_SLACK_REACTIONS, {
             "workspace_id": workspace_id,
             "channel_id": channel_id,

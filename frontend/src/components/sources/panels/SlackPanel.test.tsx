@@ -65,6 +65,7 @@ const workspace = (over: Record<string, unknown> = {}) => ({
   poll_blocker: null,
   sync_stale: false,
   apps: [],
+  can_manage: true,
   project_id: null,
   sensitivity: 'basic',
   ...over,
@@ -465,6 +466,24 @@ describe('SlackPanel - channels', () => {
     await user.click(screen.getByRole('button', { name: /Channels \(2\)/ }))
     await screen.findByText('general')
     expect(screen.getByRole('option', { name: 'Inherit (skip)' })).toBeInTheDocument()
+  })
+
+  it("shows a non-owner the workspace's and its channels' settings read-only", async () => {
+    listWorkspaces.mockResolvedValue([workspace({ can_manage: false })])
+    const { user } = renderWithUser(<SlackPanel />)
+    await screen.findByText('Acme')
+
+    expect(screen.getByText(/Only this workspace's owner/)).toBeInTheDocument()
+    const row = screen.getByText('Acme').closest('li')!
+    for (const name of ['Project', 'Sensitivity', 'LLM key']) {
+      expect(within(row).getAllByRole('combobox', { name })[0]).toBeDisabled()
+    }
+    expect(screen.getByRole('button', { name: 'Pause' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Sync now' })).toBeEnabled()
+
+    await user.click(screen.getByRole('button', { name: /Channels \(2\)/ }))
+    await screen.findByText('general')
+    expect(screen.getByRole('combobox', { name: 'Collect messages' })).toBeDisabled()
   })
 
   it('says so when a workspace has no channels', async () => {

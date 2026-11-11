@@ -5,7 +5,9 @@ from datetime import datetime, timedelta, timezone
 from typing import cast
 from unittest.mock import Mock, call, patch
 
-from memory.common import settings
+import httpx
+from caldav.lib import error as caldav_error
+
 from memory.common.db.models import CalendarEvent, HumanUser, Person
 from memory.common.db.models.sources import CalendarAccount, GoogleAccount
 from memory.workers.tasks import calendar
@@ -173,8 +175,8 @@ def inactive_account(db_session) -> CalendarAccount:
 
 def test_create_event_hash_basic(mock_event_data):
     """Test event hash creation."""
-    hash1 = _create_event_hash(mock_event_data)
-    hash2 = _create_event_hash(mock_event_data)
+    hash1 = _create_event_hash(1, mock_event_data)
+    hash2 = _create_event_hash(1, mock_event_data)
     assert hash1 == hash2
     assert len(hash1) == 32  # SHA256 = 32 bytes
 
@@ -192,9 +194,50 @@ def test_create_event_hash_different_events():
         description="",
     )
 
-    hash1 = _create_event_hash(event1)
-    hash2 = _create_event_hash(event2)
+    hash1 = _create_event_hash(1, event1)
+    hash2 = _create_event_hash(1, event2)
     assert hash1 != hash2
+
+
+def test_create_event_hash_differs_per_account(mock_event_data):
+    assert _create_event_hash(1, mock_event_data) != _create_event_hash(
+        2, mock_event_data
+    )
+
+
+def test_every_invitee_account_stores_a_shared_event(db_session, mock_event_data):
+    accounts = [
+        CalendarAccount(
+            name=name,
+            calendar_type="caldav",
+            caldav_url="https://caldav.example.com",
+            caldav_username=name,
+            caldav_password="x",
+            calendar_ids=[],
+            tags=[],
+            active=True,
+        )
+        for name in ("alice", "bob")
+    ]
+    db_session.add_all(accounts)
+    db_session.commit()
+    serialized = _serialize_event_data(mock_event_data)
+
+    with patch("memory.common.content_processing.push_chunks_to_qdrant"):
+        outcomes = [
+            calendar.sync_calendar_event(account.id, serialized)
+            for account in accounts
+        ]
+
+    db_session.expire_all()
+    owners = {
+        e.calendar_account_id
+        for e in db_session.query(CalendarEvent).filter_by(
+            external_id=mock_event_data["external_id"]
+        )
+    }
+    assert owners == {account.id for account in accounts}
+    assert [o["status"] for o in outcomes] == ["processed", "processed"]
 
 
 def test_serialize_event_data(mock_event_data):
@@ -676,6 +719,42 @@ def test_sync_calendar_account_google_success(
     assert result["calendar_type"] == "google"
 
 
+@pytest.mark.parametrize(
+    "error, text",
+    [
+        (
+            caldav_error.AuthorizationError(
+                url="http://10.0.0.7:8080/p/", reason="internal admin console"
+            ),
+            "The CalDAV server refused the username or password",
+        ),
+        (
+            httpx.ConnectError("[Errno 111] Connection refused to 10.0.0.7:5432"),
+            "Could not reach the CalDAV server",
+        ),
+        (
+            caldav_error.NotFoundError("http://10.0.0.7:6333/collections 404"),
+            "The CalDAV server's response could not be used",
+        ),
+        (
+            ValueError("Document is empty, line 1, column 1 (10.0.0.7)"),
+            "The CalDAV server's response could not be used",
+        ),
+    ],
+)
+def test_caldav_sync_error_never_echoes_the_server(
+    caldav_account, db_session, error, text
+):
+    with (
+        patch("memory.workers.tasks.calendar.DAVClient", side_effect=error),
+        pytest.raises(Exception),
+    ):
+        calendar.sync_calendar_account(caldav_account.id)
+
+    db_session.refresh(caldav_account)
+    assert caldav_account.sync_error == text
+
+
 def test_sync_calendar_account_updates_timestamp(caldav_account, db_session):
     """Test that sync updates last_sync_at timestamp."""
     with patch("memory.workers.tasks.calendar.fetch_caldav_events") as mock_fetch:
@@ -1042,14 +1121,3 @@ def test_fetch_google_events_reads_every_page_of_the_calendar_list(
     assert [e.get("external_id") for e in fetched.events] == ["event-cal-1", "event-cal-2"]
     assert fetched.complete is True
     assert calendar_list.call_args_list == [call(pageToken=None), call(pageToken="page-2")]
-
-
-def test_fetch_caldav_events_sets_a_timeout():
-    client = Mock()
-    client.principal.return_value.calendars.return_value = []
-    now = datetime.now(timezone.utc)
-
-    with patch("memory.workers.tasks.calendar.DAVClient", return_value=client) as connect:
-        calendar.fetch_caldav_events("https://caldav.example.com", "u", "p", [], now, now)
-
-    assert connect.call_args.kwargs["timeout"] == settings.REMOTE_SERVER_TIMEOUT_SEC

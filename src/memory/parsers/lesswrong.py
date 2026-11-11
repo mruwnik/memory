@@ -393,8 +393,8 @@ def fetch_lesswrong_posts(
     while next_date and items_count < max_items:
         try:
             page_posts = fetch_lesswrong(url, next_date, af, min_karma, limit, last_url)
-        except Exception as e:
-            logger.error(f"Error fetching posts: {e}")
+        except Exception:
+            logger.exception("Error fetching posts")
             break
 
         if not page_posts or next_date is None:

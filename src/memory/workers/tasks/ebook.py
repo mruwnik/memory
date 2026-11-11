@@ -275,7 +275,7 @@ def execute_book_processing(
         }
 
     except Exception as e:
-        logger.exception(f"Failed to process book {book_id}: {e}")
+        logger.exception(f"Failed to process book {book_id}")
         # Rollback partial work (sections, embeddings) to avoid persisting incomplete state
         session.rollback()
         # Now mark the job as failed in a clean transaction

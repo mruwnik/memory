@@ -41,12 +41,13 @@ const loadKeys = (listKeys: () => Promise<KeyList>) => (inflight ??= listKeys().
 /**
  * Picks which key pays for a source's LLM work. Compact mode saves on change: `onChange`
  * resolves to false when the save failed, and the caller shows why in the row.
- * Leaving a choice the viewer can't pick again asks first.
+ * Leaving a choice the viewer can't pick again asks first. `disabled` shows the choice read-only.
  */
-export function LLMKeyField({ value, onChange, compact = false }: {
+export function LLMKeyField({ value, onChange, compact = false, disabled = false }: {
   value: LLMKeyView | undefined
   onChange: (choice: LLMKeyChoice) => unknown
   compact?: boolean
+  disabled?: boolean
 }) {
   const { listKeys } = useAgents()
   const [keys, setKeys] = useState<ProviderKey[]>([])
@@ -98,7 +99,7 @@ export function LLMKeyField({ value, onChange, compact = false }: {
   const stopped = value !== undefined && value.choice !== 'none' && !value.runs
   const select = (
     <Select aria-label="LLM key" aria-describedby={compact && stopped ? badgeId : undefined} className={compact ? 'w-auto max-w-48 py-1 text-xs' : undefined}
-      value={current} disabled={saving} onChange={e => pick(toChoice(e.target.value))}>
+      value={current} disabled={saving || disabled} onChange={e => pick(toChoice(e.target.value))}>
       <option value="default" disabled={defaultLocked}>{prefix}{defaultLabel}</option>
       <option value="none">{prefix}No LLM</option>
       {keys.map(k => <option key={k.id} value={String(k.id)}>{prefix}{k.label} ({providerName(k.provider)} ••••{k.key_hint})</option>)}

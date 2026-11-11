@@ -248,7 +248,7 @@ def reingest_item(item_id: str, item_type: str):
     try:
         class_ = get_item_class(item_type)
     except ValueError as e:
-        logger.error(f"Error getting item class: {e}")
+        logger.exception("Error getting item class")
         return {"status": "error", "error": str(e)}
 
     with make_session() as session:
@@ -267,7 +267,7 @@ def reingest_empty_source_items(item_type: str):
     try:
         class_ = get_item_class(item_type)
     except ValueError as e:
-        logger.error(f"Error getting item class: {e}")
+        logger.exception("Error getting item class")
         return {"status": "error", "error": str(e)}
 
     with make_session() as session:
@@ -331,7 +331,7 @@ def process_raw_item(item_id: int, item_type: str):
     try:
         class_ = get_item_class(item_type)
     except ValueError as e:
-        logger.error(f"Error getting item class: {e}")
+        logger.exception("Error getting item class")
         return {"status": "error", "error": str(e)}
 
     with make_session() as session:
@@ -377,7 +377,7 @@ def process_raw_items(
         try:
             class_ = get_item_class(item_type)
         except ValueError as e:
-            logger.error(f"Error getting item class: {e}")
+            logger.exception("Error getting item class")
             return {"status": "error", "error": str(e)}
 
     now = datetime.now(timezone.utc)
@@ -587,7 +587,7 @@ def update_metadata_for_item(item_id: str, item_type: str):
     try:
         class_ = get_item_class(item_type)
     except ValueError as e:
-        logger.error(f"Error getting item class: {e}")
+        logger.exception("Error getting item class")
         return {"status": "error", "error": str(e)}
 
     client = qdrant.get_qdrant_client()
@@ -617,7 +617,7 @@ def update_metadata_for_item(item_id: str, item_type: str):
             new_metadata: dict[str, Any] = dict(item.as_payload())
             new_tags: set[str] = set(new_metadata.get("tags", []))
         except Exception as e:
-            logger.error(f"Error preparing metadata update for item {item.id}: {e}")
+            logger.exception(f"Error preparing metadata update for item {item.id}")
             return {
                 "status": "error",
                 "error": str(e),
@@ -653,13 +653,8 @@ def update_metadata_for_item(item_id: str, item_type: str):
             try:
                 qdrant.set_payload(client, collection, chunk_id, updated_metadata)
                 updated_chunks += 1
-            except Exception as e:
-                logger.error(
-                    "Failed to update chunk %s of item %s: %s",
-                    chunk_id,
-                    item.id,
-                    e,
-                )
+            except Exception:
+                logger.exception("Failed to update chunk %s of item %s", chunk_id, item.id)
                 errors += 1
 
     return {"status": "success", "updated_chunks": updated_chunks, "errors": errors}
@@ -673,7 +668,7 @@ def update_metadata_for_source_items(item_type: str):
     try:
         class_ = get_item_class(item_type)
     except ValueError as e:
-        logger.error(f"Error getting item class: {e}")
+        logger.exception("Error getting item class")
         return {"status": "error", "error": str(e)}
 
     with make_session() as session:
@@ -1033,14 +1028,10 @@ def update_source_access_control(
                             )
                             raise self.retry(exc=e, countdown=60)
                         # Once we've made progress, log and continue to avoid losing work
-                        logger.error(
-                            f"Failed to update chunk {chunk.id} payload: {e}"
-                        )
+                        logger.exception(f"Failed to update chunk {chunk.id} payload")
                         errors += 1
-                    except Exception as e:
-                        logger.error(
-                            f"Failed to update chunk {chunk.id} payload: {e}"
-                        )
+                    except Exception:
+                        logger.exception(f"Failed to update chunk {chunk.id} payload")
                         errors += 1
 
                 updated_items += 1
@@ -1105,14 +1096,10 @@ def reconcile_item(client, item: SourceItem, rewrite_payloads: bool) -> bool:
             continue
         try:
             qdrant.set_payload(client, chunk.collection_name, str(chunk.id), payload)
-        except Exception as e:
+        except Exception:
             # Best-effort: the next run (or config dispatch) reconciles a
             # chunk a transient error skipped.
-            logger.error(
-                "reconcile_access_control: failed to update chunk %s: %s",
-                chunk.id,
-                e,
-            )
+            logger.exception("reconcile_access_control: failed to update chunk %s", chunk.id)
     return True
 
 

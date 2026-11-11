@@ -2,6 +2,7 @@ import base64
 import contextlib
 import hashlib
 import imaplib
+import ipaddress
 import pathlib
 import socket
 import threading
@@ -493,7 +494,10 @@ def body_literals(count: int, size: int) -> bytes:
 
 
 def selected_connection(port: int) -> CappedIMAP4:
-    conn = CappedIMAP4("127.0.0.1", port, timeout=5)
+    # The scripted server is on localhost, which the dial-time policy refuses.
+    loopback = [ipaddress.ip_address("127.0.0.1")]
+    with patch("memory.common.mail_connect.public_addresses", return_value=loopback):
+        conn = CappedIMAP4("127.0.0.1", port, timeout=5)
     conn.state = "SELECTED"  # the scripted server skips SELECT
     return conn
 

@@ -1859,3 +1859,35 @@ def test_a_repo_github_does_not_find_stays_tracked_and_says_it_may_be_hidden(db_
     assert (repo.sync_error or "").startswith(
         f"GitHub returns not-found for {repo.repo_path}: {hidden_by}, or it was renamed or deleted."
     )
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="S-W8: GitHub items are one row per repo item across all users "
+    "(global repo_path+number lookup and sha256), so the second user tracking "
+    "a repo gets no item of their own; needs a per-owner design decision",
+)
+def test_every_user_tracking_a_repo_gets_its_items(
+    db_session, regular_user, admin_user, mock_issue_data
+):
+    repos = []
+    for user in (regular_user, admin_user):
+        account = GithubAccount(
+            user_id=user.id, name="gh", auth_type="pat", access_token="t", active=True
+        )
+        repos.append(
+            GithubRepo(account=account, owner="testorg", name="testrepo", active=True)
+        )
+    db_session.add_all(repos)
+    db_session.commit()
+    serialized = serialize_issue_data(mock_issue_data)
+
+    with patch("memory.common.content_processing.push_chunks_to_qdrant"):
+        for repo in repos:
+            github.sync_github_item(repo.id, serialized)
+
+    db_session.expire_all()
+    stored = db_session.query(GithubItem).filter_by(
+        repo_path="testorg/testrepo", number=mock_issue_data["number"]
+    )
+    assert {item.repo_id for item in stored} == {repo.id for repo in repos}

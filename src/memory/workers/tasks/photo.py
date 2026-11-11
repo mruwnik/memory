@@ -151,7 +151,7 @@ def execute_photo_processing(
         )
 
     except Exception as e:
-        logger.exception(f"Failed to process photo {photo_id}: {e}")
+        logger.exception(f"Failed to process photo {photo_id}")
         # Rollback partial work to avoid persisting incomplete state
         session.rollback()
         # Now mark the job as failed in a clean transaction

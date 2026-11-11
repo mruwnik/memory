@@ -137,8 +137,8 @@ async def send_via_slack_async(params: NotificationParams) -> bool:
 
         logger.info(f"Slack message sent to {label}")
         return True
-    except Exception as e:
-        logger.error(f"Failed to send Slack message: {e}")
+    except Exception:
+        logger.exception("Failed to send Slack message")
         return False
 
 
@@ -215,7 +215,7 @@ def send_via_email(params: NotificationParams) -> bool:
     if result.success:
         logger.info(f"Email sent to {to_address}")
         return True
-    logger.error(f"Failed to send email: {result.error}")
+    logger.error(f"Failed to send notification email for user {params.user_id}")
     return False
 
 

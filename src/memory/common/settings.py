@@ -485,7 +485,7 @@ MAX_DOCUMENT_IMAGES = int(os.getenv("MAX_DOCUMENT_IMAGES", 100))
 MAX_DOCUMENT_IMAGE_BYTES = int(
     os.getenv("MAX_DOCUMENT_IMAGE_BYTES", 50 * 1024 * 1024)
 )
-# Socket timeout for user-configured IMAP and CalDAV servers: a stalled server
+# Socket timeout for user-configured IMAP servers: a stalled server
 # would otherwise hold a worker until the task's time limit.
 REMOTE_SERVER_TIMEOUT_SEC = int(os.getenv("REMOTE_SERVER_TIMEOUT_SEC", 60))
 # An IMAP message larger than this is not downloaded, and no single IMAP

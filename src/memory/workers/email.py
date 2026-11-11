@@ -15,7 +15,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from sqlalchemy.orm import Session, object_session, scoped_session
 
-from memory.common import collections, embedding, paths, settings
+from memory.common import collections, embedding, mail_connect, paths, settings
 from memory.common.content_processing import (
     chunk_ids_by_collection,
     delete_vectors,
@@ -444,11 +444,11 @@ def refusing_literals(conn: imaplib.IMAP4) -> Generator[None, None, None]:
         conn.refuse_literals = False
 
 
-class CappedIMAP4(CappedResponses, imaplib.IMAP4):
+class CappedIMAP4(CappedResponses, mail_connect.PublicIMAP4):
     pass
 
 
-class CappedIMAP4SSL(CappedResponses, imaplib.IMAP4_SSL):
+class CappedIMAP4SSL(CappedResponses, mail_connect.PublicIMAP4SSL):
     pass
 
 

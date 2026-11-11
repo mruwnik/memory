@@ -218,8 +218,8 @@ def parse_otlp_json(data: bytes | str) -> list[ParsedTelemetryEvent]:
 
     try:
         payload = json.loads(data)
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse OTLP JSON: {e}")
+    except json.JSONDecodeError:
+        logger.exception("Failed to parse OTLP JSON")
         return []
 
     events: list[ParsedTelemetryEvent] = []

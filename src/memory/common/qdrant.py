@@ -275,7 +275,7 @@ def delete_points(
 
         logger.debug(f"Deleted {len(ids)} vectors from {collection_name}")
     except (ApiException, UnexpectedResponse) as e:
-        logger.error(f"Error deleting points from {collection_name}: {e}")
+        logger.exception(f"Error deleting points from {collection_name}")
         raise IOError(f"Error deleting points from {collection_name}: {e}")
 
 
