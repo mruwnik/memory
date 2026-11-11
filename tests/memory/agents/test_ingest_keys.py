@@ -112,7 +112,7 @@ def test_items_nobody_brought_in_get_no_llm_work(db_session):
 
 def test_slack_messages_use_the_app_registrants_default(db_session, regular_user, admin_user):
     default = key(db_session, regular_user, "default", is_default=True)
-    workspace = SlackWorkspace(id="T1", name="w")
+    workspace = SlackWorkspace(id="T1", name="w", owner_id=regular_user.id)
     older = SlackApp(client_id="a", name="first", created_by_user_id=regular_user.id)
     newer = SlackApp(client_id="b", name="second", created_by_user_id=admin_user.id)
     db_session.add_all([workspace, older, newer])

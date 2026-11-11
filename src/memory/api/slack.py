@@ -132,6 +132,7 @@ class SlackWorkspaceResponse(SyncStatusResponse):
     apps: list[SlackWorkspaceApp]
     # Whether the current user may change this workspace's and its channels' settings
     can_manage: bool
+    owner_id: int | None
     # Access control
     project_id: int | None
     sensitivity: str
@@ -146,6 +147,8 @@ class SlackWorkspaceUpdate(BaseModel):
     project_id: int | None = None
     sensitivity: Literal["public", "basic", "internal", "confidential"] | None = None
     llm_key: LLMKeyInput | None = None
+    # Hand the workspace to another connected member
+    owner_id: int | None = None
 
 
 class SlackChannelResponse(BaseModel):
@@ -335,6 +338,14 @@ def get_visible_workspace(db: Session, workspace_id: str, user: User) -> SlackWo
     return workspace
 
 
+def connected_member_id(db: Session, workspace_id: str, user_id: int) -> int:
+    """`user_id` if that user has a credential for the workspace, else 400."""
+    member = db.get(User, user_id)
+    if member is None or not user_has_workspace_membership(db, workspace_id, member):
+        raise HTTPException(status_code=400, detail="The new owner must have connected this workspace")
+    return user_id
+
+
 def get_workspace_for_settings(db: Session, workspace_id: str, user: User) -> SlackWorkspace:
     """A workspace whose settings `user` may change; 403 for its other members."""
     workspace = get_visible_workspace(db, workspace_id, user)
@@ -400,6 +411,7 @@ def workspace_to_response(
         sync_stale=is_sync_stale(ws, interval),
         apps=workspace_apps(db, ws, current_user),
         can_manage=user_manages_workspace(ws, current_user),
+        owner_id=ws.owner_id,
         project_id=ws.project_id,
         sensitivity=ws.sensitivity or "basic",
         llm_key=llm_key_view(db, current_user, ws),
@@ -526,7 +538,7 @@ def _persist_oauth_credentials(
     buffer, splits scopes, stores encrypted access/refresh tokens."""
     workspace = db.get(SlackWorkspace, team_id)
     if workspace is None:
-        workspace = SlackWorkspace(id=team_id, name=team_name)
+        workspace = SlackWorkspace(id=team_id, name=team_name, owner_id=user.id)
         db.add(workspace)
         db.flush()
     else:
@@ -727,6 +739,8 @@ def update_workspace(
     if updates.sensitivity is not None:
         workspace.sensitivity = updates.sensitivity
     apply_llm_key(db, user, workspace, updates.llm_key)
+    if updates.owner_id is not None:
+        workspace.owner_id = connected_member_id(db, workspace.id, updates.owner_id)
 
     db.commit()
     db.refresh(workspace)

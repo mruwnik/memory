@@ -3,6 +3,7 @@ or its channels' settings, and other members see only its public channels."""
 
 import pytest
 
+from memory.api.slack import _persist_oauth_credentials
 from memory.common.access_control import get_user_project_roles, user_can_access
 from memory.common.db.models import User
 from memory.common.db.models.slack import SlackApp, SlackChannel, SlackUserCredentials, SlackWorkspace
@@ -35,7 +36,7 @@ def victim(db_session):
 def shared(db_session, user, victim):
     """A workspace the victim connected first and `user` joined second, with the
     victim's DM, a private channel and a public channel."""
-    db_session.add(SlackWorkspace(id=WORKSPACE, name="Shared", collect_messages=False))
+    db_session.add(SlackWorkspace(id=WORKSPACE, name="Shared", collect_messages=False, owner_id=victim.id))
     db_session.flush()
     victim_app = connect(db_session, victim.id)
     connect(db_session, user.id)
@@ -63,18 +64,82 @@ def shared(db_session, user, victim):
     return {**channels, "message": message}
 
 
-def test_owner_is_the_first_user_to_connect_not_the_oldest_app(db_session, user, victim):
-    db_session.add(SlackWorkspace(id=WORKSPACE, name="Shared"))
-    older_app = SlackApp(client_id="old", name="old", created_by_user_id=user.id)
-    db_session.add(older_app)
+def oauth_connect(db_session, user_id: int) -> None:
+    app = SlackApp(client_id=f"oauth-{user_id}", name=f"oauth {user_id}", created_by_user_id=user_id)
+    db_session.add(app)
     db_session.flush()
-    connect(db_session, victim.id)
-    cred = SlackUserCredentials(slack_app_id=older_app.id, workspace_id=WORKSPACE, user_id=user.id, scopes=[])
-    db_session.add(cred)
-    db_session.commit()
+    user = db_session.get(User, user_id)
+    _persist_oauth_credentials(db_session, app, user, WORKSPACE, "Shared", {"access_token": "xoxp-x"})
+
+
+def test_the_first_user_to_connect_owns_the_workspace(db_session, user, victim):
+    oauth_connect(db_session, victim.id)
+    oauth_connect(db_session, user.id)
 
     workspace = db_session.get(SlackWorkspace, WORKSPACE)
     assert (workspace.owner_id, workspace.llm_registrant_id) == (victim.id, victim.id)
+
+
+@pytest.mark.parametrize("leave", ["disconnect", "delete_app"])
+def test_the_owner_leaving_does_not_hand_the_workspace_on(member_client, db_session, victim, shared, leave):
+    leaving = {
+        "disconnect": lambda: db_session.query(SlackUserCredentials)
+        .filter(SlackUserCredentials.user_id == victim.id)
+        .delete(),
+        "delete_app": lambda: db_session.query(SlackApp).filter(SlackApp.created_by_user_id == victim.id).delete(),
+    }
+    leaving[leave]()
+    db_session.commit()
+
+    listing = member_client.get(f"/slack/workspaces/{WORKSPACE}/channels")
+    change = member_client.patch(f"/slack/channels/{shared['dm'].id}", json={"collect_messages": True})
+
+    assert [c["id"] for c in listing.json()] == ["C0GENERAL"]
+    assert change.status_code == 404
+
+
+def test_a_deleted_owner_leaves_the_workspace_to_admins(member_client, db_session, victim, shared):
+    db_session.delete(victim)
+    db_session.commit()
+
+    workspace = member_client.patch(f"/slack/workspaces/{WORKSPACE}", json={"sensitivity": "public"})
+    listing = member_client.get(f"/slack/workspaces/{WORKSPACE}/channels")
+
+    assert (workspace.status_code, [c["id"] for c in listing.json()]) == (403, ["C0GENERAL"])
+    assert db_session.get(SlackWorkspace, WORKSPACE).owner_id is None
+
+
+def test_a_new_member_does_not_claim_an_ownerless_workspace(db_session, user, victim, shared):
+    db_session.delete(victim)
+    db_session.query(SlackUserCredentials).delete()
+    db_session.commit()
+
+    oauth_connect(db_session, user.id)
+
+    assert db_session.get(SlackWorkspace, WORKSPACE).owner_id is None
+
+
+def test_member_cannot_take_ownership(member_client, db_session, user, shared):
+    response = member_client.patch(f"/slack/workspaces/{WORKSPACE}", json={"owner_id": user.id})
+
+    assert response.status_code == 403
+    assert db_session.get(SlackWorkspace, WORKSPACE).owner_id == 999
+
+
+def test_admin_hands_the_workspace_to_a_member(client, db_session, user, victim, shared):
+    db_session.query(SlackWorkspace).filter(SlackWorkspace.id == WORKSPACE).update({"owner_id": None})
+    db_session.commit()
+
+    response = client.patch(f"/slack/workspaces/{WORKSPACE}", json={"owner_id": victim.id})
+
+    assert (response.status_code, response.json()["owner_id"]) == (200, victim.id)
+
+
+def test_ownership_goes_only_to_a_connected_member(client, db_session, admin_user, shared):
+    response = client.patch(f"/slack/workspaces/{WORKSPACE}", json={"owner_id": admin_user.id})
+
+    assert response.status_code == 400
+    assert db_session.get(SlackWorkspace, WORKSPACE).owner_id == 999
 
 
 def test_member_lists_only_public_channels(member_client, shared):
@@ -89,8 +154,8 @@ def test_member_sees_the_public_channel_count_and_cannot_manage(member_client, s
     assert (body["channel_count"], body["can_manage"]) == (1, False)
 
 
-def test_owner_lists_every_channel(member_client, db_session, victim, shared):
-    db_session.query(SlackUserCredentials).filter(SlackUserCredentials.user_id == victim.id).delete()
+def test_owner_lists_every_channel(member_client, db_session, user, shared):
+    db_session.query(SlackWorkspace).filter(SlackWorkspace.id == WORKSPACE).update({"owner_id": user.id})
     db_session.commit()
 
     response = member_client.get(f"/slack/workspaces/{WORKSPACE}/channels")
@@ -144,8 +209,8 @@ def test_member_cannot_change_the_workspace(member_client, db_session, shared, c
     assert (workspace.sync_interval_seconds, workspace.llm_disabled) == (300, False)
 
 
-def test_owner_changes_a_dm_and_the_workspace(member_client, db_session, user, victim, shared):
-    db_session.query(SlackUserCredentials).filter(SlackUserCredentials.user_id == victim.id).delete()
+def test_owner_changes_a_dm_and_the_workspace(member_client, db_session, user, shared):
+    db_session.query(SlackWorkspace).filter(SlackWorkspace.id == WORKSPACE).update({"owner_id": user.id})
     db_session.commit()
 
     channel = member_client.patch(f"/slack/channels/{shared['dm'].id}", json={"collect_messages": True})
