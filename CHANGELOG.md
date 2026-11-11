@@ -91,11 +91,14 @@ a new, empty `## Unreleased` above it.
 - `POST /sessions/ingest/batch` runs in the API threadpool instead of the event loop, and refuses with 413 events that would grow a session's transcript file past `MAX_SESSION_TRANSCRIPT_BYTES` (new, default 256 MiB). Before, each post re-read the whole transcript on the event loop, stalling every other request for seconds once a transcript was large, and transcripts could grow without limit.
 - Beeper messages are checked for HTML formatting, and their quoted reply parents removed, in time linear in their length; HTML nested too deeply to convert is stored as its text. Before, a 65,000-character message of unclosed tags held a worker for about 5 seconds, and deeply nested HTML failed to store.
 - At most `MAX_EMBEDDED_CHUNKS_PER_ITEM` (new, default 500, about 250,000 tokens) text chunks of one item are embedded on the server's Voyage key: past it, the item's first chunks and its summary are kept, and a WARNING log names the item id. Before, a 25 MB plain-text email from anyone embedded about 12,000 chunks.
+- A Slack workspace stays with the member who connected it first: when they disconnect, delete their Slack app or are offboarded, ownership no longer passes to the next member. Only the owner or an admin can hand it on (`owner_id` in `PATCH /slack/workspaces/{id}`, to a connected member); a workspace whose owner was deleted is managed by admins only until one assigns an owner.
+- A GitHub repo's sync files issues and PRs into a project only when the tracking account's owner is in one of the project's teams (or the project has none), also when that owner is an admin. Before, an admin's repos filed into any project bound to them, so whoever bound one of those repos to their own project received its items.
+
 ### Required env vars
 None
 
 ### Manual steps
-None
+- Before upgrading: an admin whose GitHub account tracks a repo bound to a project of teams the admin is not in should join one of those teams first (or remove the project's teams). Otherwise the `20261227_unbind_github_projects` migration detaches that project from the repo, and its items stop being filed there.
 
 ### Other changes for operators
 - `AGENT_MAX_RUNS_PER_HOUR` is the ceiling on runs an agent definition or prebuilt agent starts an hour, and only the default for a subscription's `max_per_hour`.
@@ -114,9 +117,12 @@ None
 - `20261223_meeting_api_ext_ids` renames the `external_id` of meetings submitted through `POST /meetings` (no transcript account, not a push, with a creator) to `api:<user id>:<id>`; one UPDATE over `meeting`, and one over `pending_jobs` renaming `params.external_id` of those submissions' meeting jobs so a retry finds its meeting. Meetings of deleted transcript accounts match the same rule and are renamed too. A submission still queued when the migration runs is stored under its bare id; let the `meetings` queue drain before updating to avoid that.
 - `20261225_null_gdoc_filename` clears `source_item.filename` on Google Drive docs (one UPDATE over `source_item`; the title stays in `google_doc.title`).
 - `20261226_mail_parsed_body` adds a nullable `mail_message.parsed_body` text column (instant).
+- `20261226_slack_workspace_owner` adds a nullable `slack_workspaces.owner_id` (FK to `users`, `ON DELETE SET NULL`) and fills it with the user of each workspace's oldest credential, its owner until now (one UPDATE over `slack_workspaces`; workspaces with no credentials left get no owner and are managed by admins).
+- `20261227_unbind_github_projects` finds repo and milestone projects that have teams, none of which the owner of the repo's tracking account is in (an owner with no person record is in none), and for each: clears `project_id` on the repo's `github_item`s filed into it and bumps their `updated_at`, clears `github_item.milestone_id` pointing at it, and sets the project's `repo_id`, `github_id` and `number` to NULL, leaving a standalone project with its teams. Projects with no teams, standalone projects and other items are not touched. Three UPDATEs over `source_item`, `github_item` and `projects`; not reversible (the downgrade does nothing; re-bind a project by hand).
 
 ### Post-deploy commands
 - Optional, re-runnable: Discord messages stored before this release that hold only an attachment stay unindexed until re-embedded. To catch up, run `UPDATE source_item SET embed_status='RAW' WHERE embed_status='SKIPPED' AND id IN (SELECT id FROM discord_message WHERE cardinality(images) > 0 OR attachments @> '[{}]');` and the hourly `process_raw_items` job embeds them (300 an hour). Re-processing records a change, so `on_edit` subscriptions may receive those messages once more.
+- Optional, re-runnable: the items `20261227_unbind_github_projects` takes out of a project leave other users' search results at the next access-control sweep (every 30 minutes by default; it picks them up by `updated_at`). The full sweep, `docker compose exec -T worker python - maintenance reconcile-access-control < tools/run_celery_task.py`, does the same at once but walks every item.
 
 ## v0.5.2 (2026-11-08)
 

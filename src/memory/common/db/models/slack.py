@@ -30,7 +30,7 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.dialects.postgresql import ARRAY
-from sqlalchemy.orm import Mapped, mapped_column, object_session, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from memory.common.db.models.base import Base
 from memory.common.db.models.provider_keys import LLMKeyChoice
@@ -191,6 +191,14 @@ class SlackWorkspace(SyncStatusMixin, LLMKeyChoice, Base):
     sensitivity: Mapped[str] = mapped_column(String(20), nullable=False, server_default="basic")
     config_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
 
+    # The user who connected the workspace first. Only they or an admin may change its or
+    # its channels' settings, and their default key pays for LLM work on its messages.
+    # Ownership moves only when the owner or an admin hands it on; with no owner (the
+    # owner's account was deleted) only admins manage the workspace.
+    owner_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
     # Relationships
     channels: Mapped[list[SlackChannel]] = relationship(
         "SlackChannel", back_populates="workspace", cascade="all, delete-orphan"
@@ -204,24 +212,6 @@ class SlackWorkspace(SyncStatusMixin, LLMKeyChoice, Base):
         Index("slack_workspaces_collect_idx", "collect_messages"),
         Index("slack_workspaces_project_idx", "project_id"),
     )
-
-    @property
-    def owner_id(self) -> int | None:
-        """The workspace's owner: the user who connected it first (its oldest credential).
-
-        Only the owner or an admin may change the workspace's or its channels' settings,
-        and the owner's default key pays for LLM work on its messages.
-        """
-        session = object_session(self)
-        if session is None:
-            return None
-        return (
-            session.query(SlackUserCredentials.user_id)
-            .filter(SlackUserCredentials.workspace_id == self.id)
-            .order_by(SlackUserCredentials.id)
-            .limit(1)
-            .scalar()
-        )
 
     @property
     def llm_registrant_id(self) -> int | None:
