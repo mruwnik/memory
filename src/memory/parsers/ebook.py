@@ -262,8 +262,16 @@ def local_attribute(element: ElementTree.Element, name: str) -> str | None:
     )
 
 
-def elements_named(root: ElementTree.Element, name: str) -> list[ElementTree.Element]:
-    return [element for element in root.iter() if local_name(element.tag) == name]
+def elements_named(root: ElementTree.Element, name: str, cap: int) -> Iterator[ElementTree.Element]:
+    """The elements called ``name`` (any namespace), raising once there are more than ``cap``."""
+    count = 0
+    for element in root.iter():
+        if local_name(element.tag) != name:
+            continue
+        count += 1
+        if count > cap:
+            raise ValueError(f"Book's package lists more than {cap} {name} elements")
+        yield element
 
 
 def parse_package_xml(archive: zipfile.ZipFile, info: zipfile.ZipInfo) -> ElementTree.Element:
@@ -273,76 +281,86 @@ def parse_package_xml(archive: zipfile.ZipFile, info: zipfile.ZipInfo) -> Elemen
         raise ValueError("Book has an unreadable package file") from e
 
 
-def entry_candidates(base: str, href: str) -> set[str]:
-    """The lowercased entry names MuPDF may read for ``href`` in the package at ``base``.
+def check_entry_names(entries: list[zipfile.ZipInfo]) -> None:
+    """Refuse entry names whose lookup could differ between MuPDF and this check:
+    a leading /, or an empty, . or .. segment (a folder's trailing / aside)."""
+    for info in entries:
+        name = info.filename[:-1] if info.is_dir() else info.filename
+        if name.startswith("/") or {"", ".", ".."} & set(name.split("/")):
+            raise ValueError("Book has a zip entry with an unusual name")
 
-    MuPDF appends the href to the package's folder (a leading / included),
-    percent-decodes it and matches entry names ignoring case.
+
+def href_cost(base: str, href: str, sizes: dict[str, int], largest: int) -> int:
+    """The inflated size of the entry MuPDF reads for ``href`` in the package at ``base``.
+
+    MuPDF appends the href to the package's folder, percent-decodes it and
+    matches entry names ignoring case. An href that isn't already in normal
+    form, or that names no entry, costs the largest entry.
     """
-    return {
-        posixpath.normpath(f"{base}/{path}").lstrip("/").lower()
-        for path in (href, unquote(href))
-    }
+    path = f"{base}/{href}" if base else href
+    candidates = {path, unquote(path)}
+    if any(posixpath.normpath(candidate) != candidate for candidate in candidates):
+        return largest
+    found = [sizes[name.lower()] for name in candidates if name.lower() in sizes]
+    return max(found, default=largest)
 
 
-def spine_cost(
-    archive: zipfile.ZipFile, package: zipfile.ZipInfo, by_name: dict[str, list[zipfile.ZipInfo]]
-) -> list[int]:
-    """The inflated size of each file the package's spine makes MuPDF lay out.
-
-    Repeated entries count each time. Every spine and manifest element is read,
-    and an itemref that can't be resolved costs the largest entry.
-    """
-    root = parse_package_xml(archive, package)
-    base = posixpath.dirname(package.filename)
-    largest = max((info.file_size for infos in by_name.values() for info in infos), default=0)
-    hrefs: dict[str, list[str]] = {}
-    for item in elements_named(root, "item"):
-        item_id, href = local_attribute(item, "id"), local_attribute(item, "href")
-        if item_id is not None and href is not None:
-            hrefs.setdefault(item_id, []).append(href)
-
-    def cost(idref: str | None) -> int:
-        sizes = [
-            info.file_size
-            for href in hrefs.get(idref or "", [])
-            for name in entry_candidates(base, href)
-            for info in by_name.get(name, [])
-        ]
-        return max(sizes, default=largest)
-
-    return [cost(local_attribute(ref, "idref")) for ref in elements_named(root, "itemref")]
+def manifest_costs(
+    package: ElementTree.Element, base: str, sizes: dict[str, int], largest: int
+) -> dict[str, int]:
+    """Each manifest item's id and the size of the file it names; ids must be unique."""
+    costs: dict[str, int] = {}
+    for item in elements_named(package, "item", settings.MAX_EBOOK_ZIP_ENTRIES):
+        item_id = local_attribute(item, "id")
+        if item_id is None:
+            continue
+        if item_id in costs:
+            raise ValueError("Book's package repeats a manifest id")
+        costs[item_id] = href_cost(base, local_attribute(item, "href") or "", sizes, largest)
+    return costs
 
 
 EPUB_CONTAINER = "meta-inf/container.xml"
+MAX_EPUB_ROOTFILES = 8
 
 
 def check_epub_spine(archive: zipfile.ZipFile) -> None:
     """Raise ValueError for an EPUB whose spine makes MuPDF lay out more than
-    MAX_EBOOK_INFLATED_BYTES, or lists more than MAX_EBOOK_ZIP_ENTRIES chapters.
+    MAX_EBOOK_INFLATED_BYTES, or that lists more than MAX_EBOOK_ZIP_ENTRIES
+    chapters or manifest items or more than MAX_EPUB_ROOTFILES package files.
 
-    A spine may list one file many times, and MuPDF lays it out each time.
-    Every package file the container names is read. Entry sizes must already
-    have been checked against their inflated data.
+    A spine may list one file many times, and MuPDF lays it out each time, so
+    each itemref is charged its file's size. Every package file the container
+    names is read once. Entry sizes must already have been checked against
+    their inflated data.
     """
-    by_name: dict[str, list[zipfile.ZipInfo]] = {}
-    for info in archive.infolist():
-        by_name.setdefault(info.filename.lower(), []).append(info)
-    if EPUB_CONTAINER not in by_name:
+    entries = archive.infolist()
+    check_entry_names(entries)
+    sizes: dict[str, int] = {}
+    for info in entries:
+        sizes[info.filename.lower()] = max(sizes.get(info.filename.lower(), 0), info.file_size)
+    if EPUB_CONTAINER not in sizes:
         return
-    container = parse_package_xml(archive, by_name[EPUB_CONTAINER][0])
-    costs: list[int] = []
-    for rootfile in elements_named(container, "rootfile"):
-        names = entry_candidates("", local_attribute(rootfile, "full-path") or "")
-        packages = [info for name in names for info in by_name.get(name, [])]
-        if not packages:
+    largest = max(sizes.values())
+    container_info = next(i for i in entries if i.filename.lower() == EPUB_CONTAINER)
+    container = parse_package_xml(archive, container_info)
+    package_names = {
+        (local_attribute(rootfile, "full-path") or "").lower()
+        for rootfile in elements_named(container, "rootfile", MAX_EPUB_ROOTFILES)
+    }
+    limit, chapters, total = settings.MAX_EBOOK_INFLATED_BYTES, 0, 0
+    for name in sorted(package_names):
+        info = next((i for i in entries if i.filename.lower() == name), None)
+        if info is None:
             raise ValueError("Book's container names a missing package file")
-        for package in packages:
-            costs += spine_cost(archive, package, by_name)
-    if len(costs) > settings.MAX_EBOOK_ZIP_ENTRIES:
-        raise ValueError(f"Book's spine lists more than {settings.MAX_EBOOK_ZIP_ENTRIES} chapters")
-    if sum(costs) > settings.MAX_EBOOK_INFLATED_BYTES:
-        raise ValueError(f"Book's chapters add up to more than {settings.MAX_EBOOK_INFLATED_BYTES} bytes")
+        package = parse_package_xml(archive, info)
+        costs = manifest_costs(package, posixpath.dirname(info.filename), sizes, largest)
+        cap = settings.MAX_EBOOK_ZIP_ENTRIES - chapters
+        for itemref in elements_named(package, "itemref", cap):
+            chapters += 1
+            total += costs.get(local_attribute(itemref, "idref") or "", largest)
+            if total > limit:
+                raise ValueError(f"Book's chapters add up to more than {limit} bytes")
 
 
 def palmdb_records(data: bytes) -> list[bytes]:

@@ -594,12 +594,18 @@ TOO_MANY = "chapters add up"
         (chapter_book("c d.xhtml", "c%20d.xhtml", ["c"] * 4), TOO_MANY),
         (chapter_book("OEBPS/c.xhtml", "/c.xhtml", ["c"] * 4, opf_path="OEBPS/content.opf"), TOO_MANY),
         (chapter_book("c.xhtml", "c.xhtml", ["unknown"] * 4), TOO_MANY),
-        (book_files.epub_package({"c.xhtml": b""}, [("c", "c.xhtml")], ["c"] * 51), "more than 50 chapters"),
+        (book_files.epub_package({"c.xhtml": b""}, [("c", "c.xhtml")], ["c"] * 51), "more than 50 itemref"),
         (chapter_book("c.xhtml", "c.xhtml", ["c"], container_path="gone.opf"), "missing package"),
+        (chapter_book("c.xhtml", "./c.xhtml", ["c"] * 4), TOO_MANY),
+        (chapter_book("x/../c.xhtml", "c.xhtml", ["c"]), "unusual name"),
+        (chapter_book("x//c.xhtml", "c.xhtml", ["c"]), "unusual name"),
+        (book_files.epub_package({"c.xhtml": b""}, [("c", "c.xhtml"), ("c", "c.xhtml")], ["c"]), "repeats a manifest id"),
+        (book_files.epub_package({"c.xhtml": b""}, [(f"i{n}", "c.xhtml") for n in range(51)], []), "more than 50 item"),
     ],
     ids=[
         "repeated idref", "ids sharing a file", "entry name case", "percent-encoded href",
-        "rooted href", "unresolved idref", "spine too long", "missing package",
+        "rooted href", "unresolved idref", "spine too long", "missing package", "dotted href",
+        "dot-dot entry", "empty segment entry", "repeated manifest id", "manifest too long",
     ],
 )
 def test_check_parse_size_charges_each_spine_chapter(tmp_path, data, match):
@@ -652,3 +658,13 @@ def test_check_parse_size_ignores_a_zip_without_a_container(tmp_path):
         archive.writestr("1.png", b"\0" * 1000)
 
     check_parse_size(path)
+
+
+def test_check_parse_size_refuses_too_many_package_files(tmp_path):
+    rootfiles = "".join(f"<rootfile full-path='p{n}.opf'/>" for n in range(9))
+    path = tmp_path / "book.epub"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("META-INF/container.xml", f"<container><rootfiles>{rootfiles}</rootfiles></container>")
+
+    with pytest.raises(ValueError, match="more than 8 rootfile"):
+        check_parse_size(path)
