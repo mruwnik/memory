@@ -145,7 +145,7 @@ When connected, the assistant has access to tools organized by domain (core, tea
 If you put the API behind Traefik, nginx, Caddy, or any reverse proxy that terminates TLS, **you must tell uvicorn and the rate limiter which upstream IPs to trust**. Without this:
 
 - Uvicorn ignores `X-Forwarded-Proto`, so any HTTP redirect uses `http://` instead of `https://` and HTTPS clients break (this is a common cause of MCP clients failing to complete the OAuth handshake).
-- The SlowAPI rate limiter keys on the proxy's IP, so every user shares one bucket.
+- The rate limiter keys on the proxy's IP, so every user shares one bucket.
 
 Set both in `.env`:
 
@@ -268,6 +268,10 @@ token; a message they can all see is stored once.
   `MESSAGE_REACTION_*` events, `THREAD_CREATE`, `THREAD_UPDATE`); others are
   acknowledged and ignored. Servers first seen through a webhook bot collect
   everything it receives; turn collection off per server or channel as usual.
+  The signature only proves the bot's owner sent an event, so messages, edits
+  and reactions are read back from Discord with the bot's token and stored as
+  Discord returns them, and a delete lands once Discord no longer has the
+  message: a webhook bot needs a token that can read its channels' history.
 
 A DM to one of your bots, gateway or webhook, is collected by default when
 the person sending it shares a server with the bot: they're in the gateway's

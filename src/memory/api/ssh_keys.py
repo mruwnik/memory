@@ -14,14 +14,14 @@ from memory.common.access_control import has_admin_scope
 from memory.common.db.connection import get_session
 from memory.common.db.models import User
 from memory.common.db.models.ssh_keys import SSHKey
-from memory.common.ssh_keys import can_use_key, encode_key, import_key
+from memory.common.ssh_keys import MAX_KEY_CHARS, can_use_key, encode_key, import_key
 
 router = APIRouter(prefix="/api/ssh-keys", tags=["ssh-keys"])
 
 
 class KeyUpdate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
-    private_key: str | None = Field(default=None, max_length=65536)
+    private_key: str | None = Field(default=None, max_length=MAX_KEY_CHARS)
     passphrase: str | None = Field(default=None, max_length=4096)
 
     @field_validator("name")

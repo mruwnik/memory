@@ -27,6 +27,7 @@ from memory.common.db.models import (
     BeeperReaction,
 )
 from memory.common.db.models.source_items import BeeperMessage
+from memory.common.html_text import strip_tags
 from memory.common.db.upsert import insert_missing
 
 logger = logging.getLogger(__name__)
@@ -42,15 +43,15 @@ HTML_TAG = re.compile(
     r"|table|thead|tbody|tr|th|td|caption|img|details|summary|mx-reply)\b[^<>]*>",
     re.IGNORECASE,
 )
-HTML_MARKUP = re.compile(
-    r"<mx-reply>|<a\s+href="
-    r"|<(a|b|i|u|s|p|em|strong|del|code|pre|blockquote|ul|ol|li|h[1-6]|sup|sub|span|font|div|table|details)"
-    r"(?:\s[^<>]*)?>.*?</\1\s*>",
-    re.IGNORECASE | re.DOTALL,
-)
+HTML_LINK = re.compile(r"<mx-reply>|<a\s+href=", re.IGNORECASE)
+PAIRED = r"(a|b|i|u|s|p|em|strong|del|code|pre|blockquote|ul|ol|li|h[1-6]|sup|sub|span|font|div|table|details)"
+# Each attempt stops at the next `<`, so scanning stays linear in the text.
+PAIRED_OPEN = re.compile(rf"<{PAIRED}(?:\s[^<>]*)?>", re.IGNORECASE)
+PAIRED_CLOSE = re.compile(rf"</{PAIRED}\s*>", re.IGNORECASE)
 HTML_ENTITY = re.compile(r"&(?:lt|gt|amp|quot|#\d+|#x[0-9a-f]+);", re.IGNORECASE)
 # The quoted parent of a reply: the reply-to is stored on its own.
-MX_REPLY = re.compile(r"<mx-reply>.*?</mx-reply>", re.IGNORECASE | re.DOTALL)
+MX_REPLY_OPEN = re.compile(r"<mx-reply>", re.IGNORECASE)
+MX_REPLY_CLOSE = re.compile(r"</mx-reply>", re.IGNORECASE)
 MATRIX_USER = re.compile(r"https://matrix\.to/#/(@[^/?#]+)")
 PILL = r'<a href="https://matrix\.to/#/[^"]*"[^>]*>[^<]*</a>'
 # Slack's channel_join/channel_leave messages as Beeper bridges them: nothing
@@ -215,18 +216,53 @@ class ChatTextConverter(MarkdownConverter):
         return super().convert_img(el, text, convert_as_inline)
 
 
+def has_paired_tag(text: str) -> bool:
+    """Whether a formatting tag is opened and later closed, in one pass over
+    the openers and one over the closers."""
+    first_open: dict[str, int] = {}
+    for opener in PAIRED_OPEN.finditer(text):
+        first_open.setdefault(opener.group(1).lower(), opener.end())
+    return any(
+        first_open.get(closer.group(1).lower(), len(text) + 1) <= closer.start()
+        for closer in PAIRED_CLOSE.finditer(text)
+    )
+
+
 def is_html(text: str) -> bool:
     # Formatted bodies escape a literal "<" as &lt;, so a bare one means plain text.
     if not all(HTML_TAG.match(text, i) for i, char in enumerate(text) if char == "<"):
         return False
-    return bool(HTML_MARKUP.search(text) or (HTML_ENTITY.search(text) and HTML_TAG.search(text)))
+    if HTML_LINK.search(text) or has_paired_tag(text):
+        return True
+    return bool(HTML_ENTITY.search(text) and HTML_TAG.search(text))
+
+
+def drop_replies(text: str) -> str:
+    """The text without its <mx-reply> blocks; an unclosed one stays."""
+    kept: list[str] = []
+    pos = 0
+    while opener := MX_REPLY_OPEN.search(text, pos):
+        closer = MX_REPLY_CLOSE.search(text, opener.end())
+        if closer is None:
+            break
+        kept.append(text[pos : opener.start()])
+        pos = closer.end()
+    kept.append(text[pos:])
+    return "".join(kept)
+
+
+def to_markdown(text: str, name_of: NameOf) -> str:
+    try:
+        return ChatTextConverter(name_of).convert(text)
+    except RecursionError:
+        return strip_tags(text)
 
 
 def plain_text(text: str, name_of: NameOf) -> str:
     """Formatted (HTML) message text as plain text; plain text unchanged."""
     if not is_html(text):
         return text
-    markdown = ChatTextConverter(name_of).convert(MX_REPLY.sub("", text))
+    markdown = to_markdown(drop_replies(text), name_of)
     lines = (line.rstrip() for line in markdown.splitlines())
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 

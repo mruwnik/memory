@@ -851,6 +851,7 @@ def mock_file_storage(tmp_path: Path):
         patch.object(settings, "EMAIL_SPOOL_DIR", email_spool_dir),
         patch.object(settings, "BEEPER_STORAGE_DIR", beeper_storage_dir),
         patch.object(settings, "DISCORD_STORAGE_DIR", tmp_path / "discord"),
+        patch.object(settings, "EBOOK_STORAGE_DIR", tmp_path / "ebooks"),
     ):
         yield
 

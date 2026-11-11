@@ -232,8 +232,8 @@ def summarize_stale_sessions() -> dict:
             try:
                 summarize_session.delay(str(session.id))
                 processed += 1
-            except Exception as e:
-                logger.error(f"Failed to queue summarization for {session.id}: {e}")
+            except Exception:
+                logger.exception(f"Failed to queue summarization for {session.id}")
                 errors += 1
 
     logger.info(

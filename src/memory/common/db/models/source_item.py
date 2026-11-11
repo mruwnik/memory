@@ -36,10 +36,10 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.dialects.postgresql import BYTEA, JSONB
 from sqlalchemy import orm
-from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
+from sqlalchemy.orm import Mapped, Session, mapped_column, relationship, validates
 from sqlalchemy.types import Numeric
 
-from memory.common import settings
+from memory.common import paths, settings
 import memory.common.extract as extract
 import memory.common.collections as collections
 import memory.common.chunker as chunker
@@ -178,6 +178,21 @@ def save_chunk_image(image: Image.Image, stem: str) -> pathlib.Path:
     path = settings.CHUNK_STORAGE_DIR / f"{stem}.webp"
     image.save(path, "WEBP", quality=CHUNK_IMAGE_QUALITY)
     return path
+
+
+def capped_chunks(item_id: int | None, chunks: Sequence[extract.DataChunk]) -> list[extract.DataChunk]:
+    """The first MAX_EMBEDDED_CHUNKS_PER_ITEM chunks, summaries always kept:
+    every chunk is embedded on the server's key, whoever sent the text."""
+    limit = settings.MAX_EMBEDDED_CHUNKS_PER_ITEM
+    if len(chunks) <= limit:
+        return list(chunks)
+    summaries = [c for c in chunks if c.metadata.get("type") == "summary"]
+    rest = [c for c in chunks if c.metadata.get("type") != "summary"]
+    kept = rest[: max(limit - len(summaries), 0)]
+    logger.warning(
+        f"Item {item_id}: embedding {len(kept)} of {len(rest)} chunks (MAX_EMBEDDED_CHUNKS_PER_ITEM)"
+    )
+    return kept + summaries
 
 
 def image_filenames(chunk_id: str, images: Sequence[Image.Image]) -> list[str]:
@@ -636,6 +651,13 @@ class SourceItem(AccessControlMixin, Base):
         Index("source_type_inserted_at_idx", "type", "inserted_at", "id"),
     )
 
+    @validates("filename")
+    def validate_filename(self, key: str, filename: str | None) -> str | None:
+        """``filename`` is a path under this type's storage dir, served by /files."""
+        if filename is None:
+            return None
+        return paths.check_item_filename(self.__mapper__.polymorphic_identity, filename)
+
     @property
     def vector_ids(self):
         """Get vector IDs from associated chunks."""
@@ -724,7 +746,7 @@ class SourceItem(AccessControlMixin, Base):
 
     def data_chunks(self, metadata: dict[str, Any] | None = None) -> Sequence[Chunk]:
         metadata = metadata or {}
-        return [self.make_chunk(data, metadata) for data in self._chunk_contents()]
+        return [self.make_chunk(data, metadata) for data in capped_chunks(self.id, self._chunk_contents())]
 
     def as_payload(self) -> SourceItemPayload:
         """

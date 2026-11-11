@@ -190,7 +190,7 @@ def test_build_mime_message_with_attachments():
     assert len(payload) == 3
 
 
-@patch("memory.common.email_sender.smtplib.SMTP")
+@patch("memory.common.email_sender.mail_connect.PublicSMTP")
 def test_send_via_smtp_success(mock_smtp_class):
     mock_server = MagicMock()
     mock_smtp_class.return_value.__enter__ = Mock(return_value=mock_server)
@@ -222,7 +222,7 @@ def test_send_via_smtp_success(mock_smtp_class):
     mock_server.send_message.assert_called_once()
 
 
-@patch("memory.common.email_sender.smtplib.SMTP")
+@patch("memory.common.email_sender.mail_connect.PublicSMTP")
 def test_send_via_smtp_with_bcc(mock_smtp_class):
     mock_server = MagicMock()
     mock_smtp_class.return_value.__enter__ = Mock(return_value=mock_server)
@@ -255,7 +255,7 @@ def test_send_via_smtp_with_bcc(mock_smtp_class):
     assert "bcc@example.com" in to_addrs
 
 
-@patch("memory.common.email_sender.smtplib.SMTP")
+@patch("memory.common.email_sender.mail_connect.PublicSMTP")
 def test_send_via_smtp_auth_failure(mock_smtp_class):
     import smtplib
 
@@ -285,7 +285,7 @@ def test_send_via_smtp_auth_failure(mock_smtp_class):
     assert "Authentication failed" in result.error
 
 
-@patch("memory.common.email_sender.smtplib.SMTP")
+@patch("memory.common.email_sender.mail_connect.PublicSMTP")
 def test_send_via_smtp_timeout(mock_smtp_class):
     import socket
 
@@ -312,7 +312,7 @@ def test_send_via_smtp_timeout(mock_smtp_class):
     assert "timed out" in result.error.lower()
 
 
-@patch("memory.common.email_sender.smtplib.SMTP")
+@patch("memory.common.email_sender.mail_connect.PublicSMTP")
 def test_send_via_smtp_no_password(mock_smtp_class):
     """Test that missing password returns clear error before attempting connection."""
     config = SmtpConfig(

@@ -141,6 +141,11 @@ class DiscordRest:
             "PUT", f"/channels/{channel_id}/messages/{message_id}/reactions/{quote(emoji, safe='')}/@me"
         )
 
+    async def reaction_users(self, channel_id: int, message_id: int, emoji: str, *, after: int | None = None) -> list[dict]:
+        """One page of the users who reacted with this emoji (``name:id`` for a custom one), by id."""
+        path = f"/channels/{channel_id}/messages/{message_id}/reactions/{quote(emoji, safe='')}"
+        return await self.get(path, after=after, limit=PAGE_SIZE)
+
     async def messages(self, channel_id: int, *, before: int | None = None) -> list[dict]:
         """One page, newest first."""
         return await self.get(f"/channels/{channel_id}/messages", before=before, limit=PAGE_SIZE)

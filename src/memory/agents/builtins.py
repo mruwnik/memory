@@ -5,9 +5,9 @@ from dataclasses import dataclass, field, replace
 from typing import Protocol
 
 import httpx
-from markdownify import markdownify
 
 from memory.common.downloads import DEFAULT_MAX_REDIRECTS as MAX_REDIRECTS
+from memory.common.html_text import html_to_markdown
 from memory.common.llms.tools import ToolDefinition
 from memory.common.safe_http import (
     PinnedBackend,
@@ -118,5 +118,5 @@ async def web_fetch(url: str) -> str:
         return f"[unsupported content type: {page.content_type}]"
     text = bytes(page.body).decode(page.encoding or "utf-8", errors="replace")
     if "html" in page.content_type:
-        text = markdownify(text).strip()
+        text = await asyncio.to_thread(html_to_markdown, text)
     return text + (f"\n[truncated: {page.cut}]" if page.cut else "")

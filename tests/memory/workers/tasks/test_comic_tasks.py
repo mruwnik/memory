@@ -2,6 +2,7 @@ import pytest
 from datetime import datetime
 from unittest.mock import Mock, patch
 
+from memory.common import settings
 from memory.common.db.models import Comic
 from memory.workers.tasks import comic
 
@@ -87,7 +88,7 @@ def test_find_new_urls_with_existing_comics(mock_parse, mock_feed_data, db_sessi
         title="Existing Comic",
         url="https://example.com/comic/1",
         author="https://example.com",
-        filename="/test/path",
+        filename="comics/test/path.png",
         sha256=b"test_hash",
         modality="comic",
         tags=["comic"],
@@ -249,7 +250,7 @@ def test_sync_comic_already_exists(db_session):
         title="Existing Comic",
         url="https://example.com/comic/1",
         author="https://example.com",
-        filename="/test/path",
+        filename="comics/test/path.png",
         sha256=b"test_hash",
         modality="comic",
         tags=["comic"],
@@ -511,3 +512,34 @@ def test_trigger_comic_sync_xkcd_extraction_error(
     # Should attempt all 307 XKCD comics
     assert mock_extract_xkcd.call_count == 307
     mock_sync_delay.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "image_url",
+    [
+        "https://example.com/x.png/../../../../escape",
+        "https://example.com/comic.php",
+        "https://example.com/comic",
+    ],
+)
+def test_sync_comic_refuses_url_without_image_extension(mock_image_response, db_session, image_url):
+    result = comic.sync_comic(
+        url="https://example.com/comic/1", image_url=image_url, title="T", author="https://example.com"
+    )
+
+    escaped = (settings.FILE_STORAGE_DIR.parent / "escape").exists()
+    assert (result["status"], escaped, db_session.query(Comic).count()) == ("failed", False, 0)
+
+
+@pytest.mark.parametrize(
+    "image_url, title, expected",
+    [
+        ("https://example.com/a/comic.PNG?v=1", "Hello World", "https___example_com/Hello_World.png"),
+        ("https://example.com/a.b/comic.jpeg#x", "", "https___example_com/untitled.jpeg"),
+        ("https://example.com/comic.webp", "../../up", "https___example_com/up.webp"),
+    ],
+)
+def test_comic_image_path_stays_in_comic_dir(image_url, title, expected):
+    path = comic.comic_image_path(image_url, "https://example.com", title)
+
+    assert path == settings.COMIC_STORAGE_DIR.resolve() / expected

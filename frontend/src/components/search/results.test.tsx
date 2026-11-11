@@ -60,6 +60,7 @@ describe('SearchResult titles', () => {
     ['image/png', { filename: 'pic.png', metadata: { title: 'A Photo' } }, 'A Photo'],
     ['message/rfc822', { metadata: { subject: 'Hello' } }, 'Hello'],
     ['application/pdf', { filename: 'book.pdf' }, 'book.pdf'],
+    ['application/pdf', { filename: null, metadata: { title: 'Drive PDF' } }, 'Drive PDF'],
   ])('titles a %s result', (mime_type, overrides, title) => {
     render({ mime_type, ...overrides })
     expect(screen.getAllByText(title)[0]).toBeInTheDocument()
@@ -82,6 +83,11 @@ it.each([
 ])('links a %s result to its file with the name encoded', (mime_type, link) => {
   render({ mime_type: mime_type as string, filename: 'reports/100% #2?.pdf' })
   expect(screen.getByRole('link', { name: link })).toHaveAttribute('href', '/files/reports/100%25%20%232%3F.pdf')
+})
+
+it('offers no file link for a PDF that keeps no file', () => {
+  render({ mime_type: 'application/pdf', filename: null, metadata: { title: 'Drive PDF' } })
+  expect(screen.queryByRole('link', { name: 'View PDF' })).not.toBeInTheDocument()
 })
 
 describe('SearchResult bodies', () => {

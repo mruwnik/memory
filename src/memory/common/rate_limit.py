@@ -1,17 +1,14 @@
-"""Lightweight Redis-backed rate limiting for endpoints SlowAPI doesn't cover.
+"""Lightweight Redis-backed rate limiting for buckets tighter than the default.
 
-The main API uses slowapi for default per-IP rate limits, but the MCP
-custom_route handlers (e.g. /oauth/login) live on the FastMCP sub-app and
-don't go through SlowAPI's middleware. Login is also a place where per-IP
-limits are insufficient: an attacker rotating X-Forwarded-For has unbounded
-throughput against a single victim account, so we want a per-account bucket
-in addition to the per-IP one.
+Every request already counts against a per-client default limit
+(``memory.api.request_limits``). Endpoints such as login need more: a
+per-account bucket next to the per-IP one, since an attacker rotating
+addresses has unbounded throughput against a single victim account.
 
-This module provides a thin sliding-window counter on top of the existing
-Redis broker. It fails *open* on Redis errors so a Redis outage doesn't
-take auth offline — that's a deliberate availability/security trade-off
-appropriate for self-hosted deployments. Operators who want fail-closed
-should configure Redis HA.
+This module provides a thin fixed-window counter on top of the existing
+Redis broker. While Redis is unreachable it counts in this process instead,
+so limits still hold per api process and an outage doesn't take auth
+offline. A failed connection is retried after REDIS_RETRY_SECONDS.
 """
 
 from __future__ import annotations
@@ -22,6 +19,9 @@ import re
 import time
 from typing import TYPE_CHECKING, cast
 
+from limits import RateLimitItemPerSecond
+from limits.storage import MemoryStorage
+from limits.strategies import FixedWindowRateLimiter
 import redis
 
 from memory.common import settings
@@ -35,9 +35,14 @@ logger = logging.getLogger(__name__)
 _LIMIT_RE = re.compile(r"\s*(\d+)\s*/\s*(second|minute|hour|day)s?\s*", re.IGNORECASE)
 _UNIT_SECONDS = {"second": 1, "minute": 60, "hour": 3600, "day": 86400}
 
-# Cached module-level client. None means we haven't tried yet, False means
-# the last attempt failed and we're failing open until the next process.
-_redis_client: redis.Redis | None | bool = None
+REDIS_RETRY_SECONDS = 30
+
+# Cached module-level client, and the monotonic time before which a failed
+# connection isn't retried.
+_redis_client: redis.Redis | None = None
+_redis_retry_at = 0.0
+
+local_limiter = FixedWindowRateLimiter(MemoryStorage())
 
 
 def parse_limit(spec: str) -> tuple[int, int]:
@@ -57,34 +62,49 @@ def parse_limit(spec: str) -> tuple[int, int]:
 def rate_limit_redis() -> redis.Redis | None:
     """Return a cached Redis client, or None if Redis is unavailable.
 
-    Separate from `memory.common.redis_pool.get_redis`: rate limiting fails
-    open, so this client has 1s socket timeouts and is pinged once.
+    Separate from `memory.common.redis_pool.get_redis`: this client has 1s
+    socket timeouts and is pinged once. After a failed connection, None is
+    returned without retrying for REDIS_RETRY_SECONDS.
     """
     global _redis_client
-    if _redis_client is False:
-        return None
     if _redis_client is not None:
-        return _redis_client  # type: ignore[return-value]
+        return _redis_client
+    if time.monotonic() < _redis_retry_at:
+        return None
     try:
         client = redis.Redis.from_url(
             settings.REDIS_URL, socket_connect_timeout=1, socket_timeout=1
         )
         # Ping once so the cache reflects reality, not optimism
         client.ping()
-        _redis_client = client
-        return client
     except Exception as exc:
         logger.warning(
-            "rate_limit: Redis unavailable, failing open: %s", type(exc).__name__
+            "rate_limit: Redis unavailable, counting in process: %s", type(exc).__name__
         )
-        _redis_client = False
+        back_off_redis()
         return None
+    _redis_client = client
+    return client
+
+
+def back_off_redis() -> None:
+    """Drop the cached client and don't reconnect for REDIS_RETRY_SECONDS."""
+    global _redis_client, _redis_retry_at
+    _redis_client = None
+    _redis_retry_at = time.monotonic() + REDIS_RETRY_SECONDS
 
 
 def reset_cache() -> None:
-    """Clear the cached Redis client. Used by tests."""
-    global _redis_client
+    """Forget the cached Redis client, the retry delay and the in-process counts."""
+    global _redis_client, _redis_retry_at
     _redis_client = None
+    _redis_retry_at = 0.0
+    local_limiter.storage.reset()
+
+
+def check_local_rate_limit(key: str, limit: int, window_seconds: int) -> bool:
+    """check_rate_limit's in-process counter, used while Redis is unavailable."""
+    return local_limiter.hit(RateLimitItemPerSecond(limit, window_seconds), "rl", key)
 
 
 def check_rate_limit(key: str, limit: int, window_seconds: int) -> bool:
@@ -94,14 +114,14 @@ def check_rate_limit(key: str, limit: int, window_seconds: int) -> bool:
     instant. Cheaper than a true sliding window and adequate for login
     throttling — the worst case is 2x the limit at the window boundary.
 
-    Fails open: any Redis error counts as "allowed" so an outage doesn't
-    take auth offline.
+    While Redis is unavailable, or on any Redis error, the request is counted
+    in this process instead.
     """
     if not settings.API_RATE_LIMIT_ENABLED:
         return True
     client = rate_limit_redis()
     if client is None:
-        return True
+        return check_local_rate_limit(key, limit, window_seconds)
     bucket = int(time.time()) // window_seconds
     redis_key = f"rl:{key}:{bucket}"
     try:
@@ -112,9 +132,10 @@ def check_rate_limit(key: str, limit: int, window_seconds: int) -> bool:
         return int(count) <= limit
     except Exception as exc:
         logger.warning(
-            "rate_limit: Redis op failed, failing open: %s", type(exc).__name__
+            "rate_limit: Redis op failed, counting in process: %s", type(exc).__name__
         )
-        return True
+        back_off_redis()
+        return check_local_rate_limit(key, limit, window_seconds)
 
 
 def check_rate_limit_spec(key: str, spec: str) -> bool:
@@ -181,21 +202,27 @@ def rate_limit_key(request: "Request") -> str:
 
 def rate_limit_reached(key: str, spec: str) -> bool:
     """Whether ``key``'s current window is already full, without counting a hit.
-    Fails open like check_rate_limit."""
+    Reads the in-process count while Redis is unavailable, as check_rate_limit
+    counts there then."""
     if not settings.API_RATE_LIMIT_ENABLED:
         return False
+    limit, window = parse_limit(spec)
     client = rate_limit_redis()
     if client is None:
-        return False
-    limit, window = parse_limit(spec)
+        return local_limit_reached(key, limit, window)
     redis_key = f"rl:{key}:{int(time.time()) // window}"
     try:
         # redis-py types sync and async results together.
         count = cast("bytes | None", client.get(redis_key))
     except Exception as exc:
-        logger.warning("rate_limit: Redis op failed, failing open: %s", type(exc).__name__)
-        return False
+        logger.warning("rate_limit: Redis op failed, reading in process: %s", type(exc).__name__)
+        back_off_redis()
+        return local_limit_reached(key, limit, window)
     return int(count or 0) >= limit
+
+
+def local_limit_reached(key: str, limit: int, window_seconds: int) -> bool:
+    return not local_limiter.test(RateLimitItemPerSecond(limit, window_seconds), "rl", key)
 
 
 def remember(key: str, ttl_seconds: int) -> None:
@@ -207,6 +234,7 @@ def remember(key: str, ttl_seconds: int) -> None:
         client.set(f"rl-mark:{key}", 1, ex=ttl_seconds)
     except Exception as exc:
         logger.warning("rate_limit: Redis op failed: %s", type(exc).__name__)
+        back_off_redis()
 
 
 def remembered(key: str) -> bool:
@@ -217,4 +245,5 @@ def remembered(key: str) -> bool:
         return bool(client.exists(f"rl-mark:{key}"))
     except Exception as exc:
         logger.warning("rate_limit: Redis op failed: %s", type(exc).__name__)
+        back_off_redis()
         return False

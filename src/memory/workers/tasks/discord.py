@@ -43,7 +43,17 @@ from memory.common.content_processing import (
     process_content_item,
 )
 from memory.common.jobs import tracked_task
-from memory.discord.rest import BotAccess, DiscordAPIError, DiscordRest, bot_access, token_channel
+from memory.discord.rest import (
+    MAX_RETRIES,
+    PAGE_SIZE,
+    RATE_LIMITED,
+    TRANSPORT_FAILED,
+    BotAccess,
+    DiscordAPIError,
+    DiscordRest,
+    bot_access,
+    token_channel,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -341,11 +351,15 @@ def delete_discord_messages(message_ids: list[int], bot_ids: list[int] | None = 
             for m in session.query(DiscordMessage).filter(DiscordMessage.message_id.in_(message_ids)).all()
             if bot_ids is None or discord_events.may_change(session, m, set(bot_ids))
         ]
-        for message in messages:
-            clear_item_chunks(message, session)
-            session.delete(message)
-        session.commit()
-        return {"status": "deleted", "deleted": len(messages)}
+        return remove_messages(session, messages)
+
+
+def remove_messages(session: DBSession, messages: list[DiscordMessage]) -> dict[str, Any]:
+    for message in messages:
+        clear_item_chunks(message, session)
+        session.delete(message)
+    session.commit()
+    return {"status": "deleted", "deleted": len(messages)}
 
 
 # Discord's error code for a message that doesn't exist; 404s for an unknown channel keep the messages.
@@ -353,7 +367,7 @@ UNKNOWN_MESSAGE = 10008
 
 
 async def read_messages(
-    access: BotAccess, targets: list[tuple[int, int, int]]
+    access: BotAccess, targets: list[tuple[int, int, int]], retries: int = MAX_RETRIES
 ) -> tuple[dict[int, dict | None], DiscordAPIError | None]:
     """Each (item id, channel id, message id) as the token reads it, in
     order: None for one Discord says doesn't exist, left out for one it
@@ -362,7 +376,7 @@ async def read_messages(
     dropped connection), which is returned with what was read before it."""
     read: dict[int, dict | None] = {}
     unreachable: set[int] = set()
-    async with DiscordRest(access) as rest:
+    async with DiscordRest(access, retries=retries) as rest:
         for item_id, channel_id, message_id in targets:
             if channel_id in unreachable:
                 continue
@@ -465,6 +479,164 @@ def apply_reads(read: dict[int, dict | None]) -> tuple[int, int]:
     return deleted, rewritten
 
 
+# A pushed event Discord can't confirm just now is retried this many times, this many seconds times the attempt apart.
+PUSH_RETRIES = 5
+PUSH_RETRY_SECONDS = 60
+# Pages of users read per emoji when refreshing a message's reactions.
+REACTOR_PAGES = 10
+
+
+class PushNotReady(Exception):
+    """A pushed event can't be applied yet: Discord can't serve its read-back
+    just now, or the message it reacts to isn't stored yet."""
+
+
+def is_transient(error: DiscordAPIError) -> bool:
+    """A rate limit, server error or dropped connection: Discord may answer later."""
+    return error.status in (RATE_LIMITED, TRANSPORT_FAILED) or error.status >= 500
+
+
+def read_as_bot(bot_id: int, targets: list[tuple[int, int, int]]) -> dict[int, dict | None]:
+    """``read_messages`` with this bot's own token, one try each; nothing
+    without API access. PushNotReady when Discord can't answer now."""
+    access = access_of(bot_id)
+    if access is None:
+        return {}
+    read, stopped = asyncio.run(read_messages(access, targets, retries=0))
+    if stopped is not None and is_transient(stopped):
+        raise PushNotReady(f"Discord API error {stopped.status}")
+    return read
+
+
+def is_message(data: Any, channel_id: int, message_id: int) -> bool:
+    """Whether a read is a complete message object for this message id in this channel."""
+    if not (discord_events.well_formed(data) and discord_events.is_full_message(data)):
+        return False
+    return (
+        discord_events.snowflake(data.get("id")) == message_id
+        and discord_events.snowflake(data.get("channel_id")) == channel_id
+        and discord_events.is_snowflake(data["author"].get("id"))
+    )
+
+
+def read_pushed_message(bot_id: int, channel_id: int, message_id: int) -> dict | None:
+    """The message a push names, as the pushing bot's own token reads it from
+    Discord; None when that token can't read it or Discord has no such message."""
+    found = read_as_bot(bot_id, [(message_id, channel_id, message_id)]).get(message_id)
+    return found if is_message(found, channel_id, message_id) else None
+
+
+def delete_confirmer(message: DiscordMessage, pusher_id: int, bot_ids: set[int]) -> int | None:
+    """The bot whose token must confirm a pushed delete of this message: the
+    pusher when its owner's bot delivered it, else the bot that did, else the
+    one holding its channel (its server's verified bot, or the DM's). None
+    when there is no such bot: Discord showing a message to one bot and not
+    another mustn't let the other delete it."""
+    if message.bot_id in bot_ids:
+        return pusher_id
+    if message.bot_id is not None:
+        return message.bot_id
+    channel = message.channel
+    if channel is None:
+        return None
+    if channel.server is not None:
+        return channel.server.bot_id if channel.server.verified else None
+    return channel.bot_id
+
+
+def delete_targets(session: DBSession, pusher_id: int, bot_ids: set[int], message_ids: list[int]) -> dict[int, list]:
+    """The stored messages these bots may change, as (item id, channel id,
+    message id) per bot that must confirm their deletion."""
+    targets: dict[int, list] = {}
+    for message in session.query(DiscordMessage).filter(DiscordMessage.message_id.in_(message_ids)):
+        if not discord_events.may_change(session, message, bot_ids):
+            continue
+        confirmer = delete_confirmer(message, pusher_id, bot_ids)
+        if confirmer is not None:
+            targets.setdefault(confirmer, []).append((message.id, message.channel_id, message.message_id))
+    return targets
+
+
+def delete_pushed(pusher_id: int, bot_ids: set[int], message_ids: list[int]) -> dict[str, Any]:
+    """A pushed delete: each stored message these bots may change is deleted
+    once Discord tells ``delete_confirmer``'s token it has no such message.
+    One that token still reads, or can't read, stays."""
+    with make_session() as session:
+        targets = delete_targets(session, pusher_id, bot_ids, message_ids)
+    gone = [
+        item_id
+        for confirmer, items in targets.items()
+        for item_id, found in read_as_bot(confirmer, items).items()
+        if found is None
+    ]
+    with make_session() as session:
+        return remove_messages(session, session.query(DiscordMessage).filter(DiscordMessage.id.in_(gone)).all())
+
+
+async def reactors(rest: DiscordRest, channel_id: int, message_id: int, emoji: str) -> list[str]:
+    users: list[str] = []
+    after = None
+    for _ in range(REACTOR_PAGES):
+        page = await rest.reaction_users(channel_id, message_id, emoji, after=after)
+        ids = [str(user["id"]) for user in page if isinstance(user, dict) and discord_events.is_snowflake(user.get("id"))]
+        users += ids
+        if len(page) < PAGE_SIZE or not ids:
+            return users
+        after = int(ids[-1])
+    return users
+
+
+async def fetch_reactions(access: BotAccess, channel_id: int, message_id: int) -> Reactions:
+    async with DiscordRest(access, retries=0) as rest:
+        message = await rest.get(f"/channels/{channel_id}/messages/{message_id}")
+        listed = message.get("reactions") if isinstance(message, dict) else None
+        emojis = [discord_events.emoji_key(r.get("emoji")) for r in listed or [] if isinstance(r, dict)]
+        return {emoji: await reactors(rest, channel_id, message_id, emoji) for emoji in emojis if emoji}
+
+
+def read_reactions(bot_id: int, channel_id: int, message_id: int) -> Reactions | None:
+    """A message's reactions, by user, as the bot's own token reads them; None
+    when it can't read the message. PushNotReady when Discord can't answer now."""
+    access = access_of(bot_id)
+    if access is None:
+        return None
+    try:
+        return asyncio.run(fetch_reactions(access, channel_id, message_id))
+    except DiscordAPIError as e:
+        if is_transient(e):
+            raise PushNotReady(f"Discord API error {e.status}") from e
+        return None
+
+
+def refresh_reactions(bot_id: int, bot_ids: set[int], message_id: int) -> dict[str, Any]:
+    """A pushed reaction event: the message's reactions are stored as the
+    pusher's token reads them from Discord, so the push only says which
+    message to refresh. One these bots may not change is ignored; one not
+    stored yet is retried, as its create may still be on its way."""
+    with make_session() as session:
+        exists = session.query(DiscordMessage.id).filter(DiscordMessage.message_id == message_id).first()
+        message = find_message(session, message_id, bot_ids)
+        if message is None and exists:
+            return {"status": "ignored", "message_id": message_id}
+        if message is None:
+            raise PushNotReady("message not stored")
+        channel_id = message.channel_id
+    reactions = read_reactions(bot_id, channel_id, message_id)
+    if reactions is None:
+        logger.info("Discord bot %s can't read message %s it pushed a reaction for; ignored", bot_id, message_id)
+        return {"status": "ignored", "message_id": message_id}
+    try:
+        with make_session() as session:
+            message = find_message(session, message_id, None, lock=True)
+            if message is None:
+                return {"status": "not_found", "message_id": message_id}
+            message.reactions = reactions
+            session.commit()
+    except sqlalchemy_exc.OperationalError as e:
+        raise PushNotReady("lock conflict") from e
+    return {"status": "updated", "message_id": message_id}
+
+
 REACTION_EVENTS: dict[str, ReactionAction] = {
     "MESSAGE_REACTION_ADD": "add",
     "MESSAGE_REACTION_REMOVE": "remove",
@@ -515,10 +687,17 @@ def store_message(bot: DiscordBot, bot_ids: set[int], data: dict, is_edit: bool,
     who shares a server with the bot; a new server channel only once the
     token reads it in the pushed server, and as the token lists it. A push
     naming no server is about its stored channel's server, if that has one:
-    only unknown channel ids cost a REST call. The gateway starts DMs
-    itself, so an edit it relays never does. The message is filed under its
-    stored channel's server, never the one a payload names."""
-    channel_id = int(data["channel_id"])
+    only unknown channel ids cost a REST call before the message itself is
+    read. The gateway starts DMs itself, so an edit it relays never does. The
+    message is filed under its stored channel's server, never the one a
+    payload names.
+
+    A signed push proves only which bot sent it, so of a pushed message only
+    its id and channel are taken: it is read back with the bot's own token
+    and stored as Discord returns it, and dropped when that token can't read
+    it. A pushed create of a message already stored changes nothing, so it
+    isn't read."""
+    channel_id, message_id = int(data["channel_id"]), int(data["id"])
     guild_id = discord_events.snowflake(data.get("guild_id"))
     with make_session() as session:
         existing = session.get(DiscordChannel, channel_id)
@@ -528,6 +707,9 @@ def store_message(bot: DiscordBot, bot_ids: set[int], data: dict, is_edit: bool,
             data = data | {"guild_id": str(guild_id)}
         # Checked before the token is asked as well as after: a refused push mustn't cost a REST call.
         refusal = pushed and guild_id is not None and discord_events.push_refusal(session, channel_id, guild_id, bot_ids)
+        known = pushed and not is_edit and find_message(session, message_id, None)
+        if not refusal and known:
+            return create_task_result(known, "already_exists", message_id=message_id)
     if refusal:
         return {"status": "skipped", "reason": refusal}
     if guild_id is None and new and not pushed:
@@ -538,6 +720,12 @@ def store_message(bot: DiscordBot, bot_ids: set[int], data: dict, is_edit: bool,
     listed = read_server_channel(bot.id, channel_id, guild_id) if pushed and guild_id is not None and new else None
     if pushed and guild_id is not None and new and listed is None:
         return {"status": "skipped", "reason": "unconfirmed_channel"}
+    if pushed:
+        read = read_pushed_message(bot.id, channel_id, message_id)
+        if read is None:
+            return {"status": "skipped", "reason": "unconfirmed_message"}
+        # A message read by REST names no server; the pushed one was checked above.
+        data = read | {"guild_id": data.get("guild_id")}
     with make_session() as session:
         if dm is not None:
             recipients = [int(r["id"]) for r in dm.get("recipients") or []]
@@ -562,14 +750,18 @@ def store_message(bot: DiscordBot, bot_ids: set[int], data: dict, is_edit: bool,
 
 def update_message(bot: DiscordBot, bot_ids: set[int], data: dict, pushed: bool) -> dict[str, Any]:
     """A MESSAGE_UPDATE: an edit when it carries content. An update for a
-    message not stored yet stores it if the payload is complete, else is dropped."""
+    message not stored yet stores it if the payload is complete, else is
+    dropped. A pushed edit is read back (``store_message``), from the stored
+    message's channel when the push names none."""
     if "content" not in data:
         return {"status": "ignored"}
     message_id = int(data["id"])
     with make_session() as session:
-        stored = session.query(DiscordMessage.id).filter(DiscordMessage.message_id == message_id).first()
+        stored = session.query(DiscordMessage.channel_id).filter(DiscordMessage.message_id == message_id).first()
         if stored and find_message(session, message_id, bot_ids) is None:
             return {"status": "ignored"}
+    if pushed and stored:
+        return store_message(bot, bot_ids, {"channel_id": str(stored.channel_id)} | data, is_edit=True, pushed=True)
     if discord_events.is_full_message(data):
         return store_message(bot, bot_ids, data, is_edit=True, pushed=pushed)
     if not stored:
@@ -581,23 +773,28 @@ def update_message(bot: DiscordBot, bot_ids: set[int], data: dict, pushed: bool)
 PUSH_REFUSALS = frozenset(
     {
         "guild_mismatch", "no_server", "not_owner", "not_member",
-        "held_by_other", "unconfirmed_dm", "unconfirmed_channel", "malformed",
+        "held_by_other", "unconfirmed_dm", "unconfirmed_channel", "unconfirmed_message", "malformed",
     }
 )
 
 
-@app.task(name=HANDLE_DISCORD_EVENT)
+@app.task(name=HANDLE_DISCORD_EVENT, bind=True, max_retries=PUSH_RETRIES)
 @tracked_task
-def handle_discord_event(bot_id: int, event_type: str, data: dict, pushed: bool = True) -> dict[str, Any]:
+def handle_discord_event(self, bot_id: int, event_type: str, data: dict, pushed: bool = True) -> dict[str, Any]:
     """Apply one gateway event, ``pushed`` to a bot's events endpoint unless
     the gateway collector says it relayed it.
 
     Every branch is idempotent: Discord retries deliveries and doesn't order
     them. The bot's key only proves its owner sent a pushed event, so edits,
-    deletes and reactions only touch messages that owner's bots may change.
-    A push it refuses (``PUSH_REFUSALS``) marks its delivery rejected.
+    deletes and reactions only touch messages that owner's bots may change,
+    and are applied as Discord confirms them to a bot's own token; a push
+    Discord can't confirm just now is retried (``PushNotReady``). A push it
+    refuses (``PUSH_REFUSALS``) marks its delivery rejected.
     """
-    result = apply_discord_event(bot_id, event_type, data, pushed)
+    try:
+        result = apply_discord_event(bot_id, event_type, data, pushed)
+    except PushNotReady as e:
+        raise self.retry(exc=e, countdown=PUSH_RETRY_SECONDS * (self.request.retries + 1))
     if pushed and result.get("status") == "skipped" and result.get("reason") in PUSH_REFUSALS:
         with make_session() as session:
             reject_raw_event(session, CAUSING_EVENT.get())
@@ -632,11 +829,13 @@ def apply_discord_event(bot_id: int, event_type: str, data: dict, pushed: bool) 
         return store_message(bot, bot_ids, data, is_edit=False, pushed=pushed)
     if event_type == "MESSAGE_UPDATE":
         return update_message(bot, bot_ids, data, pushed)
-    if event_type == "MESSAGE_DELETE":
-        return delete_discord_messages([int(data["id"])], sorted(bot_ids))
-    if event_type == "MESSAGE_DELETE_BULK":
-        return delete_discord_messages([int(i) for i in data.get("ids", [])], sorted(bot_ids))
+    if event_type in ("MESSAGE_DELETE", "MESSAGE_DELETE_BULK") and pushed:
+        return delete_pushed(bot.id, bot_ids, message_ids(event_type, data))
+    if event_type in ("MESSAGE_DELETE", "MESSAGE_DELETE_BULK"):
+        return delete_discord_messages(message_ids(event_type, data), sorted(bot_ids))
 
+    if event_type in REACTION_EVENTS and pushed:
+        return refresh_reactions(bot.id, bot_ids, int(data["message_id"]))
     if action := REACTION_EVENTS.get(event_type):
         user_id = data.get("user_id")
         return update_reactions(

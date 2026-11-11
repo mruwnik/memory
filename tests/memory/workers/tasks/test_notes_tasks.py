@@ -16,7 +16,9 @@ from memory.common.db.models.source_item import Chunk
 from memory.workers.tasks import notes
 from memory.common.content_processing import create_content_hash
 from memory.common import notes_git, settings
+from sqlalchemy import text as sql_text
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm.attributes import set_committed_value
 
 
 def _make_mock_chunk(source_id: int) -> Chunk:
@@ -406,13 +408,9 @@ def test_note_save_to_file_rejects_traversal_filename(tmp_path):
     notes_dir.mkdir(exist_ok=True)
     sentinel = tmp_path / "should-not-exist.md"
 
-    note = Note(
-        modality="text",
-        mime_type="text/markdown",
-        subject="poc",
-        content="malicious",
-        filename="notes/../should-not-exist.md",  # escapes notes_dir
-    )
+    note = Note(modality="text", mime_type="text/markdown", subject="poc", content="malicious")
+    # The model refuses such a filename; a row stored before the check could hold one.
+    set_committed_value(note, "filename", "notes/../should-not-exist.md")
 
     with (
         patch.object(settings, "FILE_STORAGE_DIR", tmp_path),
@@ -1578,10 +1576,14 @@ def add_raw_note(db_session, filename: str, on_disk: bool = True) -> Note:
         modality="text",
         mime_type="text/markdown",
         size=1,
-        filename=filename,
         chunks=[_make_mock_chunk(0)],
     )
+    set_committed_value(note, "filename", filename)
     db_session.add(note)
+    db_session.flush()
+    db_session.execute(
+        sql_text("UPDATE source_item SET filename = :f WHERE id = :id"), {"f": filename, "id": note.id}
+    )
     db_session.commit()
     if on_disk:
         path = settings.FILE_STORAGE_DIR / filename

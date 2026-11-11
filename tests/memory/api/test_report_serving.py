@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from memory.common import settings
-from memory.common.db.models import Report, SourceItem
+from memory.common.db.models import Photo, Report
 
 
 # === Serving endpoint tests ===
@@ -192,13 +192,11 @@ def test_serve_report_non_html_active_types_are_attachments(
 
 
 def test_serve_file_download_forces_attachment(client: TestClient, db_session):
-    (settings.FILE_STORAGE_DIR / "pic.png").write_bytes(b"\x89PNG fake")
-    db_session.add(
-        SourceItem(modality="photo", filename="pic.png", sha256=b"\x07" * 32)
-    )
+    (settings.PHOTO_STORAGE_DIR / "pic.png").write_bytes(b"\x89PNG fake")
+    db_session.add(Photo(modality="photo", filename="photos/pic.png", sha256=b"\x07" * 32))
     db_session.commit()
 
-    response = client.get("/files/pic.png?download=true")
+    response = client.get("/files/photos/pic.png?download=true")
 
     assert response.status_code == 200, response.text
     assert response.headers["content-disposition"].startswith("attachment")

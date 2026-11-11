@@ -9,16 +9,14 @@ uses ``max_ingest_bytes()`` as the read cap and routes when the bytes arrive.
 
 Rules, in order:
   1. image (PIL can decode it, or declared image/*)      -> Photo
-  2. PDF (``%PDF`` magic / PyMuPDF reports a PDF format)     -> MiscDoc
-  3. PyMuPDF opens it as a paginated document (epub/mobi/…)  -> Book
-  4. anything else                                        -> MiscDoc
+  2. EPUB or MOBI/AZW header                              -> Book
+  3. anything else, PDFs included                         -> MiscDoc
 """
 
 import io
 import pathlib
 from dataclasses import dataclass
 
-import pymupdf  # same parser the ebook task uses
 from PIL import Image
 
 from memory.common import settings
@@ -75,28 +73,29 @@ def is_image_bytes(content: bytes) -> bool:
         return False
 
 
-def is_ebook_bytes(content: bytes) -> bool:
-    """True if PyMuPDF opens the bytes as a non-PDF paginated document.
+EPUB_MIMETYPE = b"application/epub+zip"
+# A PalmDB header's type and creator, at offset 60: MOBI, AZW and AZW3 books.
+MOBI_SIGNATURE = b"BOOKMOBI"
 
-    PDFs open fine but are routed to MiscDoc, so they're excluded by both the
-    magic prefix and the reported format. (PyMuPDF also opens SVG/XPS/CBZ, which
-    are niche false-positives here; the common text/office/archive types fail
-    to open from a stream and correctly fall through to MiscDoc.)
+
+def is_epub(content: bytes) -> bool:
+    """An EPUB is a zip whose first entry is an uncompressed ``mimetype`` file
+    holding ``application/epub+zip`` (EPUB OCF), so its local header says so."""
+    return (
+        content.startswith(b"PK\x03\x04")
+        and content[30:38] == b"mimetype"
+        and content[38:38 + len(EPUB_MIMETYPE)] == EPUB_MIMETYPE
+    )
+
+
+def is_ebook_bytes(content: bytes) -> bool:
+    """True if the bytes start like an EPUB or a MOBI/AZW book.
+
+    Decided from the header alone: opening the document with PyMuPDF lays out
+    every chapter, unbounded in time and memory, and this runs in the API.
+    The book worker does the parsing.
     """
-    if content[:5].startswith(b"%PDF"):
-        return False
-    try:
-        doc = pymupdf.open(stream=content)
-    except Exception:
-        return False
-    try:
-        fmt = (doc.metadata or {}).get("format") or ""
-        pages = doc.page_count
-    finally:
-        doc.close()
-    if fmt.upper().startswith("PDF"):
-        return False
-    return pages > 0
+    return is_epub(content) or content[60:68] == MOBI_SIGNATURE
 
 
 def detect_bucket(declared_type: str, content: bytes) -> BucketSpec:

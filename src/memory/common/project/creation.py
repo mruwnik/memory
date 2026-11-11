@@ -141,7 +141,7 @@ def find_existing_project_by_repo(
     # Look up repo in database
     repo_obj = (
         session.query(GithubRepo)
-        .filter(GithubRepo.owner == owner, GithubRepo.name == repo_name)
+        .filter(_client.repo_name_matches(owner, repo_name))
         .first()
     )
     if not repo_obj:

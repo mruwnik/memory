@@ -523,6 +523,7 @@ def test_process_images_basic(mock_process_image):
     for i in range(3):
         mock_img = MagicMock(spec=PILImage.Image)
         mock_img.filename = str(settings.WEBPAGE_STORAGE_DIR / f"image{i + 1}.jpg")
+        pathlib.Path(mock_img.filename).write_bytes(b"img")
         mock_images.append(mock_img)
 
     mock_process_image.side_effect = mock_images
@@ -573,6 +574,7 @@ def test_process_images_with_failures(mock_process_image):
     # First image succeeds, second fails
     mock_good_image = MagicMock(spec=PILImage.Image)
     mock_good_image.filename = settings.WEBPAGE_STORAGE_DIR / "good.jpg"
+    mock_good_image.filename.write_bytes(b"img")
     mock_process_image.side_effect = [mock_good_image, None]
 
     updated_content, images = process_images(
@@ -890,3 +892,33 @@ class TestBaseHTMLParser:
         assert "test_image.jpg" in article.images
         assert article.images["test_image.jpg"] == mock_image
         mock_process_images.assert_called_once()
+
+
+def stored_image(name: str, size: int) -> MagicMock:
+    image = MagicMock(spec=PILImage.Image)
+    image.filename = str(settings.WEBPAGE_STORAGE_DIR / name)
+    pathlib.Path(image.filename).write_bytes(b"x" * size)
+    return image
+
+
+@pytest.mark.parametrize(
+    "max_images, max_bytes, fetched",
+    [
+        (2, 10_000, 2),  # count cap
+        (10, 2_500, 3),  # stops once the stored total reaches the byte cap
+        (10, 10_000, 5),
+    ],
+)
+@patch("memory.parsers.html.process_image")
+def test_process_images_caps_images_per_document(mock_process_image, max_images, max_bytes, fetched):
+    mock_process_image.side_effect = [stored_image(f"i{n}.jpg", 1000) for n in range(5)]
+    html = "<div>" + "".join(f'<img src="i{n}.jpg">' for n in range(5)) + "</div>"
+    content = cast(Tag, BeautifulSoup(html, "html.parser").find("div"))
+
+    with (
+        patch.object(settings, "MAX_DOCUMENT_IMAGES", max_images),
+        patch.object(settings, "MAX_DOCUMENT_IMAGE_BYTES", max_bytes),
+    ):
+        _, images = process_images(content, "https://example.com", settings.WEBPAGE_STORAGE_DIR)
+
+    assert (len(images), mock_process_image.call_count) == (fetched, fetched)

@@ -4,16 +4,18 @@ import imaplib
 import ssl
 import logging
 import re
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Callable, Generator, Iterable, Sequence, cast
+from collections.abc import Buffer as ReadableBuffer
+from typing import Callable, Generator, Iterable, Iterator, Sequence, cast
 
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from sqlalchemy.orm import Session, object_session, scoped_session
 
-from memory.common import collections, embedding, paths, settings
+from memory.common import collections, embedding, mail_connect, paths, settings
 from memory.common.content_processing import (
     chunk_ids_by_collection,
     delete_vectors,
@@ -132,6 +134,7 @@ def create_mail_message(
         recipients=parsed_email["recipients"],
         sent_at=parsed_email["sent_at"],
         content=raw_email,
+        parsed_body=parsed_email["body"],
         folder=folder,
         email_account_id=email_account_id,
         imap_uid=imap_uid,
@@ -215,30 +218,53 @@ def fetch_email(conn: imaplib.IMAP4, uid: str) -> RawEmailResponse | None:
         return None
 
 
-def fetch_email_since(
-    conn: imaplib.IMAP4,
-    folder: str,
-    since_date: datetime = datetime(1970, 1, 1),
-) -> tuple[list[RawEmailResponse], int]:
-    """
-    Fetch the emails a folder received on or after ``since_date``'s day.
-
-    Args:
-        conn: IMAP connection
-        folder: Folder name to select
-        since_date: Fetch emails since this date (IMAP SEARCH ignores the time)
-
-    Returns:
-        The (uid, raw_email, received_at) tuples fetched, and how many found
-        messages couldn't be fetched.
+def folder_uids_since(conn: imaplib.IMAP4, folder: str, since_date: datetime) -> list[str]:
+    """UIDs of the messages ``folder`` received on or after ``since_date``'s day
+    (IMAP SEARCH ignores the time).
 
     Raises:
         FolderUidsError: if the folder can't be selected or searched.
     """
-    uids = search_folder(conn, folder, f'(SINCE "{since_date.strftime("%d-%b-%Y")}")')
-    fetched = [fetch_email(conn, uid) for uid in uids]
-    emails = [email for email in fetched if email]
-    return emails, len(fetched) - len(emails)
+    return search_folder(conn, folder, f'(SINCE "{since_date.strftime("%d-%b-%Y")}")')
+
+
+SIZED_UID_PATTERN = re.compile(rb"UID (\d+)")
+SIZE_PATTERN = re.compile(rb"RFC822\.SIZE (\d+)")
+# UIDs per size FETCH, keeping the command line short for servers that cap it.
+SIZE_BATCH = 500
+
+
+def oversized_uids(conn: imaplib.IMAP4, uids: list[str]) -> set[str]:
+    """The ``uids`` whose RFC822.SIZE exceeds MAX_EMAIL_BYTES. A size answer
+    carries no literal, so one is refused. A batch the server won't size is
+    fetched anyway, under the response cap of the connection."""
+    oversized: set[str] = set()
+    for start in range(0, len(uids), SIZE_BATCH):
+        batch = ",".join(uids[start:start + SIZE_BATCH])
+        try:
+            with refusing_literals(conn):
+                status, data = conn.uid("FETCH", batch, "(UID RFC822.SIZE)")
+        except (imaplib.IMAP4.error, OSError):
+            logger.warning("IMAP server refused a size FETCH")
+            continue
+        if status != "OK":
+            continue
+        for line in data:
+            if not isinstance(line, bytes):
+                continue
+            uid, size = SIZED_UID_PATTERN.search(line), SIZE_PATTERN.search(line)
+            if uid and size and int(size.group(1)) > settings.MAX_EMAIL_BYTES:
+                oversized.add(uid.group(1).decode())
+    return oversized
+
+
+def fetch_emails(conn: imaplib.IMAP4, uids: list[str]) -> Iterator[RawEmailResponse | None]:
+    """Fetch each of ``uids`` in turn: None for one that couldn't be fetched or
+    is larger than MAX_EMAIL_BYTES."""
+    oversized = oversized_uids(conn, uids)
+    if oversized:
+        logger.warning("Skipping %d messages over MAX_EMAIL_BYTES", len(oversized))
+    return (None if uid in oversized else fetch_email(conn, uid) for uid in uids)
 
 
 # The response code at the start of a tagged NO, e.g. b"[NONEXISTENT] No such mailbox"
@@ -316,7 +342,7 @@ def process_folder(
         which is not counted in ``errors``.
     """
     try:
-        emails, unfetched = fetch_email_since(conn, folder, since_date)
+        uids = folder_uids_since(conn, folder, since_date)
     except FolderUnavailableError:
         logger.warning(f"Account {account.id} lists a folder the server won't open")
         return {"messages_found": 0, "new_messages": 0, "errors": 0, "unavailable": True}
@@ -324,8 +350,12 @@ def process_folder(
         logger.exception(f"Could not read a folder of account {account.id}")
         return {"messages_found": 0, "new_messages": 0, "errors": 1, "unavailable": False}
 
-    new_messages, errors = 0, unfetched
-    for uid, raw_email, received_at in emails:
+    new_messages, errors = 0, 0
+    for fetched in fetch_emails(conn, uids):
+        if fetched is None:
+            errors += 1
+            continue
+        uid, raw_email, received_at = fetched
         try:
             task = processor(
                 account_id=account.id,  # type: ignore
@@ -341,23 +371,99 @@ def process_folder(
             errors += 1
 
     return {
-        "messages_found": len(emails) + unfetched,
+        "messages_found": len(uids),
         "new_messages": new_messages,
         "errors": errors,
         "unavailable": False,
     }
 
 
+class CappedResponses:
+    """Bound what the server can make imaplib buffer or wait for.
+
+    One command's response, lines and literals together, may be at most
+    MAX_EMAIL_BYTES and must arrive within IMAP_COMMAND_TIMEOUT_SEC; each read
+    waits no longer than what is left of that. The budget restarts with each
+    command sent, after leftover untagged responses are dropped (imaplib reads
+    a command's own responses right after it). The whole connection may
+    receive at most MAX_IMAP_CONNECTION_BYTES. A literal is refused before it
+    is read, from the size the server announces.
+    """
+
+    response_bytes = 0
+    connection_bytes = 0
+    deadline: float | None = None
+    refuse_literals = False
+
+    def send(self, data: ReadableBuffer) -> None:
+        self.untagged_responses.clear()  # type: ignore[attr-defined]
+        self.response_bytes = 0
+        self.deadline = time.monotonic() + settings.IMAP_COMMAND_TIMEOUT_SEC
+        super().send(data)  # type: ignore[misc]
+
+    def read(self, size: int) -> bytes:
+        if self.refuse_literals:
+            raise imaplib.IMAP4.abort("server sent a literal where none was expected")
+        self.count_response(size)
+        self.bound_wait()
+        return super().read(size)  # type: ignore[misc]
+
+    def readline(self) -> bytes:
+        self.bound_wait()
+        line = super().readline()  # type: ignore[misc]
+        self.count_response(len(line))
+        return line
+
+    def bound_wait(self) -> None:
+        """Let the next read wait no longer than the command has left."""
+        timeout = settings.REMOTE_SERVER_TIMEOUT_SEC
+        if self.deadline is not None:
+            timeout = min(timeout, self.deadline - time.monotonic())
+        self.sock.settimeout(max(0.1, timeout))  # type: ignore[attr-defined]
+
+    def count_response(self, size: int) -> None:
+        self.response_bytes += size
+        self.connection_bytes += size
+        if self.response_bytes > settings.MAX_EMAIL_BYTES:
+            raise imaplib.IMAP4.abort("server response is over MAX_EMAIL_BYTES")
+        if self.connection_bytes > settings.MAX_IMAP_CONNECTION_BYTES:
+            raise imaplib.IMAP4.abort("server sent over MAX_IMAP_CONNECTION_BYTES")
+        if self.deadline is not None and time.monotonic() > self.deadline:
+            raise imaplib.IMAP4.abort("server response took over IMAP_COMMAND_TIMEOUT_SEC")
+
+
+@contextmanager
+def refusing_literals(conn: imaplib.IMAP4) -> Generator[None, None, None]:
+    """Make a capped ``conn`` abort on any literal while the block runs."""
+    if not isinstance(conn, CappedResponses):
+        yield
+        return
+    conn.refuse_literals = True
+    try:
+        yield
+    finally:
+        conn.refuse_literals = False
+
+
+class CappedIMAP4(CappedResponses, mail_connect.PublicIMAP4):
+    pass
+
+
+class CappedIMAP4SSL(CappedResponses, mail_connect.PublicIMAP4SSL):
+    pass
+
+
 @contextmanager
 def imap_connection(account: EmailAccount) -> Generator[imaplib.IMAP4, None, None]:
     host = cast(str, account.imap_server)
     port = cast(int, account.imap_port)
+    timeout = settings.REMOTE_SERVER_TIMEOUT_SEC
     context = ssl.create_default_context()
     # Port 143 requires STARTTLS before any credentials are sent.
     if account.use_ssl is False:
-        conn: imaplib.IMAP4 = imaplib.IMAP4(host=host, port=port)
+        conn: imaplib.IMAP4 = CappedIMAP4(host=host, port=port, timeout=timeout)
     else:
-        conn = imaplib.IMAP4_SSL(host=host, port=port, ssl_context=context)
+        conn = CappedIMAP4SSL(host=host, port=port, ssl_context=context, timeout=timeout)
     try:
         if account.use_ssl is False:
             conn.starttls(ssl_context=context)

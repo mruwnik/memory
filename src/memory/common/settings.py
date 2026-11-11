@@ -157,6 +157,8 @@ SLACK_STORAGE_DIR = pathlib.Path(
 BEEPER_STORAGE_DIR = pathlib.Path(
     os.getenv("BEEPER_STORAGE_DIR", FILE_STORAGE_DIR / "beeper")
 )
+# A coding session's transcript file stops accepting events at this size.
+MAX_SESSION_TRANSCRIPT_BYTES = int(os.getenv("MAX_SESSION_TRANSCRIPT_BYTES", 256 * 1024 * 1024))
 SESSIONS_STORAGE_DIR = pathlib.Path(
     os.getenv("SESSIONS_STORAGE_DIR", FILE_STORAGE_DIR / "sessions")
 )
@@ -229,6 +231,14 @@ MAX_ATTACHMENT_EMBED_SIZE = int(
 # each page image (1.45MB for Letter, up to 6MB) is held until the item is
 # embedded, and a worker child has ~700MB.
 MAX_ATTACHMENT_EMBED_PAGES = int(os.getenv("MAX_ATTACHMENT_EMBED_PAGES", 50))
+# The same image-page cap for uploaded documents and PDF reports.
+MAX_DOC_EMBED_PAGES = int(os.getenv("MAX_DOC_EMBED_PAGES", 50))
+# Text chunks embedded per item on the server's Voyage key; past it, the first
+# chunks and the item's summary are kept.
+MAX_EMBEDDED_CHUNKS_PER_ITEM = int(os.getenv("MAX_EMBEDDED_CHUNKS_PER_ITEM", 500))
+# PDFs with more pages are not chunked at all: every page's text is extracted
+# and embedded on the server's Voyage key.
+MAX_PDF_PAGES = int(os.getenv("MAX_PDF_PAGES", 2000))
 
 # Qdrant settings
 QDRANT_HOST = os.getenv("QDRANT_HOST", "qdrant")
@@ -390,8 +400,21 @@ LOCALHOST_CORS_ORIGINS = [
 
 # API Rate limiting settings
 API_RATE_LIMIT_ENABLED = boolean_env("API_RATE_LIMIT_ENABLED", True)
-# Default rate limit: 100 requests per minute
+# Per-client limit on every API request (api/request_limits.py), except the
+# MCP endpoint and provider webhooks, which have their own budgets below.
 API_RATE_LIMIT_DEFAULT = os.getenv("API_RATE_LIMIT_DEFAULT", "100/minute")
+# /mcp: agents behind one address make many tool calls a minute.
+API_RATE_LIMIT_MCP = os.getenv("API_RATE_LIMIT_MCP", "1200/minute")
+# Signed webhook pushes (GitHub, Slack, Discord, transcripts) arrive from a
+# provider's few addresses on behalf of every account.
+API_RATE_LIMIT_WEBHOOKS = os.getenv("API_RATE_LIMIT_WEBHOOKS", "1000/minute")
+# Anonymous OAuth client registration and authorization requests each write a
+# row, so they get a tighter limit on top of the default.
+API_RATE_LIMIT_OAUTH_REGISTER = os.getenv("API_RATE_LIMIT_OAUTH_REGISTER", "20/hour")
+API_RATE_LIMIT_OAUTH_AUTHORIZE = os.getenv("API_RATE_LIMIT_OAUTH_AUTHORIZE", "10/minute")
+# OAuth clients that never completed a login are deleted this many days after
+# registering.
+OAUTH_UNUSED_CLIENT_DAYS = int(os.getenv("OAUTH_UNUSED_CLIENT_DAYS", 30))
 # Auth endpoints have stricter limits to prevent brute force.
 # Used by /oauth/login and /api/users/me/change-password — see
 # `memory.common.rate_limit`.
@@ -480,6 +503,38 @@ MAX_REPORT_UPLOAD_BYTES = int(
 )
 MAX_MISC_UPLOAD_BYTES = int(
     os.getenv("MAX_MISC_UPLOAD_BYTES", 100 * 1024 * 1024)
+)
+# An EPUB whose entries inflate past this in total is not parsed: MuPDF lays
+# its markup out in memory, roughly 50 bytes of worker RAM per byte, so a small
+# compressed upload can OOM a worker. Images count too, since any entry can hold
+# markup; raise it for image-heavy books if workers have the memory.
+MAX_EBOOK_INFLATED_BYTES = int(
+    os.getenv("MAX_EBOOK_INFLATED_BYTES", 10 * 1024 * 1024)
+)
+MAX_EBOOK_ZIP_ENTRIES = int(os.getenv("MAX_EBOOK_ZIP_ENTRIES", 10_000))
+# Images fetched for one web page or HTML report: <img> tags past the count,
+# or once the byte total is stored, keep their remote URLs.
+MAX_DOCUMENT_IMAGES = int(os.getenv("MAX_DOCUMENT_IMAGES", 100))
+MAX_DOCUMENT_IMAGE_BYTES = int(
+    os.getenv("MAX_DOCUMENT_IMAGE_BYTES", 50 * 1024 * 1024)
+)
+# Socket timeout for user-configured IMAP servers: a stalled server
+# would otherwise hold a worker until the task's time limit.
+REMOTE_SERVER_TIMEOUT_SEC = int(os.getenv("REMOTE_SERVER_TIMEOUT_SEC", 60))
+# An IMAP message larger than this is not downloaded, and no single IMAP
+# command's response may be larger.
+MAX_EMAIL_BYTES = int(os.getenv("MAX_EMAIL_BYTES", 64 * 1024 * 1024))
+# HTML (email bodies, fetched pages) is converted to markdown up to this many
+# characters; the rest only has its tags stripped. Conversion costs about
+# 10 µs and 100 bytes of RAM per character of tag-dense HTML.
+MAX_HTML_TO_MARKDOWN_CHARS = int(os.getenv("MAX_HTML_TO_MARKDOWN_CHARS", 150_000))
+# Wall-clock limit on one IMAP command's response, however steadily it trickles in.
+IMAP_COMMAND_TIMEOUT_SEC = int(os.getenv("IMAP_COMMAND_TIMEOUT_SEC", 600))
+# Bytes one IMAP connection (one account sync) may receive in all. A sync
+# re-downloads everything since its cutoff, and a first sync starts from the
+# beginning, so this must exceed the largest mailbox synced.
+MAX_IMAP_CONNECTION_BYTES = int(
+    os.getenv("MAX_IMAP_CONNECTION_BYTES", 16 * 1024 * 1024 * 1024)
 )
 # Max decoded base64 accepted inline through the add_content MCP tool; above
 # this the caller is handed a one-time upload URL instead of inlining bytes

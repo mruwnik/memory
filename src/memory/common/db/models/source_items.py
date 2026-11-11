@@ -118,6 +118,8 @@ class MailMessage(SourceItem):
     recipients: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     folder: Mapped[str | None] = mapped_column(Text)
+    # The body extracted at ingest; NULL on mail stored before it was kept.
+    parsed_body: Mapped[str | None] = mapped_column(Text, nullable=True)
     tsv: Mapped[Any | None] = mapped_column(TSVECTOR)
 
     # Sync tracking for deletion detection
@@ -205,6 +207,8 @@ class MailMessage(SourceItem):
 
     @property
     def body(self) -> str:
+        if self.parsed_body is not None:
+            return self.parsed_body
         return self.parsed_content["body"]
 
     def format_content(self, content: dict[str, Any]) -> str:
@@ -247,14 +251,11 @@ class MailMessage(SourceItem):
         }
 
     def _chunk_contents(self) -> Sequence[extract.DataChunk]:
-        content = self.parsed_content
-        body = self.body
-
-        chunks = extract.extract_text(body, modality="mail")
+        chunks = extract.extract_text(self.body, modality="mail")
 
         def add_header(item: extract.MulitmodalChunk) -> extract.MulitmodalChunk:
             if isinstance(item, str):
-                return self.format_content(content | {"body": item}).strip()
+                return self.format_content({"body": item}).strip()
             return item
 
         for chunk in chunks:
@@ -1419,7 +1420,11 @@ class MiscDoc(SourceItem):
             contents = (settings.FILE_STORAGE_DIR / self.filename).read_bytes()
         else:
             contents = self.content or ""
-        chunks = list(extract.extract_data_chunks(self.mime_type or "", contents))
+        chunks = list(
+            extract.extract_data_chunks(
+                self.mime_type or "", contents, max_image_pages=settings.MAX_DOC_EMBED_PAGES
+            )
+        )
 
         # Emit a text chunk carrying the bibliographic metadata so the doc is
         # findable by title/author/etc. Born-digital PDFs now extract per-page
@@ -1884,7 +1889,7 @@ class Report(SourceItem):
             file_path = settings.FILE_STORAGE_DIR / self.filename
             if not file_path.exists():
                 return []
-            return extract.doc_to_images(file_path)
+            return extract.extract_pdf(file_path, max_image_pages=settings.MAX_DOC_EMBED_PAGES)
 
         # HTML: worker already converted to markdown and extracted images
         return chunk_mixed(self.content or "", self.images or [])

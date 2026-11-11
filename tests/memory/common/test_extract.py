@@ -15,7 +15,6 @@ from memory.common.extract import (
     extract_text,
     extract_docx,
     extract_docx_text,
-    doc_to_images,
     extract_pdf,
     extract_image,
     extract_data_chunks,
@@ -115,8 +114,8 @@ def test_null_summary_puts_tags_on_the_content_chunks():
     ]
 
 
-def test_doc_to_images():
-    result = doc_to_images(REGULAMIN)
+def test_extract_pdf_page_images():
+    result = [c for c in extract_pdf(REGULAMIN) if c.mime_type == "image/jpeg"]
 
     assert len(result) == 2
     with pymupdf.open(REGULAMIN) as pdf:
@@ -139,7 +138,7 @@ def test_extract_pdf_born_digital_includes_text():
     images = [c for c in result if any(isinstance(d, Image.Image) for d in c.data)]
     texts = [c for c in result if any(isinstance(d, str) for d in c.data)]
 
-    assert len(images) == 2  # one per page, same as doc_to_images
+    assert len(images) == 2  # one per page
     assert texts  # the text layer is extracted
     for t in texts:
         assert isinstance(t.data[0], str) and t.data[0].strip()
@@ -175,21 +174,19 @@ def pdf_of_pages(*sizes: tuple[float, float]) -> bytes:
     return pdf_bytes
 
 
-@pytest.mark.parametrize("extract", [doc_to_images, extract_pdf])
 @pytest.mark.parametrize(
     "width, height", [(14400, 14400), (14400, 200), (200, 14400), (1500, 1334)]
 )
-def test_oversized_pdf_page_renders_within_chunk_image_cap(extract, width, height):
+def test_oversized_pdf_page_renders_within_chunk_image_cap(width, height):
     # At 72dpi a 200x200in page would be a 622MB raster.
-    [image] = page_images(extract(pdf_of_pages((width, height))))
+    [image] = page_images(extract_pdf(pdf_of_pages((width, height))))
 
     assert image.width * image.height <= MAX_CHUNK_IMAGE_PIXELS
     assert image.width / image.height == pytest.approx(width / height, rel=0.05)
 
 
-@pytest.mark.parametrize("extract", [doc_to_images, extract_pdf])
-def test_letter_pdf_page_renders_at_72dpi(extract):
-    [image] = page_images(extract(pdf_of_pages((612, 792))))
+def test_letter_pdf_page_renders_at_72dpi():
+    [image] = page_images(extract_pdf(pdf_of_pages((612, 792))))
 
     assert image.size == (612, 792)
 
@@ -481,3 +478,8 @@ def test_extract_docx_leaves_no_pdf_beside_source(tmp_path):
     extract_docx(docx)
 
     assert (tmp_path / "doc.pdf").read_bytes() == b"precious"
+
+
+def test_extract_pdf_refuses_too_many_pages():
+    with patch.object(settings, "MAX_PDF_PAGES", 3), pytest.raises(ValueError):
+        extract_pdf(pdf_of_pages(*[(612, 792)] * 4))

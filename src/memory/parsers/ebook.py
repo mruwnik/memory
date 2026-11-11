@@ -1,10 +1,13 @@
 import logging
+import struct
+import zipfile
+import zlib
 from dataclasses import dataclass, field
-from typing import Any, cast
+from typing import Any, BinaryIO, Iterator, cast
 from pathlib import Path
 
 import pymupdf
-from memory.common import paths
+from memory.common import paths, settings
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +151,81 @@ def extract_sections(doc) -> list[Section]:
     return sections
 
 
+# Bytes read per step while measuring a zipped book.
+INFLATE_CHUNK = 64 * 1024
+LOCAL_HEADER = struct.Struct("<4s5H3L2H")
+LOCAL_HEADER_SIGNATURE = b"PK\x03\x04"
+
+
+def stored_chunks(file: BinaryIO, info: zipfile.ZipInfo) -> Iterator[bytes]:
+    """The compressed bytes of ``info``, read from after its local header."""
+    file.seek(info.header_offset)
+    header = file.read(LOCAL_HEADER.size)
+    if len(header) < LOCAL_HEADER.size or header[:4] != LOCAL_HEADER_SIGNATURE:
+        raise ValueError("Book has a damaged zip entry")
+    *_, name_length, extra_length = LOCAL_HEADER.unpack(header)
+    file.seek(name_length + extra_length, 1)
+    left = info.compress_size
+    while left > 0:
+        chunk = file.read(min(INFLATE_CHUNK, left))
+        if not chunk:
+            raise ValueError("Book has a truncated zip entry")
+        left -= len(chunk)
+        yield chunk
+
+
+def inflated_size(chunks: Iterator[bytes], method: int, budget: int) -> int:
+    """The bytes ``chunks`` really inflate to, counting no further than just past
+    ``budget``. Only stored and deflated entries are measured."""
+    if method == zipfile.ZIP_STORED:
+        return sum(len(chunk) for chunk in chunks)
+    if method != zipfile.ZIP_DEFLATED:
+        raise ValueError("Book has a zip entry in an unsupported compression method")
+    inflater = zlib.decompressobj(-zlib.MAX_WBITS)
+    size = 0
+    for data in chunks:
+        while data and size <= budget:
+            size += len(inflater.decompress(data, budget - size + 1))
+            data = inflater.unconsumed_tail
+        if size > budget or inflater.eof:
+            return size
+    return size + len(inflater.flush())
+
+
+def check_parse_size(path: Path) -> None:
+    """Raise ValueError for a zipped book with more than MAX_EBOOK_ZIP_ENTRIES
+    entries, or whose entries inflate past MAX_EBOOK_INFLATED_BYTES.
+
+    Every entry counts, whatever its name: MuPDF reads any entry the package
+    file points at, and lays out its markup in memory. Entries are measured by
+    inflating their data, since their declared sizes and CRCs are the
+    uploader's to choose; one that inflates to other than its declared size is
+    refused.
+    """
+    if not zipfile.is_zipfile(path):
+        return
+    limit = settings.MAX_EBOOK_INFLATED_BYTES
+    try:
+        archive = zipfile.ZipFile(path)
+    except zipfile.BadZipFile as e:
+        raise ValueError("Book is not a valid zip archive") from e
+    with archive, path.open("rb") as file:
+        entries = archive.infolist()
+        if len(entries) > settings.MAX_EBOOK_ZIP_ENTRIES:
+            raise ValueError(f"Book has more than {settings.MAX_EBOOK_ZIP_ENTRIES} entries")
+        total = 0
+        for info in entries:
+            try:
+                size = inflated_size(stored_chunks(file, info), info.compress_type, limit - total)
+            except zlib.error as e:
+                raise ValueError("Book has a zip entry that does not inflate") from e
+            total += size
+            if total > limit:
+                raise ValueError(f"Book inflates to more than {limit} bytes")
+            if size != info.file_size:
+                raise ValueError("Book has a zip entry whose size does not match its header")
+
+
 def parse_ebook(file_path: str | Path) -> Ebook:
     """
     Parse an ebook file and extract its content and metadata.
@@ -157,10 +235,14 @@ def parse_ebook(file_path: str | Path) -> Ebook:
 
     Returns:
         Structured ebook data
+
+    Raises:
+        ValueError: if the book's text is too large to parse.
     """
     path = Path(file_path)
     if not path.exists():
         raise FileNotFoundError(f"File not found: {path}")
+    check_parse_size(path)
 
     try:
         doc = pymupdf.open(str(path))

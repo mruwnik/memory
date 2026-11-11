@@ -118,3 +118,31 @@ def test_max_ingest_bytes_is_largest_cap():
         settings.MAX_PHOTO_UPLOAD_BYTES,
         settings.MAX_MISC_UPLOAD_BYTES,
     )
+
+
+def _mobi() -> bytes:
+    return b"Some Title".ljust(60, b"\x00") + b"BOOKMOBI" + b"\x00" * 100
+
+
+def _zip_without_mimetype() -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("content.opf", "<package/>")
+        z.writestr("mimetype", "application/epub+zip")
+    return buf.getvalue()
+
+
+@pytest.mark.parametrize(
+    "content, bucket",
+    [
+        pytest.param(_minimal_epub(), "book", id="epub"),
+        pytest.param(_mobi(), "book", id="mobi"),
+        pytest.param(_pdf(), "misc", id="pdf"),
+        pytest.param(_zip_without_mimetype(), "misc", id="zip"),
+        pytest.param(b"<svg xmlns='http://www.w3.org/2000/svg'><text>x</text></svg>", "misc", id="svg"),
+    ],
+)
+def test_routing_never_opens_the_document(content, bucket):
+    # Opening it with MuPDF lays out every page in the API's event loop.
+    with patch("pymupdf.open", side_effect=AssertionError("parsed in the API")):
+        assert ir.detect_bucket("application/octet-stream", content).name == bucket

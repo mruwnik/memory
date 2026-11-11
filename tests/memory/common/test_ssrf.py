@@ -36,6 +36,9 @@ from memory.common.ssrf import (
         "fd00::1",  # IPv6 unique-local
         "::",  # IPv6 unspecified
         "ff02::1",  # IPv6 multicast
+        "168.63.129.16",  # Azure WireServer
+        "fec0::1",  # deprecated IPv6 site-local
+        "100.100.100.200",  # Alibaba Cloud metadata
     ],
 )
 def test_is_safe_ip_rejects_unsafe(ip):

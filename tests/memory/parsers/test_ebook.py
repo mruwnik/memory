@@ -1,8 +1,12 @@
+import struct
+import zipfile
+import zlib
 from unittest.mock import MagicMock, patch
 
 import pytest
 import pymupdf
 
+from memory.common import settings
 from memory.parsers.ebook import (
     Peekable,
     extract_epub_metadata,
@@ -11,6 +15,7 @@ from memory.parsers.ebook import (
     extract_sections,
     parse_ebook,
     Section,
+    check_parse_size,
 )
 
 
@@ -392,3 +397,82 @@ def test_parse_ebook_full_content_generation(mock_open, mock_doc, tmp_path):
 
         # Check the full content is concatenated correctly
         assert ebook.full_content == "Content of section 1\n\nContent of section 2"
+
+
+def write_epub(path, entries: dict[str, bytes]):
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr(zipfile.ZipInfo("mimetype"), "application/epub+zip", zipfile.ZIP_STORED)
+        for name, content in entries.items():
+            z.writestr(name, content)
+
+
+def understate_size(path, real: int, declared: int):
+    """Rewrite an entry's uncompressed size in its local and central headers."""
+    data = path.read_bytes()
+    real_field, declared_field = struct.pack("<I", real), struct.pack("<I", declared)
+    assert data.count(real_field) == 2
+    path.write_bytes(data.replace(real_field, declared_field))
+
+
+def lying_epub(path):
+    write_epub(path, {"a.xhtml": b"a" * 200_003})
+    understate_size(path, 200_003, 1000)
+
+
+def zip_of_one_entry(name: bytes, data: bytes, crc: int, size: int) -> bytes:
+    """A deflated single-entry zip whose headers declare ``crc`` and ``size``."""
+    local = struct.pack("<4s5H3L2H", b"PK\x03\x04", 20, 0, 8, 0, 0, crc, len(data), size, len(name), 0)
+    central = struct.pack(
+        "<4s6H3L5H2L", b"PK\x01\x02", 20, 20, 0, 8, 0, 0, crc, len(data), size, len(name), 0, 0, 0, 0, 0, 0
+    )
+    entry, directory = local + name + data, central + name
+    end = struct.pack("<4s4H2LH", b"PK\x05\x06", 0, 0, 1, 1, len(directory), len(entry), 0)
+    return entry + directory + end
+
+
+def prefix_describing_epub(path):
+    """Size and CRC describe the stream's first 1000 bytes; it inflates to 200,003."""
+    deflater = zlib.compressobj(9, zlib.DEFLATED, -zlib.MAX_WBITS)
+    data = deflater.compress(b"a" * 200_003) + deflater.flush()
+    path.write_bytes(zip_of_one_entry(b"a.xhtml", data, zlib.crc32(b"a" * 1000), 1000))
+
+
+@pytest.mark.parametrize(
+    "make_book",
+    [
+        pytest.param(lambda p: write_epub(p, {"a.xhtml": b"a " * 100_000}), id="markup"),
+        pytest.param(lambda p: write_epub(p, {"content.dat": b"a " * 100_000}), id="markup-other-name"),
+        pytest.param(lambda p: write_epub(p, {f"{n}.xhtml": b"" for n in range(60)}), id="entry-count"),
+        pytest.param(lying_epub, id="understated-size"),
+        pytest.param(prefix_describing_epub, id="headers-describe-a-prefix"),
+    ],
+)
+def test_parse_ebook_refuses_book_too_large_to_parse(tmp_path, make_book):
+    path = tmp_path / "bomb.epub"
+    make_book(path)
+
+    with (
+        patch.object(settings, "MAX_EBOOK_INFLATED_BYTES", 100_000),
+        patch.object(settings, "MAX_EBOOK_ZIP_ENTRIES", 50),
+        patch("memory.parsers.ebook.pymupdf.open") as mupdf_open,
+        pytest.raises(ValueError),
+    ):
+        parse_ebook(path)
+    mupdf_open.assert_not_called()
+
+
+def test_check_parse_size_accepts_book_under_the_caps(tmp_path):
+    path = tmp_path / "book.epub"
+    write_epub(path, {"a.xhtml": b"a " * 40_000, "cover.jpg": b"\x00" * 4096})
+
+    with patch.object(settings, "MAX_EBOOK_INFLATED_BYTES", 100_000):
+        check_parse_size(path)
+
+
+def test_zip_of_one_entry_fools_zipfile(tmp_path):
+    # The prefix-describing book reads back as its 1000-byte prefix through zipfile.
+    path = tmp_path / "book.epub"
+    prefix_describing_epub(path)
+
+    with zipfile.ZipFile(path) as archive:
+        assert archive.read("a.xhtml") == b"a" * 1000

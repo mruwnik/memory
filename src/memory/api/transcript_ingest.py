@@ -44,7 +44,7 @@ router = APIRouter(prefix="/transcripts", tags=["transcripts"])
 
 MAX_BODY_BYTES = 1_048_576
 # Each accepted push costs an LLM extraction, so a leaked secret must not be
-# able to queue unbounded work. Per-IP limits come from the SlowAPI default.
+# able to queue unbounded work. Per-IP limits come from api/request_limits.py.
 ACCOUNT_RATE_LIMIT = "30/minute"
 
 FIREFLIES_TRANSCRIBED_EVENTS = {

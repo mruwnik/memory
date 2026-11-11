@@ -259,8 +259,8 @@ async def health_check(request: Request):
             conn.execute(text("SELECT 1"))
             db_rev = db_revision(conn)
         checks["database"] = "healthy"
-    except Exception as e:
-        logger.error(f"Database health check failed: {e}")
+    except Exception:
+        logger.exception("Database health check failed")
         checks["database"] = "unhealthy"
         all_healthy = False
 
@@ -269,8 +269,8 @@ async def health_check(request: Request):
         client = get_qdrant_client()
         client.get_collections()
         checks["qdrant"] = "healthy"
-    except Exception as e:
-        logger.error(f"Qdrant health check failed: {e}")
+    except Exception:
+        logger.exception("Qdrant health check failed")
         checks["qdrant"] = "unhealthy"
         all_healthy = False
 

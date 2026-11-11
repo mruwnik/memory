@@ -12,6 +12,7 @@ from memory.common.db.models.source_item import (
     Chunk,
     SourceItem,
     add_pics,
+    capped_chunks,
     chunk_mixed,
     clean_filename,
     handle_duplicate_sha256,
@@ -1439,3 +1440,40 @@ def test_meeting_inherits_transcript_account_access_control(db_session: Session)
 
     assert item.apply_inherited_access_control() == (project.id, "internal")
     assert task.apply_inherited_access_control() == (project.id, "internal")
+
+
+def text_chunk(text: str) -> extract.DataChunk:
+    return extract.DataChunk(data=[text], modality="text")
+
+
+@pytest.mark.parametrize(
+    "limit, expected",
+    [
+        (10, ["0", "1", "2", "3", "4", "sum"]),
+        (6, ["0", "1", "2", "3", "4", "sum"]),
+        (5, ["0", "1", "2", "3", "sum"]),
+        (4, ["0", "1", "2", "sum"]),
+        (1, ["sum"]),
+        (0, ["sum"]),
+    ],
+)
+def test_capped_chunks_keeps_the_head_and_the_summary(monkeypatch, limit, expected):
+    monkeypatch.setattr(settings, "MAX_EMBEDDED_CHUNKS_PER_ITEM", limit)
+    chunks = [text_chunk(str(i)) for i in range(5)] + [extract.summary_chunk("sum", [], {}, "text")]
+
+    assert [c.data[0] for c in capped_chunks(1, chunks)] == expected
+
+
+def test_data_chunks_of_a_long_email_are_capped(monkeypatch):
+    monkeypatch.setattr(settings, "MAX_EMBEDDED_CHUNKS_PER_ITEM", 3)
+    monkeypatch.setattr(chunker, "DEFAULT_CHUNK_TOKENS", 20)
+    words = " ".join(f"word{i}" for i in range(2000))
+    mail = MailMessage(
+        sha256=b"long", message_id="<long@example.com>", subject="s", sender="a@example.com",
+        content=f"From: a@example.com\nSubject: s\n\n{words}",
+    )
+
+    chunks = mail.data_chunks()
+
+    assert len(chunks) == 3
+    assert "word0 " in (chunks[0].content or "")

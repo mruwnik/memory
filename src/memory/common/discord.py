@@ -14,7 +14,7 @@ import requests
 
 from memory.common import settings
 from memory.common.db.connection import make_session
-from memory.common.db.models import DiscordBot, DiscordChannel, DiscordUser
+from memory.common.db.models import DiscordBot, DiscordChannel, DiscordServer, DiscordUser
 from memory.discord.rest import BotAccess, DiscordAPIError, DiscordRest, bot_access
 
 logger = logging.getLogger(__name__)
@@ -52,8 +52,8 @@ def send_over_rest(access: BotAccess, action: Callable[[DiscordRest], Awaitable[
 
     try:
         asyncio.run(run())
-    except DiscordAPIError as e:
-        logger.error(f"Discord bot {access.bot_id} could not send ({e})")
+    except DiscordAPIError:
+        logger.exception(f"Discord bot {access.bot_id} could not send")
         return False
     return True
 
@@ -123,62 +123,86 @@ def refresh_discord_metadata(bot_id: int) -> dict[str, Any] | None:
             raise BotNotConnected(bot_id)
         response.raise_for_status()
         return response.json()
-    except requests.RequestException as e:
-        logger.error(f"Failed to refresh Discord metadata: {e}")
+    except requests.RequestException:
+        logger.exception("Failed to refresh Discord metadata")
         return None
 
 
-# Convenience functions
+def error_channel_id(bot_id: int) -> int | None:
+    """The channel task-failure alerts go to: DISCORD_ERROR_CHANNEL as given
+    when it is an id, else the one channel of that name in a server this bot
+    verifiably owns. Other users' bots record channels and their names too, so
+    a name is never looked up beyond the alert bot's own servers, and two
+    matches there send nothing until the operator sets the id."""
+    configured = str(settings.DISCORD_ERROR_CHANNEL)
+    if configured.isdigit():
+        return int(configured)
+    with make_session() as session:
+        ids = [
+            row[0]
+            for row in session.query(DiscordChannel.id)
+            .join(DiscordServer, DiscordServer.id == DiscordChannel.server_id)
+            .filter(
+                DiscordChannel.name == configured,
+                DiscordServer.bot_id == bot_id,
+                DiscordServer.verified.is_(True),
+            )
+            .limit(2)
+        ]
+    if len(ids) != 1:
+        logger.error(
+            f"Discord bot {bot_id}: {len(ids) or 'no'} channels match DISCORD_ERROR_CHANNEL in its servers; "
+            "set DISCORD_ERROR_CHANNEL to the channel id"
+        )
+        return None
+    return ids[0]
+
+
 def send_error_message(bot_id: int, message: str) -> bool:
-    """Send an error message to the error channel"""
-    return send_to_channel(bot_id, settings.DISCORD_ERROR_CHANNEL, message)
+    """Send a message to the operator's error channel."""
+    if not (access := rest_access(bot_id)):
+        return False
+    if (channel_id := error_channel_id(bot_id)) is None:
+        return False
+    return send_over_rest(access, lambda rest: rest.send_message(channel_id, message))
+
+
+def job_id_of(task_kwargs: dict[str, Any]) -> int | None:
+    """The tracked job id a task was given, if it is one."""
+    job_id = task_kwargs.get("job_id")
+    return job_id if isinstance(job_id, int) and not isinstance(job_id, bool) else None
+
+
+def failure_message(task_name: str, error_type: str, task_id: str | None = None, job_id: int | None = None) -> str:
+    """An alert naming the task, the exception type and ids only: the error
+    channel is outside the instance, so no item text, arguments or traceback."""
+    lines = [f"🚨 **Task Failed: {task_name}**", f"**Error:** {error_type}"]
+    if task_id:
+        lines.append(f"**Task id:** {task_id}")
+    if job_id:
+        lines.append(f"**Job id:** {job_id}")
+    return "\n".join(lines)
 
 
 def notify_task_failure(
     task_name: str,
-    error_message: str,
-    task_args: tuple = (),
-    task_kwargs: dict[str, Any] | None = None,
-    traceback_str: str | None = None,
+    error_type: str,
+    task_id: str | None = None,
+    job_id: int | None = None,
     bot_id: int | None = None,
 ) -> None:
-    """
-    Send a task failure notification to Discord.
-
-    Args:
-        task_name: Name of the failed task
-        error_message: Error message
-        task_args: Task arguments
-        task_kwargs: Task keyword arguments
-        traceback_str: Full traceback string
-    """
+    """Post a task failure to the operator's Discord error channel."""
     if not settings.DISCORD_NOTIFICATIONS_ENABLED:
         logger.debug("Discord notifications disabled")
         return
 
-    if bot_id is None:
-        bot_id = settings.DISCORD_BOT_ID
-
+    bot_id = bot_id or settings.DISCORD_BOT_ID
     if not bot_id:
-        logger.debug(
-            "No Discord bot ID provided for task failure notification; skipping"
-        )
+        logger.debug("No Discord bot ID provided for task failure notification; skipping")
         return
 
-    message = f"🚨 **Task Failed: {task_name}**\n\n"
-    message += f"**Error:** {error_message[:500]}\n"
-
-    if task_args:
-        message += f"**Args:** `{str(task_args)[:200]}`\n"
-
-    if task_kwargs:
-        message += f"**Kwargs:** `{str(task_kwargs)[:200]}`\n"
-
-    if traceback_str:
-        message += f"**Traceback:**\n```\n{traceback_str[-800:]}\n```"
-
     try:
-        send_error_message(bot_id, message)
+        send_error_message(bot_id, failure_message(task_name, error_type, task_id, job_id))
         logger.info(f"Discord error notification sent for task: {task_name}")
-    except Exception as e:
-        logger.error(f"Failed to send Discord notification: {e}")
+    except Exception:
+        logger.exception("Failed to send Discord notification")

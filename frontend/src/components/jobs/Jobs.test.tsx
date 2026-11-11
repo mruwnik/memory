@@ -103,8 +103,8 @@ describe('Jobs page', () => {
   it('passes the status filter to listJobs when a filter is selected', async () => {
     const user = userEvent.setup()
     renderWithRouter(<Jobs />)
-    await waitFor(() => expect(listJobs).toHaveBeenCalled())
-    await user.click(screen.getByRole('button', { name: 'Failed' }))
+    // The filter buttons appear once the first load finishes.
+    await user.click(await screen.findByRole('button', { name: 'Failed' }))
     await waitFor(() => {
       const last = listJobs.mock.calls.at(-1)?.[0]
       expect(last.status).toBe('failed')

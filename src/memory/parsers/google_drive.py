@@ -361,8 +361,8 @@ class GoogleDriveClient:
                 text_parts.append(page.get_text())  # type: ignore[union-attr]
             doc.close()
             return "\n\n".join(text_parts)
-        except Exception as e:
-            logger.error(f"Failed to extract PDF text: {e}")
+        except Exception:
+            logger.exception("Failed to extract PDF text")
             return None
 
     def _extract_docx_text(self, docx_bytes: bytes) -> str:

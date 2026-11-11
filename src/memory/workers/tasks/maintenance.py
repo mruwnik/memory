@@ -11,9 +11,9 @@ from typing import Sequence, Any, cast
 from celery.backends.database.models import Task as CeleryTaskMeta
 from qdrant_client.http.exceptions import ApiException, UnexpectedResponse
 from sqlalchemy import CursorResult, and_, delete, func, inspect as sa_inspect, or_, update
-from sqlalchemy import BigInteger, literal, select
+from sqlalchemy import BigInteger, exists, literal, select
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.orm import aliased, contains_eager, selectinload, with_polymorphic
+from sqlalchemy.orm import Session as DBSession, aliased, contains_eager, selectinload, with_polymorphic
 
 from memory.common import (
     collections,
@@ -76,10 +76,14 @@ from memory.common.db.models import (
     Event,
     JobStatus,
     LLMSpend,
+    OAuthClientInformation,
+    OAuthRefreshToken,
+    OAuthState,
     PendingJob,
     Session,
     SourceItem,
     TelemetryEvent,
+    UserSession,
 )
 from memory.common.db.models.source_item import EMBED_RETRY_BASE, MAX_EMBED_ATTEMPTS
 from memory.common.db.models.source_items import (
@@ -248,7 +252,7 @@ def reingest_item(item_id: str, item_type: str):
     try:
         class_ = get_item_class(item_type)
     except ValueError as e:
-        logger.error(f"Error getting item class: {e}")
+        logger.exception("Error getting item class")
         return {"status": "error", "error": str(e)}
 
     with make_session() as session:
@@ -267,7 +271,7 @@ def reingest_empty_source_items(item_type: str):
     try:
         class_ = get_item_class(item_type)
     except ValueError as e:
-        logger.error(f"Error getting item class: {e}")
+        logger.exception("Error getting item class")
         return {"status": "error", "error": str(e)}
 
     with make_session() as session:
@@ -331,7 +335,7 @@ def process_raw_item(item_id: int, item_type: str):
     try:
         class_ = get_item_class(item_type)
     except ValueError as e:
-        logger.error(f"Error getting item class: {e}")
+        logger.exception("Error getting item class")
         return {"status": "error", "error": str(e)}
 
     with make_session() as session:
@@ -377,7 +381,7 @@ def process_raw_items(
         try:
             class_ = get_item_class(item_type)
         except ValueError as e:
-            logger.error(f"Error getting item class: {e}")
+            logger.exception("Error getting item class")
             return {"status": "error", "error": str(e)}
 
     now = datetime.now(timezone.utc)
@@ -587,7 +591,7 @@ def update_metadata_for_item(item_id: str, item_type: str):
     try:
         class_ = get_item_class(item_type)
     except ValueError as e:
-        logger.error(f"Error getting item class: {e}")
+        logger.exception("Error getting item class")
         return {"status": "error", "error": str(e)}
 
     client = qdrant.get_qdrant_client()
@@ -617,7 +621,7 @@ def update_metadata_for_item(item_id: str, item_type: str):
             new_metadata: dict[str, Any] = dict(item.as_payload())
             new_tags: set[str] = set(new_metadata.get("tags", []))
         except Exception as e:
-            logger.error(f"Error preparing metadata update for item {item.id}: {e}")
+            logger.exception(f"Error preparing metadata update for item {item.id}")
             return {
                 "status": "error",
                 "error": str(e),
@@ -653,13 +657,8 @@ def update_metadata_for_item(item_id: str, item_type: str):
             try:
                 qdrant.set_payload(client, collection, chunk_id, updated_metadata)
                 updated_chunks += 1
-            except Exception as e:
-                logger.error(
-                    "Failed to update chunk %s of item %s: %s",
-                    chunk_id,
-                    item.id,
-                    e,
-                )
+            except Exception:
+                logger.exception("Failed to update chunk %s of item %s", chunk_id, item.id)
                 errors += 1
 
     return {"status": "success", "updated_chunks": updated_chunks, "errors": errors}
@@ -673,7 +672,7 @@ def update_metadata_for_source_items(item_type: str):
     try:
         class_ = get_item_class(item_type)
     except ValueError as e:
-        logger.error(f"Error getting item class: {e}")
+        logger.exception("Error getting item class")
         return {"status": "error", "error": str(e)}
 
     with make_session() as session:
@@ -686,30 +685,62 @@ def update_metadata_for_source_items(item_type: str):
         return {"status": "success", "items": len(item_ids)}
 
 
+def prune_abandoned_oauth_states(session: DBSession, now: datetime) -> int:
+    """Delete OAuth authorization requests that expired before anyone logged in through them."""
+    result = session.execute(
+        delete(OAuthState).where(
+            OAuthState.expires_at < now.replace(tzinfo=None),
+            OAuthState.user_id.is_(None),
+        )
+    )
+    return cast(CursorResult, result).rowcount
+
+
+def prune_unused_oauth_clients(session: DBSession, now: datetime) -> int:
+    """Delete OAuth clients registered over OAUTH_UNUSED_CLIENT_DAYS ago that never
+    completed a login: no authorization request or refresh token refers to them.
+
+    A completed login keeps its authorization request until its user is deleted,
+    so clients people use are never pruned. Run after prune_abandoned_oauth_states.
+    """
+    cutoff = (now - timedelta(days=settings.OAUTH_UNUSED_CLIENT_DAYS)).timestamp()
+    client_id = OAuthClientInformation.client_id
+    result = session.execute(
+        delete(OAuthClientInformation)
+        .where(
+            OAuthClientInformation.client_id_issued_at < cutoff,
+            ~exists().where(OAuthState.client_id == client_id),
+            ~exists().where(OAuthRefreshToken.client_id == client_id),
+        )
+        .execution_options(synchronize_session=False)
+    )
+    return cast(CursorResult, result).rowcount
+
+
 @app.task(name=CLEANUP_EXPIRED_SESSIONS)
 @tracked_task
-def cleanup_expired_sessions():
-    """Clean up expired user sessions from the database."""
-    from memory.common.db.models import UserSession
-
-    logger.info("Cleaning up expired user sessions")
-
+def cleanup_expired_sessions() -> dict[str, int]:
+    """Delete expired sessions, abandoned OAuth authorization requests and OAuth
+    clients that never completed a login."""
     now = datetime.now(timezone.utc)
-    deleted = 0
-
     with make_session() as session:
-        expired_sessions = (
-            session.query(UserSession).filter(UserSession.expires_at < now).all()
-        )
-
-        for user_session in expired_sessions:
-            session.delete(user_session)
-            deleted += 1
-
+        sessions = cast(
+            CursorResult,
+            session.execute(
+                delete(UserSession).where(UserSession.expires_at < now.replace(tzinfo=None))
+            ),
+        ).rowcount
+        states = prune_abandoned_oauth_states(session, now)
+        clients = prune_unused_oauth_clients(session, now)
         session.commit()
 
-    logger.info(f"Deleted {deleted} expired user sessions")
-    return {"deleted": deleted}
+    logger.info(
+        "Deleted %d expired sessions, %d abandoned OAuth states, %d unused OAuth clients",
+        sessions,
+        states,
+        clients,
+    )
+    return {"sessions": sessions, "oauth_states": states, "oauth_clients": clients}
 
 
 @app.task(name=CLEANUP_OLD_CLAUDE_SESSIONS)
@@ -1033,14 +1064,10 @@ def update_source_access_control(
                             )
                             raise self.retry(exc=e, countdown=60)
                         # Once we've made progress, log and continue to avoid losing work
-                        logger.error(
-                            f"Failed to update chunk {chunk.id} payload: {e}"
-                        )
+                        logger.exception(f"Failed to update chunk {chunk.id} payload")
                         errors += 1
-                    except Exception as e:
-                        logger.error(
-                            f"Failed to update chunk {chunk.id} payload: {e}"
-                        )
+                    except Exception:
+                        logger.exception(f"Failed to update chunk {chunk.id} payload")
                         errors += 1
 
                 updated_items += 1
@@ -1105,14 +1132,10 @@ def reconcile_item(client, item: SourceItem, rewrite_payloads: bool) -> bool:
             continue
         try:
             qdrant.set_payload(client, chunk.collection_name, str(chunk.id), payload)
-        except Exception as e:
+        except Exception:
             # Best-effort: the next run (or config dispatch) reconciles a
             # chunk a transient error skipped.
-            logger.error(
-                "reconcile_access_control: failed to update chunk %s: %s",
-                chunk.id,
-                e,
-            )
+            logger.exception("reconcile_access_control: failed to update chunk %s", chunk.id)
     return True
 
 
