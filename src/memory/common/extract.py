@@ -218,6 +218,40 @@ def page_text_chunks(page: pymupdf.Page, modality: str) -> list[DataChunk]:
 MIN_PDF_PAGE_TEXT_CHARS = 16
 
 
+# A PDF's header comment; readers accept it anywhere in the first 1024 bytes.
+PDF_MAGIC = b"%PDF-"
+PDF_MAGIC_WINDOW = 1024
+
+
+def has_pdf_magic(head: bytes) -> bool:
+    return PDF_MAGIC in head[:PDF_MAGIC_WINDOW]
+
+
+def open_pdf(content: bytes | pathlib.Path) -> pymupdf.Document:
+    """Open a PDF with MuPDF, refusing anything that isn't one.
+
+    MuPDF picks its handler from the content, whatever the caller asks for, and
+    opening a reflowable format (EPUB, MOBI, FB2, HTML) lays out the whole
+    document. Content with the PDF header goes to the PDF handler; anything
+    else is refused before MuPDF sees it.
+    """
+    if isinstance(content, pathlib.Path):
+        with content.open("rb") as file:
+            head = file.read(PDF_MAGIC_WINDOW)
+    else:
+        head = content[:PDF_MAGIC_WINDOW]
+    if not has_pdf_magic(head):
+        raise ValueError("Not a PDF: no %PDF- header")
+    if isinstance(content, pathlib.Path):
+        doc = pymupdf.open(content)
+    else:
+        doc = pymupdf.open(stream=content, filetype="pdf")
+    if not doc.is_pdf:
+        doc.close()
+        raise ValueError("Not a PDF")
+    return doc
+
+
 def extract_pdf(
     content: bytes | str | pathlib.Path,
     modality: str = "doc",
@@ -232,11 +266,12 @@ def extract_pdf(
     share its ``page`` metadata. Only the first ``max_image_pages`` pages get an
     image, since every page image is held in memory until the item is embedded.
 
-    Raises ValueError for a PDF of more than MAX_PDF_PAGES pages.
+    Raises ValueError for content that isn't a PDF, or a PDF of more than
+    MAX_PDF_PAGES pages.
     """
     chunks: list[DataChunk] = []
     with as_file(content) as file_path:
-        with pymupdf.open(file_path) as pdf:
+        with open_pdf(file_path) as pdf:
             if pdf.page_count > settings.MAX_PDF_PAGES:
                 raise ValueError(
                     f"PDF has {pdf.page_count} pages (limit {settings.MAX_PDF_PAGES})"

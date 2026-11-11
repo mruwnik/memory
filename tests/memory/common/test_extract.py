@@ -18,6 +18,7 @@ from memory.common.extract import (
     extract_pdf,
     extract_image,
     extract_data_chunks,
+    open_pdf,
     safe_image_open,
     docx_to_pdf,
     merge_metadata,
@@ -25,6 +26,8 @@ from memory.common.extract import (
     MAX_CHUNK_IMAGE_PIXELS,
     DataChunk,
 )
+from memory.parsers.google_drive import GoogleCredentials, GoogleDriveClient
+from tests.memory import book_files
 
 
 REGULAMIN = pathlib.Path(__file__).parent.parent.parent / "data" / "regulamin.pdf"
@@ -483,3 +486,64 @@ def test_extract_docx_leaves_no_pdf_beside_source(tmp_path):
 def test_extract_pdf_refuses_too_many_pages():
     with patch.object(settings, "MAX_PDF_PAGES", 3), pytest.raises(ValueError):
         extract_pdf(pdf_of_pages(*[(612, 792)] * 4))
+
+
+NOT_PDFS = [
+    book_files.epub(book_files.markup(2000)),
+    book_files.mobi(book_files.markup(2000)),
+    book_files.fb2(2000),
+    book_files.markup(2000),
+]
+NOT_PDF_IDS = ["epub", "mobi", "fb2", "html"]
+
+
+@pytest.mark.parametrize("data", NOT_PDFS, ids=NOT_PDF_IDS)
+def test_extract_pdf_refuses_bytes_that_are_not_a_pdf(data):
+    with pytest.raises(ValueError, match="Not a PDF"):
+        extract_data_chunks("application/pdf", data)
+
+
+@pytest.mark.parametrize("data", NOT_PDFS, ids=NOT_PDF_IDS)
+def test_extract_pdf_refuses_a_pdf_named_file_that_is_not_a_pdf(tmp_path, data):
+    path = tmp_path / "invoice.pdf"
+    path.write_bytes(data)
+    with pytest.raises(ValueError, match="Not a PDF"):
+        extract_pdf(path)
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        b"%PDF-1.7\n" + book_files.epub(book_files.markup(2000)),
+        book_files.mobi(book_files.markup(2000), name=b"xx%PDF-1.7"),
+        b"%PDF-1.7\n" + book_files.fb2(2000),
+    ],
+    ids=["header then epub", "mobi named like a pdf", "header then fb2"],
+)
+def test_content_with_the_pdf_header_is_never_opened_as_a_book(data):
+    with pytest.raises((ValueError, pymupdf.FileDataError)):
+        open_pdf(data)
+
+
+@pytest.mark.parametrize("prefix", [b"", b"\0" * 1000])
+def test_open_pdf_accepts_the_header_within_the_first_kilobyte(prefix):
+    with open_pdf(prefix + pdf_of_pages((612, 792))) as pdf:
+        assert pdf.page_count == 1
+
+
+def drive_client() -> GoogleDriveClient:
+    return GoogleDriveClient(GoogleCredentials("token", None, None, []))
+
+
+@pytest.mark.parametrize("data", NOT_PDFS, ids=NOT_PDF_IDS)
+def test_drive_pdf_text_skips_files_that_are_not_pdfs(data):
+    assert drive_client()._extract_pdf_text(data) is None
+
+
+def test_drive_pdf_text_skips_pdfs_over_the_page_cap():
+    with patch.object(settings, "MAX_PDF_PAGES", 3):
+        assert drive_client()._extract_pdf_text(pdf_of_pages(*[(612, 792)] * 4)) is None
+
+
+def test_drive_pdf_text_reads_a_pdf():
+    assert drive_client()._extract_pdf_text(pdf_of_pages((612, 792))) == ""
