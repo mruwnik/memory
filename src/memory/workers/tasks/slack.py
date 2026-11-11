@@ -22,7 +22,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import islice
-from typing import Any
+from typing import Any, NamedTuple
 from urllib.parse import urlparse
 
 import httpx
@@ -74,7 +74,7 @@ from memory.common.content_processing import (
 from memory.common.jobs import tracked_task
 from memory.common.push_health import push_overdue, record_push_miss
 from memory.common.people import find_person_by_slack_id, sync_slack_users_to_people
-from memory.common.reactions import ReactionAction, Reactions, apply_reaction, slack_reactions
+from memory.common.reactions import Reactions, slack_reactions
 
 logger = logging.getLogger(__name__)
 
@@ -838,29 +838,6 @@ def ensure_slack_channel(workspace_id: str, channel_id: str) -> bool:
     return True
 
 
-def owner_app_ids(session, slack_app_id: int) -> set[int]:
-    """The apps of this app's owner; just this one for an unowned app."""
-    app = session.get(SlackApp, slack_app_id)
-    if app is None or app.created_by_user_id is None:
-        return {slack_app_id}
-    rows = session.query(SlackApp.id).filter(SlackApp.created_by_user_id == app.created_by_user_id)
-    return {row[0] for row in rows}
-
-
-def may_change(session, message: SlackMessage, slack_app_id: int | None, polled: bool = False) -> bool:
-    """Whether data from this app may edit, delete or react to a stored message:
-    one ingested by an app of the same owner. A message no app has claimed
-    changes only through a poll, which reads with the app's own token."""
-    if slack_app_id is None:
-        return True
-    if message.slack_app_id is None:
-        return polled
-    if message.slack_app_id in owner_app_ids(session, slack_app_id):
-        return True
-    logger.info(f"Slack message {message.id} not changed: it belongs to another owner")
-    return False
-
-
 def _maybe_update_content(existing: SlackMessage, content: str) -> bool:
     """Overwrite ``existing.content`` iff it differs. Returns True on change."""
     if existing.content == content:
@@ -964,9 +941,11 @@ def _link_author_person(session, message: SlackMessage, workspace_id: str) -> No
 
 
 def _apply_merge(session, existing: SlackMessage, msg_kwargs: dict) -> dict[str, Any]:
-    """Merge incoming data into ``existing``; re-embed if content changed."""
-    if not may_change(session, existing, msg_kwargs["slack_app_id"], msg_kwargs["polled"]):
-        return {"status": "already_exists", "message_ts": existing.message_ts, "slackmessage_id": existing.id}
+    """Merge incoming data into ``existing``; re-embed if content changed.
+
+    The data was read from Slack with the app's own token, so any app that can
+    read the message may update it.
+    """
     if existing.slack_app_id is None:
         existing.slack_app_id = msg_kwargs["slack_app_id"]
     content_changed = merge_slack_message_state(
@@ -1146,8 +1125,8 @@ def store_slack_message(
 ) -> dict[str, Any]:
     """Add or merge a Slack message in the database.
 
-    ``polled`` marks a message read with the app's own token (history sync)
-    rather than pushed; only those claim messages no app has claimed yet.
+    The fields must be as Slack's API returned them to ``slack_app_id``'s own
+    token: a history sync (``polled``) or a pushed event read back.
 
     On the happy path, inserts a new ``SlackMessage`` row and embeds it.
     If a row already exists (or appears mid-flight via a concurrent insert),
@@ -1198,12 +1177,6 @@ def store_slack_message(
     return _merge_after_race(msg_kwargs)
 
 
-def message_stored(workspace_id: str, channel_id: str, message_ts: str) -> bool:
-    with make_session() as session:
-        identity = {"workspace_id": workspace_id, "channel_id": channel_id, "message_ts": message_ts}
-        return _get_existing_slack_message(session, identity) is not None
-
-
 def find_message(client: SlackClient, channel_id: str, message_ts: str, thread_ts: str | None) -> dict | None:
     """The message at ``message_ts`` as the client's token sees it, or None."""
     window = {"channel": channel_id, "oldest": message_ts, "latest": message_ts, "inclusive": "true"}
@@ -1227,23 +1200,35 @@ class PushedMessageUnread(Exception):
     """Slack couldn't serve the read-back of a pushed message just now."""
 
 
-def read_pushed_message(
+class ReadBack(NamedTuple):
+    """A message as the pushing app's own token sees it. ``readable`` is False when
+    that token can't read the channel or thread; ``message`` is None when it can
+    but Slack has no message at that ts."""
+
+    readable: bool
+    message: dict | None
+
+
+UNREADABLE = ReadBack(readable=False, message=None)
+
+
+def read_back(
     workspace_id: str, channel_id: str, message_ts: str, thread_ts: str | None, slack_app_id: int
-) -> dict | None:
-    """The pushed message read back with the pushing app's own token; None
-    when that app can't read it. PushedMessageUnread when Slack is rate
-    limiting or failing, so the push is retried instead of dropped."""
+) -> ReadBack:
+    """Read the message a push names back with the pushing app's own token.
+    PushedMessageUnread when Slack is rate limiting or failing, so the push is
+    retried instead of dropped."""
     with make_session() as session:
         credentials = get_workspace_credentials(session, workspace_id, slack_app_id)
         if not credentials or not credentials.access_token:
-            return None
+            return UNREADABLE
         try:
             client = slack_client_for(credentials)
         except SlackAPIError:
-            return None
+            return UNREADABLE
     try:
         with client:
-            return find_message(client, channel_id, message_ts, thread_ts)
+            return ReadBack(readable=True, message=find_message(client, channel_id, message_ts, thread_ts))
     except (httpx.TransportError, json.JSONDecodeError) as e:
         # A JSONDecodeError is Slack's edge answering with an HTML error page.
         raise PushedMessageUnread(type(e).__name__) from e
@@ -1251,48 +1236,46 @@ def read_pushed_message(
         if e.error in TRANSIENT_SLACK_ERRORS:
             raise PushedMessageUnread(e.error) from e
         logger.info(f"Slack app {slack_app_id} can't read pushed message {message_ts} in {channel_id}: {e.error}")
-        return None
+        return UNREADABLE
+
+
+def read_pushed_message(
+    workspace_id: str, channel_id: str, message_ts: str, thread_ts: str | None, slack_app_id: int
+) -> dict | None:
+    """The pushed message read back with the pushing app's own token; None
+    when that app can't read it or Slack has no such message."""
+    return read_back(workspace_id, channel_id, message_ts, thread_ts, slack_app_id).message
+
+
+def stored_thread_ts(workspace_id: str, channel_id: str, message_ts: str) -> tuple[bool, str | None]:
+    """Whether the message is stored, and the thread it is a reply in."""
+    with make_session() as session:
+        identity = {"workspace_id": workspace_id, "channel_id": channel_id, "message_ts": message_ts}
+        message = _get_existing_slack_message(session, identity)
+        return message is not None, message and message.thread_ts
 
 
 def store_pushed_slack_message(
     workspace_id: str,
     channel_id: str,
     message_ts: str,
-    author_id: str | None,
-    content: str,
     slack_app_id: int,
+    author_id: str | None = None,
     thread_ts: str | None = None,
-    reply_count: int | None = None,
-    subtype: str | None = None,
-    edited_ts: str | None = None,
-    reactions: list[dict] | None = None,
-    files: list[dict] | None = None,
+    **pushed_fields: Any,
 ) -> dict[str, Any]:
-    """Apply a pushed message event.
+    """Apply a pushed message or edit.
 
-    A signed push proves only which app sent it, not what Slack holds. A
-    stored message takes the pushed changes when an app of the same owner
-    ingested it. A new one is read back with the pushing app's own token and
-    stored as Slack returns it, so it lands only in channels that app can
-    read, under the author Slack names; one the app can't read is dropped.
+    A signed push proves only which app sent it, not what Slack holds. The
+    message is read back with the pushing app's own token and stored, or merged
+    into the stored row, as Slack returns it: it lands only in channels that
+    app can read, with the author and text Slack has. One the app can't read
+    is dropped. Only the message's identity is taken from the push; the rest of
+    what it claims (``pushed_fields``: content, edit, reactions, files) is not
+    stored.
     """
     if not author_id:
         return {"status": "skipped", "reason": "no_author"}
-    if message_stored(workspace_id, channel_id, message_ts):
-        return store_slack_message(
-            workspace_id=workspace_id,
-            channel_id=channel_id,
-            message_ts=message_ts,
-            author_id=author_id,
-            content=content,
-            slack_app_id=slack_app_id,
-            thread_ts=thread_ts,
-            reply_count=reply_count,
-            subtype=subtype,
-            edited_ts=edited_ts,
-            reactions=reactions,
-            files=files,
-        )
     message = read_pushed_message(workspace_id, channel_id, message_ts, thread_ts, slack_app_id)
     if message is None:
         return {"status": "skipped", "reason": "not_readable"}
@@ -1317,39 +1300,35 @@ def add_slack_message(self, **message: Any) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-@app.task(name=MARK_SLACK_MESSAGE_DELETED)
-@tracked_task
+@app.task(name=MARK_SLACK_MESSAGE_DELETED, bind=True, max_retries=PUSH_READ_BACK_RETRIES)
+@tracked_task(job_type="mark_slack_message_deleted")
 def mark_slack_message_deleted(
-    workspace_id: str,
-    channel_id: str,
-    message_ts: str,
-    slack_app_id: int | None = None,
+    self, workspace_id: str, channel_id: str, message_ts: str, slack_app_id: int
 ) -> dict[str, Any]:
     """Hard-delete a Slack message in response to a `message_deleted` event.
 
-    Removes the SlackMessage row, its associated Chunks, and the underlying
-    Qdrant points. Message identity is ``(workspace_id, channel_id,
-    message_ts)``; ``slack_app_id`` limits it to messages its owner's apps ingested.
+    The deletion is confirmed with the pushing app's own token first: the app
+    must be able to read the channel, and Slack must no longer have the message
+    (or only its tombstone). Removes the SlackMessage row, its Chunks and its
+    Qdrant points. Message identity is ``(workspace_id, channel_id, message_ts)``.
     """
-    with make_session() as session:
-        message = (
-            session.query(SlackMessage)
-            .filter(
-                SlackMessage.workspace_id == workspace_id,
-                SlackMessage.channel_id == channel_id,
-                SlackMessage.message_ts == message_ts,
-            )
-            .first()
-        )
-        if not message:
-            logger.info(
-                f"mark_slack_message_deleted: no row for "
-                f"({workspace_id}, {channel_id}, {message_ts})"
-            )
-            return {"status": "not_found", "message_ts": message_ts}
-        if not may_change(session, message, slack_app_id):
-            return {"status": "ignored", "message_ts": message_ts}
+    stored, thread_ts = stored_thread_ts(workspace_id, channel_id, message_ts)
+    if not stored:
+        logger.info(f"mark_slack_message_deleted: no row for ({workspace_id}, {channel_id}, {message_ts})")
+        return {"status": "not_found", "message_ts": message_ts}
+    try:
+        seen = read_back(workspace_id, channel_id, message_ts, thread_ts, slack_app_id)
+    except PushedMessageUnread as e:
+        raise self.retry(exc=e, countdown=PUSH_READ_BACK_DELAY * (self.request.retries + 1))
+    if not seen.readable or (seen.message is not None and seen.message.get("subtype") != "tombstone"):
+        logger.info(f"Slack app {slack_app_id} pushed a delete of {message_ts} that Slack doesn't confirm; ignored")
+        return {"status": "ignored", "message_ts": message_ts}
 
+    with make_session() as session:
+        identity = {"workspace_id": workspace_id, "channel_id": channel_id, "message_ts": message_ts}
+        message = _get_existing_slack_message(session, identity)
+        if message is None:
+            return {"status": "not_found", "message_ts": message_ts}
         clear_item_chunks(message, session)
         session.delete(message)
         session.commit()
@@ -1363,63 +1342,76 @@ REACTION_RETRIES = 3
 REACTION_RETRY_SECONDS = 30
 
 
+def retry_reactions(retry_kwargs: dict[str, Any], attempt: int, status: str) -> dict[str, Any]:
+    if attempt >= REACTION_RETRIES:
+        return {"status": status, "message_ts": retry_kwargs["message_ts"]}
+    update_slack_reactions.apply_async(kwargs=retry_kwargs, countdown=REACTION_RETRY_SECONDS * (attempt + 1))
+    return {"status": "retrying", "message_ts": retry_kwargs["message_ts"]}
+
+
+def store_reactions(workspace_id: str, channel_id: str, message_ts: str, reactions: Reactions) -> bool:
+    """Replace a stored message's reactions; False when it is not stored."""
+    with make_session() as session:
+        message = (
+            session.query(SlackMessage)
+            .filter(
+                SlackMessage.workspace_id == workspace_id,
+                SlackMessage.channel_id == channel_id,
+                SlackMessage.message_ts == message_ts,
+            )
+            .with_for_update(of=SlackMessage.__table__)
+            .first()
+        )
+        if message is None:
+            return False
+        message.reactions = reactions
+        session.commit()
+        return True
+
+
 @app.task(name=UPDATE_SLACK_REACTIONS)
 @tracked_task
 def update_slack_reactions(
     workspace_id: str,
     channel_id: str,
     message_ts: str,
-    action: ReactionAction,
-    emoji: str | None = None,
-    user_id: str | None = None,
-    slack_app_id: int | None = None,
+    slack_app_id: int,
     attempt: int = 0,
+    **pushed_change: Any,
 ) -> dict[str, Any]:
     """Apply a `reaction_added` / `reaction_removed` event to a SlackMessage.
 
-    Only the slack_message row is locked while the per-user set operation
-    applies, so concurrent events for one message queue on it rather than
-    losing each other's updates; a lock conflict is retried.
+    The message's reactions are read back with the pushing app's own token and
+    stored as Slack lists them, so the push's own claim (``pushed_change``:
+    action, emoji, user) only says which message to refresh. A message the app
+    can't read keeps its reactions. A lock conflict is retried.
     """
     retry_kwargs = {
         "workspace_id": workspace_id,
         "channel_id": channel_id,
         "message_ts": message_ts,
-        "action": action,
-        "emoji": emoji,
-        "user_id": user_id,
         "slack_app_id": slack_app_id,
         "attempt": attempt + 1,
+        **pushed_change,
     }
+    stored, thread_ts = stored_thread_ts(workspace_id, channel_id, message_ts)
+    if not stored:
+        return retry_reactions(retry_kwargs, attempt, "not_found")
     try:
-        with make_session() as session:
-            message = (
-                session.query(SlackMessage)
-                .filter(
-                    SlackMessage.workspace_id == workspace_id,
-                    SlackMessage.channel_id == channel_id,
-                    SlackMessage.message_ts == message_ts,
-                )
-                .with_for_update(of=SlackMessage.__table__)
-                .first()
-            )
-            if message and not may_change(session, message, slack_app_id):
-                return {"status": "ignored", "message_ts": message_ts}
-            if message:
-                message.reactions = apply_reaction(message.reactions, action, emoji, user_id)
-                session.commit()
-                return {"status": "updated", "message_ts": message_ts}
+        message = read_pushed_message(workspace_id, channel_id, message_ts, thread_ts, slack_app_id)
+    except PushedMessageUnread:
+        return retry_reactions(retry_kwargs, attempt, "unread")
+    if message is None:
+        logger.info(f"Slack app {slack_app_id} can't read message {message_ts} it pushed a reaction for; ignored")
+        return {"status": "ignored", "message_ts": message_ts}
+
+    try:
+        updated = store_reactions(workspace_id, channel_id, message_ts, slack_reactions(message.get("reactions") or []) or {})
     except OperationalError:
         logger.info(f"Reaction update for Slack message {message_ts} hit a lock conflict; retrying")
         update_slack_reactions.apply_async(kwargs=retry_kwargs, countdown=1)
         return {"status": "retrying", "message_ts": message_ts}
-
-    if attempt >= REACTION_RETRIES:
-        return {"status": "not_found", "message_ts": message_ts}
-    update_slack_reactions.apply_async(
-        kwargs=retry_kwargs, countdown=REACTION_RETRY_SECONDS * (attempt + 1)
-    )
-    return {"status": "retrying", "message_ts": message_ts}
+    return {"status": "updated" if updated else "not_found", "message_ts": message_ts}
 
 
 @app.task(name=UPDATE_SLACK_CHANNEL)
