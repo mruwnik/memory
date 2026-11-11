@@ -19,6 +19,7 @@ import os
 import pathlib
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import islice
@@ -1201,21 +1202,21 @@ class PushedMessageUnread(Exception):
 
 
 class ReadBack(NamedTuple):
-    """A message as the pushing app's own token sees it. ``readable`` is False when
-    that token can't read the channel or thread; ``message`` is None when it can
-    but Slack has no message at that ts."""
+    """What a push names (a message or a channel) as the pushing app's own token
+    reads it. ``readable`` is False when that token can't read the channel or
+    thread; ``found`` is None when it can but Slack has no such object."""
 
     readable: bool
-    message: dict | None
+    found: dict | None
 
 
-UNREADABLE = ReadBack(readable=False, message=None)
+UNREADABLE = ReadBack(readable=False, found=None)
 
 
-def read_back(
-    workspace_id: str, channel_id: str, message_ts: str, thread_ts: str | None, slack_app_id: int
+def read_as_app(
+    workspace_id: str, channel_id: str, slack_app_id: int, read: Callable[[SlackClient], dict | None]
 ) -> ReadBack:
-    """Read the message a push names back with the pushing app's own token.
+    """Run ``read`` against Slack with the app's own token for the workspace.
     PushedMessageUnread when Slack is rate limiting or failing, so the push is
     retried instead of dropped."""
     with make_session() as session:
@@ -1228,15 +1229,24 @@ def read_back(
             return UNREADABLE
     try:
         with client:
-            return ReadBack(readable=True, message=find_message(client, channel_id, message_ts, thread_ts))
+            return ReadBack(readable=True, found=read(client))
     except (httpx.TransportError, json.JSONDecodeError) as e:
         # A JSONDecodeError is Slack's edge answering with an HTML error page.
         raise PushedMessageUnread(type(e).__name__) from e
     except SlackAPIError as e:
         if e.error in TRANSIENT_SLACK_ERRORS:
             raise PushedMessageUnread(e.error) from e
-        logger.info(f"Slack app {slack_app_id} can't read pushed message {message_ts} in {channel_id}: {e.error}")
+        logger.info(f"Slack app {slack_app_id} can't read channel {channel_id}: {e.error}")
         return UNREADABLE
+
+
+def read_back(
+    workspace_id: str, channel_id: str, message_ts: str, thread_ts: str | None, slack_app_id: int
+) -> ReadBack:
+    """Read the message a push names back with the pushing app's own token."""
+    return read_as_app(
+        workspace_id, channel_id, slack_app_id, lambda client: find_message(client, channel_id, message_ts, thread_ts)
+    )
 
 
 def read_pushed_message(
@@ -1244,7 +1254,7 @@ def read_pushed_message(
 ) -> dict | None:
     """The pushed message read back with the pushing app's own token; None
     when that app can't read it or Slack has no such message."""
-    return read_back(workspace_id, channel_id, message_ts, thread_ts, slack_app_id).message
+    return read_back(workspace_id, channel_id, message_ts, thread_ts, slack_app_id).found
 
 
 def stored_thread_ts(workspace_id: str, channel_id: str, message_ts: str) -> tuple[bool, str | None]:
@@ -1320,7 +1330,7 @@ def mark_slack_message_deleted(
         seen = read_back(workspace_id, channel_id, message_ts, thread_ts, slack_app_id)
     except PushedMessageUnread as e:
         raise self.retry(exc=e, countdown=PUSH_READ_BACK_DELAY * (self.request.retries + 1))
-    if not seen.readable or (seen.message is not None and seen.message.get("subtype") != "tombstone"):
+    if not seen.readable or (seen.found is not None and seen.found.get("subtype") != "tombstone"):
         logger.info(f"Slack app {slack_app_id} pushed a delete of {message_ts} that Slack doesn't confirm; ignored")
         return {"status": "ignored", "message_ts": message_ts}
 
@@ -1414,45 +1424,60 @@ def update_slack_reactions(
     return {"status": "updated" if updated else "not_found", "message_ts": message_ts}
 
 
-@app.task(name=UPDATE_SLACK_CHANNEL)
-@tracked_task
+def read_channel_info(client: SlackClient, channel_id: str) -> dict | None:
+    return client.call("conversations.info", channel=channel_id).get("channel")
+
+
+@app.task(name=UPDATE_SLACK_CHANNEL, bind=True, max_retries=PUSH_READ_BACK_RETRIES)
+@tracked_task(job_type="update_slack_channel")
 def update_slack_channel(
+    self,
     workspace_id: str,
     channel_id: str,
     channel_payload: dict,
-    slack_app_id: int | None = None,
+    slack_app_id: int,
 ) -> dict[str, Any]:
-    """Cheap upsert of channel metadata in response to a `channel_*` event.
+    """Apply a pushed `channel_*` event (created, rename, archive, unarchive).
 
-    ``channel_created`` inserts; ``channel_rename``, ``channel_archive`` and
-    ``channel_unarchive`` change only the fields their payload carries.
+    The push only names the channel: it is read with the pushing app's own
+    token (``conversations.info``) and its name, type and archived state are
+    stored as Slack returns them. A channel that token can't read, which
+    includes every other workspace's channels, is left alone and not created.
+    ``channel_payload`` is what the push claimed and is not stored.
     """
     with make_session() as session:
         channel = session.get(SlackChannel, channel_id)
         if channel is not None and channel.workspace_id != workspace_id:
             logger.info(f"Slack channel {channel_id} belongs to another workspace; event ignored")
             return {"status": "ignored", "channel_id": channel_id}
+    try:
+        seen = read_as_app(workspace_id, channel_id, slack_app_id, lambda client: read_channel_info(client, channel_id))
+    except PushedMessageUnread as e:
+        raise self.retry(exc=e, countdown=PUSH_READ_BACK_DELAY * (self.request.retries + 1))
+    info = seen.found
+    if info is None or info.get("id") != channel_id:
+        logger.info(f"Slack app {slack_app_id} pushed an event for channel {channel_id} it can't read; ignored")
+        return {"status": "ignored", "channel_id": channel_id}
+
+    with make_session() as session:
+        channel = session.get(SlackChannel, channel_id)
+        if channel is not None and channel.workspace_id != workspace_id:
+            return {"status": "ignored", "channel_id": channel_id}
         created = channel is None
         if channel is None:
-            channel = SlackChannel(
-                id=channel_id,
-                workspace_id=workspace_id,
-                name=channel_payload.get("name") or channel_id,
-                channel_type=get_channel_type(channel_payload),
-                is_private=bool(channel_payload.get("is_private", False)),
-                is_archived=bool(channel_payload.get("is_archived", False)),
-            )
+            channel = SlackChannel(id=channel_id, workspace_id=workspace_id, name=channel_id)
             session.add(channel)
-        else:
-            if channel_payload.get("name"):
-                channel.name = channel_payload["name"]
-            if "is_archived" in channel_payload:
-                channel.is_archived = bool(channel_payload["is_archived"])
-        session.commit()
-        return {
-            "status": "created" if created else "updated",
-            "channel_id": channel_id,
-        }
+        if info.get("name") and not info.get("is_im"):
+            channel.name = info["name"]
+        channel.channel_type = get_channel_type(info)
+        channel.is_private = bool(info.get("is_private", False))
+        channel.is_archived = bool(info.get("is_archived", False))
+        try:
+            session.commit()
+        except IntegrityError:
+            session.rollback()
+            return {"status": "ignored", "channel_id": channel_id}
+        return {"status": "created" if created else "updated", "channel_id": channel_id}
 
 
 def slack_ts(moment: str) -> str:

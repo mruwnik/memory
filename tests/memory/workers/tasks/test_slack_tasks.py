@@ -1303,23 +1303,6 @@ def test_credentials_use_an_api_url_an_admin_chose(db_session, slack_app, slack_
         assert slack_client_for(slack_credentials).base_url == "https://chat.example.com/api"
 
 
-@pytest.mark.parametrize(
-    "payload, expected",
-    [
-        ({"is_archived": True}, ("general", True, "private_channel")),
-        ({"id": "C12345678", "name": "renamed", "created": 1}, ("renamed", False, "private_channel")),
-    ],
-)
-def test_a_channel_event_changes_only_what_it_carries(db_session, slack_channel, payload, expected):
-    slack_channel.channel_type = "private_channel"
-    db_session.commit()
-
-    slack.update_slack_channel(slack_channel.workspace_id, slack_channel.id, payload)
-
-    db_session.refresh(slack_channel)
-    assert (slack_channel.name, slack_channel.is_archived, slack_channel.channel_type) == expected
-
-
 # =============================================================================
 # Cross-tenant isolation
 # =============================================================================
@@ -1335,8 +1318,8 @@ def other_workspace_channel(db_session):
     return channel
 
 
-def test_a_channel_event_from_another_workspace_is_ignored(db_session, slack_workspace, other_workspace_channel):
-    result = slack.update_slack_channel(slack_workspace.id, other_workspace_channel.id, {"name": "hijacked"})
+def test_a_channel_event_from_another_workspace_is_ignored(db_session, slack_workspace, slack_app, other_workspace_channel):
+    result = slack.update_slack_channel(slack_workspace.id, other_workspace_channel.id, {"name": "hijacked"}, slack_app.id)
 
     db_session.refresh(other_workspace_channel)
     assert (result["status"], other_workspace_channel.name) == ("ignored", "theirs")
@@ -1425,9 +1408,10 @@ REPLY_TS = "1704067600.000100"
 class FakeSlack:
     """Slack's conversations.history/replies, answering only for channels each token can read."""
 
-    def __init__(self, messages: dict[str, list[dict]], readable: dict[str, set[str]]):
+    def __init__(self, messages: dict[str, list[dict]], readable: dict[str, set[str]], channels: dict[str, dict] | None = None):
         self.messages = messages
         self.readable = readable
+        self.channels = channels or {}
         self.outage: str | Exception | httpx.Response | None = None
 
     def handle(self, request: httpx.Request) -> httpx.Response:
@@ -1442,11 +1426,13 @@ class FakeSlack:
         channel = form["channel"]
         if channel not in self.readable.get(token, set()):
             return httpx.Response(200, json={"ok": False, "error": "channel_not_found"})
+        method = request.url.path.rsplit("/", 1)[-1]
+        if method == "conversations.info":
+            return httpx.Response(200, json={"ok": True, "channel": self.channels[channel]})
         window = [
             m for m in self.messages.get(channel, [])
             if float(form["oldest"]) <= float(m["ts"]) <= float(form["latest"])
         ]
-        method = request.url.path.rsplit("/", 1)[-1]
         if method == "conversations.history":
             found = [m for m in window if m.get("thread_ts", m["ts"]) == m["ts"]]
         else:
@@ -1487,6 +1473,10 @@ def fake_slack(slack_channel):
     slack_side = FakeSlack(
         messages={SHARED_CHANNEL: [real | {"thread_ts": REAL_TS}, reply], slack_channel.id: [real]},
         readable={"xoxp-test-token": {slack_channel.id, SHARED_CHANNEL}, "xoxp-a": {SHARED_CHANNEL}},
+        channels={
+            SHARED_CHANNEL: {"id": SHARED_CHANNEL, "name": "shared", "is_private": False, "is_archived": False},
+            slack_channel.id: {"id": slack_channel.id, "name": "b-private", "is_private": True, "is_archived": True},
+        },
     )
     transport = httpx.MockTransport(slack_side.handle)
     with patch("memory.common.slack.public_sync_http_client", lambda **kw: httpx.Client(transport=transport, **kw)):
@@ -1720,6 +1710,57 @@ def test_update_slack_reactions_retries_a_lock_conflict(db_session, two_tenants,
         result = react_pushed(two_tenants["A"], SHARED_CHANNEL)
 
     assert (result["status"], retry.call_args.kwargs["kwargs"]["attempt"]) == ("retrying", 1)
+
+
+def channel_rows(db_session) -> list[tuple]:
+    db_session.expire_all()
+    rows = db_session.query(SlackChannel).order_by(SlackChannel.id)
+    return [(c.id, c.workspace_id, c.name, c.channel_type, c.is_archived) for c in rows]
+
+
+@pytest.mark.parametrize(
+    "pusher, channel_id, payload",
+    [
+        ("A", "C0VICTIM01", {"id": "C0VICTIM01", "name": "squatted"}),  # created: A's token can't read it
+        ("A", "C12345678", {"is_archived": False}),  # unarchive a channel only B reads
+        ("A", "C12345678", {"id": "C12345678", "name": "renamed"}),
+    ],
+)
+def test_a_pushed_channel_event_the_pushing_app_cannot_read_is_ignored(
+    db_session, two_tenants, fake_slack, slack_channel, pusher, channel_id, payload
+):
+    before = channel_rows(db_session)
+
+    result = slack.update_slack_channel("T12345678", channel_id, payload, two_tenants[pusher])
+
+    assert (result["status"], channel_rows(db_session)) == ("ignored", before)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [{"id": SHARED_CHANNEL, "name": "hijacked", "is_archived": True}, {"is_archived": True}],
+)
+def test_a_pushed_channel_event_is_stored_as_slack_has_the_channel(db_session, two_tenants, fake_slack, payload):
+    created = slack.update_slack_channel("T12345678", SHARED_CHANNEL, payload, two_tenants["A"])
+    again = slack.update_slack_channel("T12345678", SHARED_CHANNEL, payload, two_tenants["A"])
+
+    assert (created["status"], again["status"]) == ("created", "updated")
+    assert (SHARED_CHANNEL, "T12345678", "shared", "channel", False) in channel_rows(db_session)
+
+
+def test_a_pushed_channel_event_stores_slacks_rename_and_archive(db_session, two_tenants, fake_slack, slack_channel):
+    slack.update_slack_channel("T12345678", slack_channel.id, {"is_archived": False}, two_tenants["B"])
+
+    assert (slack_channel.id, "T12345678", "b-private", "private_channel", True) in channel_rows(db_session)
+
+
+def test_a_pushed_channel_event_slack_cannot_serve_yet_is_retried(db_session, two_tenants, fake_slack):
+    fake_slack.outage = "ratelimited"
+
+    with pytest.raises(slack.PushedMessageUnread):
+        slack.update_slack_channel("T12345678", SHARED_CHANNEL, {"is_archived": True}, two_tenants["A"])
+
+    assert SHARED_CHANNEL not in [row[0] for row in channel_rows(db_session)]
 
 
 @pytest.mark.parametrize(
