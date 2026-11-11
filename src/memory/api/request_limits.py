@@ -59,17 +59,18 @@ def limit_specs(path: str) -> list[tuple[str, str]]:
 
 
 def keyed_limits(path: str, address: str, credential: str | None) -> list[tuple[str, str, str]]:
-    """The (bucket name, limit spec, client key) triples a request counts against:
-    ``limit_specs`` by address, but the default bucket by credential when the
-    request carries one, plus the address's ceiling on credentialed requests."""
+    """The (bucket name, limit spec, client key) triples a request counts against,
+    in order: ``limit_specs`` by address, but the default bucket by credential when
+    the request carries one, after the address's ceiling on credentialed requests.
+    The ceiling comes first, so a request over it creates no per-credential counter."""
     specs = limit_specs(path)
     if credential is None:
         return [(bucket, spec, address) for bucket, spec in specs]
     principal = "credential:" + hash_token(credential)
     keyed = [(bucket, spec, principal if bucket == "default" else address) for bucket, spec in specs]
-    if any(bucket == "default" for bucket, _ in specs):
-        keyed.append(("credentialed", settings.API_RATE_LIMIT_CREDENTIALED_ADDRESS, address))
-    return keyed
+    if not any(bucket == "default" for bucket, _ in specs):
+        return keyed
+    return [("credentialed", settings.API_RATE_LIMIT_CREDENTIALED_ADDRESS, address), *keyed]
 
 
 def exceeded_limit(

@@ -193,8 +193,8 @@ ADDRESS = "10.0.0.1"
 @pytest.mark.parametrize(
     "path, keys",
     [
-        ("/auth/me", ["credential", ADDRESS]),
-        ("/register", ["credential", ADDRESS, ADDRESS]),
+        ("/auth/me", [ADDRESS, "credential"]),
+        ("/register", [ADDRESS, "credential", ADDRESS]),
         ("/mcp", [ADDRESS]),
         ("/github/webhook/3", [ADDRESS]),
         ("/health", []),
@@ -204,3 +204,13 @@ def test_only_the_default_bucket_is_keyed_by_credential(path, keys):
     keyed = request_limits.keyed_limits(path, ADDRESS, "tok")
 
     assert [key.split(":")[0] for _, _, key in keyed] == keys
+
+
+def test_tokens_over_the_address_ceiling_create_no_counters(monkeypatch):
+    monkeypatch.setattr(settings, "API_RATE_LIMIT_CREDENTIALED_ADDRESS", "2/minute")
+    request_limits.reset()
+
+    results = [request_limits.exceeded_limit("/auth/me", ADDRESS, f"made-up-{i}") for i in range(10)]
+
+    counters = [key for key in request_limits.storage.storage if "credential:" in key]
+    assert ([r is None for r in results], len(counters)) == ([True, True] + [False] * 8, 2)
