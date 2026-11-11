@@ -91,6 +91,7 @@ a new, empty `## Unreleased` above it.
 - `POST /sessions/ingest/batch` runs in the API threadpool instead of the event loop, and refuses with 413 events that would grow a session's transcript file past `MAX_SESSION_TRANSCRIPT_BYTES` (new, default 256 MiB). Before, each post re-read the whole transcript on the event loop, stalling every other request for seconds once a transcript was large, and transcripts could grow without limit.
 - Beeper messages are checked for HTML formatting, and their quoted reply parents removed, in time linear in their length; HTML nested too deeply to convert is stored as its text. Before, a 65,000-character message of unclosed tags held a worker for about 5 seconds, and deeply nested HTML failed to store.
 - At most `MAX_EMBEDDED_CHUNKS_PER_ITEM` (new, default 500, about 250,000 tokens) text chunks of one item are embedded on the server's Voyage key: past it, the item's first chunks and its summary are kept, and a WARNING log names the item id. Before, a 25 MB plain-text email from anyone embedded about 12,000 chunks.
+- Images are opened only as PNG, JPEG, GIF, WebP, BMP, TIFF, ICO or AVIF, whatever their declared type or file name; other formats fail to ingest. Before, an EPS file sent as `image/png` (an email attachment, chat image, upload or feed image) was accepted, and embedding it ran Ghostscript on the sender's PostScript with no time limit.
 ### Required env vars
 None
 

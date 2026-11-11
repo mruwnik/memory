@@ -13,6 +13,7 @@ from memory.common import chunker, settings, summarizer
 from memory.parsers import ebook
 import pymupdf  # PyMuPDF
 from PIL import Image
+from memory.common.images import open_image
 
 # Backstop for every Image.open in the process. PIL only *warns* (and still
 # decodes) between MAX_IMAGE_PIXELS and 2x it — the band a worker OOMs in — and
@@ -323,7 +324,7 @@ def safe_image_open(content: bytes | pathlib.Path) -> Image.Image:
     poison item forever. The raised error is catchable, so the embed path can
     record it as FAILED.
     """
-    image = Image.open(io.BytesIO(content) if isinstance(content, bytes) else content)
+    image = open_image(io.BytesIO(content) if isinstance(content, bytes) else content)
     pixels = image.width * image.height
     if pixels > settings.MAX_IMAGE_PIXELS:
         image.close()

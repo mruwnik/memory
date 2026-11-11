@@ -6,10 +6,10 @@ from pathlib import Path
 from datetime import datetime
 from typing import TypedDict
 
-from PIL import Image
 from PIL.ExifTags import TAGS
 
 from memory.common import paths, settings
+from memory.common.images import open_image
 from memory.common.celery_app import SYNC_PHOTO, REPROCESS_PHOTO, app
 from memory.common.db.connection import DBSession, make_session
 from memory.common.db.models import Photo
@@ -36,7 +36,7 @@ def extract_exif_data(image_path: Path) -> dict:
     """Extract EXIF metadata from an image file."""
     exif_data = {}
     try:
-        with Image.open(image_path) as img:
+        with open_image(image_path) as img:
             # _getexif is a private method not in type stubs
             exif = getattr(img, "_getexif", lambda: None)()
             if exif:

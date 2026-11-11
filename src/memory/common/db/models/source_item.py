@@ -40,6 +40,7 @@ from sqlalchemy.orm import Mapped, Session, mapped_column, relationship, validat
 from sqlalchemy.types import Numeric
 
 from memory.common import paths, settings
+from memory.common.images import open_image
 import memory.common.extract as extract
 import memory.common.collections as collections
 import memory.common.chunker as chunker
@@ -218,7 +219,7 @@ def chunk_mixed(content: str, image_paths: Sequence[str]) -> list[extract.DataCh
 
     # A post whose downloaded image went missing is still worth finding by its text.
     paths = [settings.FILE_STORAGE_DIR / image for image in image_paths]
-    images = [Image.open(path) for path in paths if path.is_file()]
+    images = [open_image(path) for path in paths if path.is_file()]
 
     is_long = summarizer.needs_summary(content)
     result = summarizer.summarize_or_defer(content, {} if is_long else None)
@@ -331,7 +332,7 @@ class Chunk(Base):
         if self.images:
             chunks += self.images
         elif self.file_paths:
-            chunks += [Image.open(pathlib.Path(cp)) for cp in self.file_paths]
+            chunks += [open_image(pathlib.Path(cp)) for cp in self.file_paths]
         return chunks
 
     @property
@@ -349,7 +350,7 @@ class Chunk(Base):
         for file_path in files:
             if file_path.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
                 if file_path.exists():
-                    items.append(Image.open(file_path))
+                    items.append(open_image(file_path))
             elif file_path.suffix == ".bin":
                 items.append(file_path.read_bytes())
             else:
@@ -699,7 +700,7 @@ class SourceItem(AccessControlMixin, Base):
             chunks = []
 
         if self.filename and self.mime_type and self.mime_type.startswith("image/"):
-            chunks.append(extract.DataChunk(data=[Image.open(self.filename)]))
+            chunks.append(extract.DataChunk(data=[open_image(self.filename)]))
         return chunks
 
     def make_chunk(
