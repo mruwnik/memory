@@ -100,3 +100,38 @@ def fb2(paragraphs: int) -> bytes:
         b"<?xml version='1.0'?><FictionBook xmlns='http://www.gribuser.ru/xml/fictionbook/2.0'>"
         b"<body><section>" + b"<p>a</p>" * paragraphs + b"</section></body></FictionBook>"
     )
+
+
+def pdf_stream(data: bytes, dictionary: bytes = b"") -> bytes:
+    return b"<< %s /Length %d >>\nstream\n%s\nendstream" % (dictionary, len(data), data)
+
+
+def nested_form_pdf(depth: int) -> bytes:
+    """A valid one-page PDF whose page draws a form that draws ten of the next
+    form, `depth` forms deep: about 2 KiB that MuPDF draws 10**depth times."""
+    first_form = 6
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R"
+        b" /Resources << /XObject << /F0 %d 0 R >> >> >>" % first_form,
+        pdf_stream(b"/F0 Do"),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    form = b"/Type /XObject /Subtype /Form /BBox [0 0 200 200] "
+    for level in range(depth - 1):
+        resources = b"/Resources << /XObject << /N %d 0 R >> >>" % (first_form + level + 1)
+        objects.append(pdf_stream(b"/N Do " * 10, form + resources))
+    text = b"BT /T1 8 Tf 10 10 Td (a) Tj ET"
+    objects.append(pdf_stream(text, form + b"/Resources << /Font << /T1 5 0 R >> >>"))
+
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for number, body in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n%s\nendobj\n" % (number, body)
+    xref = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+    out += b"".join(b"%010d 00000 n \n" % offset for offset in offsets)
+    out += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (len(objects) + 1, xref)
+    return bytes(out)

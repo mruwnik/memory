@@ -6,13 +6,13 @@ import logging
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Generator, TypedDict, cast
+from typing import Any, Generator, TypedDict
 
 import defusedxml.ElementTree as DefusedElementTree
 
 from memory.common.zip_limits import check_office_zip
 from memory.common import settings
-from memory.common.extract import open_pdf
+from memory.common.extract import read_pdf_pages
 
 logger = logging.getLogger(__name__)
 
@@ -351,19 +351,16 @@ class GoogleDriveClient:
         )
 
     def _extract_pdf_text(self, pdf_bytes: bytes) -> str | None:
-        """Extract text from PDF using PyMuPDF.
+        """Extract text from a PDF, parsed in MuPDF's sandbox.
 
         Returns None on failure so callers can distinguish empty PDFs from errors.
         """
         try:
-            with open_pdf(pdf_bytes) as doc:
-                if doc.page_count > settings.MAX_PDF_PAGES:
-                    logger.warning("Drive PDF has %d pages; skipping its text", doc.page_count)
-                    return None
-                return "\n\n".join(cast(str, page.get_text()) for page in doc.pages())
-        except Exception:
-            logger.exception("Failed to extract PDF text")
+            pages = read_pdf_pages(pdf_bytes, image_pages=0)
+        except ValueError as e:
+            logger.warning("Drive PDF text not extracted: %s", e)
             return None
+        return "\n\n".join(page.text or "" for page in pages)
 
     def _extract_docx_text(self, docx_bytes: bytes) -> str:
         """Extract text from Word document: empty when it can't be read or is

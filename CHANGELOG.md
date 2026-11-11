@@ -126,6 +126,8 @@ a new, empty `## Unreleased` above it.
 - `tools/ops/logs.sh` scrubs bytes and other prefixed literals (`b'...'`, `rb"..."`, `bytearray(b'...')`) like plain quoted strings, and cuts Celery's "raised unexpected:" lines to the exception's type.
 - Admins can sign out and delete any user's Beeper account (`POST /beeper/accounts/<id>/sign-out`, `DELETE /beeper/accounts/<id>`), freeing an allowlisted Server someone else added an account on.
 - `tools/backup_databases.sh` hands BACKUP_ENCRYPTION_KEY to openssl through the environment, and the `redis` service gets REDIS_PASSWORD through a private config file and `REDISCLI_AUTH` instead of `--requirepass` / `redis-cli --pass`: neither secret shows in the host's process list any more. Redis is recreated on the next `docker compose up -d`.
+- PDFs (mail attachments, uploads, reports, docx conversions, Google Drive) and books are parsed by MuPDF in a separate process with its own limits, and refused as unparseable when it breaches one: a few KiB of valid PDF or SVG could make MuPDF draw for minutes and use gigabytes inside the worker. New optional settings: `MUPDF_MEMORY_BYTES` (address space, default 1.5 GiB), `MUPDF_CPU_SECONDS` (default 300), `MUPDF_TIMEOUT_SECONDS` (wall clock, default 360) and `MUPDF_OUTPUT_BYTES` (page text and images handed back, default 512 MiB).
+- Gzip-compressed books are refused before parsing: MuPDF inflates them and opens what is inside, past every size check (a 61 KiB upload cost 108 s and 2.4 GB).
 ### Required env vars
 None
 

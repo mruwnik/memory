@@ -19,7 +19,7 @@ from memory.common.extract import (
     extract_pdf,
     extract_image,
     extract_data_chunks,
-    open_pdf,
+    read_pdf_pages,
     safe_image_open,
     docx_to_pdf,
     merge_metadata,
@@ -552,17 +552,16 @@ def epub_holding_a_pdf_header() -> bytes:
 def test_content_with_another_formats_signature_never_reaches_mupdf(tmp_path, data):
     path = tmp_path / "file.pdf"
     path.write_bytes(data)
-    with patch("memory.common.extract.pymupdf.open") as mupdf_open:
+    with patch("memory.common.extract.mupdf_sandbox.pdf_pages") as mupdf_pages:
         for content in (data, path):
             with pytest.raises(ValueError, match="Not a PDF"):
-                open_pdf(content)
-    mupdf_open.assert_not_called()
+                read_pdf_pages(content)
+    mupdf_pages.assert_not_called()
 
 
 @pytest.mark.parametrize("prefix", [b"", b"\0" * 1000, b"\r\n \t"])
-def test_open_pdf_accepts_the_header_after_whitespace(prefix):
-    with open_pdf(prefix + pdf_of_pages((612, 792))) as pdf:
-        assert pdf.page_count == 1
+def test_read_pdf_pages_accepts_the_header_after_whitespace(prefix):
+    assert len(read_pdf_pages(prefix + pdf_of_pages((612, 792)))) == 1
 
 
 def drive_client() -> GoogleDriveClient:

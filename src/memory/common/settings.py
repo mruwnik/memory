@@ -517,14 +517,24 @@ MAX_MISC_UPLOAD_BYTES = int(
     os.getenv("MAX_MISC_UPLOAD_BYTES", 100 * 1024 * 1024)
 )
 # A book with more markup than this is not parsed: MuPDF lays it out in memory,
-# roughly 50 bytes of worker RAM per byte, so a small compressed upload can OOM
-# a worker. An EPUB counts every entry's inflated size (images too, since any
-# entry can hold markup; raise it for image-heavy books if workers have the
-# memory), a MOBI its text records, any other format but PDF its file size.
+# roughly 50 bytes of RAM per byte, so this refuses early a book that would run
+# into MUPDF_MEMORY_BYTES. An EPUB counts every entry's inflated size (images
+# too, since any entry can hold markup; raise it for image-heavy books along
+# with MUPDF_MEMORY_BYTES), a MOBI its text records, any other format but PDF
+# its file size.
 MAX_EBOOK_INFLATED_BYTES = int(
     os.getenv("MAX_EBOOK_INFLATED_BYTES", 10 * 1024 * 1024)
 )
 MAX_EBOOK_ZIP_ENTRIES = int(os.getenv("MAX_EBOOK_ZIP_ENTRIES", 10_000))
+# Every MuPDF parse or render of a PDF or book runs in a child process with
+# these limits, and is refused when it breaches one: its address space, its CPU
+# time, its wall-clock time, and the results it may hand back (page text plus
+# page images of up to 6MB each). A few KiB of valid PDF can make MuPDF draw
+# billions of objects, so no check of the file itself bounds its cost.
+MUPDF_MEMORY_BYTES = int(os.getenv("MUPDF_MEMORY_BYTES", 1536 * 1024 * 1024))
+MUPDF_CPU_SECONDS = int(os.getenv("MUPDF_CPU_SECONDS", 300))
+MUPDF_TIMEOUT_SECONDS = int(os.getenv("MUPDF_TIMEOUT_SECONDS", 360))
+MUPDF_OUTPUT_BYTES = int(os.getenv("MUPDF_OUTPUT_BYTES", 512 * 1024 * 1024))
 # Images fetched for one web page or HTML report: <img> tags past the count,
 # or once the byte total is stored, keep their remote URLs.
 MAX_DOCUMENT_IMAGES = int(os.getenv("MAX_DOCUMENT_IMAGES", 100))

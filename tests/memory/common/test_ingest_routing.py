@@ -144,5 +144,8 @@ def _zip_without_mimetype() -> bytes:
 )
 def test_routing_never_opens_the_document(content, bucket):
     # Opening it with MuPDF lays out every page in the API's event loop.
-    with patch("pymupdf.open", side_effect=AssertionError("parsed in the API")):
+    with (
+        patch("pymupdf.open", side_effect=AssertionError("parsed in the API")),
+        patch("memory.common.mupdf_sandbox.run_job", side_effect=AssertionError("parsed in the API")),
+    ):
         assert ir.detect_bucket("application/octet-stream", content).name == bucket

@@ -10,9 +10,8 @@ from urllib.parse import unquote
 from xml.etree import ElementTree
 
 import defusedxml.ElementTree as DefusedElementTree
-import pymupdf
 from defusedxml import DefusedXmlException
-from memory.common import paths, settings
+from memory.common import mupdf_sandbox, paths, settings
 from memory.common.file_magic import (
     PALMDB_BOOK_SIGNATURES,
     PDF_MAGIC_WINDOW,
@@ -82,24 +81,19 @@ class Peekable:
 TOCItem = tuple[int, str, int]
 
 
-def extract_epub_metadata(doc) -> dict[str, Any]:
-    """Extract metadata from a PyMuPDF document (EPUB)."""
-    if not doc.metadata:
-        return {}
-
-    return {key: value for key, value in doc.metadata.items() if value}
+def extract_epub_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    """The book's metadata fields that have a value."""
+    return {key: value for key, value in metadata.items() if value}
 
 
-def get_pages(doc, start_page: int, end_page: int) -> list[str]:
-    pages = [
-        doc[page_num].get_text()
-        for page_num in range(start_page, end_page + 1)
-        if 0 <= page_num < doc.page_count
-    ]
-    return pages
+def get_pages(pages: list[str], start_page: int, end_page: int) -> list[str]:
+    """The text of pages ``start_page`` to ``end_page``, inclusive, that exist."""
+    return pages[max(start_page, 0) : max(end_page + 1, 0)]
 
 
-def extract_section_pages(doc, toc: Peekable, section_num: int = 1) -> Section | None:
+def extract_section_pages(
+    pages: list[str], toc: Peekable, section_num: int = 1
+) -> Section | None:
     """Extract all sections from a table of contents."""
     if not toc.peek():
         return None
@@ -110,11 +104,11 @@ def extract_section_pages(doc, toc: Peekable, section_num: int = 1) -> Section |
     level, name, page = item
     next_item = cast(TOCItem | None, toc.peek())
     if not next_item:
-        # Last section extends to the final page (page_count - 1 since 0-indexed)
-        last_page = doc.page_count - 1
+        # Last section extends to the final page (0-indexed)
+        last_page = len(pages) - 1
         return Section(
             title=name,
-            pages=get_pages(doc, page, last_page),
+            pages=get_pages(pages, page, last_page),
             number=section_num,
             start_page=page,
             end_page=last_page,
@@ -122,14 +116,14 @@ def extract_section_pages(doc, toc: Peekable, section_num: int = 1) -> Section |
 
     children = []
     while next_item and next_item[0] > level:
-        children.append(extract_section_pages(doc, toc, len(children) + 1))
+        children.append(extract_section_pages(pages, toc, len(children) + 1))
         next_item = cast(TOCItem | None, toc.peek())
 
     # When there's no next item, this section extends to the last page (0-indexed)
-    last_page = next_item[2] - 1 if next_item else doc.page_count - 1
+    last_page = next_item[2] - 1 if next_item else len(pages) - 1
     return Section(
         title=name,
-        pages=get_pages(doc, page, last_page),
+        pages=get_pages(pages, page, last_page),
         number=section_num,
         start_page=page,
         end_page=last_page,
@@ -137,16 +131,15 @@ def extract_section_pages(doc, toc: Peekable, section_num: int = 1) -> Section |
     )
 
 
-def extract_sections(doc) -> list[Section]:
-    """Extract all sections from a PyMuPDF document."""
-    toc = doc.get_toc()
+def extract_sections(pages: list[str], toc: list[TOCItem]) -> list[Section]:
+    """Split a book's page texts into sections by its table of contents."""
     if not toc:
         # No TOC - treat entire book as one section (page indices are 0-indexed)
-        last_page = doc.page_count - 1 if doc.page_count > 0 else 0
+        last_page = max(len(pages) - 1, 0)
         return [
             Section(
                 title="Content",
-                pages=get_pages(doc, 0, last_page),
+                pages=get_pages(pages, 0, last_page),
                 number=1,
                 start_page=0,
                 end_page=last_page,
@@ -154,9 +147,9 @@ def extract_sections(doc) -> list[Section]:
         ]
 
     sections = []
-    toc = Peekable(iter(doc.get_toc()))
-    while toc.peek():
-        section = extract_section_pages(doc, toc, len(sections) + 1)
+    items = Peekable(iter(toc))
+    while items.peek():
+        section = extract_section_pages(pages, items, len(sections) + 1)
         if section:
             sections.append(section)
     return sections
@@ -174,6 +167,8 @@ PALMDOC_HEADER = struct.Struct(">HHIHHHH")
 # Uncompressed and PalmDoc: MuPDF reads no other compression.
 PALMDOC_COMPRESSIONS = (1, 2)
 PALMDOC_RECORD_SIZE = 4096
+# MuPDF opens a gzip-compressed file as the document inside it.
+GZIP_MAGIC = b"\x1f\x8b"
 
 
 def stored_chunks(file: BinaryIO, info: zipfile.ZipInfo) -> Iterator[bytes]:
@@ -408,10 +403,13 @@ def check_parse_size(path: Path) -> None:
     inflating its entries (and refused unless the archive starts the file), a
     MOBI/PalmDoc signature by the text records, and anything that is neither,
     nor a PDF, by its size. MuPDF picks the format from the content, so the
-    file name and declared type don't matter.
+    file name and declared type don't matter. A gzip stream is refused: MuPDF
+    inflates it and opens whatever is inside, which none of these measure.
     """
     with path.open("rb") as file:
         head = file.read(PDF_MAGIC_WINDOW)
+    if head.startswith(GZIP_MAGIC):
+        raise ValueError("Book is gzip-compressed")
     zipped = zipfile.is_zipfile(path)
     palmdb = palmdb_signature(head) in PALMDB_BOOK_SIGNATURES
     if zipped:
@@ -436,42 +434,26 @@ def parse_ebook(file_path: str | Path) -> Ebook:
         Structured ebook data
 
     Raises:
-        ValueError: if the book's text is too large to parse.
+        ValueError: if the book is too large to parse, or MuPDF can't read it
+            within its sandbox's limits.
     """
     path = Path(file_path)
     if not path.exists():
         raise FileNotFoundError(f"File not found: {path}")
     check_parse_size(path)
 
-    try:
-        doc = pymupdf.open(str(path))
-    except pymupdf.FileNotFoundError:
-        logger.exception("Error opening ebook")
-        raise
-
-    try:
-        metadata = extract_epub_metadata(doc)
-
-        title = metadata.get("title", path.stem)
-        author = metadata.get("author", "Unknown")
-
-        sections = extract_sections(doc)
-        full_content = ""
-        if sections:
-            full_content = "\n\n".join(
-                page for section in sections for page in section.pages
-            )
-
-        return Ebook(
-            title=title,
-            author=author,
-            metadata=metadata,
-            sections=sections,
-            full_content=full_content,
-            file_path=path,
-            relative_path=paths.to_db_filename(path),
-            file_type=path.suffix.lower()[1:],
-            n_pages=doc.page_count,
-        )
-    finally:
-        doc.close()
+    book = mupdf_sandbox.book_contents(path)
+    metadata = extract_epub_metadata(book.metadata)
+    sections = extract_sections(book.pages, book.toc)
+    full_content = "\n\n".join(page for section in sections for page in section.pages)
+    return Ebook(
+        title=metadata.get("title", path.stem),
+        author=metadata.get("author", "Unknown"),
+        metadata=metadata,
+        sections=sections,
+        full_content=full_content,
+        file_path=path,
+        relative_path=paths.to_db_filename(path),
+        file_type=path.suffix.lower()[1:],
+        n_pages=len(book.pages),
+    )

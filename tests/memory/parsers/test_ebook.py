@@ -1,12 +1,14 @@
+import gzip
 import struct
 import zipfile
 import zlib
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 import pymupdf
 
 from memory.common import settings
+from memory.common.mupdf_sandbox import BookContents
 from memory.parsers.ebook import (
     Peekable,
     extract_epub_metadata,
@@ -37,32 +39,28 @@ def test_peekable_empty():
     assert list(p) == []
 
 
+PAGES = [f"Content of page {i}" for i in range(5)]
+TOC = [
+    (1, "Chapter 1", 0),
+    (2, "Section 1.1", 1),
+    (2, "Section 1.2", 2),
+    (1, "Chapter 2", 3),
+    (2, "Section 2.1", 4),
+]
+METADATA = {
+    "title": "Test Book",
+    "author": "Test Author",
+    "creator": "Test Creator",
+    "producer": "Test Producer",
+}
+
+
 @pytest.fixture
-def mock_doc():
-    doc = MagicMock()
-    doc.metadata = {
-        "title": "Test Book",
-        "author": "Test Author",
-        "creator": "Test Creator",
-        "producer": "Test Producer",
-    }
-    doc.page_count = 5
-
-    # Mock pages
-    doc.__getitem__.side_effect = lambda i: MagicMock(
-        get_text=lambda: f"Content of page {i}"
-    )
-
-    # Mock TOC
-    doc.get_toc.return_value = [
-        [1, "Chapter 1", 0],
-        [2, "Section 1.1", 1],
-        [2, "Section 1.2", 2],
-        [1, "Chapter 2", 3],
-        [2, "Section 2.1", 4],
-    ]
-
-    return doc
+def sandboxed_book():
+    """parse_ebook's sandbox call, answering with a five-page book."""
+    book = BookContents(metadata=dict(METADATA), toc=list(TOC), pages=list(PAGES))
+    with patch("memory.parsers.ebook.mupdf_sandbox.book_contents", return_value=book) as call:
+        yield call
 
 
 @pytest.mark.parametrize(
@@ -81,9 +79,7 @@ def mock_doc():
     ],
 )
 def test_extract_epub_metadata(metadata_input, expected):
-    doc = MagicMock()
-    doc.metadata = metadata_input
-    assert extract_epub_metadata(doc) == expected
+    assert extract_epub_metadata(metadata_input) == expected
 
 
 @pytest.mark.parametrize(
@@ -104,10 +100,12 @@ def test_extract_epub_metadata(metadata_input, expected):
             2,
             [f"Content of page {i}" for i in range(3)],
         ),  # Negative start
+        (-(10**12), 10**12, PAGES),  # A table of contents' pages cost nothing to clamp
+        (-5, -2, []),  # Wholly before the first page
     ],
 )
-def test_get_pages(mock_doc, start_page, end_page, expected_content):
-    assert get_pages(mock_doc, start_page, end_page) == expected_content
+def test_get_pages(start_page, end_page, expected_content):
+    assert get_pages(PAGES, start_page, end_page) == expected_content
 
 
 @pytest.fixture
@@ -121,8 +119,8 @@ def mock_toc_items():
     return Peekable(iter(items))
 
 
-def test_extract_section_pages(mock_doc, mock_toc_items):
-    assert extract_section_pages(mock_doc, mock_toc_items) == Section(
+def test_extract_section_pages(mock_toc_items):
+    assert extract_section_pages(PAGES, mock_toc_items) == Section(
         title="Chapter 1",
         number=1,
         start_page=0,
@@ -147,8 +145,8 @@ def test_extract_section_pages(mock_doc, mock_toc_items):
     )
 
 
-def test_extract_sections(mock_doc):
-    assert extract_sections(mock_doc) == [
+def test_extract_sections():
+    assert extract_sections(PAGES, TOC) == [
         Section(
             title="Chapter 1",
             number=1,
@@ -191,11 +189,8 @@ def test_extract_sections(mock_doc):
     ]
 
 
-def test_extract_sections_no_toc(mock_doc):
-    mock_doc.get_toc.return_value = []
-    mock_doc.get_text.return_value = "Full document content"
-
-    assert extract_sections(mock_doc) == [
+def test_extract_sections_no_toc():
+    assert extract_sections(PAGES, []) == [
         Section(
             title="Content",
             number=1,
@@ -207,11 +202,7 @@ def test_extract_sections_no_toc(mock_doc):
     ]
 
 
-@patch("pymupdf.open")
-def test_parse_ebook(mock_open, mock_doc, tmp_path):
-    mock_open.return_value = mock_doc
-
-    # Create a test file
+def test_parse_ebook(sandboxed_book, tmp_path):
     test_file = tmp_path / "test.epub"
     test_file.touch()
 
@@ -222,34 +213,19 @@ def test_parse_ebook(mock_open, mock_doc, tmp_path):
     assert len(ebook.sections) == 2
     assert ebook.file_path == test_file
     assert ebook.file_type == "epub"
+    assert ebook.n_pages == 5
+    assert ebook.full_content == "\n\n".join(PAGES)
+    sandboxed_book.assert_called_once_with(test_file)
 
 
-@patch("pymupdf.open")
-def test_parse_ebook_file_not_found(mock_open, tmp_path):
-    non_existent_file = tmp_path / "does_not_exist.epub"
-
+def test_parse_ebook_file_not_found(sandboxed_book, tmp_path):
     with pytest.raises(FileNotFoundError):
-        parse_ebook(non_existent_file)
+        parse_ebook(tmp_path / "does_not_exist.epub")
+    sandboxed_book.assert_not_called()
 
 
-@patch("pymupdf.open")
-def test_parse_ebook_fitz_error(mock_open, tmp_path):
-    # Create a test file to avoid FileNotFoundError
-    test_file = tmp_path / "test.epub"
-    test_file.touch()
-
-    # Mock pymupdf.open to raise the FileNotFoundError
-    mock_open.side_effect = pymupdf.FileNotFoundError("File not found by PyMuPDF")
-
-    with pytest.raises(pymupdf.FileNotFoundError):
-        parse_ebook(test_file)
-
-
-@patch("pymupdf.open")
-def test_parse_ebook_no_metadata(mock_open, mock_doc, tmp_path):
-    mock_doc.metadata = {}
-    mock_open.return_value = mock_doc
-
+def test_parse_ebook_no_metadata(sandboxed_book, tmp_path):
+    sandboxed_book.return_value.metadata = {}
     test_file = tmp_path / "test.epub"
     test_file.touch()
 
@@ -269,36 +245,21 @@ def test_parse_ebook_no_metadata(mock_open, mock_doc, tmp_path):
         ("", ""),  # No extension
     ],
 )
-@patch("pymupdf.open")
-def test_parse_ebook_file_types(
-    mock_open, mock_doc, tmp_path, file_suffix, expected_type
-):
-    mock_open.return_value = mock_doc
-
-    # Create a test file with the given suffix
+def test_parse_ebook_file_types(sandboxed_book, tmp_path, file_suffix, expected_type):
     test_file = tmp_path / f"test{file_suffix}"
     test_file.touch()
 
-    ebook = parse_ebook(test_file)
-    assert ebook.file_type == expected_type
+    assert parse_ebook(test_file).file_type == expected_type
 
 
 def test_extract_section_pages_empty():
     """Test with empty TOC."""
-    doc = MagicMock()
-    doc.page_count = 5
-
-    empty_toc = Peekable(iter([]))
-    assert extract_section_pages(doc, empty_toc) is None
+    assert extract_section_pages(PAGES, Peekable(iter([]))) is None
 
 
 def test_extract_section_pages_deeply_nested():
     """Test with deeply nested TOC structure."""
-    doc = MagicMock()
-    doc.page_count = 10
-    doc.__getitem__.side_effect = lambda i: MagicMock(
-        get_text=lambda: f"Content of page {i}"
-    )
+    pages = [f"Content of page {i}" for i in range(10)]
 
     # Create a deeply nested TOC structure
     items = [
@@ -313,7 +274,7 @@ def test_extract_section_pages_deeply_nested():
     toc = Peekable(iter(items))
 
     # Extract the top-level section
-    section = extract_section_pages(doc, toc)
+    section = extract_section_pages(pages, toc)
     assert section is not None
     assert section.title == "Chapter 1"
     assert section.start_page == 0
@@ -342,62 +303,33 @@ def test_extract_section_pages_deeply_nested():
     assert len(subsubsection.children) == 0  # No children
 
 
-def test_extract_sections_with_different_toc_formats():
-    """Test ability to handle different TOC formats."""
-    doc = MagicMock()
-    doc.page_count = 5
-    doc.__getitem__.side_effect = lambda i: MagicMock(
-        get_text=lambda: f"Content of page {i}"
-    )
+@pytest.mark.parametrize(
+    "toc",
+    [[(1, "Chapter 1", 0), (1, "Chapter 2", 3)], [[1, "Chapter 1", 0], [1, "Chapter 2", 3]]],
+    ids=["tuples", "lists"],
+)
+def test_extract_sections_with_different_toc_formats(toc):
+    sections = extract_sections(PAGES, toc)
 
-    # Test with tuple format TOC
-    doc.get_toc.return_value = [
-        (1, "Chapter 1", 0),
-        (1, "Chapter 2", 3),
-    ]
-
-    sections = extract_sections(doc)
-    assert len(sections) == 2
-    assert sections[0].title == "Chapter 1"
-    assert sections[1].title == "Chapter 2"
-
-    # Test with list format TOC (same representation in PyMuPDF)
-    doc.get_toc.return_value = [
-        [1, "Chapter 1", 0],
-        [1, "Chapter 2", 3],
-    ]
-
-    sections = extract_sections(doc)
-    assert len(sections) == 2
-    assert sections[0].title == "Chapter 1"
-    assert sections[1].title == "Chapter 2"
+    assert [s.title for s in sections] == ["Chapter 1", "Chapter 2"]
 
 
-@patch("pymupdf.open")
-def test_parse_ebook_full_content_generation(mock_open, mock_doc, tmp_path):
-    """Test full content is correctly concatenated from sections."""
-    # Setup mock document with sections
-    mock_doc.metadata = {"title": "Test Book", "author": "Test Author"}
-    mock_doc.page_count = 3
+def test_parse_ebook_reads_a_real_book_in_the_sandbox(tmp_path):
+    path = tmp_path / "book.epub"
+    path.write_bytes(book_files.epub(book_files.markup(3)))
 
-    # Create sections with specific content
-    section1 = MagicMock()
-    section1.pages = ["Content of section 1"]
-    section2 = MagicMock()
-    section2.pages = ["Content of section 2"]
+    ebook = parse_ebook(path)
 
-    # Mock extract_sections to return our sections
-    with patch("memory.parsers.ebook.extract_sections") as mock_extract:
-        mock_extract.return_value = [section1, section2]
+    assert ebook.title == "t"
+    assert ebook.full_content.split() == ["a", "a", "a"]
 
-        mock_open.return_value = mock_doc
-        test_file = tmp_path / "test.epub"
-        test_file.touch()
 
-        ebook = parse_ebook(test_file)
+def test_parse_ebook_refuses_a_book_mupdf_cannot_read(tmp_path):
+    path = tmp_path / "book.epub"
+    path.write_bytes(b"PK\x03\x04" + b"\0" * 100)
 
-        # Check the full content is concatenated correctly
-        assert ebook.full_content == "Content of section 1\n\nContent of section 2"
+    with pytest.raises(ValueError):
+        parse_ebook(path)
 
 
 def write_epub(path, entries: dict[str, bytes]):
@@ -455,7 +387,7 @@ def test_parse_ebook_refuses_book_too_large_to_parse(tmp_path, make_book):
     with (
         patch.object(settings, "MAX_EBOOK_INFLATED_BYTES", 100_000),
         patch.object(settings, "MAX_EBOOK_ZIP_ENTRIES", 50),
-        patch("memory.parsers.ebook.pymupdf.open") as mupdf_open,
+        patch("memory.parsers.ebook.mupdf_sandbox.book_contents") as mupdf_open,
         pytest.raises(ValueError),
     ):
         parse_ebook(path)
@@ -510,7 +442,7 @@ def test_parse_ebook_refuses_unzipped_book_too_large_to_parse(tmp_path, data):
 
     with (
         patch.object(settings, "MAX_EBOOK_INFLATED_BYTES", 100_000),
-        patch("memory.parsers.ebook.pymupdf.open") as mupdf_open,
+        patch("memory.parsers.ebook.mupdf_sandbox.book_contents") as mupdf_open,
         pytest.raises(ValueError),
     ):
         parse_ebook(path)
@@ -667,4 +599,22 @@ def test_check_parse_size_refuses_too_many_package_files(tmp_path):
         archive.writestr("META-INF/container.xml", f"<container><rootfiles>{rootfiles}</rootfiles></container>")
 
     with pytest.raises(ValueError, match="more than 8 rootfile"):
+        check_parse_size(path)
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        gzip.compress(book_files.markup(1024 * 1024), 9),
+        gzip.compress(book_files.epub(book_files.markup(10))),
+        gzip.compress(book_files.fb2(10)),
+        gzip.compress(book_files.nested_form_pdf(2)),
+    ],
+    ids=["html", "epub", "fb2", "pdf"],
+)
+def test_check_parse_size_refuses_a_gzip_compressed_book(tmp_path, data):
+    path = tmp_path / "book.epub"
+    path.write_bytes(data)
+
+    with pytest.raises(ValueError, match="gzip"):
         check_parse_size(path)
