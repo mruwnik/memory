@@ -78,7 +78,7 @@ def admin_session(db_session, admin_user):
 
 
 @pytest.fixture
-def teams_and_projects(db_session, regular_user, qdrant):
+def teams_and_projects(db_session, regular_user):
     """Create sample teams, projects, and memberships for testing access control."""
     # Create persons
     person1 = Person(identifier="person1", display_name="Person One")
@@ -490,7 +490,7 @@ async def test_project_update_access_control(
 
 @pytest.mark.asyncio
 async def test_project_update_success(db_session, user_session, teams_and_projects):
-    """Successful project update."""
+    """A team lead updates their project."""
     from memory.api.MCP.servers.projects import upsert as project_upsert
 
     mock_token = make_mock_access_token(user_session.token)
@@ -500,7 +500,7 @@ async def test_project_update_success(db_session, user_session, teams_and_projec
         patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
     ):
         mock_make_session.return_value.__enter__.return_value = db_session
-        result = await get_fn(project_upsert)(title="Updated Title", project_id=-1, description="Updated desc")
+        result = await get_fn(project_upsert)(title="Updated Title", project_id=-2, description="Updated desc")
 
     assert result.get("success") is True, f"Expected success, got: {result}"
     assert result["project"]["title"] == "Updated Title"
@@ -508,11 +508,11 @@ async def test_project_update_success(db_session, user_session, teams_and_projec
 
 
 @pytest.mark.asyncio
-async def test_project_update_clear_parent(db_session, user_session, teams_and_projects):
+async def test_project_update_clear_parent(db_session, admin_session, teams_and_projects):
     """project_update with clear_parent=True removes the parent."""
     from memory.api.MCP.servers.projects import upsert as project_upsert
 
-    mock_token = make_mock_access_token(user_session.token)
+    mock_token = make_mock_access_token(admin_session.token)
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -526,11 +526,11 @@ async def test_project_update_clear_parent(db_session, user_session, teams_and_p
 
 
 @pytest.mark.asyncio
-async def test_project_update_prevents_circular_parent(db_session, user_session, teams_and_projects):
+async def test_project_update_prevents_circular_parent(db_session, admin_session, teams_and_projects):
     """project_update should prevent circular parent references."""
     from memory.api.MCP.servers.projects import upsert as project_upsert
 
-    mock_token = make_mock_access_token(user_session.token)
+    mock_token = make_mock_access_token(admin_session.token)
 
     with (
         patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
@@ -816,11 +816,11 @@ async def test_project_upsert_team_replacement_allowed_for_lead(
         (["projects:write"], "manager", True),
     ],
 )
-def test_caller_can_administer_project_unit(scopes, project_role, expected):
+def test_user_can_administer_project_unit(scopes, project_role, expected):
     """Pure-unit test of the role gate: admin scope OR manager/admin project role."""
     from unittest.mock import patch
 
-    from memory.api.MCP.servers.projects import caller_can_administer_project
+    from memory.common.access_control import user_can_administer_project
 
     user = MagicMock()
     user.scopes = scopes
@@ -828,10 +828,10 @@ def test_caller_can_administer_project_unit(scopes, project_role, expected):
     project_roles = {} if project_role is None else {42: project_role}
     fake_session = MagicMock()
     with patch(
-        "memory.api.MCP.servers.projects.get_user_project_roles",
+        "memory.common.access_control.get_user_project_roles",
         return_value=project_roles,
     ):
-        assert caller_can_administer_project(fake_session, user, 42) is expected
+        assert user_can_administer_project(fake_session, user, 42) is expected
 
 
 # =============================================================================
@@ -1958,7 +1958,7 @@ async def test_detach_standalone_project_is_noop(
     """clear_repo=True on a standalone project succeeds without changes."""
     from memory.api.MCP.servers.projects import upsert
 
-    project = teams_and_projects["project_one"]
+    project = teams_and_projects["project_two"]
     assert project.repo_id is None
     mock_token = make_mock_access_token(user_session.token)
 
@@ -3263,3 +3263,119 @@ async def test_promote_failed_refresh_leaves_project_at_repo_level(
     refreshed_repo = db_session.get(GithubRepo, github_repo.id)
     assert refreshed_repo is not None
     assert refreshed_repo.active is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"title": "Renamed"},
+        {"description": "Rewritten"},
+        {"state": "closed"},
+        {"clear_parent": True},
+        {"parent_id": -2},
+        {"owner_id": None},
+        {"due_on": "2030-01-01T00:00:00Z"},
+        {"clear_due_on": True},
+        {"doc_url": "https://example.com/doc"},
+        {"clear_repo": True},
+        {"clear_milestone": True},
+        {"repo": "testorg/testrepo"},
+        {},
+    ],
+)
+async def test_project_upsert_refuses_contributor_changes(
+    db_session, user_session, teams_and_projects, changes
+):
+    """A team `member` (project contributor) can read a project but not change it."""
+    from memory.api.MCP.servers.projects import upsert
+
+    # project_child (-4) belongs to team_alpha, where regular_user is a `member`.
+    mock_token = make_mock_access_token(user_session.token)
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+        patch("memory.api.MCP.servers.projects.handle_attach") as mock_attach,
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+        result = await get_fn(upsert)(project_id=-4, **changes)
+
+    assert "Forbidden" in result["error"]
+    mock_attach.assert_not_called()
+    db_session.expire_all()
+    child = db_session.get(Project, -4)
+    assert (child.title, child.state, child.parent_id, child.doc_url) == (
+        "Child Project",
+        "open",
+        -1,
+        None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_project_upsert_refuses_parent_the_caller_cannot_see(
+    db_session, user_session, teams_and_projects
+):
+    """A lead re-parenting under a project outside their teams gets 'not found'."""
+    from memory.api.MCP.servers.projects import upsert
+
+    # regular_user leads team_beta (project -2); project -3 is team_gamma's.
+    mock_token = make_mock_access_token(user_session.token)
+    with (
+        patch("memory.api.MCP.access.get_access_token", return_value=mock_token),
+        patch("memory.api.MCP.servers.projects.make_session") as mock_make_session,
+    ):
+        mock_make_session.return_value.__enter__.return_value = db_session
+        result = await get_fn(upsert)(project_id=-2, parent_id=-3)
+
+    assert result["error"] == "Parent project not found: -3"
+    db_session.expire_all()
+    assert db_session.get(Project, -2).parent_id is None
+
+
+def recreate_repo_project(session, user, teams):
+    from memory.common.project import creation
+
+    return creation.create_repo_project(
+        session, user, teams, "testorg/testrepo", None, "open", None, None, None, None, None
+    )
+
+
+def recreate_milestone_project(session, user, teams):
+    from memory.common.project import creation
+
+    return creation.create_milestone_project(
+        session, user, teams, "testorg/testrepo", "m1", None, None, None, None, None, None
+    )
+
+
+@pytest.mark.parametrize(
+    "recreate,number",
+    [(recreate_repo_project, None), (recreate_milestone_project, 7)],
+)
+def test_create_project_existing_branch_refuses_contributor(
+    db_session, regular_user, teams_and_projects, github_repo, recreate, number
+):
+    """Re-creating a repo/milestone project that exists replaces its teams, so it
+    needs the same role as changing the project."""
+    from memory.common.project import creation
+    from memory.common.project.errors import ProjectAccessDeniedError
+
+    team_alpha = teams_and_projects["team_alpha"]
+    team_gamma = teams_and_projects["team_gamma"]
+    existing = Project(id=-60, title="m1", state="open", repo_id=github_repo.id, number=number)
+    existing.teams = [team_alpha]
+    db_session.add(existing)
+    db_session.commit()
+
+    client = MagicMock()
+    client.ensure_milestone.return_value = ({"number": 7, "github_id": 99, "title": "m1"}, False)
+    ensured = (client, github_repo, False, False, "testorg", "testrepo")
+    with (
+        patch.object(creation, "_ensure_repo_for_create", return_value=ensured),
+        pytest.raises(ProjectAccessDeniedError),
+    ):
+        recreate(db_session, regular_user, [team_gamma])
+
+    db_session.expire_all()
+    assert [t.id for t in db_session.get(Project, -60).teams] == [team_alpha.id]

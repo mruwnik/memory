@@ -419,6 +419,9 @@ OAUTH_UNUSED_CLIENT_DAYS = int(os.getenv("OAUTH_UNUSED_CLIENT_DAYS", 30))
 # Used by /oauth/login and /api/users/me/change-password — see
 # `memory.common.rate_limit`.
 API_RATE_LIMIT_AUTH = os.getenv("API_RATE_LIMIT_AUTH", "10/minute")
+# A correct password from an address that logged in to the account within
+# this many days is let through even while its failed-login bucket is full.
+LOGIN_KNOWN_ADDRESS_DAYS = int(os.getenv("LOGIN_KNOWN_ADDRESS_DAYS", 30))
 # Comma-separated set of immediate-hop IPs whose ``X-Forwarded-For`` the
 # rate limiter should trust. Anything else falls back to the direct
 # connection IP — preventing a remote attacker from rotating XFF to mint
@@ -460,6 +463,18 @@ AUDIT_RETENTION_DAYS = int(os.getenv("AUDIT_RETENTION_DAYS", 730))
 MAX_TELEMETRY_PAYLOAD_BYTES = int(
     os.getenv("MAX_TELEMETRY_PAYLOAD_BYTES", 5 * 1024 * 1024)
 )
+
+# Request body caps, enforced before authentication (api/body_limit.py).
+# Routes anyone can reach without logging in (poll responses, login, OAuth
+# registration and token, password reset, setup) get the public cap; every
+# other route gets the default, except the uploads and webhooks below.
+REQUEST_BODY_MAX_BYTES = int(os.getenv("REQUEST_BODY_MAX_BYTES", 16 * 1024 * 1024))
+PUBLIC_REQUEST_BODY_MAX_BYTES = int(os.getenv("PUBLIC_REQUEST_BODY_MAX_BYTES", 256 * 1024))
+# Slack, Discord and transcript push webhooks.
+WEBHOOK_MAX_BODY_BYTES = int(os.getenv("WEBHOOK_MAX_BODY_BYTES", 1024 * 1024))
+# GitHub deliveries of the events read (issues, PRs, comments, checks, statuses)
+# are far smaller; GitHub itself sends up to 25 MB (e.g. large pushes).
+GITHUB_WEBHOOK_MAX_BODY_BYTES = int(os.getenv("GITHUB_WEBHOOK_MAX_BODY_BYTES", 5 * 1024 * 1024))
 
 # Per-request size caps for the authenticated content-upload endpoints
 # (``/books/upload``, ``/photos/upload``, ``/reports/upload``). All three

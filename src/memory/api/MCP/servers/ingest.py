@@ -56,7 +56,8 @@ async def add_content(
         `type` or the call fails.
       - `data`: base64-encoded bytes, inlined (only up to a size limit).
       - neither, or data over the limit: you receive a short-lived
-        `upload_url` to PUT the bytes to.
+        `upload_url` to PUT the bytes to. It takes one upload; if that
+        fails, call add_content again for a new one.
 
     Args:
         type: Expected MIME type of the content.

@@ -88,19 +88,26 @@ def test_rate_limit_key_honors_xff_from_trusted_proxy(make_request, peer, truste
     assert key == "203.0.113.7"
 
 
-def test_rate_limit_key_uses_first_xff_entry(make_request):
-    """RFC 7239 §5.2: the left-most XFF entry is the original client."""
+@pytest.mark.parametrize(
+    "xff, trusted, expected",
+    [
+        # An appending proxy keeps whatever the client sent on the left.
+        ("1.1.1.1, 203.0.113.7", "10.0.0.5", "203.0.113.7"),
+        ("9.9.9.9, 203.0.113.7, 10.0.0.99", "10.0.0.5,10.0.0.99", "203.0.113.7"),
+        ("203.0.113.7, 10.0.0.99", "10.0.0.5", "10.0.0.99"),
+        # Every hop trusted: the left-most is the client.
+        ("10.0.0.7, 10.0.0.6", "10.0.0.0/24", "10.0.0.7"),
+    ],
+)
+def test_rate_limit_key_takes_right_most_untrusted_hop(make_request, xff, trusted, expected):
+    """Only hops trusted proxies appended count; entries left of the first
+    untrusted one (from the right) are the client's to choose."""
     from memory.common.rate_limit import rate_limit_key
 
-    request = make_request(
-        "10.0.0.5",
-        {"X-Forwarded-For": "203.0.113.7, 10.0.0.99, 10.0.0.5"},
-    )
-    with patch(
-        "memory.common.settings.RATE_LIMIT_TRUSTED_PROXIES", "10.0.0.5"
-    ):
+    request = make_request("10.0.0.5", {"X-Forwarded-For": xff})
+    with patch("memory.common.settings.RATE_LIMIT_TRUSTED_PROXIES", trusted):
         key = rate_limit_key(cast(Any, request))
-    assert key == "203.0.113.7"
+    assert key == expected
 
 
 def test_rate_limit_key_falls_back_when_xff_empty(make_request):

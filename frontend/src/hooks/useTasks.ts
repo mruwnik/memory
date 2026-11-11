@@ -51,15 +51,14 @@ export const useTasks = () => {
     // and rely on include_completed=false to filter out done/cancelled
     const statusParam = filters.status?.includes(',') ? undefined : filters.status
 
-    const result = await mcpCall<TodoTask[][]>('organizer_list_tasks', {
+    const result = await mcpCall<{ tasks: TodoTask[] }[]>('organizer_list_tasks', {
       status: statusParam,
       priority: filters.priority,
       include_completed: filters.include_completed ?? false,
       limit: filters.limit ?? 50,
       offset: filters.offset ?? 0,
     })
-    // mcpCall returns array from .map(), unwrap the first element
-    return result?.[0] || []
+    return result?.[0]?.tasks ?? []
   }, [mcpCall])
 
   const getTask = useCallback(async (taskId: number): Promise<TodoTask | null> => {

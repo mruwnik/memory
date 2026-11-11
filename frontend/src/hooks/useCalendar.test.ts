@@ -14,7 +14,7 @@ import { mcpResult } from './mcpEnvelope.testhelper'
 function routeMcpDynamic(makeEvents: () => CalendarEvent[]) {
   return mockFetch(async (input) => {
     if (String(input).endsWith('/auth/me')) return mockResponse({ json: {} })
-    return mockResponse(mcpResult(makeEvents()))
+    return mockResponse(mcpResult({ events: makeEvents() }))
   })
 }
 
@@ -137,13 +137,13 @@ describe('useCalendar.getMonthEvents (caching)', () => {
     mockFetch(async (input) => {
       if (String(input).endsWith('/auth/me')) return mockResponse({ json: {} })
       if (++calls === 1) return new Promise<Response>(resolve => { finishOld = resolve })
-      return mockResponse(mcpResult([ev(2, '2024-07-02T00:00:00Z')]))
+      return mockResponse(mcpResult({ events: [ev(2, '2024-07-02T00:00:00Z')] }))
     })
     const { result } = renderHook(() => useCalendar())
     const old = result.current.getMonthEvents(2024, 6)
     result.current.clearCache()
     await result.current.getMonthEvents(2024, 6)
-    finishOld(mockResponse(mcpResult([ev(1, '2024-07-01T00:00:00Z')])))
+    finishOld(mockResponse(mcpResult({ events: [ev(1, '2024-07-01T00:00:00Z')] })))
     await old
     expect((await result.current.getMonthEvents(2024, 6))[0].id).toBe(2)
   })
@@ -167,7 +167,7 @@ describe('useCalendar.getEventsForMonths', () => {
       n += 1
       const unique = ev(100 + n, `2024-02-${String(10 + n).padStart(2, '0')}T00:00:00Z`)
       const dup = ev(1, '2024-02-01T00:00:00Z')
-      return mockResponse(mcpResult([unique, dup]))
+      return mockResponse(mcpResult({ events: [unique, dup] }))
     })
     const { result } = renderHook(() => useCalendar())
     const events = await result.current.getEventsForMonths(2024, 1) // Feb
@@ -186,7 +186,7 @@ describe('useCalendar.getEventsForMonths', () => {
       if (String(input).endsWith('/auth/me')) return mockResponse({ json: {} })
       const a = JSON.parse(init?.body as string).params.arguments
       seen.push({ start: a.start_date })
-      return mockResponse(mcpResult([]))
+      return mockResponse(mcpResult({ events: [] }))
     })
     const { result } = renderHook(() => useCalendar())
     await result.current.getEventsForMonths(2024, 0) // January

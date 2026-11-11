@@ -6,6 +6,7 @@ from typing import Any, Literal
 from fastmcp import FastMCP
 from sqlalchemy import or_
 
+from memory.agents.subscription_input import new_tag, preamble, wrap_fields
 from memory.api.MCP.access import (
     UserProxy,
     get_mcp_current_user,
@@ -218,7 +219,8 @@ async def list_all(
         offset: Number of entries to skip (default: 0)
 
     Returns:
-        List of journal entries with total count.
+        {untrusted, entries, total, limit, offset}. untrusted names the tag of the
+        blocks holding each entry's content, which people wrote.
     """
     user = get_mcp_current_user()
     if user is None or user.id is None:
@@ -262,8 +264,10 @@ async def list_all(
             query.order_by(JournalEntry.created_at.asc()).offset(offset).limit(limit).all()
         )
 
+        tag = new_tag()
         return {
-            "entries": [e.as_payload() for e in entries],
+            "untrusted": preamble(tag),
+            "entries": [wrap_fields(tag, e.as_payload(), {"content"}) for e in entries],
             "total": total,
             "limit": limit,
             "offset": offset,
