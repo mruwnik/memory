@@ -37,10 +37,12 @@ from memory.common.db.models.users import (
     utc_timestamp,
 )
 from memory.api.auth import (
+    has_userinfo,
     is_expired,
     is_web_ui_callback,
     lookup_principal,
     on_web_ui_origin,
+    origin_of,
     system_scopes,
 )
 from memory.common.scopes import (
@@ -60,19 +62,6 @@ def token_id(token: str) -> str:
     Returns first 8 chars of SHA256 hash - enough for correlation, not enough for brute-force.
     """
     return hash_token(token)[:8]
-
-
-def redirect_uri_origin(uri: str) -> tuple[str, str, int | None]:
-    """Return the (scheme, host, port) origin of a redirect URI.
-
-    Used to compare allowlist entries to client-supplied redirect_uris
-    by *origin*, not by string prefix.  String-prefix matching is unsafe:
-    ``http://localhost.evil.com`` starts with ``http://localhost``, so a
-    naive ``startswith`` allowlist would let an attacker register an
-    arbitrary host.
-    """
-    parsed = urlparse(uri)
-    return (parsed.scheme, parsed.hostname or "", parsed.port)
 
 
 # Per RFC 8252 §7.3, native-app OAuth clients (Claude Code, Claude Desktop,
@@ -460,6 +449,13 @@ class SimpleOAuthProvider(OAuthProvider):
         expand the default localhost-only allowlist.  ``*`` disables the
         check entirely (logged at startup-time so leaks are visible).
         """
+        with_userinfo = [str(uri) for uri in client_info.redirect_uris or [] if has_userinfo(str(uri))]
+        if with_userinfo:
+            raise RegistrationError(
+                error="invalid_redirect_uri",
+                error_description=f"redirect_uri {with_userinfo[0]!r} is not permitted: it names a user before the host.",
+            )
+
         allowlist = settings.OAUTH_REDIRECT_URI_ALLOWLIST
         if allowlist == ["*"]:
             logger.warning(
@@ -468,11 +464,11 @@ class SimpleOAuthProvider(OAuthProvider):
                 "production."
             )
         else:
-            allowed_origins = {redirect_uri_origin(p) for p in allowlist}
+            allowed_origins = {origin_of(p) for p in allowlist}
             for uri in client_info.redirect_uris or []:
                 uri_str = str(uri)
                 if not is_redirect_uri_allowed(
-                    redirect_uri_origin(uri_str), allowed_origins
+                    origin_of(uri_str), allowed_origins
                 ):
                     logger.warning(
                         "Rejected OAuth client registration: redirect_uri %r "
@@ -553,7 +549,7 @@ class SimpleOAuthProvider(OAuthProvider):
             )
             raise ValueError(f"Invalid redirect_uri: {redirect_uri_str}")
         # Registration refuses these; this catches clients stored before it did.
-        if is_misplaced_on_web_ui_origin(redirect_uri_str):
+        if has_userinfo(redirect_uri_str) or is_misplaced_on_web_ui_origin(redirect_uri_str):
             raise AuthorizeError(
                 error="unauthorized_client",
                 error_description="This client may not redirect to that page on this server.",
