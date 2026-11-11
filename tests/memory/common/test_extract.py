@@ -25,6 +25,7 @@ from memory.common.extract import (
     MAX_CHUNK_IMAGE_PIXELS,
     DataChunk,
 )
+from tests.memory.office_files import docx_bytes
 
 
 REGULAMIN = pathlib.Path(__file__).parent.parent.parent / "data" / "regulamin.pdf"
@@ -194,12 +195,16 @@ def test_letter_pdf_page_renders_at_72dpi():
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 
-@pytest.mark.parametrize("mime_type", ["application/pdf", DOCX_MIME])
+@pytest.mark.parametrize(
+    "mime_type, packed",
+    [("application/pdf", lambda pdf: pdf), (DOCX_MIME, docx_bytes)],
+    ids=["pdf", "docx"],
+)
 @pytest.mark.parametrize(
     "max_image_pages, image_pages", [(None, [0, 1, 2]), (2, [0, 1]), (0, [])]
 )
 def test_page_images_stop_at_max_image_pages_but_text_does_not(
-    mime_type, max_image_pages, image_pages
+    mime_type, packed, max_image_pages, image_pages
 ):
     doc = pymupdf.open()
     for number in range(3):
@@ -212,7 +217,9 @@ def test_page_images_stop_at_max_image_pages_but_text_does_not(
         return output_path
 
     with patch("memory.common.extract.docx_to_pdf", side_effect=convert):
-        chunks = extract_data_chunks(mime_type, pdf_bytes, max_image_pages=max_image_pages)
+        chunks = extract_data_chunks(
+            mime_type, packed(pdf_bytes), max_image_pages=max_image_pages
+        )
 
     assert [c.metadata["page"] for c in chunks if page_images([c])] == image_pages
     assert [c.data for c in chunks if not page_images([c])] == [

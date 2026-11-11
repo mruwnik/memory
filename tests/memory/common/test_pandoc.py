@@ -108,3 +108,13 @@ def test_extract_docx_refuses_a_bomb_before_pandoc(
 
     assert not recording_pandoc.exists()
     assert os.path.getsize(docx_bomb) < 64 * 1024
+
+
+def test_pandoc_runs_under_the_memory_limit(tmp_path, monkeypatch, docx):
+    script = write_script(tmp_path / "pandoc", "ulimit -v")
+    monkeypatch.setattr(extract, "PANDOC_PATH", script)
+    monkeypatch.setattr(settings, "PANDOC_MEMORY_LIMIT_BYTES", 512 * 1024 * 1024)
+
+    chunks = extract.extract_docx_text(docx)
+
+    assert [c.data for c in chunks] == [[str(512 * 1024)]]

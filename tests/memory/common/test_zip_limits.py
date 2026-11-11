@@ -9,7 +9,9 @@ from tests.memory.office_files import (
     bomb_docx,
     docx_bytes,
     paragraphs_xml,
+    set_local_header_field,
     understate_sizes,
+    with_trailing_deflate_data,
 )
 
 MIB = 1024 * 1024
@@ -27,8 +29,8 @@ def small_limits(monkeypatch):
     [
         docx_bytes(paragraphs_xml("hello")),
         docx_bytes(paragraphs_xml("hello"), **{"word/media/a.png": b"\0" * (MIB + 1)}),
-        b"\xd0\xcf\x11\xe0 a legacy .doc is not a zip",
     ],
+    ids=["text", "media-over-markup-limit"],
 )
 def test_documents_within_limits_pass(small_limits, data):
     check_office_zip(io.BytesIO(data))
@@ -54,3 +56,38 @@ def test_sample_docx_passes():
 def test_documents_over_limits_are_refused(small_limits, data):
     with pytest.raises(ValueError):
         check_office_zip(io.BytesIO(data))
+
+
+DOC = docx_bytes(paragraphs_xml("hello"))
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        b"\xd0\xcf\x11\xe0 a legacy .doc is not a zip",
+        b"",
+        b"MZ" + bytes(200) + DOC,
+        DOC + b"trailing bytes",
+        DOC + DOC,
+        set_local_header_field(DOC, 8, "<H", 0),
+        set_local_header_field(DOC, 18, "<L", 1),
+        with_trailing_deflate_data(paragraphs_xml("x"), b"hidden"),
+    ],
+    ids=[
+        "not-zip",
+        "empty",
+        "prepended",
+        "appended",
+        "two-archives",
+        "local-method",
+        "local-compressed-size",
+        "data-after-deflate-stream",
+    ],
+)
+def test_documents_readers_could_disagree_on_are_refused(data):
+    with pytest.raises(ValueError):
+        check_office_zip(io.BytesIO(data))
+
+
+def test_complete_deflate_stream_passes():
+    check_office_zip(io.BytesIO(with_trailing_deflate_data(paragraphs_xml("x"), b"")))
