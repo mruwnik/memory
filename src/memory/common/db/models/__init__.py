@@ -69,6 +69,7 @@ from memory.common.db.models.slack import (
     SlackApp,
     SlackWorkspace,
     SlackChannel,
+    SlackChannelMember,
     SlackUserCredentials,
 )
 from memory.common.db.models.mcp import ExternalMCPServer, ServerStatus
@@ -290,6 +291,7 @@ __all__ = [
     "SlackApp",
     "SlackWorkspace",
     "SlackChannel",
+    "SlackChannelMember",
     "SlackUserCredentials",
     "SlackMessage",
     "ExternalMCPServer",

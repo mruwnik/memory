@@ -313,7 +313,7 @@ const WorkspaceRow = ({
       </>}
     >
       {update.error && <RowError live>{update.error}</RowError>}
-      {readOnly && <Hint>Only this workspace's owner (the first user to connect it) or an admin can change its settings. You see its public channels.</Hint>}
+      {readOnly && <Hint>Only this workspace's owner (the first user to connect it) or an admin can change its settings. You see its public channels and your own DMs and private channels, whose collection you can switch off.</Hint>}
       {workspace.collect_messages && workspace.poll_blocker && <RowError>Not collecting: {workspace.poll_blocker}</RowError>}
       <SyncFailure status={workspace} />
       {workspace.apps.filter(app => app.push_missing_since).map(app => (
@@ -383,8 +383,12 @@ const ChannelRow = ({ channel, projects, workspaceCollecting, readOnly, onUpdate
       actions={<>
         <AccessSelects projectId={channel.project_id} sensitivity={channel.sensitivity} projects={projects} disabled={readOnly || updating || channel.is_archived}
           onChange={update} />
-        <CollectSelect value={channel.collect_messages} inherited={workspaceCollecting} disabled={readOnly || updating || channel.is_archived}
-          onChange={collect_messages => update({ collect_messages })} />
+        {readOnly && channel.can_switch_off
+          ? channel.effective_collect && (
+            <Button size="sm" disabled={updating} onClick={() => update({ collect_messages: false })}>Stop collecting</Button>
+          )
+          : <CollectSelect value={channel.collect_messages} inherited={workspaceCollecting} disabled={readOnly || updating || channel.is_archived}
+            onChange={collect_messages => update({ collect_messages })} />}
       </>}
     />
   )

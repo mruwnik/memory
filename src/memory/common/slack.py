@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
-from sqlalchemy import and_
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Query, object_session
 
 from memory.common import settings
@@ -22,6 +22,7 @@ from memory.common.db.models.slack import (
     DEFAULT_SLACK_API_BASE_URL,
     SlackApp,
     SlackChannel,
+    SlackChannelMember,
     SlackUserCredentials,
     SlackWorkspace,
 )
@@ -103,12 +104,43 @@ def is_public_channel(channel: SlackChannel) -> bool:
     return channel.channel_type == "channel" and not channel.is_private
 
 
+def member_channel_ids(user: UserLike):
+    """The non-public channels whose listing by `user`'s own token was recorded."""
+    return select(SlackChannelMember.channel_id).where(SlackChannelMember.user_id == user.id)
+
+
+def user_in_channel(db: DBSession, channel: SlackChannel, user: UserLike) -> bool:
+    return db.get(SlackChannelMember, (channel.id, user.id)) is not None
+
+
 def visible_channels(query: Query, workspace: SlackWorkspace, user: UserLike) -> Query:
     """`query` over the workspace's channels, narrowed to the ones `user` may see:
-    all of them for its owner and admins, the public ones for other members."""
+    all of them for its owner and admins; for other members, the public ones and
+    the DMs and private channels they are in."""
     if user_manages_workspace(workspace, user):
         return query
-    return query.filter(PUBLIC_CHANNEL)
+    return query.filter(or_(PUBLIC_CHANNEL, SlackChannel.id.in_(member_channel_ids(user))))
+
+
+def record_channel_members(
+    db: DBSession, workspace_id: str, user_id: int, channel_ids: set[str]
+) -> None:
+    """Make `channel_ids` the non-public channels of the workspace that `user_id`'s
+    token lists, replacing what an earlier listing recorded."""
+    workspace_channels = select(SlackChannel.id).where(SlackChannel.workspace_id == workspace_id)
+    recorded = {
+        row.channel_id
+        for row in db.query(SlackChannelMember).filter(
+            SlackChannelMember.user_id == user_id,
+            SlackChannelMember.channel_id.in_(workspace_channels),
+        )
+    }
+    for channel_id in recorded - channel_ids:
+        db.delete(db.get(SlackChannelMember, (channel_id, user_id)))
+    db.add_all(
+        SlackChannelMember(channel_id=channel_id, user_id=user_id)
+        for channel_id in channel_ids - recorded
+    )
 
 
 def workspace_poll_plan(db: DBSession, workspace_id: str) -> tuple[list[int], list[str]]:

@@ -58,11 +58,13 @@ from memory.common.slack import (
     SlackAPIError,
     SlackClient,
     get_channel_type,
+    is_public_channel,
     iter_channels,
     iter_messages,
     iter_thread_replies,
     is_slack_ts,
     iter_users,
+    record_channel_members,
     slack_api_base_url,
     slack_client_for,
     workspace_poll_plan,
@@ -366,7 +368,7 @@ def sync_slack_workspace(
 
                 # Sync channels (pass pre-built user cache)
                 channels_synced = sync_workspace_channels(
-                    client, workspace, session, users_by_id
+                    client, workspace, session, users_by_id, credentials.user_id
                 )
 
                 people_result = sync_slack_users_to_people(session, workspace_id, users_list)
@@ -425,6 +427,7 @@ def sync_workspace_channels(
     workspace: SlackWorkspace,
     session,
     users_by_id: dict[str, str],
+    member_id: int,
 ) -> int:
     """Sync channels from Slack workspace to database.
 
@@ -433,8 +436,11 @@ def sync_workspace_channels(
         workspace: SlackWorkspace to sync channels for
         session: Database session
         users_by_id: Pre-built mapping of Slack user IDs to display names (for DM resolution)
+        member_id: The user whose token `client` uses; the DMs and private channels
+            it lists are recorded as theirs
     """
     synced = 0
+    member_of: set[str] = set()
 
     for channel in iter_channels(client):
         channel_id = channel.get("id")
@@ -463,9 +469,13 @@ def sync_workspace_channels(
         slack_channel.is_private = channel.get("is_private", False)
         slack_channel.is_archived = channel.get("is_archived", False)
         session.add(slack_channel)
+        if not is_public_channel(slack_channel):
+            member_of.add(channel_id)
 
         synced += 1
 
+    session.flush()
+    record_channel_members(session, workspace.id, member_id, member_of)
     session.commit()
     return synced
 

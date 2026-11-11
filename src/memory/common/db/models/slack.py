@@ -397,3 +397,22 @@ class SlackChannel(Base):
     @property
     def llm_key_holder(self) -> SlackWorkspace | None:
         return self.workspace
+
+
+class SlackChannelMember(Base):
+    """A connected user whose own Slack token lists a DM, group DM or private channel.
+
+    Recorded by the channel sync, so a workspace member who isn't its owner can see
+    the non-public channels they are in and switch off their collection.
+    """
+
+    __tablename__ = "slack_channel_members"
+
+    channel_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("slack_channels.id", ondelete="CASCADE"), primary_key=True
+    )
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+
+    __table_args__ = (Index("slack_channel_members_user_idx", "user_id"),)

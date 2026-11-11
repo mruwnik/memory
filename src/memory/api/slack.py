@@ -73,7 +73,9 @@ from memory.common.safe_http import public_http_client
 from memory.common.slack import (
     is_public_channel,
     is_slack_ts,
+    member_channel_ids,
     user_has_workspace_membership,
+    user_in_channel,
     user_manages_workspace,
     visible_channels,
     workspace_poll_plan,
@@ -161,6 +163,9 @@ class SlackChannelResponse(BaseModel):
     # Access control
     project_id: int | None
     sensitivity: str
+    # Whether the current user may switch off collection here: the workspace's owner
+    # and admins anywhere, other members in their own DMs and private channels
+    can_switch_off: bool
 
 
 class SlackChannelUpdate(BaseModel):
@@ -322,6 +327,7 @@ def workspace_apps(db: Session, ws: SlackWorkspace, user: User) -> list[SlackWor
 
 
 NOT_WORKSPACE_OWNER = "Only the workspace's owner (the first user to connect it) or an admin can change its settings"
+ONLY_SWITCH_OFF = "In your own DMs and private channels you may only switch collection off; ask the workspace's owner for other changes"
 
 
 def get_visible_workspace(db: Session, workspace_id: str, user: User) -> SlackWorkspace:
@@ -343,15 +349,27 @@ def get_workspace_for_settings(db: Session, workspace_id: str, user: User) -> Sl
     return workspace
 
 
-def get_channel_for_settings(db: Session, channel_id: str, user: User) -> SlackChannel:
-    """A channel whose settings `user` may change. A channel the caller doesn't see in
-    the listing is a 404, one they see but don't manage is a 403."""
+def is_switch_off(updates: SlackChannelUpdate) -> bool:
+    return updates.model_fields_set == {"collect_messages"} and updates.collect_messages is False
+
+
+def get_channel_for_settings(
+    db: Session, channel_id: str, user: User, updates: SlackChannelUpdate
+) -> SlackChannel:
+    """A channel whose settings `user` may change as `updates` asks: the workspace's
+    owner and admins may change anything, another member may switch collection off
+    in a DM or private channel they are in. A channel the caller doesn't see in the
+    listing is a 404, one they see but may not change so is a 403."""
     channel = db.get(SlackChannel, channel_id)
     if channel is None:
         raise HTTPException(status_code=404, detail="Channel not found")
     workspace = get_visible_workspace(db, channel.workspace_id, user)
     if user_manages_workspace(workspace, user):
         return channel
+    if user_in_channel(db, channel, user):
+        if is_switch_off(updates):
+            return channel
+        raise HTTPException(status_code=403, detail=ONLY_SWITCH_OFF)
     if not is_public_channel(channel):
         raise HTTPException(status_code=404, detail="Channel not found")
     raise HTTPException(status_code=403, detail=NOT_WORKSPACE_OWNER)
@@ -406,7 +424,7 @@ def workspace_to_response(
     )
 
 
-def channel_to_response(channel: SlackChannel) -> SlackChannelResponse:
+def channel_to_response(channel: SlackChannel, can_switch_off: bool) -> SlackChannelResponse:
     return SlackChannelResponse(
         id=channel.id,
         workspace_id=channel.workspace_id,
@@ -419,6 +437,7 @@ def channel_to_response(channel: SlackChannel) -> SlackChannelResponse:
         last_message_ts=channel.last_message_ts,
         project_id=channel.project_id,
         sensitivity=channel.sensitivity or "basic",
+        can_switch_off=can_switch_off,
     )
 
 
@@ -836,9 +855,11 @@ def list_channels(
     user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> list[SlackChannelResponse]:
-    """List a workspace's channels: all of them for its owner and admins, the public
-    ones for its other members."""
+    """List a workspace's channels: all of them for its owner and admins; for its
+    other members, the public ones and the DMs and private channels they are in."""
     workspace = get_visible_workspace(db, workspace_id, user)
+    manages = user_manages_workspace(workspace, user)
+    own = set(db.scalars(member_channel_ids(user)))
 
     query = visible_channels(
         db.query(SlackChannel).filter(SlackChannel.workspace_id == workspace_id), workspace, user
@@ -848,7 +869,7 @@ def list_channels(
         query = query.filter(SlackChannel.channel_type == channel_type)
 
     channels = query.order_by(SlackChannel.name).all()
-    return [channel_to_response(c) for c in channels]
+    return [channel_to_response(c, manages or c.id in own) for c in channels]
 
 
 @router.patch("/channels/{channel_id}")
@@ -858,8 +879,9 @@ def update_channel(
     user: User = Depends(get_interactive_user),
     db: Session = Depends(get_session),
 ) -> SlackChannelResponse:
-    """Update channel settings. Only the workspace's owner or an admin may."""
-    channel = get_channel_for_settings(db, channel_id, user)
+    """Update channel settings. The workspace's owner or an admin may change any of
+    them; another member may switch collection off in their own DMs and private channels."""
+    channel = get_channel_for_settings(db, channel_id, user, updates)
 
     if "collect_messages" in updates.model_fields_set:
         channel.collect_messages = updates.collect_messages
@@ -873,7 +895,7 @@ def update_channel(
     db.commit()
     db.refresh(channel)
 
-    return channel_to_response(channel)
+    return channel_to_response(channel, True)
 
 
 # ===========================================================================

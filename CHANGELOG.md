@@ -92,6 +92,7 @@ a new, empty `## Unreleased` above it.
 - Beeper messages are checked for HTML formatting, and their quoted reply parents removed, in time linear in their length; HTML nested too deeply to convert is stored as its text. Before, a 65,000-character message of unclosed tags held a worker for about 5 seconds, and deeply nested HTML failed to store.
 - At most `MAX_EMBEDDED_CHUNKS_PER_ITEM` (new, default 500, about 250,000 tokens) text chunks of one item are embedded on the server's Voyage key: past it, the item's first chunks and its summary are kept, and a WARNING log names the item id. Before, a 25 MB plain-text email from anyone embedded about 12,000 chunks.
 - An admin's API key, run or OAuth token narrowed below `*` is no longer treated as admin when it lists a Slack workspace's channels (it sees what any member sees) or binds a GitHub repo another user tracks (GitHub must let its credentials read the repo).
+- A Slack workspace member who isn't its owner sees the DMs and private channels their own token lists, besides its public channels, and may switch their collection off (`PATCH /slack/channels/{id}` with `collect_messages: false`; the web UI shows a Stop collecting button). Channel listings carry `can_switch_off`. Memberships are recorded from each workspace's next channel sync.
 ### Required env vars
 None
 
@@ -115,6 +116,7 @@ None
 - `20261223_meeting_api_ext_ids` renames the `external_id` of meetings submitted through `POST /meetings` (no transcript account, not a push, with a creator) to `api:<user id>:<id>`; one UPDATE over `meeting`, and one over `pending_jobs` renaming `params.external_id` of those submissions' meeting jobs so a retry finds its meeting. Meetings of deleted transcript accounts match the same rule and are renamed too. A submission still queued when the migration runs is stored under its bare id; let the `meetings` queue drain before updating to avoid that.
 - `20261225_null_gdoc_filename` clears `source_item.filename` on Google Drive docs (one UPDATE over `source_item`; the title stays in `google_doc.title`).
 - `20261226_mail_parsed_body` adds a nullable `mail_message.parsed_body` text column (instant).
+- `20261227_slack_channel_members` adds a `slack_channel_members` table (instant); it fills on each Slack workspace's next sync.
 
 ### Post-deploy commands
 - Optional, re-runnable: Discord messages stored before this release that hold only an attachment stay unindexed until re-embedded. To catch up, run `UPDATE source_item SET embed_status='RAW' WHERE embed_status='SKIPPED' AND id IN (SELECT id FROM discord_message WHERE cardinality(images) > 0 OR attachments @> '[{}]');` and the hourly `process_raw_items` job embeds them (300 an hour). Re-processing records a change, so `on_edit` subscriptions may receive those messages once more.

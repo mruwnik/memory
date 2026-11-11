@@ -460,7 +460,8 @@ async def list_channels(
     """
     List a Slack workspace's stored channels. Its other members' DMs and private
     channels are listed only to the workspace's owner (the first user to connect it)
-    and admins; everyone else sees its public channels.
+    and admins; everyone else sees its public channels and their own DMs and
+    private channels.
 
     Args:
         workspace_id: Optional workspace ID (uses default if not specified)

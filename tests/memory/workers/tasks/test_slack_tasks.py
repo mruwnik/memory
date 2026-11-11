@@ -17,6 +17,7 @@ from memory.common.db.models import Event, User
 from memory.common.db.models.slack import (
     SlackApp,
     SlackChannel,
+    SlackChannelMember,
     SlackUserCredentials,
     SlackWorkspace,
 )
@@ -1360,9 +1361,11 @@ def test_images_are_not_fetched_from_an_api_url_no_longer_allowed(
     download.assert_not_called()
 
 
-def test_a_channel_listing_never_touches_another_workspaces_channel(db_session, slack_workspace, other_workspace_channel):
+def test_a_channel_listing_never_touches_another_workspaces_channel(
+    db_session, slack_workspace, slack_credentials, other_workspace_channel
+):
     with patch.object(slack, "iter_channels", return_value=[{"id": other_workspace_channel.id, "name": "hijacked"}]):
-        slack.sync_workspace_channels(MagicMock(), slack_workspace, db_session, {})
+        slack.sync_workspace_channels(MagicMock(), slack_workspace, db_session, {}, slack_credentials.user_id)
 
     db_session.refresh(other_workspace_channel)
     assert (other_workspace_channel.name, other_workspace_channel.workspace_id) == ("theirs", "T99999999")
@@ -2496,3 +2499,22 @@ def test_the_first_pushed_message_dates_push_in_its_channel(db_session, slack_ap
     db_session.refresh(slack_channel)
     assert first is not None
     assert slack_channel.push_since == first
+
+
+LISTED_CHANNELS = [
+    {"id": "C0PUBLIC", "name": "general", "is_channel": True},
+    {"id": "G0PRIVATE", "name": "team", "is_group": True, "is_private": True},
+    {"id": "D0DM", "is_im": True, "user": "U2", "is_private": True},
+]
+
+
+def test_a_channel_listing_records_its_tokens_user_in_the_non_public_channels(
+    db_session, slack_workspace, slack_credentials
+):
+    with patch.object(slack, "iter_channels", return_value=LISTED_CHANNELS):
+        slack.sync_workspace_channels(MagicMock(), slack_workspace, db_session, {}, slack_credentials.user_id)
+    with patch.object(slack, "iter_channels", return_value=LISTED_CHANNELS[:2]):
+        slack.sync_workspace_channels(MagicMock(), slack_workspace, db_session, {}, slack_credentials.user_id)
+
+    members = db_session.query(SlackChannelMember).all()
+    assert [(m.channel_id, m.user_id) for m in members] == [("G0PRIVATE", slack_credentials.user_id)]
