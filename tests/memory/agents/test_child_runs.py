@@ -11,18 +11,29 @@ from memory.agents.caps import children_cost, daily_pools
 from memory.agents import cancel
 from memory.agents.enqueue import TriggerInfo, enqueue_run
 from memory.agents.mcp_client import memory_tools
-from memory.agents.runner import execute_run, mint_session
+from memory.agents.runner import execute_run, finish, mint_session
 from memory.agents.spec import AgentSpec
 from memory.common import settings
 from memory.common.db.connection import make_session
 from memory.api.MCP.servers import agent
 from memory.common.db.models import AgentDefinition, AgentRun, APIKey
+from memory.common.db.models.agents import RunStatus
 from tests.conftest import mcp_auth_context
 from tests.memory.agents.fakes import DEFAULT_USAGE, PRICING, FakeHub, calls, reply
 
 D = Decimal
 PARENT_TOOLS = ["agent_run", "agent_wait", "agent_cancel", "meta_get_user"]
 CHILD = {"system_prompt": "help", "model": "anthropic/m", "tools": ["meta_get_user"]}
+
+
+def add_worker_child(db, user, parent: AgentRun) -> AgentRun:
+    child = add_run(
+        db, user, parent_run_id=parent.id, depth=1, status="pending",
+        executor="workers", max_cost_usd=D(0),
+    )
+    child.spec = child.spec | {"placement": "runner_only"}
+    db.commit()
+    return child
 
 
 def add_run(db, user, *, tools=PARENT_TOOLS, status="running", **fields):
@@ -184,6 +195,7 @@ async def test_cancelling_a_run_cancels_its_live_descendants(
     child = add_run(db_session, admin_user, parent_run_id=parent.id, depth=1)
     grandchild = add_run(db_session, admin_user, parent_run_id=child.id, depth=2, status="pending")
     finished = add_run(db_session, admin_user, parent_run_id=parent.id, depth=1, status="done")
+    on_workers = add_worker_child(db_session, admin_user, parent)
 
     with patch.object(cancel.app.control, "revoke") as revoke:
         with mcp_auth_context(admin_session.token):
@@ -199,8 +211,46 @@ async def test_cancelling_a_run_cancels_its_live_descendants(
         child.id: ("running", True),
         grandchild.id: ("cancelled", True),
         finished.id: ("done", False),
+        on_workers.id: ("cancelled", True),
     }
     revoke.assert_called_once_with(grandchild.id)
+
+
+@pytest.mark.parametrize("status", [RunStatus.DONE, RunStatus.FAILED])
+def test_a_runs_end_cancels_its_server_children_but_not_its_worker_only_ones(
+    db_session, regular_user, no_celery_dispatch, status
+):
+    parent = add_run(db_session, regular_user)
+    on_server = add_run(db_session, regular_user, parent_run_id=parent.id, depth=1, status="pending")
+    on_workers = add_worker_child(db_session, regular_user, parent)
+
+    with patch.object(cancel.app.control, "revoke"):
+        finish(parent.id, status, None, None)
+
+    db_session.expire_all()
+    assert (on_server.status, on_workers.status) == ("cancelled", "pending")
+
+
+@pytest.mark.asyncio
+async def test_a_run_hands_a_worker_only_definition_to_workers(
+    db_session, admin_user, admin_keys, no_celery_dispatch
+):
+    escalation = AgentDefinition(
+        user_id=admin_user.id,
+        name="ea-escalation",
+        spec=CHILD | {"placement": "runner_only", "requires": {"flags": ["ea"]}},
+    )
+    db_session.add(escalation)
+    db_session.commit()
+    parent = add_run(db_session, admin_user)
+
+    child = await submit(mint_session(admin_user.id, 600, None), parent.id, "ea-escalation")
+
+    assert (child.executor, child.parent_run_id, child.definition_id) == (
+        "workers", parent.id, escalation.id,
+    )
+    assert (child.max_cost_usd, child.provider_key_id) == (D(0), None)
+    no_celery_dispatch.assert_not_called()
 
 
 @pytest.mark.parametrize(

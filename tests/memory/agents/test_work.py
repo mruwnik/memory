@@ -16,7 +16,7 @@ from memory.api.MCP.servers import agent
 from memory.api.MCP.visibility import get_visibility_checker
 from memory.common import settings
 from memory.common.celery_app import RUN_AGENT
-from memory.common.db.models import AgentRun, HumanUser, LLMProviderKey
+from memory.common.db.models import AgentRun, APIKey, HumanUser, LLMProviderKey
 from memory.workers.tasks.maintenance import sweep_agent_runs
 from tests.conftest import mcp_auth_context
 from tests.memory.agents.conftest import work_session
@@ -119,6 +119,31 @@ async def test_a_worker_claims_its_owners_run(
         seen = (await agent.wait.fn(run_id=run_id))["run"]
     assert (seen["worker_label"], seen["status"]) == ("laptop", "running")
     assert "lease_token" not in seen
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "trigger,claimable",
+    [
+        ("manual", True),
+        # Their input may carry items: ingest's from the subscription, a child's from its parent.
+        ("ingest", False),
+        ("agent", False),
+    ],
+)
+async def test_a_worker_key_without_read_takes_no_run_that_may_carry_items(
+    db_session, regular_user, worker_session, trigger, claimable
+):
+    key = APIKey.create(user_id=regular_user.id, name="work only", scopes=["agents:work"])
+    db_session.add(key)
+    db_session.commit()
+    stored(db_session, submit_run(db_session, regular_user)).trigger_kind = trigger
+    db_session.commit()
+
+    with mcp_auth_context(key.key):
+        claimed = (await claim())["run"]
+
+    assert (claimed is not None) is claimable
 
 
 @pytest.mark.asyncio

@@ -160,9 +160,14 @@ def stored_spec_problems(db: DBSession, user_id: int, spec: dict[str, Any]) -> l
     return run_problems(db, user_id, parsed)
 
 
-def child_problems(parent: AgentRun, spec: AgentSpec) -> list[str]:
+def child_problems(
+    parent: AgentRun, spec: AgentSpec, definition: AgentDefinition | None
+) -> list[str]:
     """Why `parent` can't start a run of `spec`: a child stays inside its parent's
-    depth limit and tools."""
+    depth limit and tools. It runs on the server, under the parent's budget, or only on
+    workers, which cost nothing; a placement that moves between them would leave the
+    parent's budget. Only an owner's saved definition goes to workers, so a run never
+    writes the prompt a worker executes."""
     problems = []
     if parent.status in TERMINAL_STATUSES:
         problems.append(f"the parent run is {parent.status}")
@@ -171,8 +176,13 @@ def child_problems(parent: AgentRun, spec: AgentSpec) -> list[str]:
             f"runs started by runs nest at most {settings.AGENT_MAX_SPAWN_DEPTH} deep "
             "(AGENT_MAX_SPAWN_DEPTH)"
         )
-    if spec.placement != "server_only":
-        problems.append("runs started by runs execute on the server (placement server_only)")
+    if spec.placement not in ("server_only", "runner_only"):
+        problems.append(
+            "runs started by runs execute on the server (placement server_only) "
+            "or only on workers (runner_only)"
+        )
+    if spec.placement == "runner_only" and definition is None:
+        problems.append("runs started by runs go to workers only as a saved definition")
     allowed = set(exposed_tools(AgentSpec.model_validate(parent.spec)))
     if extra := [t for t in exposed_tools(spec) if t not in allowed]:
         problems.append(f"tools the parent run doesn't have: {', '.join(extra)}")
@@ -233,7 +243,7 @@ def enqueue_run(
     # Checked here too so cron doesn't start runs that would fail at hub open.
     provider_key, problems = start_problems(db, user_id, spec)
     if parent is not None:
-        problems += child_problems(parent, spec)
+        problems += child_problems(parent, spec, definition)
     if problems or (provider_key is None and uses_server(spec)):
         raise SpecInvalid(problems)
     # Serialise a subscription's and a definition's enqueues until this run is committed,

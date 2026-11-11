@@ -8,8 +8,12 @@ from memory.common.db.models import AgentRun
 from memory.common.db.models.agents import EXECUTOR_WORKERS, TERMINAL_STATUSES, RunStatus
 
 
-def cancel_tree(db: DBSession, run: AgentRun, now: datetime) -> None:
+def cancel_tree(
+    db: DBSession, run: AgentRun, now: datetime, *, spare_worker_only: bool = False
+) -> None:
     """Cancel `run`, if still live, and every live run it started, at any depth.
+    With `spare_worker_only`, for a run that ended rather than was cancelled, children
+    placed only on workers are left to finish: they spend nothing of the owner's.
 
     Pending runs end at once, as do worker-held ones (nothing of ours is executing
     them; the worker learns of it when it renews its lease); running ones stop at their
@@ -38,4 +42,7 @@ def cancel_tree(db: DBSession, run: AgentRun, now: datetime) -> None:
         db.query(AgentRun).filter(AgentRun.parent_run_id == run.id).with_for_update().all()
     )
     for child in children:
-        cancel_tree(db, child, now)
+        # The spec's placement is read raw: this module must not import memory.agents.spec.
+        if spare_worker_only and child.spec.get("placement") == "runner_only":
+            continue
+        cancel_tree(db, child, now, spare_worker_only=spare_worker_only)

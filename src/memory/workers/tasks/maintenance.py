@@ -1560,7 +1560,7 @@ def sweep_agent_runs() -> dict[str, int]:
             )
         # As when a run ends normally: its children would spend a budget nobody follows.
         for r in stale + orphaned:
-            cancel_tree(db, r, now)
+            cancel_tree(db, r, now, spare_worker_only=True)
     if stale or orphaned:
         logger.warning("swept %d stale and %d orphaned agent runs", len(stale), len(orphaned))
     return {"stale": len(stale), "orphaned": len(orphaned)}

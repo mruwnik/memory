@@ -736,26 +736,63 @@ def test_worker_runs_start_without_a_key_or_a_live_worker(
     no_celery_dispatch.assert_not_called()
 
 
-def test_runs_started_by_runs_stay_on_the_server(
-    db_session, regular_user, fake_providers, no_celery_dispatch
-):
+def running_parent(db, user) -> AgentRun:
     parent = AgentRun(
-        user_id=regular_user.id,
+        user_id=user.id,
         spec=SPEC,
         input="x",
         max_cost_usd=Decimal("1"),
         trigger_kind="manual",
         status="running",
     )
-    db_session.add(parent)
-    db_session.commit()
+    db.add(parent)
+    db.commit()
+    return parent
 
-    with pytest.raises(SpecInvalid, match="runs started by runs execute on the server"):
+
+def test_a_runs_child_from_a_worker_only_definition_waits_for_a_worker(
+    db_session, regular_user, no_celery_dispatch
+):
+    parent = running_parent(db_session, regular_user)
+    escalation = definition(db_session, regular_user, placement="runner_only")
+
+    child = enqueue_run(
+        db_session,
+        user_id=regular_user.id,
+        spec=AgentSpec.model_validate(escalation.spec),
+        input="hi",
+        trigger=TriggerInfo(kind="agent"),
+        definition=escalation,
+        parent=parent,
+    )
+
+    assert (child.executor, child.parent_run_id, child.depth) == ("workers", parent.id, 1)
+    assert (child.max_cost_usd, child.provider_key_id) == (Decimal(0), None)
+    no_celery_dispatch.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "placement,saved",
+    [
+        # An inline spec would let the run write the prompt a worker executes.
+        ({"placement": "runner_only"}, False),
+        ({"placement": "runner_first", "fallback_after": 10}, True),
+        ({"placement": "server_first", "fallback_after": 10}, True),
+    ],
+)
+def test_a_runs_child_runs_on_the_server_or_only_on_workers(
+    db_session, regular_user, fake_providers, no_celery_dispatch, placement, saved
+):
+    parent = running_parent(db_session, regular_user)
+    escalation = definition(db_session, regular_user, **placement) if saved else None
+
+    with pytest.raises(SpecInvalid, match="runs started by runs"):
         enqueue_run(
             db_session,
             user_id=regular_user.id,
-            spec=spec(placement="runner_only"),
+            spec=spec(**placement),
             input="hi",
             trigger=TriggerInfo(kind="agent"),
+            definition=escalation,
             parent=parent,
         )

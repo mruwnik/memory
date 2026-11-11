@@ -555,10 +555,16 @@ async def run(
     no key of yours unless the server may take them, and cost you nothing. System agents
     always run on the server.
 
-    Called by a run, this starts its child: it may use only the run's tools, runs on the
-    server, nests at most AGENT_MAX_SPAWN_DEPTH deep, and gets half of what the run has
-    left of its budget, which it holds until it finishes. A child spec's own max_cost_usd
-    is capped at what the run has left; taking all of it ends the run budget_exceeded.
+    Called by a run, this starts its child, with the agent's own placement and no
+    overrides. The child may use only the run's tools and nests at most
+    AGENT_MAX_SPAWN_DEPTH deep. A server_only child gets half of what the run has left of
+    its budget, which it holds until it finishes; a child spec's own max_cost_usd is
+    capped at what the run has left, and taking all of it ends the run budget_exceeded.
+    A runner_only child, which must be one of your saved definitions, waits for one of
+    your workers to claim it as any worker run does, costs the run nothing, and keeps
+    going when the run ends; cancelling the run cancels it. Other placements are refused.
+    agent_wait returns after at most AGENT_MAX_WAIT_SEC and the run's timeout_sec still
+    applies, so start a worker child and move on rather than waiting for it.
     """
     user_id, _ = caller()
     token, _ = caller_token()
@@ -880,7 +886,8 @@ def take_next(
                     AgentRun.started_at
                     > now - timedelta(seconds=settings.AGENT_WORK_HOLD_MAX_SEC),
                 ),
-                *(() if can_read(user, key) else (AgentRun.trigger_kind != INGEST,)),
+                # Ingest runs carry items; a child's input may carry what its parent read.
+                *(() if can_read(user, key) else (AgentRun.trigger_kind.notin_((INGEST, "agent")),)),
             )
             query = db.query(AgentRun.created_at, AgentRun.id, AgentRun.spec["requires"]).filter(
                 *claimable

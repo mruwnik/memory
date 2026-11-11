@@ -255,7 +255,7 @@ def finish(
         run.result = result
         ended = run.finished_at = now()
         # Children outliving their parent would spend a budget nobody is following.
-        cancel_tree(db, run, ended)
+        cancel_tree(db, run, ended, spare_worker_only=True)
         db.commit()
 
 
