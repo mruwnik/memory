@@ -10,7 +10,7 @@ from typing import Any, cast
 
 from sqlalchemy import func
 
-from memory.common.access_control import has_admin_scope
+from memory.common.access_control import UserLike, has_admin_scope
 from memory.common.db.models.sources import GithubAccount, GithubRepo
 from memory.common.github import GithubClient, GithubCredentials
 
@@ -44,16 +44,17 @@ def repo_name_matches(owner: str, name: str) -> Any:
     )
 
 
-def can_bind_repo(account: GithubAccount, client: GithubClient, repo: GithubRepo) -> bool:
-    """Whether ``account``'s owner may bind ``repo``, tracked by any account, to a project.
+def can_bind_repo(binder: UserLike, client: GithubClient, repo: GithubRepo) -> bool:
+    """Whether ``binder`` may bind ``repo``, tracked by any account, to a project.
 
     Binding files every item the repo's sync stores under the project, so it
-    needs one of: the owner is an admin, the owner's own GitHub account tracks
-    the repo, or ``client`` (the owner's credentials) can read the repo on GitHub.
+    needs one of: the binder's credential has admin scope, the binder's own GitHub
+    account tracks the repo, or ``client`` (the binder's GitHub credentials) can
+    read the repo on GitHub.
     """
-    if has_admin_scope(account.user):
+    if has_admin_scope(binder):
         return True
-    if repo.account is not None and repo.account.user_id == account.user_id:
+    if repo.account is not None and repo.account.user_id == binder.id:
         return True
     return client.fetch_repository_info(cast(str, repo.owner), cast(str, repo.name)) is not None
 
@@ -122,6 +123,7 @@ def ensure_github_repo(
     account_id: int,
     owner: str,
     repo_name: str,
+    binder: UserLike,
     description: str | None = None,
     create_if_missing: bool = False,
     private: bool = True,
@@ -136,6 +138,7 @@ def ensure_github_repo(
         account_id: ID of the GithubAccount to associate with
         owner: Repository owner (user or org)
         repo_name: Repository name
+        binder: The caller, with its credential's scopes (see `can_bind_repo`)
         description: Optional description (used if creating on GitHub)
         create_if_missing: If True, creates the repo on GitHub if it doesn't exist
         private: Whether to create as private (default: True)
@@ -143,7 +146,7 @@ def ensure_github_repo(
     Returns:
         Tuple of (GithubRepo, repo_was_created_on_github, tracking_entry_was_created)
         Returns (None, False, False) if the repo doesn't exist and create_if_missing=False,
-        or if another user tracks it and the account's owner can't bind it
+        or if another user tracks it and ``binder`` can't bind it
         (see `can_bind_repo`).
     """
     # A repo is tracked once, globally; whoever binds it to a project must
@@ -152,10 +155,9 @@ def ensure_github_repo(
         session.query(GithubRepo).filter(repo_name_matches(owner, repo_name)).first()
     )
     if existing_repo:
-        account = session.get(GithubAccount, account_id)
-        if account is None or not can_bind_repo(account, client, existing_repo):
+        if not can_bind_repo(binder, client, existing_repo):
             logger.warning(
-                "Account %s may not bind GithubRepo %s", account_id, existing_repo.id
+                "User %s may not bind GithubRepo %s", binder.id, existing_repo.id
             )
             return None, False, False
         return existing_repo, False, False

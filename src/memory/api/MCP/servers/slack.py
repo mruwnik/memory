@@ -212,10 +212,13 @@ def _get_channels_data(
         if not workspace:
             raise ValueError("Workspace not found")
 
+        caller = get_mcp_current_user(session)
+        if caller is None:
+            raise ValueError("Not authenticated")
         query = visible_channels(
             session.query(SlackChannel).filter(SlackChannel.workspace_id == credentials.workspace_id),
             workspace,
-            credentials.user,
+            caller,
         )
 
         if not include_archived:
