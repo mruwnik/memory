@@ -22,7 +22,10 @@ a new, empty `## Unreleased` above it.
 
 ## Unreleased
 
+## v0.5.5 (2026-11-11)
+
 ### Changes
+- Fix: without `GOOGLE_REDIRECT_URI`, Google sign-in redirects to `{SERVER_URL}/google-drive/callback`, the route that handles it.
 - A run's `agent_run` of a saved definition placed `runner_only` now starts a child that waits for one of the owner's workers, instead of being refused; it costs the run nothing and keeps going when the run ends (cancelling the run still cancels it). Workers whose key lacks the read scope no longer claim runs started by runs.
 - Fix: the Discord Add bot form says the bot needs the Message Content and Server Members intents turned on in the Developer Portal.
 - Fix: the Slack connect wizard's last step says a newly connected workspace starts paused and collects nothing until you click Resume.
