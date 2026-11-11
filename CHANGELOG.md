@@ -114,6 +114,7 @@ a new, empty `## Unreleased` above it.
 - An email keeps at most `MAX_EMAIL_ATTACHMENTS` attachments (default 100) and `MAX_EMAIL_RECIPIENTS` To/Cc/Bcc addresses (default 500); the rest are dropped with a warning naming the Message-ID. Before, a small mail with tens of thousands of attachments held a worker for minutes and became that many items.
 - An email's Subject and From are cut to `MAX_EMAIL_HEADER_CHARS` (default 8192) before their MIME encoded-words are decoded, so a mail with a huge header no longer holds a worker (or each search hit that reparses it) for seconds to minutes.
 - Handing a Slack workspace to another member turns its LLM work off unless its key choice charges whoever made the change; the new owner picks a key (or "default" to pay with their own). Before, a workspace left on the default key started charging the new owner's key without their say.
+- Only the session first-run setup signs in with, besides web-UI logins, may create API keys; sessions agent runs act through no longer pass for it. A setup session from before this release has to sign in again to create an API key.
 ### Required env vars
 None
 
@@ -140,6 +141,7 @@ None
 - `20261226_slack_workspace_owner` adds a nullable `slack_workspaces.owner_id` (FK to `users`, `ON DELETE SET NULL`) and fills it with the user of each workspace's oldest credential, its owner until now (one UPDATE over `slack_workspaces`; workspaces with no credentials left get no owner and are managed by admins).
 - `20261227_unbind_github_projects` finds repo and milestone projects that have teams, none of which the owner of the repo's tracking account is in (an owner with no person record is in none), and for each: clears `project_id` on the repo's `github_item`s filed into it and bumps their `updated_at`, clears `github_item.milestone_id` pointing at it, and sets the project's `repo_id`, `github_id` and `number` to NULL, leaving a standalone project with its teams. Projects with no teams, standalone projects and other items are not touched. Three UPDATEs over `source_item`, `github_item` and `projects`; not reversible (the downgrade does nothing; re-bind a project by hand).
 - `20261226_recurrence_cost` adds a nullable `calendar_event.recurrence_cost_ms` float (instant).
+- `20261230_setup_sessions` adds `user_sessions.from_setup`, a boolean defaulting to false (instant).
 
 ### Post-deploy commands
 - Optional, re-runnable: Discord messages stored before this release that hold only an attachment stay unindexed until re-embedded. To catch up, run `UPDATE source_item SET embed_status='RAW' WHERE embed_status='SKIPPED' AND id IN (SELECT id FROM discord_message WHERE cardinality(images) > 0 OR attachments @> '[{}]');` and the hourly `process_raw_items` job embeds them (300 an hour). Re-processing records a change, so `on_edit` subscriptions may receive those messages once more.

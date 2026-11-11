@@ -8,6 +8,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from memory.agents.runner import mint_session
 from memory.api import auth, users
 from memory.api.MCP.oauth_provider import make_token_from_data
 from memory.common import settings
@@ -106,7 +107,15 @@ def api_key_token(db_session, user) -> str:
 
 
 def setup_token(db_session, user) -> str:
+    return auth.create_user_session(user.id, db_session, from_setup=True)
+
+
+def unmarked_session_token(db_session, user) -> str:
     return auth.create_user_session(user.id, db_session)
+
+
+def keyless_run_token(db_session, user) -> str:
+    return mint_session(user.id, 60, None)
 
 
 @pytest.mark.parametrize(
@@ -120,11 +129,14 @@ def setup_token(db_session, user) -> str:
         (lambda db, u: oauth_token(db, u, report_redirect(), refreshed=False), 403),
         (lambda db, u: oauth_token(db, u, report_redirect(), refreshed=True), 403),
         (agent_run_token, 403),
+        (keyless_run_token, 403),
+        (unmarked_session_token, 403),
         (api_key_token, 403),
     ],
     ids=[
         "web-ui", "web-ui-refreshed", "setup", "connector", "connector-refreshed",
-        "same-origin-page", "same-origin-page-refreshed", "agent-run", "api-key",
+        "same-origin-page", "same-origin-page-refreshed", "agent-run", "keyless-agent-run",
+        "clientless-not-setup", "api-key",
     ],
 )
 def test_only_web_ui_logins_create_api_keys(api, db_session, human, make_token, status):
