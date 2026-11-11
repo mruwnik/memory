@@ -1127,6 +1127,21 @@ def test_process_meeting_records_uploader_as_creator(
     assert meeting.creator_id == regular_user.id
 
 
+def test_each_owner_stores_their_copy_of_a_transcript(
+    db_session, regular_user, admin_user, sample_transcript
+):
+    created = [
+        meetings.create_meeting_record(
+            db_session, sample_transcript, "Standup", None, None, None,
+            "api", None, None, creator_id=user.id,
+        )
+        for user in (regular_user, admin_user)
+    ]
+
+    assert [m.creator_id for m in created] == [regular_user.id, admin_user.id]
+    assert all(m.id is not None for m in created)
+
+
 def test_process_meeting_idempotent(
     scripted_llm, llm_key, regular_user, sample_extraction_response, sample_transcript, mock_make_session, qdrant
 ):

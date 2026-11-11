@@ -94,12 +94,15 @@ def _get_vevent_attr(vevent: Any, attr: str, default: Any = None) -> Any:
     return value
 
 
-def _create_event_hash(event_data: EventData) -> bytes:
+def _create_event_hash(account_id: int, event_data: EventData) -> bytes:
     """Create a hash for deduplication based on event content.
 
-    Includes external_id to distinguish recurring events with same content.
+    Includes external_id to distinguish recurring events with same content,
+    and the account: sha256 is unique across all items, and every invitee's
+    account holds its own copy of a shared event.
     """
     content = (
+        f"{account_id}:"
         f"{event_data.get('external_id', '')}"
         f"{event_data.get('title', '')}"
         f"{event_data.get('start_time', '')}"
@@ -149,7 +152,7 @@ def _create_calendar_event(
 
     return CalendarEvent(
         modality="calendar",
-        sha256=_create_event_hash(event_data),
+        sha256=_create_event_hash(cast(int, account.id), event_data),
         content=event_data.get("description", ""),
         event_title=event_data["title"],
         start_time=event_data["start_time"],
