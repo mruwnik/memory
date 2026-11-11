@@ -17,6 +17,7 @@ from memory.parsers.ebook import (
     Section,
     check_parse_size,
 )
+from tests.memory import book_files
 
 
 def test_peekable_peek():
@@ -476,3 +477,194 @@ def test_zip_of_one_entry_fools_zipfile(tmp_path):
 
     with zipfile.ZipFile(path) as archive:
         assert archive.read("a.xhtml") == b"a" * 1000
+
+
+LARGE_TEXT = book_files.markup(25_000)  # 200,025 bytes
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        book_files.mobi(LARGE_TEXT),
+        book_files.mobi(LARGE_TEXT, signature=b"TEXtREAd"),
+        book_files.palmdoc_repeats(30),
+        book_files.palmdb([LARGE_TEXT[:4096]], compression=17480),
+        book_files.palmdb([LARGE_TEXT[:4096]] * 2, offsets=[2000, 1000, 100]),
+        book_files.fb2(25_000),
+        LARGE_TEXT,
+        book_files.mobi(LARGE_TEXT) + book_files.epub(b"<html/>"),
+        book_files.mobi(LARGE_TEXT, name=b"%PDF-1.7"),
+        b"x" + book_files.epub(b"<html/>"),
+        b"junk %PDF-1.7\n" + LARGE_TEXT,
+        b"%PDF-1.7\n" + book_files.fb2(25_000),
+    ],
+    ids=[
+        "mobi", "palmdoc", "compressed mobi", "huff mobi", "damaged record table", "fb2", "html",
+        "mobi with a zip appended", "mobi named a pdf", "zip after junk", "pdf header after junk",
+        "pdf header then fb2",
+    ],
+)
+def test_parse_ebook_refuses_unzipped_book_too_large_to_parse(tmp_path, data):
+    path = tmp_path / "book.pdf"
+    path.write_bytes(data)
+
+    with (
+        patch.object(settings, "MAX_EBOOK_INFLATED_BYTES", 100_000),
+        patch("memory.parsers.ebook.pymupdf.open") as mupdf_open,
+        pytest.raises(ValueError),
+    ):
+        parse_ebook(path)
+    mupdf_open.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        book_files.mobi(book_files.markup(10_000)),
+        book_files.palmdoc_repeats(2),
+        book_files.fb2(10_000),
+        b"%PDF-1.7\n" + b"0" * 200_000,
+    ],
+    ids=["mobi", "compressed mobi", "fb2", "pdf"],
+)
+def test_check_parse_size_accepts_unzipped_book_under_the_cap(tmp_path, data):
+    path = tmp_path / "book.mobi"
+    path.write_bytes(data)
+
+    with patch.object(settings, "MAX_EBOOK_INFLATED_BYTES", 100_000):
+        check_parse_size(path)
+
+
+def mupdf_text_bytes(data: bytes) -> int:
+    with pymupdf.open(stream=data) as doc:
+        return "".join(page.get_text() for page in doc.pages()).count("a") * len(b"<p>a</p>")
+
+
+@pytest.mark.parametrize(
+    "records, compression",
+    [
+        ([book_files.markup(12_800)] * 3, 1),
+        ([book_files.palmdoc_record()] * 3, 2),
+        ([book_files.palmdoc_record() * 20] * 3, 2),
+    ],
+    ids=["large uncompressed records", "compressed records", "large compressed records"],
+)
+def test_mupdf_reads_at_most_one_record_size_per_text_record(records, compression):
+    """check_palmdb_size's bound depends on this."""
+    assert mupdf_text_bytes(book_files.palmdb(records, compression=compression)) <= 3 * 4096
+
+
+@pytest.mark.parametrize("records, refused", [(24, False), (25, True)])
+def test_check_parse_size_counts_mobi_text_records(tmp_path, records, refused):
+    path = tmp_path / "book.mobi"
+    path.write_bytes(book_files.palmdoc_repeats(records))
+
+    with patch.object(settings, "MAX_EBOOK_INFLATED_BYTES", 100_000):
+        assert check_size_refuses(path) == refused
+
+
+def check_size_refuses(path) -> bool:
+    try:
+        check_parse_size(path)
+    except ValueError:
+        return True
+    return False
+
+
+CHAPTER = book_files.markup(3_750)  # 30,025 bytes
+
+
+def chapter_book(name: str, href: str, spine: list[str], **kwargs) -> bytes:
+    """An EPUB of CHAPTER stored as `name`, manifest item "c" pointing at `href`."""
+    return book_files.epub_package({name: CHAPTER}, [("c", href)], spine, **kwargs)
+
+
+SHARED_FILE = book_files.epub_package(
+    {"c.xhtml": CHAPTER}, [(f"i{n}", "c.xhtml") for n in range(4)], [f"i{n}" for n in range(4)]
+)
+TOO_MANY = "chapters add up"
+
+
+@pytest.mark.parametrize(
+    "data, match",
+    [
+        (book_files.epub(CHAPTER, repeats=4), TOO_MANY),
+        (SHARED_FILE, TOO_MANY),
+        (chapter_book("C.XHTML", "c.xhtml", ["c"] * 4), TOO_MANY),
+        (chapter_book("c d.xhtml", "c%20d.xhtml", ["c"] * 4), TOO_MANY),
+        (chapter_book("OEBPS/c.xhtml", "/c.xhtml", ["c"] * 4, opf_path="OEBPS/content.opf"), TOO_MANY),
+        (chapter_book("c.xhtml", "c.xhtml", ["unknown"] * 4), TOO_MANY),
+        (book_files.epub_package({"c.xhtml": b""}, [("c", "c.xhtml")], ["c"] * 51), "more than 50 itemref"),
+        (chapter_book("c.xhtml", "c.xhtml", ["c"], container_path="gone.opf"), "missing package"),
+        (chapter_book("c.xhtml", "./c.xhtml", ["c"] * 4), TOO_MANY),
+        (chapter_book("x/../c.xhtml", "c.xhtml", ["c"]), "unusual name"),
+        (chapter_book("x//c.xhtml", "c.xhtml", ["c"]), "unusual name"),
+        (book_files.epub_package({"c.xhtml": b""}, [("c", "c.xhtml"), ("c", "c.xhtml")], ["c"]), "repeats a manifest id"),
+        (book_files.epub_package({"c.xhtml": b""}, [(f"i{n}", "c.xhtml") for n in range(51)], []), "more than 50 item"),
+    ],
+    ids=[
+        "repeated idref", "ids sharing a file", "entry name case", "percent-encoded href",
+        "rooted href", "unresolved idref", "spine too long", "missing package", "dotted href",
+        "dot-dot entry", "empty segment entry", "repeated manifest id", "manifest too long",
+    ],
+)
+def test_check_parse_size_charges_each_spine_chapter(tmp_path, data, match):
+    path = tmp_path / "book.epub"
+    path.write_bytes(data)
+
+    with (
+        patch.object(settings, "MAX_EBOOK_INFLATED_BYTES", 100_000),
+        patch.object(settings, "MAX_EBOOK_ZIP_ENTRIES", 50),
+        pytest.raises(ValueError, match=match),
+    ):
+        check_parse_size(path)
+
+
+def unreadable_package(path):
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("META-INF/container.xml", book_files.CONTAINER.format("content.opf"))
+        archive.writestr("content.opf", "<package><spine>")
+
+
+def test_check_parse_size_refuses_an_unreadable_package(tmp_path):
+    path = tmp_path / "book.epub"
+    unreadable_package(path)
+
+    with pytest.raises(ValueError, match="unreadable package"):
+        check_parse_size(path)
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        book_files.epub(CHAPTER, repeats=3),
+        book_files.epub_package(
+            {"a.xhtml": CHAPTER, "b.xhtml": CHAPTER}, [("a", "a.xhtml"), ("b", "b.xhtml")], ["a", "b"]
+        ),
+    ],
+    ids=["three repeats", "two chapters"],
+)
+def test_check_parse_size_accepts_a_spine_under_the_cap(tmp_path, data):
+    path = tmp_path / "book.epub"
+    path.write_bytes(data)
+
+    with patch.object(settings, "MAX_EBOOK_INFLATED_BYTES", 100_000):
+        check_parse_size(path)
+
+
+def test_check_parse_size_ignores_a_zip_without_a_container(tmp_path):
+    path = tmp_path / "comic.cbz"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("1.png", b"\0" * 1000)
+
+    check_parse_size(path)
+
+
+def test_check_parse_size_refuses_too_many_package_files(tmp_path):
+    rootfiles = "".join(f"<rootfile full-path='p{n}.opf'/>" for n in range(9))
+    path = tmp_path / "book.epub"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("META-INF/container.xml", f"<container><rootfiles>{rootfiles}</rootfiles></container>")
+
+    with pytest.raises(ValueError, match="more than 8 rootfile"):
+        check_parse_size(path)

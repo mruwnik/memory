@@ -7,6 +7,7 @@ import pymupdf
 from PIL import Image
 import io
 import shutil
+import zipfile
 from unittest.mock import patch
 from memory.common import settings, summarizer
 from memory.common.extract import (
@@ -18,6 +19,7 @@ from memory.common.extract import (
     extract_pdf,
     extract_image,
     extract_data_chunks,
+    open_pdf,
     safe_image_open,
     docx_to_pdf,
     merge_metadata,
@@ -25,6 +27,8 @@ from memory.common.extract import (
     MAX_CHUNK_IMAGE_PIXELS,
     DataChunk,
 )
+from memory.parsers.google_drive import GoogleCredentials, GoogleDriveClient
+from tests.memory import book_files
 
 
 REGULAMIN = pathlib.Path(__file__).parent.parent.parent / "data" / "regulamin.pdf"
@@ -483,3 +487,90 @@ def test_extract_docx_leaves_no_pdf_beside_source(tmp_path):
 def test_extract_pdf_refuses_too_many_pages():
     with patch.object(settings, "MAX_PDF_PAGES", 3), pytest.raises(ValueError):
         extract_pdf(pdf_of_pages(*[(612, 792)] * 4))
+
+
+NOT_PDFS = [
+    book_files.epub(book_files.markup(2000)),
+    book_files.mobi(book_files.markup(2000)),
+    book_files.fb2(2000),
+    book_files.markup(2000),
+]
+NOT_PDF_IDS = ["epub", "mobi", "fb2", "html"]
+
+
+@pytest.mark.parametrize("data", NOT_PDFS, ids=NOT_PDF_IDS)
+def test_extract_pdf_refuses_bytes_that_are_not_a_pdf(data):
+    with pytest.raises(ValueError, match="Not a PDF"):
+        extract_data_chunks("application/pdf", data)
+
+
+@pytest.mark.parametrize("data", NOT_PDFS, ids=NOT_PDF_IDS)
+def test_extract_pdf_refuses_a_pdf_named_file_that_is_not_a_pdf(tmp_path, data):
+    path = tmp_path / "invoice.pdf"
+    path.write_bytes(data)
+    with pytest.raises(ValueError, match="Not a PDF"):
+        extract_pdf(path)
+
+
+def epub_holding_a_pdf_header() -> bytes:
+    """An EPUB whose second entry, stored, holds the PDF header within the first KiB."""
+    book = zipfile.ZipFile(io.BytesIO(book_files.epub(book_files.markup(2000))))
+    first, *rest = book.infolist()
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(first, book.read(first), zipfile.ZIP_STORED)
+        archive.writestr("%PDF-1.7.txt", b"%PDF-1.7", zipfile.ZIP_STORED)
+        for info in rest:
+            archive.writestr(info.filename, book.read(info))
+    return buffer.getvalue()
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        b"%PDF-1.7\n" + book_files.epub(book_files.markup(2000)),
+        book_files.mobi(book_files.markup(2000), name=b"%PDF-1.7"),
+        book_files.mobi(book_files.markup(2000), name=b"xx%PDF-1.7"),
+        b"%PDF-1.7\n" + book_files.fb2(2000),
+        b"%PDF-1.7\n" + book_files.markup(2000),
+        epub_holding_a_pdf_header(),
+        pdf_of_pages((612, 792)) + book_files.epub(book_files.markup(10)),
+        b"junk %PDF-1.7\n",
+    ],
+    ids=[
+        "header then epub", "mobi named a pdf", "mobi naming a pdf", "header then fb2",
+        "header then html", "epub holding a pdf header", "pdf with a zip appended", "header after junk",
+    ],
+)
+def test_content_with_another_formats_signature_never_reaches_mupdf(tmp_path, data):
+    path = tmp_path / "file.pdf"
+    path.write_bytes(data)
+    with patch("memory.common.extract.pymupdf.open") as mupdf_open:
+        for content in (data, path):
+            with pytest.raises(ValueError, match="Not a PDF"):
+                open_pdf(content)
+    mupdf_open.assert_not_called()
+
+
+@pytest.mark.parametrize("prefix", [b"", b"\0" * 1000, b"\r\n \t"])
+def test_open_pdf_accepts_the_header_after_whitespace(prefix):
+    with open_pdf(prefix + pdf_of_pages((612, 792))) as pdf:
+        assert pdf.page_count == 1
+
+
+def drive_client() -> GoogleDriveClient:
+    return GoogleDriveClient(GoogleCredentials("token", None, None, []))
+
+
+@pytest.mark.parametrize("data", NOT_PDFS, ids=NOT_PDF_IDS)
+def test_drive_pdf_text_skips_files_that_are_not_pdfs(data):
+    assert drive_client()._extract_pdf_text(data) is None
+
+
+def test_drive_pdf_text_skips_pdfs_over_the_page_cap():
+    with patch.object(settings, "MAX_PDF_PAGES", 3):
+        assert drive_client()._extract_pdf_text(pdf_of_pages(*[(612, 792)] * 4)) is None
+
+
+def test_drive_pdf_text_reads_a_pdf():
+    assert drive_client()._extract_pdf_text(pdf_of_pages((612, 792))) == ""

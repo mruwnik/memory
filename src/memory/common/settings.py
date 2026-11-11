@@ -489,10 +489,11 @@ MAX_REPORT_UPLOAD_BYTES = int(
 MAX_MISC_UPLOAD_BYTES = int(
     os.getenv("MAX_MISC_UPLOAD_BYTES", 100 * 1024 * 1024)
 )
-# An EPUB whose entries inflate past this in total is not parsed: MuPDF lays
-# its markup out in memory, roughly 50 bytes of worker RAM per byte, so a small
-# compressed upload can OOM a worker. Images count too, since any entry can hold
-# markup; raise it for image-heavy books if workers have the memory.
+# A book with more markup than this is not parsed: MuPDF lays it out in memory,
+# roughly 50 bytes of worker RAM per byte, so a small compressed upload can OOM
+# a worker. An EPUB counts every entry's inflated size (images too, since any
+# entry can hold markup; raise it for image-heavy books if workers have the
+# memory), a MOBI its text records, any other format but PDF its file size.
 MAX_EBOOK_INFLATED_BYTES = int(
     os.getenv("MAX_EBOOK_INFLATED_BYTES", 10 * 1024 * 1024)
 )

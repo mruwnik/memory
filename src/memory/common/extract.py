@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field, replace
 import io
+import zipfile
 import logging
 import math
 import mimetypes
@@ -10,6 +11,7 @@ from contextlib import contextmanager
 from typing import Any, Generator, Sequence, cast
 
 from memory.common import chunker, settings, summarizer
+from memory.common.file_magic import PDF_MAGIC_WINDOW, looks_like_pdf
 from memory.parsers import ebook
 import pymupdf  # PyMuPDF
 from PIL import Image
@@ -218,6 +220,33 @@ def page_text_chunks(page: pymupdf.Page, modality: str) -> list[DataChunk]:
 MIN_PDF_PAGE_TEXT_CHARS = 16
 
 
+def open_pdf(content: bytes | pathlib.Path) -> pymupdf.Document:
+    """Open a PDF with MuPDF, refusing anything that isn't one.
+
+    MuPDF picks its handler from the content, whatever the caller asks for, and
+    opening a reflowable format (EPUB, MOBI, FB2, HTML) lays out the whole
+    document. Only content that starts with the PDF header and carries no
+    other format's signature, nor a zip directory, reaches MuPDF.
+    """
+    if isinstance(content, pathlib.Path):
+        with content.open("rb") as file:
+            head = file.read(PDF_MAGIC_WINDOW)
+        zipped = zipfile.is_zipfile(content)
+    else:
+        head = content[:PDF_MAGIC_WINDOW]
+        zipped = zipfile.is_zipfile(io.BytesIO(content))
+    if not looks_like_pdf(head) or zipped:
+        raise ValueError("Not a PDF")
+    if isinstance(content, pathlib.Path):
+        doc = pymupdf.open(content, filetype="pdf")
+    else:
+        doc = pymupdf.open(stream=content, filetype="pdf")
+    if not doc.is_pdf:
+        doc.close()
+        raise ValueError("Not a PDF")
+    return doc
+
+
 def extract_pdf(
     content: bytes | str | pathlib.Path,
     modality: str = "doc",
@@ -232,11 +261,12 @@ def extract_pdf(
     share its ``page`` metadata. Only the first ``max_image_pages`` pages get an
     image, since every page image is held in memory until the item is embedded.
 
-    Raises ValueError for a PDF of more than MAX_PDF_PAGES pages.
+    Raises ValueError for content that isn't a PDF, or a PDF of more than
+    MAX_PDF_PAGES pages.
     """
     chunks: list[DataChunk] = []
     with as_file(content) as file_path:
-        with pymupdf.open(file_path) as pdf:
+        with open_pdf(file_path) as pdf:
             if pdf.page_count > settings.MAX_PDF_PAGES:
                 raise ValueError(
                     f"PDF has {pdf.page_count} pages (limit {settings.MAX_PDF_PAGES})"

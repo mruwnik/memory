@@ -450,6 +450,7 @@ RECURRENCE_EXPANDABLE_CASES = [
     # Malformed or unbounded
     ("FREQ=BOGUS", False),
     ("FREQ=DAILY;INTERVAL=0", False),
+    ("FREQ=YEARLY;BYEASTER=0", False),
 ]
 
 
@@ -1121,3 +1122,32 @@ def test_fetch_google_events_reads_every_page_of_the_calendar_list(
     assert [e.get("external_id") for e in fetched.events] == ["event-cal-1", "event-cal-2"]
     assert fetched.complete is True
     assert calendar_list.call_args_list == [call(pageToken=None), call(pageToken="page-2")]
+
+
+@pytest.mark.parametrize("rule, has_cost", [("FREQ=WEEKLY;BYDAY=MO", True), (None, False)])
+def test_sync_calendar_event_records_the_rules_cost(
+    mock_event_data, caldav_account, db_session, no_embedding, rule, has_cost
+):
+    mock_event_data["recurrence_rule"] = rule
+
+    calendar.sync_calendar_event(caldav_account.id, _serialize_event_data(mock_event_data))
+
+    event = db_session.query(CalendarEvent).filter_by(external_id="event-123").one()
+    assert (event.recurrence_cost_ms is not None) is has_cost
+
+
+def test_sync_calendar_event_measures_a_rule_checked_without_its_cost(
+    mock_event_data, caldav_account, db_session, no_embedding
+):
+    mock_event_data["recurrence_rule"] = "FREQ=WEEKLY;BYDAY=MO"
+    calendar.sync_calendar_event(caldav_account.id, _serialize_event_data(mock_event_data))
+    db_session.query(CalendarEvent).filter_by(external_id="event-123").update(
+        {"recurrence_expandable": True, "recurrence_cost_ms": None}
+    )
+    db_session.commit()
+
+    calendar.sync_calendar_event(caldav_account.id, _serialize_event_data(mock_event_data))
+
+    event = db_session.query(CalendarEvent).filter_by(external_id="event-123").one()
+    db_session.refresh(event)
+    assert event.recurrence_cost_ms is not None
