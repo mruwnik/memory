@@ -1419,7 +1419,11 @@ class MiscDoc(SourceItem):
             contents = (settings.FILE_STORAGE_DIR / self.filename).read_bytes()
         else:
             contents = self.content or ""
-        chunks = list(extract.extract_data_chunks(self.mime_type or "", contents))
+        chunks = list(
+            extract.extract_data_chunks(
+                self.mime_type or "", contents, max_image_pages=settings.MAX_DOC_EMBED_PAGES
+            )
+        )
 
         # Emit a text chunk carrying the bibliographic metadata so the doc is
         # findable by title/author/etc. Born-digital PDFs now extract per-page
@@ -1884,7 +1888,7 @@ class Report(SourceItem):
             file_path = settings.FILE_STORAGE_DIR / self.filename
             if not file_path.exists():
                 return []
-            return extract.doc_to_images(file_path)
+            return extract.extract_pdf(file_path, max_image_pages=settings.MAX_DOC_EMBED_PAGES)
 
         # HTML: worker already converted to markdown and extracted images
         return chunk_mixed(self.content or "", self.images or [])

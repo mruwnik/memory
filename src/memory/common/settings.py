@@ -229,6 +229,11 @@ MAX_ATTACHMENT_EMBED_SIZE = int(
 # each page image (1.45MB for Letter, up to 6MB) is held until the item is
 # embedded, and a worker child has ~700MB.
 MAX_ATTACHMENT_EMBED_PAGES = int(os.getenv("MAX_ATTACHMENT_EMBED_PAGES", 50))
+# The same image-page cap for uploaded documents and PDF reports.
+MAX_DOC_EMBED_PAGES = int(os.getenv("MAX_DOC_EMBED_PAGES", 50))
+# PDFs with more pages are not chunked at all: every page's text is extracted
+# and embedded on the server's Voyage key.
+MAX_PDF_PAGES = int(os.getenv("MAX_PDF_PAGES", 2000))
 
 # Qdrant settings
 QDRANT_HOST = os.getenv("QDRANT_HOST", "qdrant")

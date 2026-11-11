@@ -1,8 +1,15 @@
 """Tests for the Report model."""
+# pyright: reportAttributeAccessIssue=false
+# PyMuPDF's stubs omit Document.new_page; it exists at runtime.
 
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
-from memory.common.db.models import Report
+import pymupdf
+import pytest
+from PIL import Image
+
+from memory.common import settings
+from memory.common.db.models import MiscDoc, Report
 
 
 def test_report_as_payload(db_session):
@@ -111,25 +118,31 @@ def test_report_chunk_contents_html(tmp_path):
         )
 
 
-def test_report_chunk_contents_pdf(tmp_path):
-    report_file = tmp_path / "test_report.pdf"
-    report_file.write_bytes(b"fake pdf content")
+def blank_pdf(pages: int) -> bytes:
+    doc = pymupdf.open()
+    for _ in range(pages):
+        doc.new_page()
+    return doc.tobytes()
 
-    mock_chunks = [MagicMock(data=["page 1 text"])]
 
-    with (
-        patch("memory.common.settings.REPORT_STORAGE_DIR", tmp_path),
-        patch("memory.common.extract.doc_to_images", return_value=mock_chunks) as mock_extract,
-    ):
-        report = Report(
-            modality="doc",
-            mime_type="application/pdf",
-            report_format="pdf",
-            filename="test_report.pdf",
-        )
-        chunks = report._chunk_contents()
-        mock_extract.assert_called_once_with(report_file)
-        assert chunks == mock_chunks
+def image_chunks(chunks) -> list:
+    return [c for c in chunks if any(isinstance(d, Image.Image) for d in c.data)]
+
+
+@pytest.mark.parametrize(
+    "item",
+    [
+        Report(modality="doc", mime_type="application/pdf", report_format="pdf", filename="r.pdf"),
+        MiscDoc(modality="doc", mime_type="application/pdf", filename="r.pdf"),
+    ],
+)
+def test_pdf_page_images_are_capped(item):
+    (settings.FILE_STORAGE_DIR / "r.pdf").write_bytes(blank_pdf(5))
+
+    with patch.object(settings, "MAX_DOC_EMBED_PAGES", 2):
+        chunks = item._chunk_contents()
+
+    assert [c.metadata["page"] for c in image_chunks(chunks)] == [0, 1]
 
 
 def test_report_save_to_file_text(tmp_path):

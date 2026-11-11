@@ -190,22 +190,13 @@ def page_metadata(page: pymupdf.Page) -> dict[str, Any]:
 
 def page_image_chunk(page: pymupdf.Page, modality: str = "doc") -> DataChunk:
     """One multimodal image chunk for a PDF page, carrying its page geometry as
-    metadata. Shared by ``doc_to_images`` and ``extract_pdf`` so the two paths
-    can't drift."""
+    metadata."""
     return DataChunk(
         data=[page_to_image(page)],
         metadata=page_metadata(page),
         mime_type="image/jpeg",
         modality=modality,
     )
-
-
-def doc_to_images(
-    content: bytes | str | pathlib.Path, modality: str = "doc"
-) -> list[DataChunk]:
-    with as_file(content) as file_path:
-        with pymupdf.open(file_path) as pdf:
-            return [page_image_chunk(page, modality) for page in pdf.pages()]
 
 
 def page_text_chunks(page: pymupdf.Page, modality: str) -> list[DataChunk]:
@@ -240,10 +231,16 @@ def extract_pdf(
     back to image-only multimodal chunks. The text and image chunks for a page
     share its ``page`` metadata. Only the first ``max_image_pages`` pages get an
     image, since every page image is held in memory until the item is embedded.
+
+    Raises ValueError for a PDF of more than MAX_PDF_PAGES pages.
     """
     chunks: list[DataChunk] = []
     with as_file(content) as file_path:
         with pymupdf.open(file_path) as pdf:
+            if pdf.page_count > settings.MAX_PDF_PAGES:
+                raise ValueError(
+                    f"PDF has {pdf.page_count} pages (limit {settings.MAX_PDF_PAGES})"
+                )
             for page in pdf.pages():
                 if max_image_pages is None or page.number < max_image_pages:
                     chunks.append(page_image_chunk(page, modality))

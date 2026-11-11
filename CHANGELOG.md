@@ -67,6 +67,7 @@ a new, empty `## Unreleased` above it.
 - `/files`, `core_fetch_file` and email attachments serve a file only through an item type that keeps files on disk (notes, reports, photos, comics, book sections, documents, email attachments, Discord images), from that type's own folder, and never a path with a dot-prefixed segment. Google Drive docs no longer store their title as a file path: a Drive file named like a stored path let anyone with Drive connected read that file.
 - Comics are stored only when the image URL's path ends in an image extension (.png, .jpg, .jpeg, .gif, .webp); the stored file's name no longer comes from the rest of the URL, which could point outside the comics folder. LessWrong posts whose page URL would put their images outside the `lesswrong` folder are refused.
 - Uploads through `add_content` and `/ingest/upload` are routed to books by their header (EPUB, MOBI/AZW) instead of being opened with MuPDF in the API, which could stall every request for seconds per upload. XPS, CBZ, FB2 and SVG uploads now become documents rather than books. The book worker refuses an EPUB whose text inflates past `MAX_EBOOK_MARKUP_BYTES` (default 10 MiB).
+- Uploaded PDF documents and PDF reports embed page images for their first `MAX_DOC_EMBED_PAGES` pages (default 50) and text for every page; before, every page became an image, which a small upload with many pages could use to exhaust a worker's memory. PDF reports now also get their text indexed. A PDF of more than `MAX_PDF_PAGES` pages (default 2000) is not indexed.
 ### Required env vars
 None
 
