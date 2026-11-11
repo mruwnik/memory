@@ -152,8 +152,8 @@ None
 - `20261226_slack_workspace_owner` adds a nullable `slack_workspaces.owner_id` (FK to `users`, `ON DELETE SET NULL`) and fills it with the user of each workspace's oldest credential, its owner until now (one UPDATE over `slack_workspaces`; workspaces with no credentials left get no owner and are managed by admins).
 - `20261227_unbind_github_projects` finds repo and milestone projects that have teams, none of which the owner of the repo's tracking account is in (an owner with no person record is in none), and for each: clears `project_id` on the repo's `github_item`s filed into it and bumps their `updated_at`, clears `github_item.milestone_id` pointing at it, and sets the project's `repo_id`, `github_id` and `number` to NULL, leaving a standalone project with its teams. Projects with no teams, standalone projects and other items are not touched. Three UPDATEs over `source_item`, `github_item` and `projects`; not reversible (the downgrade does nothing; re-bind a project by hand).
 - `20261226_recurrence_cost` adds a nullable `calendar_event.recurrence_cost_ms` float (instant).
-- `20261229_slack_channel_members` adds a `slack_channel_members` table (instant); it fills on each Slack workspace's next sync.
 - `20261230_setup_sessions` adds `user_sessions.from_setup`, a boolean defaulting to false (instant).
+- `20261231_slack_channel_members` adds a `slack_channel_members` table (instant); it fills on each Slack workspace's next sync.
 
 ### Post-deploy commands
 - Optional, re-runnable: Discord messages stored before this release that hold only an attachment stay unindexed until re-embedded. To catch up, run `UPDATE source_item SET embed_status='RAW' WHERE embed_status='SKIPPED' AND id IN (SELECT id FROM discord_message WHERE cardinality(images) > 0 OR attachments @> '[{}]');` and the hourly `process_raw_items` job embeds them (300 an hour). Re-processing records a change, so `on_edit` subscriptions may receive those messages once more.
