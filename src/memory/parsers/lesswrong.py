@@ -8,8 +8,8 @@ from bs4 import BeautifulSoup
 from PIL import Image as PILImage
 from memory.common import paths, settings
 from memory.common.ssrf import validate_public_url
+from memory.common.html_text import html_to_markdown
 import requests
-from markdownify import markdownify
 
 from memory.parsers.html import parse_date, process_images
 
@@ -154,7 +154,7 @@ def format_comment(comment: dict[str, Any]) -> LessWrongComment:
         "parent_comment_id": comment.get("parentCommentId"),
         "url": comment.get("pageUrl") or "",
         "author": (comment.get("user") or {}).get("displayName") or "anonymous",
-        "content": markdownify(comment["htmlBody"]).strip(),
+        "content": html_to_markdown(comment["htmlBody"]),
         "karma": comment.get("baseScore") or 0,
         "votes": comment.get("voteCount") or 0,
         "posted_at": posted_at and posted_at.replace(tzinfo=timezone.utc).isoformat(),
@@ -288,7 +288,7 @@ def extract_body(post: dict[str, Any]) -> tuple[str, dict[str, PILImage.Image]]:
 
     soup = BeautifulSoup(body, "html.parser")
     soup, images = process_images(soup, url, image_dir)
-    body = markdownify(str(soup)).strip()
+    body = html_to_markdown(str(soup))
     return body, images
 
 

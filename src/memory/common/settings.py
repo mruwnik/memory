@@ -157,6 +157,8 @@ SLACK_STORAGE_DIR = pathlib.Path(
 BEEPER_STORAGE_DIR = pathlib.Path(
     os.getenv("BEEPER_STORAGE_DIR", FILE_STORAGE_DIR / "beeper")
 )
+# A coding session's transcript file stops accepting events at this size.
+MAX_SESSION_TRANSCRIPT_BYTES = int(os.getenv("MAX_SESSION_TRANSCRIPT_BYTES", 256 * 1024 * 1024))
 SESSIONS_STORAGE_DIR = pathlib.Path(
     os.getenv("SESSIONS_STORAGE_DIR", FILE_STORAGE_DIR / "sessions")
 )
@@ -231,6 +233,9 @@ MAX_ATTACHMENT_EMBED_SIZE = int(
 MAX_ATTACHMENT_EMBED_PAGES = int(os.getenv("MAX_ATTACHMENT_EMBED_PAGES", 50))
 # The same image-page cap for uploaded documents and PDF reports.
 MAX_DOC_EMBED_PAGES = int(os.getenv("MAX_DOC_EMBED_PAGES", 50))
+# Text chunks embedded per item on the server's Voyage key; past it, the first
+# chunks and the item's summary are kept.
+MAX_EMBEDDED_CHUNKS_PER_ITEM = int(os.getenv("MAX_EMBEDDED_CHUNKS_PER_ITEM", 500))
 # PDFs with more pages are not chunked at all: every page's text is extracted
 # and embedded on the server's Voyage key.
 MAX_PDF_PAGES = int(os.getenv("MAX_PDF_PAGES", 2000))
@@ -504,6 +509,10 @@ REMOTE_SERVER_TIMEOUT_SEC = int(os.getenv("REMOTE_SERVER_TIMEOUT_SEC", 60))
 # An IMAP message larger than this is not downloaded, and no single IMAP
 # command's response may be larger.
 MAX_EMAIL_BYTES = int(os.getenv("MAX_EMAIL_BYTES", 64 * 1024 * 1024))
+# HTML (email bodies, fetched pages) is converted to markdown up to this many
+# characters; the rest only has its tags stripped. Conversion costs about
+# 10 µs and 100 bytes of RAM per character of tag-dense HTML.
+MAX_HTML_TO_MARKDOWN_CHARS = int(os.getenv("MAX_HTML_TO_MARKDOWN_CHARS", 150_000))
 # Wall-clock limit on one IMAP command's response, however steadily it trickles in.
 IMAP_COMMAND_TIMEOUT_SEC = int(os.getenv("IMAP_COMMAND_TIMEOUT_SEC", 600))
 # Bytes one IMAP connection (one account sync) may receive in all. A sync

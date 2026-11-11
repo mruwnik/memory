@@ -180,6 +180,21 @@ def save_chunk_image(image: Image.Image, stem: str) -> pathlib.Path:
     return path
 
 
+def capped_chunks(item_id: int | None, chunks: Sequence[extract.DataChunk]) -> list[extract.DataChunk]:
+    """The first MAX_EMBEDDED_CHUNKS_PER_ITEM chunks, summaries always kept:
+    every chunk is embedded on the server's key, whoever sent the text."""
+    limit = settings.MAX_EMBEDDED_CHUNKS_PER_ITEM
+    if len(chunks) <= limit:
+        return list(chunks)
+    summaries = [c for c in chunks if c.metadata.get("type") == "summary"]
+    rest = [c for c in chunks if c.metadata.get("type") != "summary"]
+    kept = rest[: max(limit - len(summaries), 0)]
+    logger.warning(
+        f"Item {item_id}: embedding {len(kept)} of {len(rest)} chunks (MAX_EMBEDDED_CHUNKS_PER_ITEM)"
+    )
+    return kept + summaries
+
+
 def image_filenames(chunk_id: str, images: Sequence[Image.Image]) -> list[str]:
     for i, image in enumerate(images):
         # A shrunk image no longer matches the file it was read from.
@@ -731,7 +746,7 @@ class SourceItem(AccessControlMixin, Base):
 
     def data_chunks(self, metadata: dict[str, Any] | None = None) -> Sequence[Chunk]:
         metadata = metadata or {}
-        return [self.make_chunk(data, metadata) for data in self._chunk_contents()]
+        return [self.make_chunk(data, metadata) for data in capped_chunks(self.id, self._chunk_contents())]
 
     def as_payload(self) -> SourceItemPayload:
         """

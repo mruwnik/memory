@@ -134,6 +134,7 @@ def create_mail_message(
         recipients=parsed_email["recipients"],
         sent_at=parsed_email["sent_at"],
         content=raw_email,
+        parsed_body=parsed_email["body"],
         folder=folder,
         email_account_id=email_account_id,
         imap_uid=imap_uid,

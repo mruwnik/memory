@@ -1677,3 +1677,28 @@ def test_search_folder_tells_a_missing_folder_from_a_passing_refusal(
         search_folder(provider, folder, "ALL")
 
     assert isinstance(raised.value, FolderUnavailableError) is gone
+
+
+def test_stored_mail_body_is_read_without_reparsing(db_session, monkeypatch):
+    raw_email = (
+        "From: sender@example.com\nTo: recipient@example.com\nSubject: S\n"
+        "Message-ID: <stored-body@example.com>\nMIME-Version: 1.0\n"
+        "Content-Type: text/html\n\n<p>Hello <b>there</b></p>"
+    )
+    mail_message = create_mail_message(
+        db_session=db_session, folder="INBOX", tags=[], parsed_email=parse_email_message(raw_email)
+    )
+    db_session.commit()
+    db_session.expire_all()
+
+    def no_parse(*args, **kwargs):
+        raise AssertionError("the stored body was re-extracted")
+
+    monkeypatch.setattr("memory.parsers.email.parse_email_message", no_parse)
+    stored = db_session.get(MailMessage, mail_message.id)
+
+    assert stored.parsed_body == "Hello **there**"
+    assert (stored.body, stored.preview_text) == ("Hello **there**", "Hello **there**")
+    assert [chunk.data for chunk in stored._chunk_contents()] == [
+        ["Subject: S\nFrom: sender@example.com\nTo: recipient@example.com\nDate: \nBody:\nHello **there**"]
+    ]

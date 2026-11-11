@@ -8,7 +8,7 @@ from datetime import datetime
 from email.utils import getaddresses, parsedate_to_datetime
 from typing import TypedDict
 
-from markdownify import markdownify
+from memory.common.html_text import html_to_markdown
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +120,7 @@ def extract_body(msg: email.message.Message) -> str:  # type: ignore
                 content = str(payload)
             content_type = msg.get_content_type()
             if content_type == "text/html":
-                return markdownify(content).strip()
+                return html_to_markdown(content)
             else:
                 return content
         except Exception:
@@ -154,7 +154,7 @@ def extract_body(msg: email.message.Message) -> str:  # type: ignore
 
     # Prefer HTML (converted to markdown) over plain text
     if html_body.strip():
-        return markdownify(html_body).strip()
+        return html_to_markdown(html_body)
     else:
         return plain_body.strip()
 

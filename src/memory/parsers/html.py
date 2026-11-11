@@ -9,11 +9,11 @@ from typing import Any
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
-from markdownify import markdownify as md
 from PIL import Image as PILImage
 
 from memory.common import paths, settings
 from memory.common.downloads import safe_get, stream_download_to_path
+from memory.common.html_text import html_to_markdown
 from memory.common.ssrf import UnsafeURLError, validate_public_url
 
 logger = logging.getLogger(__name__)
@@ -346,7 +346,7 @@ def convert_to_markdown(content: Tag | None, base_url: str) -> str:
             tag["href"] = to_absolute_url(str(href), base_url)
 
     # Convert to markdown
-    markdown = md(str(content), heading_style="ATX", bullets="-")
+    markdown = html_to_markdown(str(content), heading_style="ATX", bullets="-")
 
     # Clean up excessive newlines
     markdown = re.sub(r"\n{3,}", "\n\n", markdown)
