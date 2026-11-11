@@ -1,3 +1,4 @@
+# pyright: reportAttributeAccessIssue=false
 """A session for caldav's DAVClient whose every request is checked at dial time.
 
 A CalDAV server names the URLs the client fetches next (principal, calendar
