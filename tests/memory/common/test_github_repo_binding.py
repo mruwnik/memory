@@ -3,7 +3,7 @@
 A repo is tracked once, by one account; its sync files every new or changed
 issue and PR under the repo's project, which grants that project's teams
 access. So binding someone else's repo needs GitHub access to it, and the
-sync files only into projects its owner shares.
+sync files only into projects its owner shares, even when the owner is an admin.
 """
 
 from datetime import datetime, timedelta
@@ -140,9 +140,10 @@ async def test_the_tracker_or_an_admin_binds_without_asking_github(
         (["read"], True, True, True),
         (["read"], False, True, False),
         (["read"], False, False, True),
-        (["*"], False, True, True),
+        (["*"], False, True, False),
+        (["*"], True, True, True),
     ],
-    ids=["owner in team", "owner not in team", "project without teams", "admin owner"],
+    ids=["owner in team", "owner not in team", "project without teams", "admin not in team", "admin in team"],
 )
 def test_owner_may_file_into_project(db_session, owner_scopes, owner_in_team, project_has_team, allowed):
     owner = github_user(db_session, "o@example.com", owner_scopes)
@@ -175,6 +176,20 @@ def test_the_sync_files_into_a_repo_project_only_when_its_owner_shares_it(
     expected = project.id if alice_in_team else None
     assert github._lookup_repo_project_id(db_session, alice_repo) == expected
     assert github._lookup_milestone_id(db_session, alice_repo, None) is None
+
+
+@pytest.mark.parametrize("milestone", [None, 3])
+def test_an_admins_sync_does_not_file_into_a_project_of_teams_they_are_not_in(db_session, milestone):
+    admin = github_user(db_session, "root@example.com", ["*"])
+    account = db_session.query(GithubAccount).filter_by(user_id=admin.id).one()
+    repo = GithubRepo(account_id=account.id, github_id=2, owner="corp", name="ops", active=True)
+    db_session.add(repo)
+    db_session.commit()
+    bob = github_user(db_session, "bob@example.com", ["read"])
+    bound_project(db_session, repo, team_of(db_session, "bobs", bob), number=milestone)
+
+    assert github._lookup_repo_project_id(db_session, repo) is None
+    assert github._lookup_milestone_id(db_session, repo, milestone) is None
 
 
 @pytest.mark.parametrize("alice_in_team", [True, False])
