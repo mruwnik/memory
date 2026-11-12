@@ -196,6 +196,8 @@ class AgentRun(Base):
     # When the ended run was first handed to its owner (agent_wait or an unseen listing).
     seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    subscription: Mapped["Subscription | None"] = relationship("Subscription")
+
     __table_args__ = (
         CheckConstraint(
             "status IN ('pending','running','done','failed','budget_exceeded','cancelled')",
@@ -299,6 +301,7 @@ class AgentRun(Base):
             "trigger_kind": self.trigger_kind,
             "trigger_ref": self.trigger_ref,
             "subscription_id": self.subscription_id,
+            "subscription_name": self.subscription.name if self.subscription else None,
             "starred": self.starred,
             "provider_key_id": self.provider_key_id,
             "model": self.spec.get("model"),

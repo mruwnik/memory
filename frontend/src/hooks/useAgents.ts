@@ -31,7 +31,15 @@ export interface AgentRun {
   definition_id: number | null
   // A prebuilt or system agent's slug; null with definition_id for an inline spec.
   agent: string | null
-  executor: string
+  executor: 'server' | 'workers'
+  // A queue delivery's queue; its subscription is what routed the items there.
+  queue: string | null
+  subscription_id: number | null
+  subscription_name: string | null
+  worker_label: string | null
+  lease_expires_at: string | null
+  // What the worker says it spent; the server's own usage and cost stay zero for worker runs.
+  worker_usage: { input_tokens?: number; output_tokens?: number; model?: string; cost_usd?: string } | null
   parent_run_id: string | null
   depth: number
   input: string
@@ -44,7 +52,7 @@ export interface AgentRun {
   num_turns: number
   trigger_kind: string
   starred: boolean
-  model: string
+  model: string | null
   created_at: string | null
   started_at: string | null
   finished_at: string | null

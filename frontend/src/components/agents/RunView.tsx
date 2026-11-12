@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { TERMINAL_STATUSES, useAgents, type AgentRun, type Block, type RunStep } from '@/hooks/useAgents'
-import { StatusBadge, TRIGGER_LABELS } from './StatusBadge'
+import { runTitle, StatusBadge, TRIGGER_LABELS, workerStatus } from './StatusBadge'
 import { Badge, Button, ConfirmButton, DetailList, Disclosure, List, Notice, Page, Row, Section, useActionNotice, type Tone } from '@/components/shared/ui'
 import { isForbiddenOrMissing } from '@/hooks/useMCP'
 import { formatCost } from '@/utils/format'
@@ -131,13 +131,17 @@ function RunView({ runId }: { runId: string }) {
   const runs = { to: '/agents/runs', label: 'Runs' }
   if (!run) return <Page back={runs} title="Run" loading="Loading run..." error={error} onRetry={retry} />
   const live = !TERMINAL_STATUSES.includes(run.status)
-  const agent = run.definition_id === null ? null : agentName ?? `Agent ${run.definition_id}`
+  const agent = run.definition_id === null ? null : runTitle(run, agentName)
+  // A worker runs on its own credentials and model, so the server records no cost, turns or tokens for it.
+  const byWorker = run.executor === 'workers'
+  const reported = run.worker_usage
+  const model = run.model ?? reported?.model
   const back = agent && fromAgent ? { to: `/agents/${run.definition_id}`, label: agent } : runs
 
   return (
     <Page
       back={back}
-      title={<>{agent ?? run.agent ?? 'Ad-hoc run'} <StatusBadge status={run.status} /></>}
+      title={<>{runTitle(run, agentName)} <StatusBadge status={run.status} /></>}
       actions={<>
         <Button aria-pressed={run.starred} title="Starred runs are kept past retention" onClick={() => act(async () => setRun(await starRun(run.id, !run.starred)))}>
           <span aria-hidden="true">{run.starred ? '★' : '☆'}</span> Star
@@ -153,14 +157,20 @@ function RunView({ runId }: { runId: string }) {
       ['Input', run.input.length > LONG_INPUT || run.input.includes('\n')
         ? <Disclosure summary="Show input"><div className="whitespace-pre-wrap">{run.input}</div></Disclosure>
         : run.input],
-      ['Model', <span className="font-mono">{run.model}</span>],
+      ['Model', model ? <span className="font-mono">{model}</span> : byWorker && 'Chosen by the worker'],
       ['Trigger', TRIGGER_LABELS[run.trigger_kind] ?? run.trigger_kind],
+      ['Worker', run.worker_label],
       ['Started by', run.parent_run_id && <Link to={`/agents/runs/${run.parent_run_id}`} className="text-primary hover:underline">Parent run</Link>],
       ['Started', run.started_at && formatUserDateTime(run.started_at)],
       ['Duration', run.started_at && run.finished_at && formatDuration(run.started_at, run.finished_at)],
-      ['Cost', `${formatCost(run.cost_usd)} of ${formatCost(run.max_cost_usd)}`],
-      ['Turns', run.num_turns],
-      ['Tokens', `${contextTokens(run.usage).toLocaleString()} context (${(run.usage.cache_read_tokens ?? 0).toLocaleString()} cached) / ${(run.usage.output_tokens ?? 0).toLocaleString()} out`],
+      ['Cost', byWorker
+        ? `Paid by the worker${reported?.cost_usd != null ? ` (reports ${formatCost(reported.cost_usd)})` : ''}`
+        : `${formatCost(run.cost_usd)} of ${formatCost(run.max_cost_usd)}`],
+      ['Turns', !byWorker && run.num_turns],
+      ['Tokens', byWorker
+        ? reported && (reported.input_tokens != null || reported.output_tokens != null)
+          && `${(reported.input_tokens ?? 0).toLocaleString()} in / ${(reported.output_tokens ?? 0).toLocaleString()} out, as the worker reports`
+        : `${contextTokens(run.usage).toLocaleString()} context (${(run.usage.cache_read_tokens ?? 0).toLocaleString()} cached) / ${(run.usage.output_tokens ?? 0).toLocaleString()} out`],
     ]} />
     {notice}
     {error && <Notice tone="error" onRetry={retry}>{error}</Notice>}
@@ -182,7 +192,7 @@ function RunView({ runId }: { runId: string }) {
         </List>
       )}
     </Section>
-    {live && <div role="status" className="text-sm text-slate-600">running…</div>}
+    {live && <div role="status" className="text-sm text-slate-600">{workerStatus(run) ?? 'running…'}</div>}
   </Page>
 )
 }

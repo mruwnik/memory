@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAgents, type AgentRun, type RunStatus } from '@/hooks/useAgents'
 import { formatRelativeTime } from '@/components/sources/shared'
-import { STATUS_LABELS, StatusBadge, TRIGGER_LABELS } from './StatusBadge'
+import { runTitle, STATUS_LABELS, StatusBadge, TRIGGER_LABELS, workerStatus } from './StatusBadge'
 import { Button, ButtonLink, EmptyState, ErrorState, List, LoadingState, Page, RefreshButton, Row, ToggleGroup, Toolbar } from '@/components/shared/ui'
 import { formatCost } from '@/utils/format'
 
@@ -70,10 +70,6 @@ export default function AgentRuns() {
     listDefinitions().then(defs => setAgentNames(new Map(defs.map(d => [d.id, d.name])))).catch(() => {})
   }, [listDefinitions])
 
-  const runTitle = (r: AgentRun) => r.definition_id === null
-    ? r.agent ?? 'Ad-hoc run'
-    : agentNames.get(r.definition_id) ?? `Agent ${r.definition_id}`
-
   return (
     <Page
       back={{ to: '/agents', label: 'Agents' }}
@@ -92,9 +88,14 @@ export default function AgentRuns() {
             <Row
               key={r.id}
               to={`/agents/runs/${r.id}`}
-              title={<>{r.starred && <span aria-label="Starred">★ </span>}{runTitle(r)}</>}
+              title={<>{r.starred && <span aria-label="Starred">★ </span>}{runTitle(r, r.definition_id === null ? null : agentNames.get(r.definition_id))}</>}
               badges={<StatusBadge status={r.status} />}
-              meta={[<span className="font-mono">{r.model}</span>, formatRelativeTime(r.created_at), formatCost(r.cost_usd), TRIGGER_LABELS[r.trigger_kind] ?? r.trigger_kind]}
+              meta={[
+                r.model && <span className="font-mono">{r.model}</span>,
+                formatRelativeTime(r.created_at),
+                r.executor === 'workers' ? workerStatus(r) ?? 'Run by a worker' : formatCost(r.cost_usd),
+                TRIGGER_LABELS[r.trigger_kind] ?? r.trigger_kind,
+              ]}
             >
               <p className="text-slate-600 line-clamp-2 whitespace-pre-line break-words">{r.input}</p>
             </Row>

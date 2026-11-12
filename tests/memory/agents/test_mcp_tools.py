@@ -20,6 +20,7 @@ from memory.common.db.models import (
     AgentRunStep,
     APIKey,
     LLMProviderKey,
+    Subscription,
 )
 from tests.conftest import mcp_auth_context
 
@@ -394,6 +395,30 @@ async def test_list_runs_filters_by_prebuilt_agent(db_session, regular_user, use
         result = await agent.list_runs.fn(agent="fact-check")
 
     assert [r["id"] for r in result["runs"]] == [fact_check.id]
+
+
+@pytest.mark.asyncio
+async def test_runs_name_the_subscription_that_started_them(
+    db_session, regular_user, user_session
+):
+    subscription = Subscription(
+        user_id=regular_user.id,
+        name="EA escalations",
+        handler={"queue": "ea"},
+        kind="cron",
+        config={"cron": "0 9 * * *"},
+    )
+    db_session.add(subscription)
+    db_session.commit()
+    queued, manual = seeded_run(db_session, regular_user), seeded_run(db_session, regular_user)
+    queued.subscription_id = subscription.id
+    db_session.commit()
+
+    with mcp_auth_context(user_session.token):
+        listed = {r["id"]: r["subscription_name"] for r in (await agent.list_runs.fn())["runs"]}
+        waited = (await agent.wait.fn(run_id=queued.id))["run"]["subscription_name"]
+
+    assert (listed, waited) == ({queued.id: "EA escalations", manual.id: None}, "EA escalations")
 
 
 @pytest.mark.asyncio

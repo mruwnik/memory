@@ -20,7 +20,7 @@ const run = (o = {}) => ({
   id: 'r1', definition_id: null, input: 'do it', status: 'running', result: null, error: null,
   usage: { input_tokens: 100, output_tokens: 10 }, cost_usd: '0.000120', max_cost_usd: '1.000000',
   num_turns: 1, trigger_kind: 'manual', starred: false, model: 'anthropic/claude-sonnet-5-5',
-  created_at: null, started_at: null, finished_at: null, agent: null, executor: 'server', parent_run_id: null, depth: 0, ...o,
+  created_at: null, started_at: null, finished_at: null, agent: null, executor: 'server', parent_run_id: null, depth: 0, queue: null, subscription_id: null, subscription_name: null, worker_label: null, lease_expires_at: null, worker_usage: null, ...o,
 })
 
 const view = (path = '/agents/runs/r1') => renderWithRouter(
@@ -143,6 +143,45 @@ describe('RunView', () => {
     view()
     expect(await screen.findByRole('heading', { name: /Ad-hoc run/ })).toBeInTheDocument()
     expect(getDefinition).not.toHaveBeenCalled()
+  })
+
+  // Worker-run labels are asserted inside the details list, where the title can't also match them.
+  const fact = (term: string) => screen.getByText(term, { selector: 'dt' }).nextElementSibling
+  const queueRun = { executor: 'workers', queue: 'ea', subscription_id: 3, subscription_name: 'EA escalations', model: null, max_cost_usd: '0', cost_usd: '0', num_turns: 0, usage: {} }
+
+  it('titles a queue delivery by its subscription and queue, and says the worker pays and picks the model', async () => {
+    waitRun.mockResolvedValue({ run: run({ ...queueRun, status: 'pending' }), steps: [] })
+    view()
+    expect(await screen.findByRole('heading', { name: /EA escalations → queue ea/ })).toBeInTheDocument()
+    expect(fact('Model')).toHaveTextContent('Chosen by the worker')
+    expect(fact('Cost')).toHaveTextContent('Paid by the worker')
+    expect(screen.queryByText('Turns')).not.toBeInTheDocument()
+    expect(screen.queryByText('Tokens')).not.toBeInTheDocument()
+    expect(screen.getByText('Waiting for a worker')).toHaveAttribute('role', 'status')
+  })
+
+  it('names the worker holding a run and when its lease runs out', async () => {
+    setUserTimezone('UTC')
+    vi.setSystemTime(new Date('2026-11-12T11:00:00Z'))
+    waitRun.mockResolvedValue({
+      run: run({ ...queueRun, worker_label: 'EA session', lease_expires_at: '2026-11-12T11:25:00Z' }),
+      steps: [],
+    })
+    view()
+    expect(await screen.findByText('Held by a worker, lease until Nov 12, 2026, 11:25 AM')).toHaveAttribute('role', 'status')
+    expect(fact('Worker')).toHaveTextContent('EA session')
+  })
+
+  it('shows what a finished worker run reports it spent', async () => {
+    waitRun.mockResolvedValueOnce({
+      run: run({ ...queueRun, status: 'done', worker_usage: { input_tokens: 5200, output_tokens: 310, model: 'claude-opus-5-5', cost_usd: '0.041' } }),
+      steps: [],
+    })
+    view()
+    await screen.findByRole('heading', { name: /EA escalations/ })
+    expect(fact('Model')).toHaveTextContent('claude-opus-5-5')
+    expect(fact('Cost')).toHaveTextContent('Paid by the worker (reports $0.04)')
+    expect(fact('Tokens')).toHaveTextContent('5,200 in / 310 out, as the worker reports')
   })
 
   it('asks before cancelling a run', async () => {

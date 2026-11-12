@@ -15,6 +15,7 @@ const run = (o: Partial<AgentRun>): AgentRun => ({
   id: 'r1', definition_id: null, input: 'New report: - [report #5] summary', status: 'done', result: null, error: null,
   usage: {}, cost_usd: '0.000228', max_cost_usd: '1', num_turns: 1, trigger_kind: 'manual', starred: false,
   model: 'anthropic/claude-haiku-5-5', created_at: null, started_at: null, finished_at: null, agent: null, executor: 'server', parent_run_id: null, depth: 0,
+  queue: null, subscription_id: null, subscription_name: null, worker_label: null, lease_expires_at: null, worker_usage: null,
   ...o,
 })
 
@@ -30,6 +31,20 @@ describe('AgentRuns', () => {
     expect(screen.getByRole('link', { name: 'Ad-hoc run' })).toBeInTheDocument()
     expect(screen.getAllByText('New report: - [report #5] summary')).toHaveLength(2)
     expect(screen.getByText('New items')).toBeInTheDocument()
+  })
+
+  it('titles a queue delivery by its subscription and queue, and says where it stands instead of a cost', async () => {
+    const delivery = { executor: 'workers', queue: 'ea', subscription_id: 3, subscription_name: 'EA escalations', model: null, cost_usd: '0' } as const
+    listRuns.mockReset().mockResolvedValue([
+      run({ ...delivery, id: 'q1', status: 'pending' }),
+      run({ ...delivery, id: 'q2', status: 'done', subscription_name: null }),
+    ])
+    renderWithRouter(<AgentRuns />)
+    expect(await screen.findByRole('link', { name: 'EA escalations → queue ea' })).toHaveAttribute('href', '/agents/runs/q1')
+    expect(screen.getByRole('link', { name: 'Subscription 3 → queue ea' })).toBeInTheDocument()
+    expect(screen.getByText('Waiting for a worker')).toBeInTheDocument()
+    expect(screen.getByText('Run by a worker')).toBeInTheDocument()
+    expect(screen.queryByText('$0.00')).not.toBeInTheDocument()
   })
 
   it('names statuses and costs in plain words', async () => {
