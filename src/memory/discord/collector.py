@@ -22,7 +22,9 @@ from typing import TYPE_CHECKING, Any
 
 from discord import (
     ConnectionClosed,
+    DMChannel,
     Guild,
+    HTTPException,
     Intents,
     LoginFailure,
     Member,
@@ -320,10 +322,30 @@ class MessageCollector(commands.Bot):
     async def on_raw_reaction_clear_emoji(self, payload: RawReactionClearEmojiEvent) -> None:
         self.queue_event("MESSAGE_REACTION_REMOVE_EMOJI", reaction_data(payload.message_id, payload.emoji))
 
+    async def dm_recipients(self, message: Message, channel: DMChannel) -> list[abc.User]:
+        """Whom a DM is with. Discord sends no CHANNEL_CREATE for a DM, so
+        discord.py builds the channel of a DM message without its recipient:
+        it is the author, or, for the bot's own message in a DM not stored
+        yet, whoever Discord says the channel is with."""
+        if channel.me is None or message.author.id != channel.me.id:
+            return [message.author]
+        with make_session() as session:
+            if session.get(DiscordChannel, channel.id) is not None:
+                return []
+        try:
+            fetched = await self.fetch_channel(channel.id)
+        except HTTPException:
+            logger.exception(f"Bot {self.bot_info.id} could not read DM {channel.id}")
+            return []
+        return list(getattr(fetched, "recipients", []))
+
     async def _process_message(self, message: Message) -> None:
         """Process a message - check collection settings and queue for storage."""
+        if isinstance(message.channel, DMChannel) and message.channel.recipient is None:
+            message.channel.recipients = await self.dm_recipients(message, message.channel)
         with make_session() as session:
             if untracked_dm(session, message.channel, self.bot_info.id):
+                logger.info(f"Bot {self.bot_info.id} left DM {message.channel.id} untracked: its other end shares no server with the bot")
                 return
             channel_model = ensure_message_entities(
                 session, message, self.bot_info.id

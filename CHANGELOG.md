@@ -24,6 +24,7 @@ a new, empty `## Unreleased` above it.
 
 ### Changes
 - Fix: a note deleted in the git-synced vault is removed from Memory, and a moved one keeps its Memory note (id, subject, tags, owner, project) under the new path; before, the old path stayed listed and opening it said its file was missing from storage. `maintenance cleanup-junk-notes` also deletes notes git deleted from the vault since their last save (`deleted_from_vault`); other notes missing their file are still only listed.
+- Fix: a bot's first DM over the gateway is collected (named "DM with <sender>") when the sender shares a server with the bot or has posted in one of its servers; before, every new DM was dropped as if from a stranger, because discord.py gives a DM's channel no recipient. A first DM the bot itself sends is collected after reading whom the channel is with from Discord. A DM dropped as a stranger's is logged at INFO, by ids.
 
 ### Post-deploy commands
 - Re-runnable: remove notes already deleted from the vault. Check `deleted_from_vault` with `--dry-run` first:

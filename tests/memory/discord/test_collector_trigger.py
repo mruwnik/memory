@@ -4,7 +4,7 @@ from time import monotonic, sleep
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from discord import DMChannel, MessageType
@@ -12,12 +12,22 @@ from fastapi import HTTPException
 from sqlalchemy import text
 
 from memory.common.celery_app import ADD_DISCORD_MESSAGE, BACKFILL_DISCORD_CHANNEL, HANDLE_DISCORD_EVENT
-from memory.common.db.models import DiscordBot, DiscordBotServer, DiscordChannel, DiscordServer, DiscordUser, HumanUser, Project
+from memory.common.db.models import (
+    DiscordBot,
+    DiscordBotServer,
+    DiscordChannel,
+    DiscordMessage,
+    DiscordServer,
+    DiscordUser,
+    HumanUser,
+    Project,
+)
 from memory.common.db.models.discord import DEFAULT_DISCORD_API_BASE_URL
 from memory.discord import api as collector_api
 from memory.discord import collector as collector_module
 from memory.discord.collector import BotInfo, CollectorManager, MessageCollector
 from memory.discord.ingest import ensure_user
+from memory.workers.tasks.discord import add_discord_message
 
 
 def fake_guild_channel(channel_id=10, guild_id=1):
@@ -319,11 +329,14 @@ async def test_a_paused_server_stops_collection_for_channels_that_inherit(db_ses
     assert (ADD_DISCORD_MESSAGE in sent) is queued
 
 
-def fake_dm(mutual_guilds=("a guild",)):
+def fake_dm(mutual_guilds=("a guild",), author_id=444):
+    """A DM as discord.py builds it from MESSAGE_CREATE: its recipients unknown."""
     message = fake_message()
     message.guild = None
-    message.channel = MagicMock(spec=DMChannel, id=555)
-    message.channel.recipient = SimpleNamespace(id=444, name="alice", mutual_guilds=list(mutual_guilds))
+    state: Any = SimpleNamespace(user=SimpleNamespace(id=42))
+    message.channel = DMChannel._from_message(state, 555)
+    message.author.id = author_id
+    message.author.mutual_guilds = list(mutual_guilds)
     return message
 
 
@@ -356,17 +369,90 @@ async def test_a_first_dm_from_someone_sharing_a_server_with_the_bot_stores_its_
     assert ADD_DISCORD_MESSAGE in [c.args[0] for c in celery_app.send_task.call_args_list]
 
 
-@pytest.mark.asyncio
-async def test_a_dm_from_a_stranger_is_untracked(db_session):
-    db_session.add(DiscordBot(id=42, application_id=42, name="bot"))
+def a_post_by_alice(db_session, bot_server: int) -> None:
+    """Alice posted in server 1; the bot is in ``bot_server``."""
+    db_session.add_all([
+        DiscordBot(id=42, application_id=42, name="bot"),
+        DiscordServer(id=1, name="posted in"),
+        DiscordServer(id=2, name="other"),
+        DiscordUser(id=444, username="alice"),
+    ])
+    db_session.flush()
+    db_session.add_all([
+        DiscordBotServer(bot_id=42, server_id=bot_server),
+        DiscordChannel(id=10, server_id=1, name="general", channel_type="text"),
+    ])
+    db_session.flush()
+    db_session.add(DiscordMessage(
+        modality="message", sha256=b"\x02" * 32, content="hi", message_id=33, channel_id=10,
+        server_id=1, author_id=444, sent_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    ))
     db_session.commit()
+
+
+@pytest.mark.parametrize("bot_server, stored", [(1, True), (2, False)])
+@pytest.mark.asyncio
+async def test_a_first_dm_is_collected_only_from_someone_who_posted_in_the_bots_servers(db_session, bot_server, stored):
+    """A proxied gateway caches no members, so posts are what show who shares a server."""
+    a_post_by_alice(db_session, bot_server)
     celery_app = MagicMock()
 
     await collector_with(celery_app).on_message(fake_dm(mutual_guilds=()))
 
     db_session.expire_all()
-    assert db_session.get(DiscordChannel, 555) is None
-    assert ADD_DISCORD_MESSAGE not in [c.args[0] for c in celery_app.send_task.call_args_list]
+    assert (db_session.get(DiscordChannel, 555) is not None) is stored
+    assert (ADD_DISCORD_MESSAGE in [c.args[0] for c in celery_app.send_task.call_args_list]) is stored
+
+
+@pytest.mark.asyncio
+async def test_a_first_dm_reaches_the_worker_as_a_dm_named_after_its_sender(db_session, qdrant):
+    db_session.add(DiscordBot(id=42, application_id=42, name="bot"))
+    db_session.commit()
+    celery_app = MagicMock()
+
+    await collector_with(celery_app).on_message(fake_dm())
+    add_discord_message(**celery_app.send_task.call_args.kwargs["kwargs"])
+
+    db_session.expire_all()
+    stored = db_session.query(DiscordMessage).filter_by(message_id=111).one()
+    assert (stored.channel_id, stored.channel.name, stored.channel.channel_type, stored.server_id) == (
+        555, "DM with alice", "dm", None,
+    )
+
+
+@pytest.mark.parametrize("recipient_mutual_guilds, stored", [(["a guild"], True), ([], False)])
+@pytest.mark.asyncio
+async def test_the_bots_own_first_dm_asks_discord_whom_it_is_with(db_session, recipient_mutual_guilds, stored):
+    db_session.add(DiscordBot(id=42, application_id=42, name="bot"))
+    db_session.commit()
+    celery_app = MagicMock()
+    alice = SimpleNamespace(id=444, name="alice", mutual_guilds=recipient_mutual_guilds)
+    fetch = AsyncMock(return_value=SimpleNamespace(recipients=[alice]))
+
+    with patch.object(MessageCollector, "fetch_channel", fetch):
+        await collector_with(celery_app).on_message(fake_dm(author_id=42))
+
+    db_session.expire_all()
+    fetch.assert_awaited_once_with(555)
+    assert [c.name for c in db_session.query(DiscordChannel).filter_by(id=555)] == ["DM with alice"] * stored
+    assert (ADD_DISCORD_MESSAGE in [c.args[0] for c in celery_app.send_task.call_args_list]) is stored
+
+
+@pytest.mark.asyncio
+async def test_the_bots_own_message_in_a_stored_dm_asks_discord_nothing(db_session):
+    db_session.add(DiscordBot(id=42, application_id=42, name="bot"))
+    db_session.flush()
+    db_session.add(DiscordChannel(id=555, name="DM with alice", channel_type="dm", bot_id=42))
+    db_session.commit()
+    celery_app = MagicMock()
+    fetch = AsyncMock()
+
+    with patch.object(MessageCollector, "fetch_channel", fetch):
+        await collector_with(celery_app).on_message(fake_dm(author_id=42))
+
+    fetch.assert_not_awaited()
+    assert db_session.get(DiscordChannel, 555).name == "DM with alice"
+    assert ADD_DISCORD_MESSAGE in [c.args[0] for c in celery_app.send_task.call_args_list]
 
 
 @pytest.mark.asyncio
