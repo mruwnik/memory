@@ -60,6 +60,7 @@ if TYPE_CHECKING:
     )
     from memory.common.db.models.sources import Person
     from memory.common.db.models.slack import (
+        SlackApp,
         SlackChannel,
         SlackWorkspace,
     )
@@ -677,6 +678,7 @@ class SlackMessage(SourceItem):
     # Relationships (no author relationship - use author_name field)
     channel: Mapped[SlackChannel | None] = relationship("SlackChannel", foreign_keys=[channel_id])
     workspace: Mapped[SlackWorkspace | None] = relationship("SlackWorkspace", foreign_keys=[workspace_id])
+    slack_app: Mapped[SlackApp | None] = relationship("SlackApp", foreign_keys=[slack_app_id])
 
     __mapper_args__ = {
         "polymorphic_identity": "slack_message",

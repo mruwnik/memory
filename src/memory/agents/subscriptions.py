@@ -468,13 +468,17 @@ def mentioned_ids(item: SourceItem) -> frozenset[str]:
     return lowered(MENTION.findall(item.content or ""))
 
 
+def collecting_bot(item: DiscordMessage) -> DiscordBot | None:
+    return item.bot or (item.channel.bot if item.channel else None)
+
+
 def direct_and_collector(item: SourceItem) -> tuple[bool, str | None]:
     if isinstance(item, SlackMessage):
         collector = f"slack_app:{item.slack_app_id}" if item.slack_app_id else None
         channel = item.channel
     elif isinstance(item, DiscordMessage):
         channel = item.channel
-        bot = item.bot or (channel.bot if channel else None)
+        bot = collecting_bot(item)
         collector = f"discord_bot:{bot.application_id}" if bot else None
     else:
         return False, None

@@ -15,6 +15,7 @@ from memory.agents.subscription_input import (
 from tests.conftest import discord_image_name, shown
 from memory.common.db.models import (
     BlogPost,
+    DiscordBot,
     DiscordChannel,
     DiscordMessage,
     DiscordUser,
@@ -23,6 +24,7 @@ from memory.common.db.models import (
     GithubPRData,
     MailMessage,
     Meeting,
+    SlackApp,
     SlackChannel,
     SlackMessage,
     SlackWorkspace,
@@ -81,7 +83,8 @@ def slack_reply():
         workspace_id="T1",
         workspace=SlackWorkspace(id="T1", name="Acme", domain="acme"),
         channel_id="C1",
-        channel=SlackChannel(id="C1", workspace_id="T1", name="general"),
+        channel=SlackChannel(id="C1", workspace_id="T1", name="general", channel_type="channel"),
+        slack_app=SlackApp(id=8, client_id="c", name="Kai app"),
         message_ts="1700000001.000200",
         thread_ts="1700000000.000100",
         author_id="U1",
@@ -98,6 +101,7 @@ def discord_message():
         server_id=10,
         channel_id=20,
         channel=DiscordChannel(id=20, name="t", channel_type="thread", parent_id=11),
+        bot=DiscordBot(id=9, application_id=90, name="Kai bot"),
         message_id=30,
         thread_id=20,
         author_id=100,
@@ -316,12 +320,49 @@ def test_the_default_rendering_has_what_a_worker_needs_to_reply():
         "  workspace_id: T1\n"
         "  channel_id: C1\n"
         "  channel_name: general\n"
+        "  dm: False\n"
+        "  collected_by: Kai app\n"
         "  ts: 1700000001.000200\n"
         "  thread_ts: 1700000000.000100\n"
         "  user: U1\n"
         "  <T id=2 field=author>bob</T>\n"
         "  <T id=2 field=content>can someone look?</T>"
     )
+
+
+def slack_dm():
+    item = slack_reply()
+    item.channel = SlackChannel(id="D1", workspace_id="T1", name="mpdm-bob--dan-1", channel_type="mpim")
+    return item
+
+
+def discord_dm():
+    item = discord_message()
+    item.server_id = None
+    item.channel = DiscordChannel(id=21, name="carol", channel_type="dm")
+    return item
+
+
+@pytest.mark.parametrize(
+    "make, dm, bot",
+    [
+        (slack_reply, False, "Kai app"),
+        (slack_dm, True, "Kai app"),
+        (discord_message, False, "Kai bot"),
+        (discord_dm, True, "Kai bot"),
+    ],
+)
+def test_the_rendering_says_whether_a_chat_message_is_a_dm(make, dm, bot):
+    item = make()
+
+    rendered = shown(render_input("{items}", [item], max_chars=10_000))
+    as_json = shown(render_input("{items_json}", [item], max_chars=10_000))
+    per_item = shown(render_input("{item.dm} {item.collected_by}", [item], max_chars=10_000))
+
+    assert f"  dm: {dm}\n  collected_by: {bot}" in rendered
+    [record] = json.loads(as_json.removeprefix("<T id=all field=items_json>").removesuffix("</T>"))
+    assert (record["dm"], record["collected_by"]) == (dm, bot)
+    assert per_item == f"{dm} {bot}"
 
 
 def test_an_emails_message_id_is_untrusted_in_the_default_rendering():

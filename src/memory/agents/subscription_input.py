@@ -13,7 +13,13 @@ import secrets
 from datetime import datetime
 from typing import Any, Callable, Collection, Mapping
 
-from memory.agents.subscriptions import REMOVED_CHANGE, item_body, item_title
+from memory.agents.subscriptions import (
+    REMOVED_CHANGE,
+    collecting_bot,
+    direct_and_collector,
+    item_body,
+    item_title,
+)
 from memory.common.db.models import (
     DiscordMessage,
     ForumPost,
@@ -124,6 +130,16 @@ def discord_parent_id(item: DiscordMessage) -> int | None:
     return item.channel.parent_id if item.channel else None
 
 
+def is_dm(item: SourceItem) -> bool:
+    return direct_and_collector(item)[0]
+
+
+def collected_by(item: SlackMessage | DiscordMessage) -> str | None:
+    """The bot or app that collected the message, by the name its operator gave it."""
+    bot = item.slack_app if isinstance(item, SlackMessage) else collecting_bot(item)
+    return bot.name if bot else None
+
+
 COMMON: dict[str, Getter] = {
     "id": lambda i: i.id,
     "type": lambda i: i.type,
@@ -157,6 +173,8 @@ BY_TYPE: dict[type[SourceItem], dict[str, Getter]] = {
         "workspace_id": lambda i: i.workspace_id,
         "channel_id": lambda i: i.channel_id,
         "channel_name": lambda i: i.channel.name if i.channel else None,
+        "dm": is_dm,
+        "collected_by": collected_by,
         "ts": lambda i: i.message_ts,
         "thread_ts": lambda i: i.thread_ts,
         "user": lambda i: i.author_id,
@@ -167,6 +185,8 @@ BY_TYPE: dict[type[SourceItem], dict[str, Getter]] = {
         "message_id": lambda i: i.message_id,
         "thread_id": lambda i: i.thread_id,
         "parent_id": discord_parent_id,
+        "dm": is_dm,
+        "collected_by": collected_by,
         "author_id": lambda i: i.author_id,
         "attachments": lambda i: i.attachment_files,
     },
