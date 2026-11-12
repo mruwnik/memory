@@ -224,6 +224,78 @@ describe('PersonFormModal edit mode', () => {
   })
 })
 
+describe('PersonFormModal Discord and Slack', () => {
+  const slackPerson = () => makePerson({
+    contact_info: {
+      email: 'a@x.com',
+      discord: 4242424242,
+      slack: { T1: { user_id: 'U1', username: 'alice', display_name: 'Alice C' } },
+    },
+  })
+  const renderEdit = (person: Person) =>
+    render(<PersonFormModal {...baseProps} submitLabel="Save changes" isEdit initialData={person} />)
+
+  it('creates a person with a Discord id and a Slack team/user pair', async () => {
+    const user = userEvent.setup()
+    render(<PersonFormModal {...baseProps} />)
+    await user.type(screen.getByLabelText(/Display name/), 'Bob')
+    await user.type(screen.getByLabelText('Discord user id'), '42')
+    await user.type(screen.getByLabelText('Slack team id'), 'T9')
+    await user.type(screen.getByLabelText('Slack user id'), 'U9')
+    await user.click(screen.getByRole('button', { name: 'Create person' }))
+    expect(baseProps.onSubmit.mock.calls[0][0].contact_info).toEqual({ discord: '42', slack: { T9: { user_id: 'U9' } } })
+  })
+
+  it('prefills a numeric Discord id and sends nothing for untouched Slack and Discord', async () => {
+    const user = userEvent.setup()
+    renderEdit(slackPerson())
+    expect(screen.getByLabelText('Discord user id')).toHaveValue('4242424242')
+    expect(screen.getByText('Alice C')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+    expect(baseProps.onSubmit.mock.calls[0][0].contact_info).toEqual({})
+  })
+
+  it('sends a removed team as null and an added team as its user id', async () => {
+    const user = userEvent.setup()
+    renderEdit(slackPerson())
+    await user.click(screen.getByRole('button', { name: 'Remove' }))
+    await user.type(screen.getByLabelText('Slack team id'), 'T2')
+    await user.type(screen.getByLabelText('Slack user id'), 'U2')
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+    expect(baseProps.onSubmit.mock.calls[0][0].contact_info).toEqual({
+      slack: { T1: null, T2: { user_id: 'U2', username: null, display_name: null } },
+    })
+  })
+
+  it("replacing a team's user id clears the old user's names", async () => {
+    const user = userEvent.setup()
+    renderEdit(slackPerson())
+    await user.type(screen.getByLabelText('Slack team id'), 'T1')
+    await user.type(screen.getByLabelText('Slack user id'), 'U7')
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+    expect(baseProps.onSubmit.mock.calls[0][0].contact_info).toEqual({
+      slack: { T1: { user_id: 'U7', username: null, display_name: null } },
+    })
+  })
+
+  it('blocks saving half a Slack pair', async () => {
+    const user = userEvent.setup()
+    renderEdit(slackPerson())
+    await user.type(screen.getByLabelText('Slack team id'), 'T2')
+    expect(screen.getByLabelText('Slack user id')).toHaveAccessibleDescription('Enter the user id too')
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled()
+  })
+
+  it('leaves a merged list of Slack accounts read-only', async () => {
+    const user = userEvent.setup()
+    renderEdit(makePerson({ contact_info: { slack: [{ T1: { user_id: 'U1' } }, { T2: { user_id: 'U2' } }] } }))
+    expect(screen.getByText(/can't edit/)).toBeInTheDocument()
+    expect(screen.queryByLabelText('Slack team id')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+    expect(baseProps.onSubmit.mock.calls[0][0].contact_info).toEqual({})
+  })
+})
+
 describe('PersonFormModal interactions', () => {
   it('calls onCancel when Cancel button clicked', async () => {
     const user = userEvent.setup()

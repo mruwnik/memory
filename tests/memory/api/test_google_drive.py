@@ -630,3 +630,27 @@ def test_google_callback_escapes_error():
     response = google_callback(request=Mock(), error="<script>x</script>")
 
     assert "<script>x" not in bytes(response.body).decode()
+
+
+@pytest.mark.parametrize(
+    "userinfo, verified",
+    [
+        ({"verified_email": True}, True),
+        ({"email_verified": True}, True),
+        ({"verified_email": False}, False),
+        ({"verified_email": "true"}, False),
+        ({}, False),
+    ],
+)
+def test_google_callback_records_whether_google_verified_the_email(
+    db_session, regular_user, user_session, google_exchange, userinfo, verified
+):
+    service = Mock()
+    service.userinfo().get().execute.return_value = {"email": "drive@example.com", "name": "D", **userinfo}
+    state = GoogleOAuthState.create(regular_user.id)
+
+    with patch("googleapiclient.discovery.build", return_value=service):
+        run_callback("test-session-token", state)
+
+    [account] = accounts_for(db_session, "drive@example.com")
+    assert account.email_verified is verified

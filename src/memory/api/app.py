@@ -32,6 +32,7 @@ from memory.api.auth import (
     router as auth_router,
 )
 from memory.api.body_limit import BodySizeLimitMiddleware
+from memory.api.identity import router as identity_router
 from memory.api.google_drive import router as google_drive_router
 from memory.api.request_limits import RequestRateLimitMiddleware
 from memory.api.security_headers import SecurityHeadersMiddleware
@@ -468,6 +469,7 @@ async def serve_file(
 
 
 app.include_router(auth_router)
+app.include_router(identity_router)
 app.include_router(google_drive_router)
 app.include_router(mcp_servers_router)
 app.include_router(email_accounts_router)

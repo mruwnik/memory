@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useAuth } from '../../hooks/useAuth'
 import { usePeople, type Person, type PersonCreate, type PersonUpdate, type Tidbit, type TidbitInput } from '../../hooks/usePeople'
 import { useModule } from '../../hooks/useModule'
@@ -28,7 +29,8 @@ const PeopleManagement = () => {
   const [teamsFailed, setTeamsFailed] = useState<Record<string, boolean>>({})
 
   // Search/filter state
-  const [searchTerm, setSearchTerm] = useState('')
+  const [searchParams] = useSearchParams()
+  const [searchTerm, setSearchTerm] = useState(() => searchParams.get('search') ?? '')
   const [tagFilter, setTagFilter] = useState<string[]>([])
   const [teamFilter, setTeamFilter] = useState<number | null>(null)
 

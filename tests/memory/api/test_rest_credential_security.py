@@ -87,3 +87,11 @@ def test_ssh_key_management_requires_interactive_session(security_client, db_ses
     response = security_client.post('/api/ssh-keys', headers=headers, json={'name': 'SSH', 'generate': True})
     assert response.status_code == (200 if session else 403)
     assert security_client.get('/api/ssh-keys', headers=headers).status_code == (200 if session else 403)
+
+
+@pytest.mark.parametrize("session, status", [(True, 200), (False, 403)])
+def test_identity_requires_an_interactive_session(security_client, db_session, session, status):
+    from memory.api.identity import router
+    security_client.app.include_router(router)
+    _, headers = identity(db_session, key_scopes=["*"], session=session)
+    assert security_client.get("/auth/me/identity", headers=headers).status_code == status

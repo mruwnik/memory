@@ -4,6 +4,7 @@ import { useAuth } from '../../hooks/useAuth'
 import { Badge, Button, Card, Field, FormActions, Input, List, Modal, Notice, Page, Row } from '@/components/shared/ui'
 import { TimezoneCombobox } from '@/components/shared/TimezoneCombobox'
 import { ApiKeys } from './ApiKeys'
+import IdentityCard from './IdentityCard'
 import { NewPasswordFields, passwordIsValid } from './NewPasswordFields'
 
 const UserSettings = () => {
@@ -154,6 +155,8 @@ const UserSettings = () => {
             </FormActions>
           </form>
         </Card>
+
+        <IdentityCard />
 
         {authUser?.user_type === 'human' && (
           <Card title="Security" flush>

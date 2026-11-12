@@ -11,6 +11,7 @@ from discord import DMChannel, MessageType
 from fastapi import HTTPException
 from sqlalchemy import text
 
+from memory.common import discord_link, settings
 from memory.common.celery_app import ADD_DISCORD_MESSAGE, BACKFILL_DISCORD_CHANNEL, HANDLE_DISCORD_EVENT
 from memory.common.db.models import (
     DiscordBot,
@@ -547,3 +548,35 @@ async def test_a_gateway_message_in_a_server_corrects_a_channel_stored_as_a_dm(d
     db_session.expire_all()
     channel = db_session.get(DiscordChannel, 555)
     assert (channel.server_id, channel.channel_type, channel.name, channel.content_owner_id) == (222, "text", "general", None)
+
+
+def uncollected_dm():
+    return [DiscordChannel(id=555, name="DM with alice", channel_type="dm", bot_id=42, collect_messages=False)]
+
+
+@pytest.mark.parametrize("channels", [list, uncollected_dm])
+@pytest.mark.asyncio
+async def test_a_link_code_dmed_by_a_stranger_or_in_an_uncollected_dm_is_redeemed(
+    db_session, regular_user, monkeypatch, channels
+):
+    """Neither a sender sharing no server with the bot nor a DM switched off
+    stops a link code; it is still never queued for storage."""
+    monkeypatch.setattr(settings, "TRANSFER_TOKEN_SECRET", "test-discord-link-secret")
+    replies = []
+    monkeypatch.setattr(discord_link, "send_dm", lambda bot_id, user, text: replies.append(text) or True)
+    db_session.add(DiscordBot(id=42, application_id=42, name="bot", created_by_user_id=regular_user.id))
+    db_session.flush()
+    db_session.add_all(channels())
+    db_session.commit()
+    code, _ = discord_link.issue_code(regular_user.id)
+    message = fake_dm(mutual_guilds=())
+    message.author.bot = False
+    message.content = f"link {code}"
+    celery_app = MagicMock()
+
+    await collector_with(celery_app).on_message(message)
+
+    db_session.expire_all()
+    assert db_session.get(DiscordUser, 444).verified_user_id == regular_user.id
+    assert celery_app.send_task.call_args_list == []
+    assert [r.startswith("Linked to") for r in replies] == [True]

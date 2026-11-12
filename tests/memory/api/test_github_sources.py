@@ -7,8 +7,8 @@ from unittest.mock import Mock, patch
 import pytest
 
 from memory.api.github_sources import ContentMode
-from memory.common.db.models import HumanUser
-from memory.common.db.models.sources import CONTENT_MODES, GithubAccount, GithubRepo
+from memory.common.db.models import HumanUser, Person
+from memory.common.db.models.sources import CONTENT_MODES, GithubAccount, GithubRepo, GithubUser
 from memory.common.github import GithubQueryError
 
 
@@ -74,17 +74,18 @@ def test_list_accounts_empty_when_no_accounts(client, db_session, user):
 # ====== POST /github/accounts tests ======
 
 
-def make_github_client_mock(login: str | None = "octocat") -> Mock:
-    """Build a GithubClient mock whose credentials resolve to ``login``.
+def make_github_client_mock(login: str | None = "octocat", github_id: int | None = 583231) -> Mock:
+    """Build a GithubClient mock whose credentials resolve to ``login`` and
+    ``github_id`` (None for an App installation).
 
     ``login=None`` simulates a verification failure (bad credentials or
-    GitHub unreachable) by raising from ``get_authenticated_login``.
+    GitHub unreachable) by raising from ``get_authenticated_identity``.
     """
     mock_client = Mock()
     if login is None:
-        mock_client.get_authenticated_login.side_effect = RuntimeError("bad creds")
+        mock_client.get_authenticated_identity.side_effect = RuntimeError("bad creds")
     else:
-        mock_client.get_authenticated_login.return_value = login
+        mock_client.get_authenticated_identity.return_value = (login, github_id)
     return mock_client
 
 
@@ -112,13 +113,13 @@ def test_create_account_pat_success(mock_client_class, client, db_session, user)
     account = db_session.query(GithubAccount).filter_by(name="My GitHub PAT").first()
     assert account is not None
     assert account.user_id == user.id
-    assert account.verified_login == "octocat"
+    assert (account.verified_login, account.verified_github_id) == ("octocat", 583231)
 
 
 @patch("memory.api.github_sources.GithubClient")
 def test_create_account_app_success(mock_client_class, client, db_session, user):
     """Create GitHub account with App authentication succeeds."""
-    mock_client_class.return_value = make_github_client_mock("acme-org")
+    mock_client_class.return_value = make_github_client_mock("acme-org", None)
     payload = {
         "name": "My GitHub App",
         "auth_type": "app",
@@ -447,7 +448,8 @@ def test_available_projects_github_refuses_say_what_to_grant(client, db_session,
 def test_validate_account_persists_verified_login(
     mock_client_class, client, db_session, user
 ):
-    """A successful validation (re)stores the GitHub-verified login."""
+    """A successful validation (re)stores the GitHub-verified login and id,
+    which is how accounts verified before ids were stored get one."""
     mock_client_class.return_value = make_github_client_mock("octocat")
     account = GithubAccount(
         user_id=user.id,
@@ -466,7 +468,7 @@ def test_validate_account_persists_verified_login(
     assert data["status"] == "success"
     assert data["user"] == "octocat"
     db_session.refresh(account)
-    assert account.verified_login == "octocat"
+    assert (account.verified_login, account.verified_github_id) == ("octocat", 583231)
 
 
 @patch("memory.api.github_sources.GithubClient")
@@ -917,3 +919,29 @@ def test_update_repo_rejects_unknown_content_mode(client, db_session, user, valu
     assert response.status_code == 422
     db_session.refresh(repo)
     assert repo.content_mode == "full"
+
+
+@pytest.mark.parametrize(
+    "act",
+    [
+        lambda client, account_id: client.post(f"/github/accounts/{account_id}/validate"),
+        lambda client, account_id: client.patch(f"/github/accounts/{account_id}", json={"access_token": "new"}),
+    ],
+)
+@patch("memory.api.github_sources.GithubClient")
+def test_an_admin_verifying_someone_elses_account_links_its_owner(
+    mock_client_class, client, db_session, user, regular_user, act
+):
+    mock_client_class.return_value = make_github_client_mock("octocat", 583231)
+    person = Person(identifier="octocat", display_name="octocat")
+    db_session.add(person)
+    db_session.flush()
+    db_session.add(GithubUser(id=583231, username="octocat", person_id=person.id))
+    account = GithubAccount(user_id=regular_user.id, name="theirs", auth_type="pat", access_token="token123")
+    db_session.add(account)
+    db_session.commit()
+
+    assert act(client, account.id).status_code == 200
+
+    db_session.expire_all()
+    assert db_session.get(Person, person.id).user_id == regular_user.id

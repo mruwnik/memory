@@ -35,7 +35,7 @@ from memory.common.celery_app import (
 )
 from memory.common.db.connection import make_session
 from memory.common.db.models import DiscordMessage, Person
-from memory.common import discord_attachments, discord_events
+from memory.common import discord_attachments, discord_events, discord_link
 from memory.common.db.models.discord import DM_CHANNEL_TYPES, DiscordBot, DiscordChannel, DiscordUser
 from memory.common.db.models.events import CAUSING_EVENT, reject_raw_event
 from memory.common.people import DBSession, json_string
@@ -148,7 +148,7 @@ def changes(
 
 
 @app.task(name=ADD_DISCORD_MESSAGE)
-@tracked_task
+@tracked_task(redact=discord_link.redact_message)
 def add_discord_message(
     bot_id: int,
     message_id: int,
@@ -172,10 +172,13 @@ def add_discord_message(
     Add a Discord message to the database and queue for embedding.
 
     ``backfill`` marks history read below what was stored, which subscriptions
-    don't react to. A new message is filed under its channel's server as stored
+    don't react to. A ``link <code>`` message links its author instead, or
+    just spends the code (``discord_link.redeem``). A new message is filed under its channel's server as stored
     now: the channel may have moved since the message was queued.
     """
     logger.debug(f"Adding Discord message {message_id}")
+    if (linked := discord_link.redeem(bot_id, channel_id, message_id, author_id, content, not is_edit and not backfill)) is not None:
+        return linked
 
     # Include message_id in hash to ensure uniqueness
     content_hash = hashlib.sha256(f"{message_id}:{content}".encode()).digest()
@@ -751,6 +754,28 @@ def dm_name(dm: dict) -> str | None:
     return f"DM with {recipients[0].get('username') or recipients[0]['id']}"
 
 
+def redeem_link_dm(bot_id: int, data: dict, pushed: bool) -> dict[str, Any]:
+    """Try a ``link <code>`` DM, collected or not. A push only names the
+    message: it must be a DM of this bot's, and is read back with its token
+    so its author and text are Discord's, not the pusher's."""
+    channel_id, message_id = int(data["channel_id"]), int(data["id"])
+    if pushed:
+        if read_dm(bot_id, channel_id) is None:
+            return {"status": "skipped", "reason": "unconfirmed_dm"}
+        read = read_pushed_message(bot_id, channel_id, message_id)
+        if read is None:
+            return {"status": "skipped", "reason": "unconfirmed_message"}
+        data = read
+    author = data.get("author") or {}
+    author_id = discord_events.snowflake(author.get("id"))
+    if author_id is None or author.get("bot"):
+        return {"status": "skipped", "reason": "malformed"}
+    redeemed = discord_link.redeem_dm(
+        bot_id, message_id, author_id, str(author.get("username") or author_id), str(data.get("content") or "")
+    )
+    return redeemed or {"status": "skipped", "reason": "not_a_link_code"}
+
+
 def store_message(bot: DiscordBot, bot_ids: set[int], data: dict, is_edit: bool, pushed: bool) -> dict[str, Any]:
     """Store a pushed or gateway message. A push is held to
     ``discord_events.push_refusal``; a DM it names is stored only once the
@@ -768,6 +793,8 @@ def store_message(bot: DiscordBot, bot_ids: set[int], data: dict, is_edit: bool,
     and stored as Discord returns it, and dropped when that token can't read
     it. A pushed create of a message already stored changes nothing, so it
     isn't read."""
+    if not is_edit and discord_link.is_link_dm("MESSAGE_CREATE", data):
+        return redeem_link_dm(bot.id, data, pushed)
     channel_id, message_id = int(data["channel_id"]), int(data["id"])
     guild_id = discord_events.snowflake(data.get("guild_id"))
     with make_session() as session:
@@ -850,7 +877,7 @@ PUSH_REFUSALS = frozenset(
 
 
 @app.task(name=HANDLE_DISCORD_EVENT, bind=True, max_retries=PUSH_RETRIES)
-@tracked_task
+@tracked_task(redact=discord_link.redact_event)
 def handle_discord_event(self, bot_id: int, event_type: str, data: dict, pushed: bool = True) -> dict[str, Any]:
     """Apply one gateway event, ``pushed`` to a bot's events endpoint unless
     the gateway collector says it relayed it.

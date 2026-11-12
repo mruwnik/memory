@@ -42,6 +42,7 @@ from memory.common.celery_app import (
     SYNC_LESSWRONG,
     SYNC_LESSWRONG_POST,
     CLEAN_ALL_COLLECTIONS,
+    LINK_USER_PEOPLE,
     CLEAN_COLLECTION,
     REINGEST_CHUNK,
     REINGEST_EMPTY_SOURCE_ITEMS,
@@ -76,6 +77,7 @@ TASK_MAPPINGS = {
     },
     "maintenance": {
         "clean_all_collections": CLEAN_ALL_COLLECTIONS,
+        "link_user_people": LINK_USER_PEOPLE,
         "clean_collection": CLEAN_COLLECTION,
         "reingest_missing_chunks": REINGEST_MISSING_CHUNKS,
         "clean_chunk_images": CLEAN_CHUNK_IMAGES,
@@ -308,6 +310,13 @@ def maintenance(ctx):
 def maintenance_clean_all_collections(ctx):
     """Clean all collections."""
     execute_task(ctx, "maintenance", "clean_all_collections")
+
+
+@maintenance.command("link-user-people")
+@click.pass_context
+def maintenance_link_user_people(ctx):
+    """Link each user to the Person their proven accounts point to."""
+    execute_task(ctx, "maintenance", "link_user_people")
 
 
 @maintenance.command("clean-collection")

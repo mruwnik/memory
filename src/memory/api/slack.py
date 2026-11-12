@@ -68,6 +68,7 @@ from memory.common.db.models.slack import (
 )
 from memory.common.db.models.source_items import SlackMessage
 from memory.common.encryption import decrypt_value
+from memory.common.identity import link_proven_person
 from memory.common.oauth_client import (
     generate_state,
     log_corr_id,
@@ -620,6 +621,8 @@ def _persist_oauth_credentials(
     creds.bot_user_id = bot_user_id
 
     workspace.record_sync(None)
+    db.flush()
+    link_proven_person(db, user)
     db.commit()
 
 

@@ -1476,3 +1476,18 @@ def test_get_label_ids():
 # =============================================================================
 # Tests for create/update issue (GraphQL mutations)
 # =============================================================================
+
+
+@pytest.mark.parametrize(
+    "auth_type, expected",
+    [("pat", ("octo", 583231)), ("app", ("acme-org", None))],
+)
+def test_authenticated_identity_has_a_user_id_only_for_a_pat(auth_type, expected):
+    credentials = GithubCredentials(auth_type=auth_type, access_token="t", app_id=1, installation_id=2, private_key="k")
+    with patch.object(GithubClient, "__init__", lambda self, c: setattr(self, "credentials", c)):
+        client = GithubClient(credentials)
+    with (
+        patch.object(client, "get_authenticated_user", return_value={"login": "octo", "id": 583231}),
+        patch.object(client, "get_app_installation", return_value={"account": {"login": "acme-org", "id": 9}}),
+    ):
+        assert client.get_authenticated_identity() == expected

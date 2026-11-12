@@ -25,6 +25,7 @@ from memory.common.celery_app import (
 from memory.common.db.connection import get_session
 from memory.common.db.models import User, GithubProject
 from memory.common.db.models.sources import CONTENT_FULL, GithubAccount, GithubRepo
+from memory.common.identity import link_proven_person
 from memory.common.github import GithubClient, GithubCredentials, GithubQueryError, webhook_url
 from memory.common.push_health import GITHUB_PUSH_STATUSES, push_stale
 from memory.common.redis_pool import get_redis
@@ -240,23 +241,24 @@ def account_credentials(account: GithubAccount) -> GithubCredentials:
     )
 
 
-def verify_account_identity(account: GithubAccount) -> str | None:
-    """Resolve the real GitHub login for an account's stored credentials.
+def verify_account_identity(account: GithubAccount) -> None:
+    """Store the real GitHub login (and, for a PAT, user id) of an account's
+    stored credentials, or clear them if they can't be verified (invalid, or
+    GitHub unreachable).
 
-    Returns the login GitHub itself reports, or None if the credentials
-    can't be verified (invalid, or GitHub unreachable). The result is
-    never derived from user input, so it is safe to store as a verified
-    identity. Verification failures are non-fatal: the account is still
-    usable, it just stays unverified until ``validate_account`` succeeds.
+    The values come from GitHub, never from user input, so they are safe to
+    use as a verified identity. Verification failures are non-fatal: the
+    account is still usable, it just stays unverified until
+    ``validate_account`` succeeds.
     """
     try:
         client = GithubClient(account_credentials(account))
-        return client.get_authenticated_login()
+        account.verified_login, account.verified_github_id = client.get_authenticated_identity()
     except Exception as e:
         logger.warning(
             "GitHub identity verification failed for account %s: %s", account.id, e
         )
-        return None
+        account.verified_login, account.verified_github_id = None, None
 
 
 # --- Account Endpoints ---
@@ -318,7 +320,9 @@ def create_account(
     db.refresh(account)
     # Resolve identity from the credentials themselves — never trust the
     # client-supplied ``name`` as a GitHub identity (see issue #84).
-    account.verified_login = verify_account_identity(account)
+    verify_account_identity(account)
+    db.flush()
+    link_proven_person(db, user)
     db.commit()
     db.refresh(account)
 
@@ -375,7 +379,9 @@ def update_account(
     db.refresh(account)
 
     if credentials_changed:
-        account.verified_login = verify_account_identity(account)
+        verify_account_identity(account)
+        db.flush()
+        link_proven_person(db, account.user)
         db.commit()
         db.refresh(account)
 
@@ -461,11 +467,14 @@ def validate_account(
 
     try:
         client = GithubClient(account_credentials(account))
-        login = client.get_authenticated_login()
+        login, github_id = client.get_authenticated_identity()
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-    account.verified_login = login
+    account.verified_login, account.verified_github_id = login, github_id
+    db.flush()
+    # An admin may validate someone else's account: the proof is its owner's.
+    link_proven_person(db, account.user)
     db.commit()
 
     return {

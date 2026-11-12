@@ -17,7 +17,7 @@ from sqlalchemy import func as sql_func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Query, Session, scoped_session
 
-from memory.common.db.models import Person
+from memory.common.db.models import Person, User
 from memory.common.db.models.sources import GithubUser
 
 if TYPE_CHECKING:
@@ -258,6 +258,53 @@ def link_github_user_to_person(
     session.flush()
     logger.info(f"Linked GitHub user {login} to person '{person.identifier}'")
     return github_user
+
+
+def new_person_for_user(session: DBSession, user: User) -> Person:
+    """A new, bare Person linked to ``user``, named after them. Flushed, not committed."""
+    name = user.name or user.email.split("@")[0]
+    identifier = make_identifier(name)
+    if session.query(Person).filter(Person.identifier == identifier).first():
+        identifier = f"{identifier}_{user.id}"
+    person = Person(
+        identifier=identifier,
+        display_name=name,
+        aliases=[name],
+        contact_info={"email": user.email},
+        creator_id=user.id,
+        user_id=user.id,
+    )
+    session.add(person)
+    session.flush()
+    return person
+
+
+def link_person_to_user(session: DBSession, user: User) -> Person | None:
+    """At account creation, link the new User to the unlinked Person with their
+    email, else to a new Person, so every user has an identity for team/project
+    membership.
+
+    Only email matches: a Person's names and aliases are free text chosen by
+    whoever created it. Only a Person that ingest or an admin made counts, so
+    a non-admin can't plant one carrying someone else's email. The email is
+    the one the account was created with; a later self-service change to it
+    proves nothing, so nothing else may call this.
+
+    Commits the session, including anything the caller flushed. Returns the
+    linked Person, or None when the email's Person belongs to another user
+    (nothing is committed then).
+    """
+    matches = people_with_email(session, user.email).filter(Person.creator_trusted).limit(2).all()
+    if len(matches) != 1:
+        person = new_person_for_user(session, user)
+        session.commit()
+        return person
+    person = matches[0]
+    if person.user_id is not None:
+        return None
+    person.user_id = user.id
+    session.commit()
+    return person
 
 
 def find_or_create_person(

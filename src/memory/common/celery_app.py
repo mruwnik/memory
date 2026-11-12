@@ -105,6 +105,7 @@ REINGEST_EMPTY_SOURCE_ITEMS = f"{MAINTENANCE_ROOT}.reingest_empty_source_items"
 REINGEST_ALL_EMPTY_SOURCE_ITEMS = f"{MAINTENANCE_ROOT}.reingest_all_empty_source_items"
 PROCESS_RAW_ITEMS = f"{MAINTENANCE_ROOT}.process_raw_items"
 PROCESS_RAW_ITEM = f"{MAINTENANCE_ROOT}.process_raw_item"
+LINK_USER_PEOPLE = f"{MAINTENANCE_ROOT}.link_user_people"
 UPDATE_METADATA_FOR_SOURCE_ITEMS = (
     f"{MAINTENANCE_ROOT}.update_metadata_for_source_items"
 )
@@ -498,6 +499,10 @@ def build_beat_schedule() -> dict:
         },
         # The interval is a server setting, so the task checks it: beat's own intervals are fixed.
         "sync-notes-when-due": {"task": SYNC_NOTES_WHEN_DUE, "schedule": 60},
+        "link-user-people": {
+            "task": LINK_USER_PEOPLE,
+            "schedule": crontab(hour="4", minute="40"),
+        },
         "backup-all": {
             "task": BACKUP_ALL,
             "schedule": crontab(hour="2", minute="0"),

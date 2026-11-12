@@ -21,7 +21,6 @@ from memory.common.db.models import (
     BotUser,
     HumanUser,
     OAuthRefreshToken,
-    Person,
     User,
     UserSession,
 )
@@ -44,7 +43,7 @@ from memory.api.auth import (
 )
 from memory.api.field_errors import field_error
 from memory.common.access_control import credential_scopes, has_admin_scope, narrow_scopes
-from memory.common.people import make_identifier, people_with_email
+from memory.common.people import link_person_to_user
 
 logger = logging.getLogger(__name__)
 
@@ -153,39 +152,6 @@ def authorize_user_self_or_admin(
     if not target_user:
         raise HTTPException(status_code=404, detail="User not found")
     return target_user
-
-
-def link_person_to_user(db: Session, user: User) -> Person | None:
-    """Link this User to the unlinked Person with their email, else to a new Person,
-    so every user has an identity for team/project membership.
-
-    Only email matches: a Person's names and aliases are free text chosen by
-    whoever created it. Only a Person that ingest or an admin made counts, so
-    a non-admin can't plant one carrying someone else's email.
-
-    Returns the linked Person, or None when the email's Person belongs to
-    another user.
-    """
-    matches = people_with_email(db, user.email).filter(Person.creator_trusted).limit(2).all()
-    person = matches[0] if len(matches) == 1 else None
-    if person is None:
-        name = user.name or user.email.split("@")[0]
-        identifier = make_identifier(name)
-        if db.query(Person).filter(Person.identifier == identifier).first():
-            identifier = f"{identifier}_{user.id}"
-        person = Person(
-            identifier=identifier,
-            display_name=name,
-            aliases=[name],
-            contact_info={"email": user.email},
-            creator_id=user.id,
-        )
-        db.add(person)
-    if person.user_id is not None:
-        return None
-    person.user_id = user.id
-    db.commit()
-    return person
 
 
 def check_single_user(db: Session, enabled: frozenset[str]) -> None:

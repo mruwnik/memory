@@ -40,7 +40,7 @@ const install = (
   mockFetch(async (input, init) => {
     const url = String(input)
     const method = init?.method || 'GET'
-    if (url.includes('/auth/me')) return mockResponse({ json: authUser })
+    if (url.endsWith('/auth/me')) return mockResponse({ json: authUser })
 
     for (const [pattern, handler] of Object.entries(handlers)) {
       if (url.includes(pattern)) {
@@ -48,6 +48,8 @@ const install = (
         if (r) return r
       }
     }
+
+    if (url.endsWith('/auth/me/identity')) return mockResponse({ json: { person: null, accounts: [], suggestions: [], notify: { order: [], chosen: null, problems: {} } } })
 
     if (url.endsWith('/users/me') && method === 'GET') return mockResponse({ json: meUser })
     if (url.endsWith('/api-keys') && method === 'GET') return mockResponse({ json: [] })

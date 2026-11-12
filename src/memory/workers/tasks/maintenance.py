@@ -39,6 +39,7 @@ from memory.common.celery_app import (
     CLEAN_COLLECTION,
     CLEAN_MAIL_HEADERS,
     CLEANUP_EXPIRED_SESSIONS,
+    LINK_USER_PEOPLE,
     DELETE_ORPHANED_SOURCE_ITEMS,
     PURGE_AGENT_RUNS,
     ROUTE_EVENTS,
@@ -66,6 +67,7 @@ from memory.common.celery_app import (
 )
 from memory.common.db.connection import make_session
 from memory.common.db.orphans import orphaned_source_ids
+from memory.common.identity import link_all_users
 from memory.common.session_transcripts import delete_transcript_files
 from memory.common.db.models import (
     ACCESS_CONTROLLED_SOURCE_MODELS,
@@ -1707,3 +1709,10 @@ def notify_finished_runs() -> dict[str, int]:
 def sweep_deliveries() -> dict[str, int]:
     """Send deliveries that are due or were lost, and end stale or excess ones."""
     return subscriptions.sweep_deliveries()
+
+
+@app.task(name=LINK_USER_PEOPLE)
+def link_user_people() -> dict[str, int]:
+    """Link each user to the Person their proven accounts point to, where that is safe."""
+    with make_session() as session:
+        return link_all_users(session)

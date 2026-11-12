@@ -383,6 +383,9 @@ class GithubAccount(LLMKeyChoice, Base):
     # ``name`` this is never taken from user input, so it is the only
     # field safe to use for identity decisions. NULL until verified.
     verified_login: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # GitHub's numeric id of the PAT's owner, which unlike a login is never
+    # reused. NULL for App auth, which has no user, and until verified.
+    verified_github_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
     # Authentication - support both PAT and GitHub App
     auth_type: Mapped[str] = mapped_column(Text, nullable=False)  # 'pat' or 'app'
@@ -951,6 +954,10 @@ class GoogleAccount(SyncStatusMixin, Base):
     email: Mapped[str] = mapped_column(
         Text, nullable=False, unique=True
     )  # Google account email
+    # Whether Google's userinfo says it verified ``email``; only then is it proof of identity.
+    email_verified: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false"), default=False
+    )
 
     # OAuth2 tokens (encrypted at rest)
     access_token_encrypted: Mapped[bytes | None] = mapped_column(

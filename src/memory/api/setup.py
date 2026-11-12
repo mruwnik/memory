@@ -15,7 +15,8 @@ from sqlalchemy.orm import Session
 
 from memory.api.auth import authenticate_request, create_user, create_user_session
 from memory.api.password_reset import require_rate_limit
-from memory.api.users import link_person_to_user, validate_password_strength
+from memory.api.users import validate_password_strength
+from memory.common.people import link_person_to_user
 from memory.common import settings
 from memory.common.db.connection import get_session, make_session
 from memory.common.db.counts import count_rows

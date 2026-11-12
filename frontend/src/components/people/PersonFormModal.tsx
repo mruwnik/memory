@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import type { Person, PersonCreate, PersonUpdate } from '../../hooks/usePeople'
-import { Button, Input, Modal, MultiSelect, Notice, Textarea, Field, FieldRow, Fieldset, FormActions, requiredLabel } from '@/components/shared/ui'
+import type { Person, PersonCreate, PersonUpdate, SlackContact } from '../../hooks/usePeople'
+import { Badge, Button, Input, List, Modal, MultiSelect, Notice, Row, Textarea, Field, FieldRow, Fieldset, FormActions, Hint, requiredLabel } from '@/components/shared/ui'
 
 interface PersonFormModalProps {
   title: string
@@ -13,29 +13,56 @@ interface PersonFormModalProps {
   isEdit?: boolean
 }
 
-interface FormData {
+type ContactKey = 'email' | 'phone' | 'github' | 'discord' | 'twitter' | 'website'
+
+// Merged people can hold several values for one contact field
+type ContactValue = string | string[]
+
+interface FormData extends Record<ContactKey, ContactValue> {
   identifier: string
   display_name: string
   aliases: string
   tags: string
   notes: string
-  // Contact info fields; merged people can hold several values for one field
-  email: ContactValue
-  phone: ContactValue
-  github: ContactValue
-  twitter: ContactValue
-  website: ContactValue
+  slackTeam: string
+  slackUser: string
 }
 
-type ContactValue = string | string[]
+interface ContactField {
+  key: ContactKey
+  label: string
+  type: string
+  placeholder: string
+  hint?: string
+  pattern?: string
+  inputMode?: 'numeric'
+}
 
-const CONTACT_FIELDS = [
+const CONTACT_FIELDS: ContactField[] = [
   { key: 'email', label: 'Email', type: 'email', placeholder: 'alice@example.com' },
   { key: 'phone', label: 'Phone', type: 'tel', placeholder: '+1 555-1234' },
   { key: 'github', label: 'GitHub', type: 'text', placeholder: '@alicechen' },
+  {
+    key: 'discord', label: 'Discord user id', type: 'text', placeholder: '123456789012345678', pattern: '[0-9]{1,19}', inputMode: 'numeric',
+    hint: 'The number from "Copy User ID" in Discord, not the username: usernames can pass to someone else.',
+  },
   { key: 'twitter', label: 'Twitter/X', type: 'text', placeholder: '@alice_c' },
   { key: 'website', label: 'Website', type: 'url', placeholder: 'https://alice.dev' },
-] as const
+]
+
+// Discord ids can be stored as numbers; the form edits text.
+const contactValue = (raw: unknown): ContactValue =>
+  Array.isArray(raw) ? raw.map(String) : typeof raw === 'string' || typeof raw === 'number' ? String(raw) : ''
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
+
+/** contact_info.slack as team id -> account rows; null when it isn't one team map (a merged person's list), which the form can't edit. */
+const slackTeams = (raw: unknown): [string, SlackContact][] | null => {
+  if (raw === undefined) return []
+  if (!isRecord(raw)) return null
+  return Object.entries(raw).flatMap(([team, info]) =>
+    isRecord(info) ? [[team, { ...info, user_id: contactValue(info.user_id).toString() } as SlackContact]] : [])
+}
 
 const PersonFormModal = ({
   title,
@@ -53,13 +80,16 @@ const PersonFormModal = ({
     aliases: initialData?.aliases?.join(', ') || '',
     tags: initialData?.tags?.join(', ') || '',
     notes: '',
-    email: initialData?.contact_info?.email || '',
-    phone: initialData?.contact_info?.phone || '',
-    github: initialData?.contact_info?.github || '',
-    twitter: initialData?.contact_info?.twitter || '',
-    website: initialData?.contact_info?.website || '',
+    ...Object.fromEntries(CONTACT_FIELDS.map(({ key }) => [key, contactValue(initialData?.contact_info?.[key])])) as Record<ContactKey, ContactValue>,
+    slackTeam: '',
+    slackUser: '',
   }
   const [form, setForm] = useState<FormData>(initialForm)
+  const slack = slackTeams(initialData?.contact_info?.slack)
+  const [slackRemoved, setSlackRemoved] = useState<string[]>([])
+  const slackPartial = !form.slackTeam.trim() !== !form.slackUser.trim()
+  const slackAdded = form.slackTeam.trim() && form.slackUser.trim()
+    ? { [form.slackTeam.trim()]: { user_id: form.slackUser.trim() } } : {}
 
   const generateIdentifier = (name: string): string => {
     return name
@@ -89,6 +119,13 @@ const PersonFormModal = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (slackPartial) return
+    // Teams merge on the server, so only added and removed teams are sent. An added
+    // team clears the names a replaced user id had, which would belong to someone else.
+    const slackChanges: Record<string, SlackContact | null> = {
+      ...Object.fromEntries(slackRemoved.map(team => [team, null])),
+      ...Object.fromEntries(Object.entries(slackAdded).map(([team, info]) => [team, { ...info, username: null, display_name: null }])),
+    }
 
     if (isEdit) {
       // The server only removes what is sent as null, so cleared fields and dropped aliases go as null.
@@ -116,11 +153,13 @@ const PersonFormModal = ({
         ]),
         tags: parseCommaSeparated(form.tags),
         content: form.notes || undefined,
-        contact_info,
+        contact_info: Object.keys(slackChanges).length ? { ...contact_info, slack: slackChanges } : contact_info,
       }
       await onSubmit(data)
     } else {
-      const contact_info = Object.fromEntries(CONTACT_FIELDS.filter(({ key }) => form[key]).map(({ key }) => [key, form[key] as string]))
+      const contact_info: NonNullable<PersonCreate['contact_info']> = Object.fromEntries(
+        CONTACT_FIELDS.filter(({ key }) => form[key]).map(({ key }) => [key, form[key] as string]))
+      if (Object.keys(slackAdded).length) contact_info.slack = slackAdded
       const data: PersonCreate = {
         identifier: form.identifier,
         display_name: form.display_name,
@@ -194,10 +233,10 @@ const PersonFormModal = ({
 
           <Fieldset legend="Contact information" className="pt-2 space-y-3">
             <FieldRow>
-              {CONTACT_FIELDS.map(({ key, label, type, placeholder }) => {
+              {CONTACT_FIELDS.map(({ key, label, type, placeholder, hint, pattern, inputMode }) => {
                 const value = form[key]
                 return (
-                  <Field key={key} label={label}>
+                  <Field key={key} label={label} hint={hint}>
                     {Array.isArray(value) ? (
                       <MultiSelect
                         id={`person-${key}`}
@@ -214,12 +253,56 @@ const PersonFormModal = ({
                         value={value}
                         onChange={(e) => setForm({ ...form, [key]: e.target.value })}
                         placeholder={placeholder}
+                        pattern={pattern}
+                        inputMode={inputMode}
+                        title={pattern ? 'Digits only' : undefined}
                       />
                     )}
                   </Field>
                 )
               })}
             </FieldRow>
+          </Fieldset>
+
+          <Fieldset legend="Slack" className="space-y-3">
+            {slack === null ? (
+              <Hint>This person's Slack accounts came from several merged records and are stored as a list, which this form can't edit. Saving keeps them as they are.</Hint>
+            ) : (
+              <>
+                {slack.length > 0 && (
+                  <List flush aria-label="Slack accounts">
+                    {slack.map(([team, info]) => {
+                      const removed = slackRemoved.includes(team)
+                      return (
+                        <Row key={team} compact muted={removed} title={info.display_name || info.username || info.user_id}
+                          badges={removed && <Badge tone="warning">removed on save</Badge>}
+                          meta={[`team ${team}`, `user ${info.user_id}`]}
+                          actions={
+                            <Button size="sm" onClick={() => setSlackRemoved(removed ? slackRemoved.filter(t => t !== team) : [...slackRemoved, team])}>
+                              {removed ? 'Undo' : 'Remove'}
+                            </Button>
+                          } />
+                      )
+                    })}
+                  </List>
+                )}
+                <FieldRow>
+                  <Field label="Slack team id" error={slackPartial && !form.slackTeam.trim() ? 'Enter the team id too' : null}>
+                    <Input id="person-slack-team" value={form.slackTeam} placeholder="T01ABCDEF"
+                      onChange={(e) => setForm({ ...form, slackTeam: e.target.value })} />
+                  </Field>
+                  <Field label="Slack user id" error={slackPartial && !form.slackUser.trim() ? 'Enter the user id too' : null}>
+                    <Input id="person-slack-user" value={form.slackUser} placeholder="U07ABCDEF"
+                      onChange={(e) => setForm({ ...form, slackUser: e.target.value })} />
+                  </Field>
+                </FieldRow>
+                <Hint>
+                  Add an account by its ids: the user id from "Copy member ID" on their Slack profile, the team id from
+                  the browser address (app.slack.com/client/T…).
+                  {slack.some(([team]) => team === form.slackTeam.trim()) && ' This team is already listed: saving replaces its user id.'}
+                </Hint>
+              </>
+            )}
           </Fieldset>
 
           <Field label="Add a note">
@@ -236,7 +319,7 @@ const PersonFormModal = ({
             <Button type="button" onClick={onCancel}>Cancel</Button>
             <Button variant="primary"
               type="submit"
-              disabled={loading || !form.display_name || !form.identifier}
+              disabled={loading || !form.display_name || !form.identifier || slackPartial}
             >
               {loading ? 'Saving...' : submitLabel}
             </Button>

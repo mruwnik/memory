@@ -45,7 +45,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from memory.common import settings
+from memory.common import discord_link, settings
 from memory.common.celery_app import BACKFILL_DISCORD_CHANNEL, HANDLE_DISCORD_EVENT
 from memory.common.db.connection import make_session
 from memory.common.db.models import DiscordBot, DiscordBotServer, DiscordChannel, DiscordMessage, DiscordServer
@@ -403,6 +403,14 @@ class MessageCollector(commands.Bot):
 
     async def _process_message(self, message: Message) -> None:
         """Process a message - check collection settings and queue for storage."""
+        if isinstance(message.channel, DMChannel) and not message.author.bot:
+            # A link code works from any DM, collected or not, and is never stored.
+            redeemed = await asyncio.to_thread(
+                discord_link.redeem_dm,
+                self.bot_info.id, message.id, message.author.id, message.author.name, message.content or "",
+            )
+            if redeemed is not None:
+                return
         if isinstance(message.channel, DMChannel) and message.channel.recipient is None:
             message.channel.recipients = await self.dm_recipients(message, message.channel)
         with make_session() as session:

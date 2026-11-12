@@ -58,11 +58,8 @@ def test_channel_problems(user, expected):
     assert all(expected[name] in why for name, why in problems.items())
 
 
-def test_the_missing_discord_reason_sends_you_to_an_admin():
-    """Only admins can link a Discord account or set contact_info.discord."""
-    assert "(ask an admin to link your Discord account, or to add your Discord user id" in (
-        channel_problems({"user": {}})["discord"]
-    )
+def test_the_missing_discord_reason_sends_you_to_your_identity_settings():
+    assert "Settings → Your identity" in channel_problems({"user": {}})["discord"]
 
 
 @pytest.mark.parametrize("user", USER_SHAPES)

@@ -151,7 +151,7 @@ def someone_elses_bot(db_session):
 @pytest.mark.asyncio
 async def test_forced_discord_without_linked_account_says_so(db_session, user_session, notify_person):
     with mcp_auth_context(user_session.token):
-        with pytest.raises(ValueError, match="^Can't notify over discord: no Discord account is linked to your Person"):
+        with pytest.raises(ValueError, match="^Can't notify over discord: no Discord account is linked: use Link a Discord account in Settings"):
             await meta.notify_user.fn(subject="Hi", message="body", channel="discord")
 
 

@@ -392,6 +392,17 @@ class GithubClientCore:
         response.raise_for_status()
         return response.json()
 
+    def get_authenticated_identity(self) -> tuple[str, int | None]:
+        """The login that owns the configured credentials, and for PAT auth the
+        numeric id of that GitHub user. An App installation has no user, so no id."""
+        if self.credentials.auth_type == "app":
+            return self.get_authenticated_login(), None
+        user = self.get_authenticated_user()
+        login, github_id = user.get("login"), user.get("id")
+        if not login or not isinstance(github_id, int):
+            raise ValueError("GitHub /user response missing login or id")
+        return login, github_id
+
     def get_authenticated_login(self) -> str:
         """Return the GitHub login that owns the configured credentials.
 

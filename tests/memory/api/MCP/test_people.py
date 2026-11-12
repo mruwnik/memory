@@ -11,7 +11,6 @@ from memory.api.MCP.servers.people import (
     fetch,
     list_all,
     merge,
-    REPOINTED_PERSON_COLUMNS,
     tidbit_add,
     tidbit_delete,
     tidbit_list,
@@ -19,6 +18,7 @@ from memory.api.MCP.servers.people import (
     upsert,
 )
 from memory.common.db import connection as db_connection
+from memory.common.people_merge import REPOINTED_PERSON_COLUMNS
 from memory.common.db.models import (
     Base,
     BeeperAccount,
@@ -487,6 +487,20 @@ async def test_fetch_found(db_session, admin_session, sample_people):
     # Tidbits are returned separately
     assert "tidbits" in result
     assert len(result["tidbits"]) > 0
+
+
+@pytest.mark.parametrize(
+    "discord, expected",
+    [(123456789012345678, "123456789012345678"), ([1, "2"], ["1", "2"])],
+)
+@pytest.mark.asyncio
+async def test_fetch_returns_discord_ids_as_strings(db_session, admin_session, discord, expected):
+    db_session.add(Person(identifier="snow", display_name="Snow", contact_info={"discord": discord}))
+    db_session.commit()
+    with mcp_auth_context(admin_session.token):
+        result = unwrapped(await get_fn(fetch)(identifier="snow"))
+
+    assert result["contact_info"]["discord"] == expected
 
 
 @pytest.mark.asyncio
@@ -2257,3 +2271,64 @@ async def test_people_reads_wrap_text_people_wrote(
     with mcp_auth_context(admin_session.token):
         result = await tool.fn(**kwargs)
     assert in_block(result, pick(result))
+
+
+HELD_DISCORD_ID = 1480984810137714779
+
+
+def discord_holder(db_session, kind, other_user_id) -> Person:
+    """A Person holding a Discord account: another user's, one another user
+    verified the account on, or an unlinked ingest one."""
+    person = Person(
+        identifier=f"holder_{kind}",
+        display_name="Holder",
+        user_id=other_user_id if kind == "another_users" else None,
+    )
+    db_session.add(person)
+    db_session.flush()
+    db_session.add(
+        DiscordUser(
+            id=HELD_DISCORD_ID,
+            username="held",
+            person_id=person.id,
+            verified_user_id=other_user_id if kind == "verified_by_another" else None,
+        )
+    )
+    db_session.commit()
+    return person
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["another_users", "verified_by_another", "unlinked"])
+@pytest.mark.parametrize("existing", [True, False])
+async def test_a_non_admin_upsert_never_moves_a_discord_account(
+    db_session, user_session, admin_user, kind, existing
+):
+    holder = discord_holder(db_session, kind, admin_user.id)
+    db_session.add(Person(identifier="mine", display_name="Mine"))
+    db_session.commit()
+
+    with mcp_auth_context(user_session.token), pytest.raises(PermissionError):
+        await get_fn(upsert)(
+            identifier="mine" if existing else "new",
+            display_name=None if existing else "New",
+            contact_info={"discord": str(HELD_DISCORD_ID)},
+        )
+
+    db_session.expire_all()
+    assert db_session.get(DiscordUser, HELD_DISCORD_ID).person_id == holder.id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["another_users", "verified_by_another", "unlinked"])
+async def test_an_admin_upsert_moves_a_discord_account(db_session, admin_session, regular_user, kind):
+    discord_holder(db_session, kind, regular_user.id)
+
+    with mcp_auth_context(admin_session.token):
+        result = await get_fn(upsert)(
+            identifier="target", display_name="Target", contact_info={"discord": str(HELD_DISCORD_ID)}
+        )
+
+    db_session.expire_all()
+    assert db_session.get(DiscordUser, HELD_DISCORD_ID).person_id == result["person_id"]
+    assert result["moved_discord_users"] == [{"id": str(HELD_DISCORD_ID), "from": f"holder_{kind}"}]

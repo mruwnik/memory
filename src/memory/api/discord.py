@@ -24,7 +24,7 @@ from memory.api.request_body import read_request_body_with_cap
 from memory.api.webhook_events import record_event_arrival
 from memory.api.llm_keys import LLMKeyInput, LLMKeyView, apply_llm_key, llm_key_view
 from memory.common import discord as discord_client
-from memory.common import settings
+from memory.common import discord_link, settings
 from memory.common.access_control import has_admin_scope
 from memory.common.celery_app import DISCOVER_DISCORD_SERVERS, HANDLE_DISCORD_EVENT
 from memory.common.celery_app import app as celery_app
@@ -733,7 +733,10 @@ async def discord_events(bot_id: int, request: Request, db: Session = Depends(ge
         logger.warning("Discord event of the wrong shape for bot %s", bot_id)
         return Response(status_code=400)
     learnable = isinstance(data, dict) and may_learn_collection(db, bot, event_type, data)
-    outcome = discord_outcome(db, bot.id, event_type, data, learnable)
+    # A link code works from any DM, collected or not: the worker reads it back
+    # with the bot's token and tries it, without storing it.
+    link_dm = isinstance(data, dict) and discord_link.is_link_dm(event_type, data)
+    outcome = STORED if link_dm else discord_outcome(db, bot.id, event_type, data, learnable)
     # A delete still drops whatever copy Memory has.
     untracked_delete = event_type in DELETE_EVENT_TYPES and outcome == NOT_COLLECTED
     channel_id = event_channel_id(event_type, data) if isinstance(data, dict) else None
@@ -747,8 +750,9 @@ async def discord_events(bot_id: int, request: Request, db: Session = Depends(ge
         delivery_id=body_sha,
         outcome=outcome,
         container=str(channel_id) if channel_id else None,
-        payload=envelope,
-        links_items=outcome == STORED and writes_items(event_type, data),
+        payload=discord_link.redact_envelope(envelope),
+        # A link DM writes no item, so nothing may wait for one.
+        links_items=outcome == STORED and not link_dm and writes_items(event_type, data),
     )
     if raw_id is None:
         db.rollback()

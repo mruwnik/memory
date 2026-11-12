@@ -384,6 +384,8 @@ def test_event_records_when_it_arrived(client, db_session, webhook_bot):
     "event_type, data, links_items",
     [
         ("MESSAGE_CREATE", {"id": "9", "channel_id": "2"}, True),
+        # A link code is tried, never stored, so no item event comes.
+        ("MESSAGE_CREATE", {"id": "9", "channel_id": "2", "content": "link 12345678"}, False),
         ("MESSAGE_UPDATE", {"id": "9", "channel_id": "2", "content": "edited"}, True),
         # An embed-only update leaves the stored message as it was.
         ("MESSAGE_UPDATE", {"id": "9", "channel_id": "2"}, False),
@@ -402,3 +404,21 @@ def test_a_raw_event_says_whether_its_task_writes_item_events(
 
     (raw,) = raw_events(db_session)
     assert bool((raw.data or {}).get("links_items")) is links_items
+
+
+@pytest.mark.parametrize("channel_id", ["2", "77"])
+def test_a_link_code_dm_is_queued_whoever_sent_it_and_whether_or_not_collected(
+    client, db_session, webhook_bot, channel_id
+):
+    """An unknown DM from a stranger, or a DM with collection off: the worker
+    reads the message back and tries the code."""
+    db_session.add(DiscordChannel(id=2, name="off", channel_type="dm", bot_id=webhook_bot.id, collect_messages=False))
+    db_session.commit()
+    data = {"id": "9", "channel_id": channel_id, "author": {"id": "31337"}, "content": "link 12345678"}
+
+    with patch("memory.api.discord.celery_app.send_task") as send:
+        post_event(client, webhook_bot.id, event("MESSAGE_CREATE", data))
+
+    (raw,) = raw_events(db_session)
+    assert (raw.outcome, raw.payload) == ("stored", None)
+    assert send.call_args.args[0] == HANDLE_DISCORD_EVENT

@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from memory.common import settings
 from memory.common.celery_app import SYNC_GOOGLE_FOLDER, app as celery_app
 from memory.common.db.connection import DBSession, get_session, make_session
+from memory.common.identity import link_proven_person
 from memory.common.db.models import User
 from memory.common.redis_pool import get_redis
 from memory.common.db.models.sources import (
@@ -521,6 +522,8 @@ def google_callback(
             )
             session.add(account)
 
+        # oauth2 v2 userinfo says verified_email; OpenID Connect's says email_verified.
+        account.email_verified = user_info.get("verified_email") is True or user_info.get("email_verified") is True
         account.access_token = credentials.token
         account.refresh_token = credentials.refresh_token
         account.token_expires_at = credentials.expiry
@@ -528,6 +531,8 @@ def google_callback(
         account.scopes = scope.split() if scope else []
         account.active = True
         account.record_sync(None)
+        session.flush()
+        link_proven_person(session, user)
 
         session.commit()
 

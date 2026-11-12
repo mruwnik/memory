@@ -315,6 +315,11 @@ class DiscordUser(Base):
     person_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("people.id", ondelete="SET NULL"), nullable=True
     )
+    # The User who proved they own this account (a Discord link code), so its
+    # Person can be linked to them: see memory.common.identity.
+    verified_user_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
 
     created_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -328,6 +333,7 @@ class DiscordUser(Base):
 
     __table_args__ = (
         Index("discord_users_person_idx", "person_id"),
+        Index("discord_users_verified_user_idx", "verified_user_id"),
     )
 
     @property

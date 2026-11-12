@@ -625,13 +625,16 @@ def killed_its_worker(session: DBSession, job_type: str, **params: Any) -> bool:
 @overload
 def tracked_task(func: Callable[..., _R]) -> Callable[..., _R]: ...
 @overload
-def tracked_task(*, job_type: str | None = None) -> Callable[[Callable[..., _R]], Callable[..., _R]]: ...
+def tracked_task(
+    *, job_type: str | None = None, redact: Callable[[dict[str, Any]], dict[str, Any]] | None = None
+) -> Callable[[Callable[..., _R]], Callable[..., _R]]: ...
 
 
 def tracked_task(
     func: Callable[..., _R] | None = None,
     *,
     job_type: str | None = None,
+    redact: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> Callable[..., _R] | Callable[[Callable[..., _R]], Callable[..., _R]]:
     """Decorator that wraps a Celery task with PendingJob lifecycle tracking.
 
@@ -648,7 +651,8 @@ def tracked_task(
 
     The ``job_id`` kwarg is consumed by the decorator and NOT passed to the
     wrapped function, nor is ``caused_by`` (see safe_task_execution); neither
-    is kept in the job's params.
+    is kept in the job's params. ``redact`` maps the kwargs to what the params
+    may keep, for tasks whose arguments can carry a secret.
 
     If the task returns a dict with ``result_id`` and/or ``result_type``,
     those are forwarded to complete_job for result linking.
@@ -681,7 +685,7 @@ def tracked_task(
 
             # Build params snapshot for debugging/retry
             task_name = get_celery_task_name(fn, args)
-            params = _build_job_params(task_name, fn, args, kwargs)
+            params = _build_job_params(task_name, fn, args, redact(kwargs) if redact else kwargs)
 
             actual_job_id, should_run = _start_or_create_job(
                 incoming_job_id=incoming_job_id,

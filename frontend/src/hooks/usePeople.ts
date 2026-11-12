@@ -19,18 +19,26 @@ export interface Person {
   identifier: string
   display_name: string
   aliases: string[]
-  /** A person merged from several records can hold a list of values for one field. */
-  contact_info: Record<string, string | string[]>
+  /** Mostly strings; a person merged from several records can hold a list for one field, and `slack` maps team id to SlackContact. */
+  contact_info: Record<string, unknown>
   tags: string[]
   created_at: string | null
   tidbits?: Tidbit[]
+}
+
+/** One Slack workspace's account, under contact_info.slack[team_id]. */
+export interface SlackContact {
+  user_id: string
+  /** null in an update removes it. */
+  username?: string | null
+  display_name?: string | null
 }
 
 export interface PersonCreate {
   identifier: string
   display_name: string
   aliases?: string[]
-  contact_info?: Record<string, string>
+  contact_info?: Record<string, string | Record<string, SlackContact>>
   content?: string  // Initial tidbit content
   tidbit_type?: string
   tags?: string[]
@@ -43,7 +51,7 @@ export interface PersonUpdate {
   /** A list adds aliases; in the map form true adds an alias and null removes it. */
   aliases?: string[] | Record<string, true | null>
   /** Merged into the stored contact info; null removes a key. For a list field, {entry: true} adds an entry and {entry: null} removes it. */
-  contact_info?: Record<string, string | null | Record<string, true | null>>
+  contact_info?: Record<string, string | null | Record<string, true | null> | Record<string, SlackContact | null>>
   content?: string  // Add a tidbit
   tidbit_type?: string
   tags?: string[]
