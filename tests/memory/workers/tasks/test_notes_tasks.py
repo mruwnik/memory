@@ -2,6 +2,7 @@ from typing import cast
 from celery import Task
 
 import json
+import os
 import subprocess
 import uuid
 import pytest
@@ -16,6 +17,7 @@ from memory.common.db.models.source_item import Chunk
 from memory.workers.tasks import notes
 from memory.common.content_processing import create_content_hash
 from memory.common import notes_git, settings
+from memory.common import qdrant as qd
 from sqlalchemy import text as sql_text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm.attributes import set_committed_value
@@ -635,6 +637,12 @@ def configure_identity(repo: pathlib.Path):
     git(repo, "config", "user.name", "Test")
 
 
+def commit_deletion(repo: pathlib.Path, name: str, when: datetime):
+    git(repo, "rm", "-q", name)
+    env = {**os.environ, "GIT_COMMITTER_DATE": f"@{int(when.timestamp())}"}
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", f"delete {name}"], env=env, check=True)
+
+
 def commit_file(repo: pathlib.Path, name: str, text: str):
     (repo / name).parent.mkdir(parents=True, exist_ok=True)
     (repo / name).write_text(text)
@@ -705,7 +713,7 @@ def reindexed(queued_reindexes):
 
 def run_queued_reindexes(queued_reindexes) -> list[str]:
     """Run the queued reindexes, as a worker would once the git lock is free."""
-    return [notes.reindex_note(c.args[0])["status"] for c in queued_reindexes.call_args_list]
+    return [notes.reindex_note(*c.args, **c.kwargs)["status"] for c in queued_reindexes.call_args_list]
 
 
 @pytest.mark.parametrize("branch", ["main", "master"])
@@ -1337,6 +1345,122 @@ def test_reindex_keeps_the_rows_subject(mock_make_session, qdrant, tmp_path, que
     assert (row.subject, row.content) == ("Meeting with Bob, 3 Oct", "hand-edited body")
 
 
+def index_vault_note(mock_make_session, queued_reindexes, vault: pathlib.Path, name: str) -> Note:
+    commit_file(vault, name, "soon removed")
+    notes.track_git_changes()
+    run_queued_reindexes(queued_reindexes)
+    queued_reindexes.reset_mock()
+    return mock_make_session.query(Note).filter(Note.filename == f"notes/{name}").one()
+
+
+@pytest.mark.parametrize(
+    "remove", [("rm", "-q", "gone.md"), ("mv", "gone.md", "gone.txt")], ids=["rm", "mv-out"]
+)
+def test_a_note_deleted_in_the_vault_loses_its_row_and_vectors(
+    mock_make_session, qdrant, tmp_path, queued_reindexes, remove
+):
+    vault, _ = make_vault(tmp_path, "master")
+    row = index_vault_note(mock_make_session, queued_reindexes, vault, "gone.md")
+    chunk_ids = [str(c.id) for c in row.chunks]
+    qd.upsert_vectors(qdrant, "text", chunk_ids, [[1] * 1024] * len(chunk_ids))
+
+    git(vault, *remove)
+    git(vault, "commit", "-q", "-m", "remove gone.md")
+    notes.track_git_changes()
+
+    assert run_queued_reindexes(queued_reindexes) == ["deleted"]
+    assert remaining_notes(mock_make_session) == set()
+    assert qdrant.retrieve("text", ids=chunk_ids) == []
+
+
+def test_a_note_deleted_in_the_vault_keeps_its_row_while_memory_writes_it(
+    mock_make_session, qdrant, tmp_path, queued_reindexes
+):
+    vault, _ = make_vault(tmp_path, "master")
+    index_vault_note(mock_make_session, queued_reindexes, vault, "gone.md")
+    notes.mark_pending_write("notes/gone.md", create_content_hash("newer"))
+
+    git(vault, "rm", "-q", "gone.md")
+    git(vault, "commit", "-q", "-m", "remove gone.md")
+    notes.track_git_changes()
+
+    assert run_queued_reindexes(queued_reindexes) == ["write_pending"]
+    assert remaining_notes(mock_make_session) == {"notes/gone.md"}
+
+
+MOVED_BODY = "\n".join(f"line {i}" for i in range(10))
+
+
+@pytest.mark.parametrize(
+    "body", [MOVED_BODY, MOVED_BODY + "\nedited with the move"], ids=["unchanged", "edited"]
+)
+def test_a_note_moved_in_the_vault_keeps_its_row(
+    mock_make_session, qdrant, tmp_path, queued_reindexes, regular_user, body
+):
+    vault, _ = make_vault(tmp_path, "master")
+    notes.sync_note(
+        subject="Meeting with Bob",
+        content=MOVED_BODY,
+        filename="notes/n.md",
+        tags=["bob"],
+        creator_id=regular_user.id,
+    )
+    note_id = mock_make_session.query(Note).filter(Note.filename == "notes/n.md").one().id
+
+    (vault / "archive").mkdir()
+    git(vault, "mv", "n.md", "archive/bob.md")
+    (vault / "archive/bob.md").write_text(body)
+    git(vault, "commit", "-qam", "archive n.md")
+    notes.track_git_changes()
+    run_queued_reindexes(queued_reindexes)
+
+    assert remaining_notes(mock_make_session) == {"notes/archive/bob.md"}
+    row = mock_make_session.query(Note).one()
+    assert (row.id, row.subject, row.tags, row.creator_id, row.content) == (
+        note_id, "Meeting with Bob", ["bob"], regular_user.id, body
+    )
+
+
+def test_a_note_moved_onto_a_path_memory_writes_in_the_same_sync_drops_the_old_row(
+    mock_make_session, qdrant, tmp_path, queued_reindexes
+):
+    vault, _ = make_vault(tmp_path, "master")
+    notes.sync_note(subject="Meeting with Bob", content=MOVED_BODY, filename="notes/n.md")
+
+    (vault / "archive").mkdir()
+    git(vault, "mv", "n.md", "archive/bob.md")
+    git(vault, "commit", "-qm", "archive n.md")
+    notes.sync_note(subject="Bob", content="saved by Memory", filename="notes/archive/bob.md")
+    run_queued_reindexes(queued_reindexes)
+
+    assert remaining_notes(mock_make_session) == {"notes/archive/bob.md"}
+
+
+def deleted_before_the_row(vault: pathlib.Path):
+    commit_file(vault, "gone.md", "x")
+    commit_deletion(vault, "gone.md", datetime.now(timezone.utc) - timedelta(days=1))
+
+
+def deleted_then_restored(vault: pathlib.Path):
+    commit_file(vault, "gone.md", "x")
+    commit_deletion(vault, "gone.md", datetime.now(timezone.utc) + timedelta(minutes=1))
+    commit_file(vault, "gone.md", "x")
+    (vault / "gone.md").unlink()
+
+
+@pytest.mark.parametrize("history", [deleted_before_the_row, deleted_then_restored])
+def test_cleanup_junk_notes_keeps_a_missing_file_git_has_not_deleted_since(
+    mock_make_session, qdrant, tmp_path, history
+):
+    vault, _ = make_vault(tmp_path, "master")
+    add_raw_note(mock_make_session, "notes/gone.md", on_disk=False)
+    history(vault)
+
+    notes.cleanup_junk_notes()
+
+    assert remaining_notes(mock_make_session) == {"notes/gone.md"}
+
+
 def test_reindex_runs_the_untracked_upsert(mock_make_session, qdrant, tmp_path):
     vault, _ = make_vault(tmp_path, "master")
     commit_file(vault, "n.md", "hand commit")
@@ -1618,7 +1742,7 @@ def test_cleanup_junk_notes_removes_junk_rows_and_the_files_memory_made(junk_vau
     assert on_disk == {f for f, (_, file_removed) in JUNK_NOTES.items() if not file_removed}
     assert all((settings.FILE_STORAGE_DIR / f).exists() for f in JUNK_COUNTERPARTS)
     assert junk_vault.query(Chunk).count() == len(kept) + 2
-    assert result == {"dry_run": False, "junk": 8, "needs_review": NEEDS_REVIEW, "files_removed": 5}
+    assert result == {"dry_run": False, "junk": 8, "needs_review": NEEDS_REVIEW, "files_removed": 5, "deleted_from_vault": 0}
 
 
 def test_cleanup_junk_notes_dry_run_changes_nothing(junk_vault):
@@ -1628,7 +1752,26 @@ def test_cleanup_junk_notes_dry_run_changes_nothing(junk_vault):
 
     assert remaining_notes(junk_vault) == before
     assert all((settings.FILE_STORAGE_DIR / f).exists() for f in JUNK_NOTES)
-    assert result == {"dry_run": True, "junk": 8, "needs_review": NEEDS_REVIEW, "files_removed": 5}
+    assert result == {"dry_run": True, "junk": 8, "needs_review": NEEDS_REVIEW, "files_removed": 5, "deleted_from_vault": 0}
+
+
+@pytest.mark.parametrize(
+    "dry_run, remaining",
+    [(True, {"notes/gone.md", "notes/unwritten.md"}), (False, {"notes/unwritten.md"})],
+)
+def test_cleanup_junk_notes_deletes_notes_git_deleted_from_the_vault(
+    mock_make_session, qdrant, tmp_path, dry_run, remaining
+):
+    vault, _ = make_vault(tmp_path, "master")
+    commit_file(vault, "gone.md", "x")
+    add_raw_note(mock_make_session, "notes/gone.md", on_disk=False)
+    add_raw_note(mock_make_session, "notes/unwritten.md", on_disk=False)
+    commit_deletion(vault, "gone.md", datetime.now(timezone.utc) + timedelta(minutes=1))
+
+    result = notes.cleanup_junk_notes(dry_run=dry_run)
+
+    assert remaining_notes(mock_make_session) == remaining
+    assert (result["deleted_from_vault"], result["needs_review"]) == (1, ["notes/unwritten.md"])
 
 
 def test_cleanup_junk_notes_commits_removed_files_in_the_vault(mock_make_session, qdrant, tmp_path):

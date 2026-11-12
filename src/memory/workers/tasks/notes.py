@@ -303,20 +303,45 @@ def is_vault_note(path: str) -> bool:
     return path.endswith(".md") and not paths.is_hidden(path)
 
 
-def changed_notes(repo_root: pathlib.Path, before: str, after: str) -> list[str]:
+class NoteChange(NamedTuple):
+    path: str
+    moved_from: str | None = None
+    deleted: bool = False
+
+
+def parse_name_status(fields: list[str]) -> Iterator[NoteChange]:
+    """Vault note changes in ``git diff --name-status -z`` output: ``R<score> old new`` or ``<status> path``."""
+    rest = iter(fields)
+    for status in rest:
+        path = next(rest)
+        if not status.startswith("R"):
+            if is_vault_note(path):
+                yield NoteChange(path, deleted=status == "D")
+            continue
+        new = next(rest)
+        if is_vault_note(new):
+            yield NoteChange(new, moved_from=path if is_vault_note(path) else None)
+        elif is_vault_note(path):
+            yield NoteChange(path, deleted=True)
+
+
+def changed_notes(repo_root: pathlib.Path, before: str, after: str) -> list[NoteChange]:
     if not before or before == after:
         return []
-    diff = run_git(repo_root, "diff", "--name-only", "-z", f"{before}..{after}")
+    diff = run_git(
+        repo_root, "diff", "--name-status", "--find-renames", "-z", f"{before}..{after}"
+    )
     if git_step_failed("diff", diff):
         return []
-    return [f for f in diff.stdout.split("\0") if is_vault_note(f)]
+    return list(parse_name_status(diff.stdout.split("\0")[:-1]))
 
 
-def reindex_notes(repo_root: pathlib.Path, filenames: list[str]):
+def reindex_notes(repo_root: pathlib.Path, changes: list[NoteChange]):
     # Not via to_db_filename(path): that resolves symlinks, which reindex_note must refuse.
     prefix = paths.to_db_filename(repo_root)
-    for filename in filenames:
-        reindex_note.delay(f"{prefix}/{filename}")
+    for path, moved_from, deleted in changes:
+        moved_from = moved_from and f"{prefix}/{moved_from}"
+        reindex_note.delay(f"{prefix}/{path}", moved_from=moved_from, deleted=deleted)
 
 
 def mark_pending_write(filename: str, sha256: bytes):
@@ -377,7 +402,7 @@ class VaultSync:
     is_repo: bool
     before: str = ""
     failures: list[str] = field(default_factory=list)
-    changed: list[str] = field(default_factory=list)
+    changed: list[NoteChange] = field(default_factory=list)
     written: list[pathlib.Path] = field(default_factory=list)
 
     def track(self, path: pathlib.Path):
@@ -427,13 +452,14 @@ def git_tracking(repo_root: pathlib.Path, commit_message: str = "Sync note") -> 
             sync.changed = changed_notes(repo_root, base, head_commit(repo_root))
         else:
             all_files = (f.relative_to(repo_root).as_posix() for f in repo_root.rglob("*.md"))
-            sync.changed = [f for f in all_files if is_vault_note(f)]
+            sync.changed = [NoteChange(f) for f in all_files if is_vault_note(f)]
 
         try:
             yield sync
         finally:
             ours = {repo_path(repo_root, p) for p in sync.written}
-            reindex_notes(repo_root, [f for f in sync.changed if f not in ours])
+            # A move still releases the old path when Memory writes the new one.
+            reindex_notes(repo_root, [c for c in sync.changed if c.path not in ours or c.moved_from])
 
         if step := commit_files(repo_root, sync.written, commit_message):
             sync.failures.append(step)
@@ -526,17 +552,52 @@ def write_note_file_when_free(
 
 @app.task(name=REINDEX_NOTE, bind=True, max_retries=VAULT_BUSY_RETRIES)
 @safe_task_execution
-def reindex_note(self, filename: str):
-    """Index a vault file's current text, unless Memory's own newer edit of it awaits writing.
+def reindex_note(self, filename: str, moved_from: str | None = None, deleted: bool = False):
+    """Bring a vault file's row in line with git, unless Memory's own newer edit of it awaits writing.
 
-    Reads the file under the git lock, so it sees Memory's write or the pending mark.
+    A moved file keeps the row of the path it was moved from; a deleted one loses its row.
+    Runs under the git lock, so it sees Memory's write or the pending mark.
     """
     try:
         with git_notes_lock("tracking"):
+            if moved_from and not move_note_row(moved_from, filename):
+                drop_deleted_note(moved_from)
+            if deleted and (dropped := drop_deleted_note(filename)):
+                return dropped
             return reindex_note_file(filename)
     except GitLockTimeout as e:
         # The indexed commit has moved past this file: dropping it would skip it for good.
         raise self.retry(exc=e, countdown=vault_busy_backoff(self.request.retries))
+
+
+def move_note_row(old: str, new: str) -> bool:
+    if os.path.lexists(settings.FILE_STORAGE_DIR / old):
+        return False
+    with make_session() as session:
+        # The row lock orders this against a concurrent save's pending mark, as in upsert_note.
+        row = session.query(Note).filter(Note.filename == old).with_for_update().one_or_none()
+        taken = session.query(Note.id).filter(Note.filename == new).first()
+        if row is None or taken or write_pending(old) or write_pending(new):
+            return False
+        row.filename = new  # type: ignore
+        session.commit()
+    return True
+
+
+def drop_deleted_note(filename: str) -> dict | None:
+    """Delete the row of a file git deleted; None if the file is back."""
+    if os.path.lexists(settings.FILE_STORAGE_DIR / filename):
+        return None
+    with make_session() as session:
+        row = session.query(Note).filter(Note.filename == filename).with_for_update().one_or_none()
+        if row is None:
+            return {"status": "missing"}
+        if write_pending(filename):
+            return {"status": "write_pending"}
+        note_id = row.id
+        delete_orphaned_item(row, session)
+        session.commit()
+    return {"status": "deleted", "note_id": note_id}
 
 
 def reindex_note_file(filename: str) -> dict:
@@ -815,7 +876,7 @@ def track_git_changes():
         "failed_step": sync.failed_step,
         "current_commit": sync.before,
         "latest_commit": latest_commit,
-        "changed_files": sync.changed,
+        "changed_files": [c.path for c in sync.changed],
     }
 
 
@@ -897,6 +958,25 @@ def remove_vault_files(files: list[pathlib.Path]):
             remove_empty_dirs(path.parent, repo_root)
 
 
+def deleted_in_git(note: Note) -> bool:
+    """Whether the vault deleted this note's file, and did so after the row's last write.
+
+    A missing file alone, or one deleted before Memory re-created the row, may be a Memory
+    write that never happened: the only copy of the note.
+    """
+    repo_root = settings.NOTES_STORAGE_DIR
+    path = (settings.FILE_STORAGE_DIR / str(note.filename)).resolve()
+    if note.updated_at is None or not path.is_relative_to(repo_root.resolve()):
+        return False
+    rel = repo_path(repo_root, path)
+    if run_git(repo_root, "cat-file", "-e", f"HEAD:{rel}").returncode == 0:
+        return False
+    log = run_git(repo_root, "log", "--diff-filter=D", "-1", "--format=%ct", "--", rel)
+    deleted_at = log.stdout.strip()
+    # %ct has whole seconds.
+    return log.returncode == 0 and deleted_at.isdigit() and int(deleted_at) >= int(note.updated_at.timestamp())
+
+
 @app.task(name=CLEANUP_JUNK_NOTES)
 @tracked_task
 def cleanup_junk_notes(dry_run: bool = False) -> dict:
@@ -905,8 +985,9 @@ def cleanup_junk_notes(dry_run: bool = False) -> dict:
     Junk is a hidden path, or a file Memory wrote that duplicates one still in
     the vault: a ".md" copy of a non-markdown file, or a note re-rooted from an
     absolute filename whose original exists. Only those duplicates are removed
-    from the vault: hidden folders may belong to the user's tools. Re-rooted
-    notes without an original and notes missing their file are only listed:
+    from the vault: hidden folders may belong to the user's tools. Notes whose
+    file git records as deleted from the vault are deleted too. Re-rooted notes
+    without an original and other notes missing their file are only listed:
     they may be the only copy. Safe to re-run.
     """
     if not settings.NOTES_STORAGE_DIR.is_dir():
@@ -917,6 +998,8 @@ def cleanup_junk_notes(dry_run: bool = False) -> dict:
         junk = [n for n in rows if junk_note(str(n.filename))]
         junk_ids = {n.id for n in junk}
         review = [n for n in rows if n.id not in junk_ids and needs_review(n)]
+        deleted = [n for n in review if note_file_missing(n) and deleted_in_git(n)]
+        review = [n for n in review if n not in deleted]
         files = [
             settings.FILE_STORAGE_DIR / str(n.filename)
             for n in junk
@@ -928,13 +1011,17 @@ def cleanup_junk_notes(dry_run: bool = False) -> dict:
             "junk": len(junk),
             "needs_review": sorted(str(n.filename) for n in review),
             "files_removed": len(files),
+            "deleted_from_vault": len(deleted),
         }
         if dry_run:
             return result
         # Files first: a re-run still finds the junk rows, but no longer the files of deleted rows.
         remove_vault_files(files)
-        for note in junk:
+        for note in junk + deleted:
             delete_orphaned_item(note, session)
         session.commit()
-    logger.info("Removed %s junk notes; %s notes need review", len(junk), len(review))
+    logger.info(
+        "Removed %s junk notes and %s deleted from the vault; %s notes need review",
+        len(junk), len(deleted), len(review),
+    )
     return result

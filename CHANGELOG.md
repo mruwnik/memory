@@ -22,6 +22,17 @@ a new, empty `## Unreleased` above it.
 
 ## Unreleased
 
+### Changes
+- Fix: a note deleted in the git-synced vault is removed from Memory, and a moved one keeps its Memory note (id, subject, tags, owner, project) under the new path; before, the old path stayed listed and opening it said its file was missing from storage. `maintenance cleanup-junk-notes` also deletes notes git deleted from the vault since their last save (`deleted_from_vault`); other notes missing their file are still only listed.
+
+### Post-deploy commands
+- Re-runnable: remove notes already deleted from the vault. Check `deleted_from_vault` with `--dry-run` first:
+
+```bash
+docker compose exec -T worker python - --wait maintenance cleanup-junk-notes --dry-run < tools/run_celery_task.py
+docker compose exec -T worker python - --wait maintenance cleanup-junk-notes < tools/run_celery_task.py
+```
+
 ## v0.5.7 (2026-11-11)
 
 ### Changes
