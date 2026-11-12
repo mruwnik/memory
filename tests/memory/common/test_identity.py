@@ -25,6 +25,7 @@ from memory.common.identity import (
     suggestions,
 )
 from memory.common.notify import channel_problems, user_info_for
+from memory.workers.tasks.github import _resolve_author_person
 from memory.workers.tasks.maintenance import link_user_people
 from tests.conftest import make_source_item
 
@@ -65,7 +66,7 @@ def ingest_person(db, identifier: str = "daniel", creator_id: int | None = None)
     db.add(person)
     db.flush()
     db.add(DiscordUser(id=DISCORD_ID, username="dan#1", person_id=person.id))
-    db.add(GithubUser(id=GITHUB_ID, username="octo", person_id=person.id))
+    db.add(GithubUser(id=GITHUB_ID, username="octo", person_id=person.id, linked_by_id=True))
     db.flush()
     return person
 
@@ -184,7 +185,7 @@ def second_candidate(db, person, user):
     two = Person(identifier="dan_two", display_name="dan two")
     db.add(two)
     db.flush()
-    db.add(GithubUser(id=GITHUB_ID + 1, username="octo-two", person_id=two.id))
+    db.add(GithubUser(id=GITHUB_ID + 1, username="octo-two", person_id=two.id, linked_by_id=True))
     db.add(GithubAccount(user_id=user.id, name="two", auth_type="pat", verified_login="octo-two", verified_github_id=GITHUB_ID + 1))
 
 
@@ -327,3 +328,22 @@ def test_a_github_handle_in_contact_info_proves_nothing(db_session, regular_user
 
     assert link_proven_person(db_session, regular_user) == []
     assert person.user_id is None
+
+
+def test_ingest_matching_a_typed_github_handle_makes_no_proof(db_session, regular_user):
+    """An unverified handle on someone's Person; whoever holds that login on
+    GitHub authors a synced item, and then proves the account with their PAT."""
+    victim = victim_person(db_session)
+    victim.contact_info = {"github": "victim-handle"}
+    db_session.flush()
+    own = link_person_to_user(db_session, regular_user)
+    assert _resolve_author_person(db_session, "victim-handle", 777) == victim.id
+    db_session.add(
+        GithubAccount(user_id=regular_user.id, name="x", auth_type="pat", verified_login="victim-handle", verified_github_id=777)
+    )
+    db_session.flush()
+
+    assert link_proven_person(db_session, regular_user) == []
+    db_session.refresh(regular_user)
+    assert (regular_user.person and regular_user.person.id) == (own and own.id)
+    assert db_session.get(Person, victim.id).user_id is None

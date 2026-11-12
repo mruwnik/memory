@@ -793,7 +793,7 @@ def store_message(bot: DiscordBot, bot_ids: set[int], data: dict, is_edit: bool,
     and stored as Discord returns it, and dropped when that token can't read
     it. A pushed create of a message already stored changes nothing, so it
     isn't read."""
-    if not is_edit and discord_link.is_link_dm("MESSAGE_CREATE", data):
+    if not is_edit and discord_link.is_link_dm(bot.id, "MESSAGE_CREATE", data):
         return redeem_link_dm(bot.id, data, pushed)
     channel_id, message_id = int(data["channel_id"]), int(data["id"])
     guild_id = discord_events.snowflake(data.get("guild_id"))

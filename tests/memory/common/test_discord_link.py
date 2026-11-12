@@ -79,23 +79,71 @@ def linked_user(db_session, discord_user_id=AUTHOR) -> int | None:
     return person and person.user_id
 
 
+def prompt(person: str) -> str:
+    return (
+        f"This links this Discord account to Memory login owner@example.com ({person}). "
+        "Reply `confirm` within 5 minutes to finish."
+    )
+
+
+def link_and_confirm(bot, code, author=AUTHOR, first_id=1):
+    """DM a code, then confirm it; the confirm's result."""
+    dm(bot, f"link {code}", author=author, message_id=first_id)
+    return dm(bot, "confirm", author=author, message_id=first_id + 1)
+
+
 def with_person(db_session, owner):
-    db_session.add(Person(identifier="owner", display_name="The Owner", user_id=owner.id))
+    db_session.add(Person(identifier="owner", display_name="The Owner", user_id=owner.id, creator_id=owner.id))
     db_session.commit()
 
 
-@pytest.mark.parametrize("give_person, name", [(with_person, "The Owner"), (lambda db, owner: None, "Owner")])
+def without_person(db_session, owner):
+    pass
+
+
+@pytest.mark.parametrize("give_person, name", [(with_person, "The Owner"), (without_person, "Owner")])
 @pytest.mark.parametrize("command", ["link {code}", "  LINK {code} "])
-def test_a_dmed_code_links_the_author_to_its_user(db_session, owner, bot, replies, give_person, name, command):
+def test_a_dmed_code_links_the_author_once_they_confirm(db_session, owner, bot, replies, give_person, name, command):
     give_person(db_session, owner)
     code, _ = discord_link.issue_code(owner.id)
 
-    result = dm(bot, command.format(code=code))
+    asked = dm(bot, command.format(code=code), message_id=1)
 
-    assert result["status"] == "verified"
+    assert asked["status"] == "pending"
+    assert linked_user(db_session) is None
+    assert db_session.get(DiscordUser, AUTHOR).verified_user_id is None
+
+    confirmed = dm(bot, "  Confirm ", message_id=2)
+
+    assert confirmed["status"] == "verified"
     assert linked_user(db_session) == owner.id
     assert db_session.query(DiscordMessage).count() == 0
-    assert replies == [(bot.id, str(AUTHOR), f"Linked to {name} (Memory login owner@example.com).")]
+    assert replies == [
+        (bot.id, str(AUTHOR), prompt(name)),
+        (bot.id, str(AUTHOR), f"Linked to {name} (Memory login owner@example.com)."),
+    ]
+
+
+@pytest.mark.parametrize("confirmer", [OTHER_AUTHOR, AUTHOR])
+def test_a_confirm_with_nothing_pending_is_an_ordinary_message(db_session, owner, bot, replies, qdrant, confirmer):
+    """Only the author who sent the code can confirm it, and only once."""
+    code, _ = discord_link.issue_code(owner.id)
+    link_and_confirm(bot, code)
+
+    dm(bot, "confirm", author=confirmer, message_id=3)
+
+    assert db_session.query(DiscordMessage).count() == 1
+
+
+def test_an_unconfirmed_code_links_nothing_when_the_confirmation_lapses(db_session, owner, bot, replies, qdrant):
+    code, _ = discord_link.issue_code(owner.id)
+    dm(bot, f"link {code}", message_id=1)
+    get_redis().delete(discord_link.pending_key(bot.id, AUTHOR))  # its 5 minutes are up
+
+    dm(bot, "confirm", message_id=2)
+
+    assert linked_user(db_session) is None
+    assert db_session.query(DiscordMessage).count() == 1
 
 
 ON_ANOTHER_PERSON = (
@@ -104,25 +152,23 @@ ON_ANOTHER_PERSON = (
 )
 
 
-@pytest.mark.parametrize("owner_has_person", [True, False])
-def test_an_author_on_another_person_stays_there(db_session, owner, bot, replies, owner_has_person):
+@pytest.mark.parametrize("give_person", [with_person, without_person])
+def test_an_author_on_another_person_stays_there(db_session, owner, bot, replies, qdrant, give_person):
     """A code can be phished: whoever DMs it may be someone else, whose Person
     must never become the code user's."""
-    if owner_has_person:
-        db_session.add(Person(identifier="owner", display_name="The Owner", user_id=owner.id, creator_id=owner.id))
-        db_session.commit()
-    dm(bot, "an ordinary first message long enough to be stored", message_id=1)
+    give_person(db_session, owner)
+    dm(bot, "an ordinary first message long enough to be stored", message_id=10)
     placeholder = db_session.get(DiscordUser, AUTHOR).person
     code, _ = discord_link.issue_code(owner.id)
 
-    result = dm(bot, f"link {code}", message_id=2)
+    result = link_and_confirm(bot, code)
 
     assert result["status"] == "verified"
     db_session.expire_all()
     author = db_session.get(DiscordUser, AUTHOR)
     assert (author.person_id, author.verified_user_id) == (placeholder.id, owner.id)
     assert db_session.get(Person, placeholder.id).user_id is None
-    assert replies == [(bot.id, str(AUTHOR), ON_ANOTHER_PERSON)]
+    assert replies[-1] == (bot.id, str(AUTHOR), ON_ANOTHER_PERSON)
 
 
 @pytest.mark.parametrize("second_author", [AUTHOR, OTHER_AUTHOR])
@@ -145,7 +191,7 @@ def test_a_new_code_replaces_the_users_last(db_session, owner, bot, replies):
 
 @pytest.mark.parametrize(
     "wrong, status, reply_count",
-    [(discord_link.MAX_FAILURES - 1, "verified", discord_link.MAX_FAILURES), (discord_link.MAX_FAILURES, "skipped", discord_link.MAX_FAILURES)],
+    [(discord_link.MAX_FAILURES - 1, "pending", discord_link.MAX_FAILURES), (discord_link.MAX_FAILURES, "skipped", discord_link.MAX_FAILURES)],
 )
 def test_wrong_codes_lock_the_author_out(db_session, owner, bot, replies, wrong, status, reply_count):
     code, _ = discord_link.issue_code(owner.id)
@@ -199,11 +245,11 @@ def test_an_author_linked_to_another_user_is_not_moved(db_session, owner, bot, r
     db_session.commit()
     code, _ = discord_link.issue_code(owner.id)
 
-    result = dm(bot, f"link {code}")
+    result = link_and_confirm(bot, code)
 
     assert result["reason"] == "refused"
     assert linked_user(db_session) == other.id
-    assert replies == [(bot.id, str(AUTHOR), FAILED)]
+    assert replies == [(bot.id, str(AUTHOR), prompt("Owner")), (bot.id, str(AUTHOR), FAILED)]
 
 
 def test_a_code_dmed_to_someone_elses_bot_is_burnt(db_session, owner, bot, replies):
@@ -236,6 +282,16 @@ def test_issued_codes_expire_in_a_quarter_hour(owner, monkeypatch):
     assert 14 * 60 < cast(int, redis.ttl(discord_link.code_key(discord_link.digest(code)))) <= 15 * 60
 
 
+def test_a_pending_link_lapses_in_five_minutes(owner, bot, replies, monkeypatch):
+    redis = fakeredis.FakeRedis()
+    monkeypatch.setattr(discord_link, "get_redis", lambda: redis)
+    code, _ = discord_link.issue_code(owner.id)
+
+    dm(bot, f"link {code}")
+
+    assert 4 * 60 < cast(int, redis.ttl(discord_link.pending_key(bot.id, AUTHOR))) <= 5 * 60
+
+
 def job_params(db_session) -> str:
     db_session.expire_all()
     return " ".join(str(job.params) for job in db_session.query(PendingJob))
@@ -265,6 +321,15 @@ def test_no_job_keeps_a_live_code_after_a_lockout_or_a_redelivery(db_session, ow
     assert discord_link.REDACTED in params
 
 
+def test_a_confirm_owed_to_the_bot_is_kept_out_of_jobs(db_session, owner, bot, replies):
+    code, _ = discord_link.issue_code(owner.id)
+    dm(bot, f"link {code}", message_id=1)
+
+    dm(bot, "confirm", message_id=2)
+
+    assert "confirm" not in job_params(db_session)
+
+
 def test_an_ordinary_message_keeps_its_content_in_its_job(db_session, owner, bot, replies, qdrant):
     dm(bot, "an ordinary message long enough to be stored")
 
@@ -282,23 +347,33 @@ def test_only_a_keyed_digest_of_a_code_is_stored(owner):
 STRANGER, STRANGER_DM = 500000000000000009, 600000000000000009
 
 
+def push(bot, message_id, content, author):
+    return discord.handle_discord_event(
+        bot_id=bot.id,
+        event_type="MESSAGE_CREATE",
+        data={"id": str(message_id), "channel_id": str(STRANGER_DM), "author": {"id": str(author)}, "content": content},
+        pushed=True,
+    )
+
+
 def test_a_pushed_link_dm_from_a_stranger_is_read_back_and_tried(db_session, owner, bot, replies, monkeypatch):
     """The push names no author it can be trusted for: the one Discord reads
     back is verified, and no channel or message is stored."""
     code, _ = discord_link.issue_code(owner.id)
-    read_back = {
-        "id": "3", "channel_id": str(STRANGER_DM), "author": {"id": str(STRANGER), "username": "stranger"},
-        "content": f"link {code}",
-    }
+    texts = {3: f"link {code}", 4: "confirm"}
     monkeypatch.setattr(discord, "read_dm", lambda bot_id, channel_id: {"type": 1})
-    monkeypatch.setattr(discord, "read_pushed_message", lambda bot_id, channel_id, message_id: read_back)
-
-    result = discord.handle_discord_event(
-        bot_id=bot.id,
-        event_type="MESSAGE_CREATE",
-        data={"id": "3", "channel_id": str(STRANGER_DM), "author": {"id": str(AUTHOR)}, "content": f"link {code}"},
-        pushed=True,
+    monkeypatch.setattr(
+        discord,
+        "read_pushed_message",
+        lambda bot_id, channel_id, message_id: {
+            "id": str(message_id), "channel_id": str(STRANGER_DM),
+            "author": {"id": str(STRANGER), "username": "stranger"}, "content": texts[message_id],
+        },
     )
+
+    # The first push lies about its author; the pending link is Discord's author's.
+    assert push(bot, 3, f"link {code}", AUTHOR)["status"] == "pending"
+    result = push(bot, 4, "confirm", STRANGER)
 
     assert result["status"] == "verified"
     db_session.expire_all()

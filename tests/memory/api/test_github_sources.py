@@ -936,7 +936,7 @@ def test_an_admin_verifying_someone_elses_account_links_its_owner(
     person = Person(identifier="octocat", display_name="octocat")
     db_session.add(person)
     db_session.flush()
-    db_session.add(GithubUser(id=583231, username="octocat", person_id=person.id))
+    db_session.add(GithubUser(id=583231, username="octocat", person_id=person.id, linked_by_id=True))
     account = GithubAccount(user_id=regular_user.id, name="theirs", auth_type="pat", access_token="token123")
     db_session.add(account)
     db_session.commit()

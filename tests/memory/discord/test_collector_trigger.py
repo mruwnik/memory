@@ -3,7 +3,7 @@ import threading
 from time import monotonic, sleep
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -569,14 +569,38 @@ async def test_a_link_code_dmed_by_a_stranger_or_in_an_uncollected_dm_is_redeeme
     db_session.add_all(channels())
     db_session.commit()
     code, _ = discord_link.issue_code(regular_user.id)
-    message = fake_dm(mutual_guilds=())
-    message.author.bot = False
-    message.content = f"link {code}"
     celery_app = MagicMock()
+    collector = collector_with(celery_app)
 
-    await collector_with(celery_app).on_message(message)
+    for message_id, content in [(111, f"link {code}"), (112, "confirm")]:
+        message = fake_dm(mutual_guilds=())
+        message.id, message.author.bot, message.content = message_id, False, content
+        await collector.on_message(message)
 
     db_session.expire_all()
     assert db_session.get(DiscordUser, 444).verified_user_id == regular_user.id
     assert celery_app.send_task.call_args_list == []
-    assert [r.startswith("Linked to") for r in replies] == [True]
+    assert [r.split(" ")[0] for r in replies] == ["This", "Linked"]
+
+
+@pytest.mark.asyncio
+async def test_a_code_posted_in_a_server_or_edited_in_is_spent_before_collection(db_session, regular_user, monkeypatch):
+    """Even where Memory collects nothing, a posted code is spent and nothing queued."""
+    monkeypatch.setattr(settings, "TRANSFER_TOKEN_SECRET", "test-discord-link-secret")
+    db_session.add(DiscordBot(id=42, application_id=42, name="bot", created_by_user_id=regular_user.id))
+    db_session.add(DiscordServer(id=222, name="Test Server", bot_id=42, collect_messages=False))
+    db_session.commit()
+    posted, _ = discord_link.issue_code(regular_user.id)
+    message = fake_message()
+    message.content = f"link {posted}"
+    celery_app = MagicMock()
+    collector = collector_with(celery_app)
+
+    await collector.on_message(message)
+    assert discord_link.take_code(posted) is None
+
+    edited, _ = discord_link.issue_code(regular_user.id)
+    await collector.on_raw_message_edit(cast(Any, SimpleNamespace(data={"id": "1", "channel_id": "333", "content": f"link {edited}"})))
+
+    assert discord_link.take_code(edited) is None
+    assert celery_app.send_task.call_args_list == []

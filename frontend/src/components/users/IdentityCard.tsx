@@ -113,10 +113,14 @@ const DiscordCode = ({ code, onRefresh, onNewCode, busy }: { code: DiscordLinkCo
           DM <code className="bg-white/70 px-1.5 py-0.5 rounded font-mono">{message}</code> to {bots} within {minutesLeft(code.expires_at)} minutes
           (the code expires at {formatUserTime(code.expires_at)}).
         </p>
+        <p>
+          The bot answers with your Memory login. Check it is yours, then reply{' '}
+          <code className="bg-white/70 px-1.5 py-0.5 rounded font-mono">confirm</code> within 5 minutes to finish.
+        </p>
         <div className="flex flex-wrap gap-2">
           {/* The button that asked for the code is gone, so focus lands on the next step instead of the page. */}
           <CopyButton text={message} label="Copy message" autoFocus />
-          <Button size="sm" variant="primary" onClick={onRefresh} disabled={busy}>I've sent it: check again</Button>
+          <Button size="sm" variant="primary" onClick={onRefresh} disabled={busy}>I've confirmed: check again</Button>
         </div>
       </div>
     </Notice>
@@ -164,7 +168,7 @@ const IdentityCard = () => {
       setCode(null)
       return
     }
-    throw new Error('No Discord account has been verified yet. The bot may take a moment to answer your DM; check again once it has replied.')
+    throw new Error('No Discord account has been verified yet. Reply confirm to the bot once it answers your DM, then check again.')
   }, 'Discord account verified')
 
   if (!identity) {

@@ -104,7 +104,7 @@ def people_proven_by(session: DBSession, proof: Proof) -> list[Person]:
     if kind == "github":
         # By GitHub's id: a login can be renamed and then taken by someone else.
         return session.query(Person).join(GithubUser, GithubUser.person_id == Person.id).filter(
-            GithubUser.id == int(value)
+            GithubUser.id == int(value), GithubUser.linked_by_id
         ).all()
     if kind == "email":
         return people_with_email(session, value).all()

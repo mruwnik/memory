@@ -1,8 +1,12 @@
 """One-time codes a user DMs to their own Discord bot to prove which Discord account is theirs.
 
 Only the user's own bots count: a bot's owner reads its DMs, so a code sent to
-someone else's bot could be replayed from the owner's account. A code posted
-anywhere else, or edited into a message, is spent unused. Worker-safe.
+someone else's bot could be replayed from the owner's account. A valid code
+links nothing yet: the bot names the Memory login it belongs to and waits for
+a ``confirm`` reply, so someone talked into sending another person's code sees
+whose it is before their account goes to them. A code posted anywhere else, or
+edited into a message, is spent unused. Neither message is ever stored.
+Worker-safe.
 """
 
 import hashlib
@@ -23,45 +27,82 @@ from memory.common.redis_pool import get_redis
 logger = logging.getLogger(__name__)
 
 CODE_TTL = timedelta(minutes=15)
+CONFIRM_TTL = timedelta(minutes=5)
 MAX_FAILURES = 5
 FAILURE_WINDOW_SECONDS = 3600
 LINK_COMMAND = re.compile(r"\s*link\s+(\d{8})\s*", re.IGNORECASE)
+CONFIRM_COMMAND = re.compile(r"\s*confirm\s*", re.IGNORECASE)
 FAILED_REPLY = "That code is wrong, used or expired. Get a new one in Memory."
-
-
 REDACTED = "[link code redacted]"
 
 
+def pending_key(bot_id: int, author_id: int) -> str:
+    return f"discord-link:pending:{bot_id}:{author_id}"
+
+
+def has_pending(bot_id: Any, author_id: Any) -> bool:
+    try:
+        return bool(get_redis().exists(pending_key(int(bot_id), int(author_id))))
+    except (TypeError, ValueError):
+        return False
+
+
+def is_link_text(bot_id: Any, author_id: Any, content: Any) -> bool:
+    """A ``link <code>`` message, or a ``confirm`` the author owes the bot."""
+    text = str(content or "")
+    if LINK_COMMAND.fullmatch(text):
+        return True
+    return CONFIRM_COMMAND.fullmatch(text) is not None and has_pending(bot_id, author_id)
+
+
+def author_of(data: dict[str, Any]) -> Any:
+    author = data.get("author")
+    return author.get("id") if isinstance(author, dict) else None
+
+
 def redact_message(kwargs: dict[str, Any]) -> dict[str, Any]:
-    """add_discord_message's kwargs without the body of a ``link <code>`` message."""
-    if not LINK_COMMAND.fullmatch(str(kwargs.get("content") or "")):
+    """add_discord_message's kwargs without the body of a link message."""
+    if not is_link_text(kwargs.get("bot_id"), kwargs.get("author_id"), kwargs.get("content")):
         return kwargs
     return {**kwargs, "content": REDACTED}
 
 
 def redact_event(kwargs: dict[str, Any]) -> dict[str, Any]:
-    """handle_discord_event's kwargs without the body of a ``link <code>`` message."""
+    """handle_discord_event's kwargs (or a pushed event, given its bot) without
+    the body of a link message."""
     data = kwargs.get("data")
-    if not isinstance(data, dict) or not LINK_COMMAND.fullmatch(str(data.get("content") or "")):
+    if not isinstance(data, dict) or not is_link_text(kwargs.get("bot_id"), author_of(data), data.get("content")):
         return kwargs
     return {**kwargs, "data": {**data, "content": REDACTED}}
 
 
-def redact_envelope(envelope: dict[str, Any]) -> dict[str, Any]:
-    """A pushed Discord event without the body of a ``link <code>`` message."""
+def redact_envelope(envelope: dict[str, Any], bot_id: int) -> dict[str, Any]:
+    """A pushed Discord event without the body of a link message."""
     event = envelope.get("event")
-    if not isinstance(event, dict):
+    data = event.get("data") if isinstance(event, dict) else None
+    if not isinstance(data, dict) or not is_link_text(bot_id, author_of(data), data.get("content")):
         return envelope
-    return {**envelope, "event": redact_event(event)}
+    return {**envelope, "event": {**cast(dict, event), "data": {**data, "content": REDACTED}}}
 
 
-def is_link_dm(event_type: str, data: dict[str, Any]) -> bool:
-    """Whether an event is a new message, in no server, that looks like ``link <code>``."""
+def is_link_dm(bot_id: int, event_type: str, data: dict[str, Any]) -> bool:
+    """Whether an event is a new message, in no server, that is a link message."""
     return (
         event_type == "MESSAGE_CREATE"
         and data.get("guild_id") is None
-        and LINK_COMMAND.fullmatch(str(data.get("content") or "")) is not None
+        and is_link_text(bot_id, author_of(data), data.get("content"))
     )
+
+
+def spend_posted_code(content: Any) -> bool:
+    """Spend the code of a ``link <code>`` seen anywhere but a new DM (a server
+    channel, an edit, a DM Memory doesn't see through), with no reply. Whether
+    it was one, so the caller drops the message."""
+    match = LINK_COMMAND.fullmatch(str(content or ""))
+    if match is None:
+        return False
+    take_code(match[1])
+    return True
 
 
 def now() -> datetime:
@@ -87,6 +128,10 @@ def user_key(user_id: int) -> str:
 
 def failures_key(author_id: int) -> str:
     return f"discord-link:failures:{author_id}"
+
+
+def seen_key(message_id: int) -> str:
+    return f"discord-link:message:{message_id}"
 
 
 def issue_code(user_id: int) -> tuple[str, datetime]:
@@ -119,18 +164,32 @@ def record_failure(author_id: int) -> None:
     pipe.execute()
 
 
-def link(bot_id: int, user_id: int, author_id: int) -> str | None:
-    """Record that the author is the code's user; the reply to send, or None when refused.
+def first_try(message_id: int) -> bool:
+    """False for a message already handled: Discord redelivers pushes."""
+    return bool(get_redis().set(seen_key(message_id), 1, nx=True, ex=FAILURE_WINDOW_SECONDS))
 
-    The reply names the user's Memory login, so whoever was talked into sending
-    someone else's code sees whose account their Discord account went to.
-    """
+
+def confirm_prompt(bot_id: int, user_id: int) -> str | None:
+    """What the bot asks before linking, or None when the code went to a bot
+    not of the code's user."""
     with make_session() as session:
         bot = session.get_one(DiscordBot, bot_id)
         user = session.get_one(User, user_id)
         if bot.created_by_user_id != user_id:
             logger.warning(f"Discord link code of user {user_id} sent to bot {bot_id} of another user; code spent")
             return None
+        person = user.person.display_name if user.person else user.name or user.email
+        minutes = int(CONFIRM_TTL.total_seconds() // 60)
+        return (
+            f"This links this Discord account to Memory login {user.email} ({person}). "
+            f"Reply `confirm` within {minutes} minutes to finish."
+        )
+
+
+def link(user_id: int, author_id: int) -> str | None:
+    """Record that the author is the user; the reply to send, or None when refused."""
+    with make_session() as session:
+        user = session.get_one(User, user_id)
         person = link_discord_user(session, user, author_id)
         session.commit()
         login = f"Memory login {user.email}"
@@ -149,42 +208,46 @@ def link(bot_id: int, user_id: int, author_id: int) -> str | None:
 def redeem(
     bot_id: int, channel_id: int, message_id: int, author_id: int, content: str, fresh: bool
 ) -> dict[str, Any] | None:
-    """Handle a ``link <code>`` message, which isn't stored: the code is a
-    credential, not content. Only a ``fresh`` one (not an edit or history) in
-    a DM is tried; any other spends its code silently. None for any other
-    message, which is stored as usual."""
-    match = LINK_COMMAND.fullmatch(content)
-    if match is None:
+    """Handle a link message reaching storage. Only a ``fresh`` one (not an
+    edit or history) in a DM is acted on; a code anywhere else is spent
+    silently. None for any other message, which is stored as usual."""
+    if not is_link_text(bot_id, author_id, content):
         return None
     with make_session() as session:
         channel = session.get(DiscordChannel, channel_id)
         direct = channel is not None and channel.is_direct
-    if not (fresh and direct):
-        take_code(match[1])
+    if fresh and direct:
+        return act_on_dm(bot_id, message_id, author_id, content)
+    if spend_posted_code(content):
         return {"status": "skipped", "reason": "link_code_elsewhere"}
-    return try_code(bot_id, message_id, author_id, match[1])
+    return None  # a "confirm" outside a new DM is just a message
 
 
 def redeem_dm(bot_id: int, message_id: int, author_id: int, author_name: str, content: str) -> dict[str, Any] | None:
     """Handle a new DM to the bot that Discord vouches for (the gateway, or a
     push read back with the bot's token), whether or not Memory collects that
     DM: a code must work from a stranger's first DM too. None when it isn't a
-    ``link <code>`` message. The author's DiscordUser is made if missing, as
-    linking needs one; the DM channel isn't, so collection stays as it was."""
-    match = LINK_COMMAND.fullmatch(content)
-    if match is None:
+    link message. The author's DiscordUser is made if missing, as linking
+    needs one; the DM channel isn't, so collection stays as it was."""
+    if not is_link_text(bot_id, author_id, content):
         return None
     with make_session() as session:
         if session.get(DiscordUser, author_id) is None:
             session.add(DiscordUser(id=author_id, username=author_name))
             session.commit()
-    return try_code(bot_id, message_id, author_id, match[1])
+    return act_on_dm(bot_id, message_id, author_id, content)
 
 
-def try_code(bot_id: int, message_id: int, author_id: int, code: str) -> dict[str, Any]:
-    # Discord redelivers pushes; a retried attempt would count as a failure.
-    if not get_redis().set(f"discord-link:message:{message_id}", 1, nx=True, ex=FAILURE_WINDOW_SECONDS):
+def act_on_dm(bot_id: int, message_id: int, author_id: int, content: str) -> dict[str, Any]:
+    if not first_try(message_id):
         return {"status": "skipped", "reason": "seen"}
+    match = LINK_COMMAND.fullmatch(content)
+    if match is None:
+        return finish(bot_id, author_id)
+    return try_code(bot_id, author_id, match[1])
+
+
+def try_code(bot_id: int, author_id: int, code: str) -> dict[str, Any]:
     if locked_out(author_id):
         logger.warning(f"Discord user {author_id} locked out of link codes")
         return {"status": "skipped", "reason": "locked_out"}
@@ -194,7 +257,22 @@ def try_code(bot_id: int, message_id: int, author_id: int, code: str) -> dict[st
         record_failure(author_id)
         send_dm(bot_id, str(author_id), FAILED_REPLY)
         return {"status": "skipped", "reason": "bad_code"}
-    reply = link(bot_id, user_id, author_id)
+    prompt = confirm_prompt(bot_id, user_id)
+    if prompt is None:
+        send_dm(bot_id, str(author_id), FAILED_REPLY)
+        return {"status": "skipped", "reason": "refused"}
+    get_redis().set(pending_key(bot_id, author_id), str(user_id), ex=int(CONFIRM_TTL.total_seconds()))
+    send_dm(bot_id, str(author_id), prompt)
+    return {"status": "pending", "user_id": user_id}
+
+
+def finish(bot_id: int, author_id: int) -> dict[str, Any]:
+    """Link on the author's ``confirm``; the pending link is used up either way."""
+    raw = cast(bytes | str | None, get_redis().getdel(pending_key(bot_id, author_id)))
+    if raw is None:
+        return {"status": "skipped", "reason": "nothing_pending"}
+    user_id = int(raw)
+    reply = link(user_id, author_id)
     if reply is None:
         send_dm(bot_id, str(author_id), FAILED_REPLY)
         return {"status": "skipped", "reason": "refused"}

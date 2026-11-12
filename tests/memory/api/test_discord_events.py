@@ -9,6 +9,7 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
+from memory.common import discord_link, settings
 from memory.common.celery_app import HANDLE_DISCORD_EVENT
 from memory.common.db.models import DiscordBot, DiscordBotServer, DiscordChannel, DiscordMessage, DiscordServer, DiscordUser
 from tests.conftest import raw_events
@@ -421,4 +422,35 @@ def test_a_link_code_dm_is_queued_whoever_sent_it_and_whether_or_not_collected(
 
     (raw,) = raw_events(db_session)
     assert (raw.outcome, raw.payload) == ("stored", None)
+    assert send.call_args.args[0] == HANDLE_DISCORD_EVENT
+
+
+@pytest.mark.parametrize(
+    "event_type, extra",
+    [("MESSAGE_CREATE", {"guild_id": "99"}), ("MESSAGE_UPDATE", {}), ("MESSAGE_UPDATE", {"guild_id": "99"})],
+)
+def test_a_code_posted_anywhere_but_a_new_dm_is_spent_on_arrival(
+    client, db_session, webhook_bot, user, monkeypatch, event_type, extra
+):
+    monkeypatch.setattr(settings, "TRANSFER_TOKEN_SECRET", "test-discord-link-secret")
+    code, _ = discord_link.issue_code(user.id)
+    data = {"id": "9", "channel_id": "77", "author": {"id": "31337"}, "content": f"link {code}", **extra}
+
+    with patch("memory.api.discord.celery_app.send_task"):
+        post_event(client, webhook_bot.id, event(event_type, data))
+
+    assert discord_link.take_code(code) is None
+    (raw,) = raw_events(db_session)
+    assert not (raw.data or {}).get("links_items")
+
+
+def test_a_confirm_owed_to_the_bot_is_queued_and_never_kept(client, db_session, webhook_bot, monkeypatch):
+    monkeypatch.setattr(discord_link, "has_pending", lambda bot_id, author_id: str(author_id) == "31337")
+    data = {"id": "9", "channel_id": "77", "author": {"id": "31337"}, "content": "confirm"}
+
+    with patch("memory.api.discord.celery_app.send_task") as send:
+        post_event(client, webhook_bot.id, event("MESSAGE_CREATE", data))
+
+    (raw,) = raw_events(db_session)
+    assert (raw.outcome, raw.payload, bool((raw.data or {}).get("links_items"))) == ("stored", None, False)
     assert send.call_args.args[0] == HANDLE_DISCORD_EVENT

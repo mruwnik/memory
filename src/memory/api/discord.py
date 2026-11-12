@@ -733,9 +733,16 @@ async def discord_events(bot_id: int, request: Request, db: Session = Depends(ge
         logger.warning("Discord event of the wrong shape for bot %s", bot_id)
         return Response(status_code=400)
     learnable = isinstance(data, dict) and may_learn_collection(db, bot, event_type, data)
-    # A link code works from any DM, collected or not: the worker reads it back
-    # with the bot's token and tries it, without storing it.
-    link_dm = isinstance(data, dict) and discord_link.is_link_dm(event_type, data)
+    # A link message works from any DM, collected or not: the worker reads it
+    # back with the bot's token and acts on it, without storing it. A code
+    # posted anywhere else is spent here, before collection decides anything.
+    link_dm = isinstance(data, dict) and discord_link.is_link_dm(bot.id, event_type, data)
+    posted_code = (
+        not link_dm
+        and isinstance(data, dict)
+        and event_type in ("MESSAGE_CREATE", "MESSAGE_UPDATE")
+        and discord_link.spend_posted_code(data.get("content"))
+    )
     outcome = STORED if link_dm else discord_outcome(db, bot.id, event_type, data, learnable)
     # A delete still drops whatever copy Memory has.
     untracked_delete = event_type in DELETE_EVENT_TYPES and outcome == NOT_COLLECTED
@@ -750,9 +757,9 @@ async def discord_events(bot_id: int, request: Request, db: Session = Depends(ge
         delivery_id=body_sha,
         outcome=outcome,
         container=str(channel_id) if channel_id else None,
-        payload=discord_link.redact_envelope(envelope),
-        # A link DM writes no item, so nothing may wait for one.
-        links_items=outcome == STORED and not link_dm and writes_items(event_type, data),
+        payload=discord_link.redact_envelope(envelope, bot.id),
+        # A link message writes no item, so nothing may wait for one.
+        links_items=outcome == STORED and not (link_dm or posted_code) and writes_items(event_type, data),
     )
     if raw_id is None:
         db.rollback()

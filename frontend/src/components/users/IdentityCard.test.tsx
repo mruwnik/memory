@@ -107,11 +107,12 @@ describe('IdentityCard', () => {
 
     await user.click(await screen.findByRole('button', { name: 'Link a Discord account' }))
     expect(await screen.findByText(/to MemoryBot within 15 minutes/)).toHaveTextContent('DM link 48213907 to MemoryBot')
+    expect(screen.getByText(/then reply/)).toHaveTextContent('reply confirm within 5 minutes')
 
-    await user.click(screen.getByRole('button', { name: "I've sent it: check again" }))
+    await user.click(screen.getByRole('button', { name: "I've confirmed: check again" }))
     expect(await screen.findByText(/No Discord account has been verified yet/)).toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: "I've sent it: check again" }))
+    await user.click(screen.getByRole('button', { name: "I've confirmed: check again" }))
     expect(await within(group('Discord')).findByText('ada#1')).toBeInTheDocument()
     expect(within(group('Discord')).getByText('On another person record: ask an admin to merge')).toBeInTheDocument()
     expect(screen.queryByText(/48213907/)).not.toBeInTheDocument()

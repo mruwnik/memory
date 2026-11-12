@@ -93,8 +93,7 @@ def test_resolve_author_person_creates_person_and_link(db_session):
 
     assert person_id is not None
     github_user = db_session.query(GithubUser).filter_by(username="newdev").one()
-    assert github_user.id == 42
-    assert github_user.person_id == person_id
+    assert (github_user.id, github_user.person_id, github_user.linked_by_id) == (42, person_id, True)
     person = db_session.get(Person, person_id)
     assert person.contact_info["github"] == "newdev"
 
@@ -124,3 +123,12 @@ def test_resolve_author_person_links_existing_person_by_contact_info(db_session)
     assert person_id == person.id  # linked to existing Person, not a duplicate
     github_user = db_session.query(GithubUser).filter_by(username="existinglogin").one()
     assert github_user.person_id == person.id
+    # A typed handle doesn't prove who owns the account.
+    assert github_user.linked_by_id is False
+
+
+def test_resolve_author_person_links_its_own_idless_person_by_id_later(db_session):
+    person_id = _resolve_author_person(db_session, "noid", None)
+
+    assert _resolve_author_person(db_session, "noid", 43) == person_id
+    assert db_session.get(GithubUser, 43).linked_by_id is True

@@ -734,6 +734,12 @@ class GithubUser(Base):
     person: Mapped["Person | None"] = relationship(
         "Person", back_populates="github_accounts"
     )
+    # Whether the link came from the account itself (ingest made the Person for
+    # this id), not from a login someone typed into a Person's contact_info.
+    # Only such a link lets a verified GitHub id prove the Person.
+    linked_by_id: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false"), default=False
+    )
 
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(

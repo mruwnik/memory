@@ -294,6 +294,9 @@ class MessageCollector(commands.Bot):
             logger.exception(f"Error processing message {message.id}")
 
     async def on_raw_message_edit(self, payload: RawMessageUpdateEvent) -> None:
+        # A code edited into a message is spent, and the edit not stored.
+        if await asyncio.to_thread(discord_link.spend_posted_code, payload.data.get("content")):
+            return
         self.queue_event("MESSAGE_UPDATE", payload.data)
 
     async def on_raw_message_delete(self, payload: RawMessageDeleteEvent) -> None:
@@ -404,13 +407,16 @@ class MessageCollector(commands.Bot):
     async def _process_message(self, message: Message) -> None:
         """Process a message - check collection settings and queue for storage."""
         if isinstance(message.channel, DMChannel) and not message.author.bot:
-            # A link code works from any DM, collected or not, and is never stored.
+            # A link message works from any DM, collected or not, and is never stored.
             redeemed = await asyncio.to_thread(
                 discord_link.redeem_dm,
                 self.bot_info.id, message.id, message.author.id, message.author.name, message.content or "",
             )
             if redeemed is not None:
                 return
+        elif await asyncio.to_thread(discord_link.spend_posted_code, message.content):
+            # A code posted in a server is spent before collection decides anything.
+            return
         if isinstance(message.channel, DMChannel) and message.channel.recipient is None:
             message.channel.recipients = await self.dm_recipients(message, message.channel)
         with make_session() as session:

@@ -198,8 +198,11 @@ def link_github_user_to_person(
     display_name: str | None = None,
     avatar_url: str | None = None,
     email: str | None = None,
+    linked_by_id: bool | None = None,
 ) -> GithubUser:
     """Link a GitHub account to a Person, upserting the ``GithubUser`` row.
+    ``linked_by_id`` records whether the Person was made for this account
+    (None keeps what the row says).
 
     Also records the login in ``contact_info["github"]`` so readers of contact
     info stay consistent with the relational link.
@@ -245,6 +248,8 @@ def link_github_user_to_person(
 
     github_user.username = login
     github_user.person_id = person.id
+    if linked_by_id is not None:
+        github_user.linked_by_id = linked_by_id
     if display_name is not None:
         github_user.display_name = display_name
     if avatar_url is not None:

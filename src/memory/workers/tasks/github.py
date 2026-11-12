@@ -759,6 +759,12 @@ def _resolve_author_person(
     # A recycled login is a different human, so nothing keyed on the login
     # (the stale link or a contact_info handle) identifies them.
     person = None if recycled else find_person_by_github(session, login)
+    # A contact_info handle is unverified, so a Person found by it is linked
+    # for attribution but proves nothing about who owns the account, unless
+    # it is the one ingest made for this login before its id was known.
+    made_for_account = person is None or (
+        person.creator_id is None and person.identifier == f"github:{login}"
+    )
     if person is None:
         # Two concurrent first-sighting syncs for the same login can both reach
         # here and both insert; the unique constraints on people.identifier and
@@ -777,7 +783,7 @@ def _resolve_author_person(
 
     link_id = github_id or (github_user.id if github_user else None)
     if link_id:
-        link_github_user_to_person(session, person, link_id, login)
+        link_github_user_to_person(session, person, link_id, login, linked_by_id=made_for_account)
     return person.id
 
 
