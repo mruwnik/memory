@@ -164,6 +164,12 @@ class MessageCollector(commands.Bot):
         # Runs this bot's server syncs and leaves in the order Discord sent them,
         # one thread at a time rather than one per server at connect.
         self.guild_lock = asyncio.Lock()
+        # A gateway (or a proxy in front of it) can keep the socket and heartbeats up while
+        # delivering nothing, so is_ready() alone can't show a stall.
+        self.last_event_at: datetime | None = None
+
+    async def on_socket_event_type(self, event_type: str) -> None:
+        self.last_event_at = datetime.now(timezone.utc)
 
     async def on_ready(self) -> None:
         # Each server's GUILD_CREATE, at startup too, records it (on_guild_available/on_guild_join).

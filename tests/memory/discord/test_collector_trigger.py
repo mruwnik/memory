@@ -291,6 +291,22 @@ async def test_a_refresh_syncs_only_the_bot_asked_for(db_session):
     assert db_session.get(DiscordServer, 1).verified
 
 
+@pytest.mark.asyncio
+async def test_health_shows_when_each_bot_last_heard_from_the_gateway():
+    manager = CollectorManager(MagicMock())
+    heard, silent = (MessageCollector(BotInfo(id=i, name="b", token="t"), MagicMock()) for i in (42, 43))
+    manager.collectors = {42: heard, 43: silent}
+
+    before = datetime.now(timezone.utc)
+    await heard.on_socket_event_type("MESSAGE_CREATE")
+    with patch.object(collector_api, "manager", manager):
+        health = await collector_api.health()
+
+    assert before <= datetime.fromisoformat(health["42"]["last_event_at"]) <= datetime.now(timezone.utc)
+    assert health["43"]["last_event_at"] is None
+    assert health["43"]["latency"] is None
+
+
 @pytest.mark.parametrize(
     "api_base_url, chunks",
     [(DEFAULT_DISCORD_API_BASE_URL, True), ("https://chat.example.com/discord/api/v10", False)],

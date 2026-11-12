@@ -9,6 +9,7 @@ REST API, not through here.
 import asyncio
 import contextlib
 import logging
+import math
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -18,6 +19,12 @@ from memory.common.celery_app import app as celery_app
 from memory.discord.collector import CollectorManager
 
 logger = logging.getLogger(__name__)
+
+# Run under uvicorn with collector.start(), so neither uvicorn nor discord.py sets up a handler.
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logging.getLogger("discord").setLevel(logging.WARNING)
+for gateway_lifecycle in ("discord.gateway", "discord.client"):
+    logging.getLogger(gateway_lifecycle).setLevel(logging.INFO)
 
 # Global collector manager
 manager: CollectorManager | None = None
@@ -61,6 +68,8 @@ async def health() -> dict[str, Any]:
         result[str(bot_id)] = {
             "connected": collector.is_ready(),
             "name": collector.bot_info.name,
+            "last_event_at": collector.last_event_at and collector.last_event_at.isoformat(),
+            "latency": collector.latency if math.isfinite(collector.latency) else None,
         }
     return result
 
