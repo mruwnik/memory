@@ -22,6 +22,8 @@ a new, empty `## Unreleased` above it.
 
 ## Unreleased
 
+## v0.5.8 (2026-11-12)
+
 ### Changes
 - Subscriptions that skip your own Slack and Discord messages (`exclude_own`, the default for agent handlers) still take your direct messages to your own Discord bots and Slack apps, so DMing your bot reaches your agent through a broad subscription. The bot's own replies there still never match.
 - Fix: a note deleted in the git-synced vault is removed from Memory, and a moved one keeps its Memory note (id, subject, tags, owner, project) under the new path; before, the old path stayed listed and opening it said its file was missing from storage. `maintenance cleanup-junk-notes` also deletes notes git deleted from the vault since their last save (`deleted_from_vault`); other notes missing their file are still only listed.
