@@ -146,9 +146,9 @@ class DiscordRest:
         path = f"/channels/{channel_id}/messages/{message_id}/reactions/{quote(emoji, safe='')}"
         return await self.get(path, after=after, limit=PAGE_SIZE)
 
-    async def messages(self, channel_id: int, *, before: int | None = None) -> list[dict]:
+    async def messages(self, channel_id: int, *, before: int | None = None, limit: int = PAGE_SIZE) -> list[dict]:
         """One page, newest first."""
-        return await self.get(f"/channels/{channel_id}/messages", before=before, limit=PAGE_SIZE)
+        return await self.get(f"/channels/{channel_id}/messages", before=before, limit=limit)
 
     async def channel(self, channel_id: int) -> dict:
         return await self.get(f"/channels/{channel_id}")

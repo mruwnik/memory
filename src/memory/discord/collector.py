@@ -15,7 +15,7 @@ import asyncio
 import logging
 import math
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from time import monotonic
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
@@ -41,12 +41,14 @@ from discord import (
 )
 import yarl
 from discord.ext import commands
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from memory.common import settings
 from memory.common.celery_app import BACKFILL_DISCORD_CHANNEL, HANDLE_DISCORD_EVENT
 from memory.common.db.connection import make_session
-from memory.common.db.models import DiscordBot, DiscordBotServer, DiscordChannel, DiscordServer
+from memory.common.db.models import DiscordBot, DiscordBotServer, DiscordChannel, DiscordMessage, DiscordServer
 from memory.common.db.models.discord import DEFAULT_DISCORD_API_BASE_URL
 from memory.common.discord_events import hand_off_server
 from memory.discord.ingest import (
@@ -60,7 +62,8 @@ from memory.discord.ingest import (
 )
 from memory.common.chat_urls import chat_url_allowed
 from memory.discord.proxied_http import ProxiedHTTPClient
-from memory.discord.rest import bot_access
+from memory.discord.backfill import snowflake_at
+from memory.discord.rest import BotAccess, DiscordAPIError, DiscordRest, bot_access
 
 if TYPE_CHECKING:
     from celery import Celery
@@ -94,6 +97,12 @@ MAX_RETRY_DELAY_SECONDS = 60 * 60
 # Gateway closes that recur until the bot's owner changes something: auth
 # failed, invalid shard, sharding required, invalid version or intents.
 REFUSED_CLOSE_CODES = {4004, 4010, 4011, 4012, 4013}
+# A message this new may still be on its way over the gateway.
+DELIVERY_GRACE = timedelta(minutes=1)
+PROBED_CHANNELS = 5
+ACTIVE_CHANNEL_WINDOW = timedelta(days=30)
+RESCUE_REPEAT_WINDOW = timedelta(hours=1)
+MAX_PROBE_INTERVAL = timedelta(hours=6)
 
 
 @dataclass(frozen=True)
@@ -111,6 +120,52 @@ def refused(error: Exception) -> bool:
     if isinstance(error, LoginFailure):
         return True
     return isinstance(error, ConnectionClosed) and error.code in REFUSED_CLOSE_CODES
+
+
+@dataclass
+class Watch:
+    """When a silent gateway was last checked against REST, how often it may be,
+    and when it was last found stalled."""
+
+    interval: timedelta
+    probed_at: datetime | None = None
+    rescued_at: datetime | None = None
+
+
+def silence_threshold() -> timedelta:
+    return timedelta(seconds=settings.DISCORD_GATEWAY_SILENCE_SECONDS)
+
+
+def recent_channels(bot_id: int) -> list[tuple[int, int]]:
+    """The collected channels of this bot with the newest stored messages, and those messages' ids."""
+    newest = func.max(DiscordMessage.message_id)
+    in_bot_server = DiscordChannel.server_id.in_(select(DiscordBotServer.server_id).where(DiscordBotServer.bot_id == bot_id))
+    own_dm = and_(DiscordChannel.server_id.is_(None), DiscordChannel.bot_id == bot_id)
+    with make_session() as session:
+        rows = (
+            session.query(DiscordChannel, newest)
+            .join(DiscordMessage, DiscordMessage.channel_id == DiscordChannel.id)
+            .filter(or_(in_bot_server, own_dm), DiscordMessage.sent_at > datetime.now(timezone.utc) - ACTIVE_CHANNEL_WINDOW)
+            .group_by(DiscordChannel.id)
+            .order_by(newest.desc())
+            .limit(PROBED_CHANNELS)
+        )
+        return [(channel.id, stored) for channel, stored in rows if channel.should_collect]
+
+
+async def missed_channels(bot: BotInfo, silent_since: datetime, now: datetime) -> list[int]:
+    """Recently active channels holding a message, not stored, that Discord minted
+    after the gateway's last event and long enough ago to have been delivered."""
+    channels = await asyncio.to_thread(recent_channels, bot.id)
+    settled = snowflake_at(now - DELIVERY_GRACE)
+    access = BotAccess(bot.id, bot.token, bot.api_base_url, push_only=False)
+    async with DiscordRest(access, retries=0, timeout=10.0) as rest:
+        upstream = {channel_id: await rest.messages(channel_id, before=settled, limit=1) for channel_id, _ in channels}
+    floor = snowflake_at(silent_since)
+    return [
+        channel_id for channel_id, stored in channels
+        if upstream[channel_id] and int(upstream[channel_id][0]["id"]) > max(stored, floor)
+    ]
 
 
 def gateway_allowed(bot_id: int, url: str) -> bool:
@@ -167,6 +222,7 @@ class MessageCollector(commands.Bot):
         # A gateway (or a proxy in front of it) can keep the socket and heartbeats up while
         # delivering nothing, so is_ready() alone can't show a stall.
         self.last_event_at: datetime | None = None
+        self.started_at = datetime.now(timezone.utc)
 
     async def on_socket_event_type(self, event_type: str) -> None:
         self.last_event_at = datetime.now(timezone.utc)
@@ -374,6 +430,7 @@ class CollectorManager:
         self.collectors: dict[int, MessageCollector] = {}
         self._tasks: dict[int, asyncio.Task] = {}
         self.held: dict[int, Hold] = {}
+        self.watches: dict[int, Watch] = {}
 
     async def sync(self) -> None:
         """Run exactly the bots that should be on the gateway, restarting any
@@ -394,10 +451,45 @@ class CollectorManager:
     async def keep_synced(self) -> None:
         while True:
             await asyncio.sleep(SYNC_INTERVAL_SECONDS)
+            for step in (self.sync, self.rescue_stalled):
+                try:
+                    await step()
+                except Exception:
+                    logger.exception(f"Discord collector {step.__name__} failed")
+
+    async def rescue_stalled(self) -> None:
+        """Reconnect bots whose gateway, though up, has stopped delivering messages
+        that REST shows, and backfill what they missed. Silence alone may just be
+        a quiet bot. A bot needing this again soon is checked less often, so a
+        broken proxy doesn't spend its IDENTIFYs in a loop."""
+        now = datetime.now(timezone.utc)
+        for bot_id, collector in list(self.collectors.items()):
+            watch = self.watches.setdefault(bot_id, Watch(silence_threshold()))
+            silent_since = collector.last_event_at or collector.started_at
+            if not collector.is_ready() or now - max(silent_since, watch.probed_at or silent_since) < watch.interval:
+                continue
+            watch.probed_at = now
             try:
-                await self.sync()
-            except Exception:
-                logger.exception("Discord collector sync failed")
+                missed = await missed_channels(collector.bot_info, silent_since, now)
+            except DiscordAPIError as e:
+                logger.warning(f"Bot {bot_id}: could not check its silent gateway over REST ({e})")
+                continue
+            if not missed:
+                watch.interval = silence_threshold()
+                continue
+            again = watch.rescued_at is not None and now - watch.rescued_at < watch.interval + RESCUE_REPEAT_WINDOW
+            logger.log(
+                logging.ERROR if again else logging.WARNING,
+                f"Bot {bot_id}: gateway silent for {now - silent_since} while channels {missed} got messages; reconnecting",
+            )
+            if again:
+                watch.interval = min(watch.interval * 2, MAX_PROBE_INTERVAL)
+            watch.rescued_at = now
+            # A fresh IDENTIFY rather than a RESUME, which could rejoin the stalled session.
+            await self.stop_bot(bot_id)
+            await self.start_bot(collector.bot_info)
+            for channel_id in missed:
+                self.celery_app.send_task(BACKFILL_DISCORD_CHANNEL, args=[channel_id])
 
     async def start_bot(self, bot_info: BotInfo) -> None:
         """Start a single bot."""

@@ -610,6 +610,8 @@ DISCORD_NOTIFICATIONS_ENABLED = boolean_env("DISCORD_NOTIFICATIONS_ENABLED", Tru
 # Discord collector settings
 DISCORD_COLLECTOR_PORT = int(os.getenv("DISCORD_COLLECTOR_PORT", 8003))
 DISCORD_COLLECTOR_SERVER_URL = os.getenv("DISCORD_COLLECTOR_SERVER_URL", "0.0.0.0")
+# A gateway bot silent this long is checked against REST and reconnected if it missed messages.
+DISCORD_GATEWAY_SILENCE_SECONDS = int(os.getenv("DISCORD_GATEWAY_SILENCE_SECONDS", 600))
 
 # Discord history backfill
 DISCORD_BACKFILL_JITTER_SECONDS = int(
