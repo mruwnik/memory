@@ -211,7 +211,7 @@ def test_dms_to_me_are_direct_messages_that_reached_me(direct, collector, expect
     ],
 )
 def test_message_facts_say_whether_they_are_direct_and_what_collected_them(item, direct, collector):
-    got = item_facts(item, with_direct=True)
+    got = subscriptions.with_direct(item_facts(item), item)
 
     assert (got.direct, got.collector) == (direct, collector)
 
@@ -1250,6 +1250,57 @@ def test_dms_to_me_match_discord_dms_to_my_bot(
     db_session.flush()
     message.channel_id, message.server_id = 30, None
     db_session.commit()
+
+    assert bool(route_item(db_session, message.id)) is fires
+
+
+def own_discord_message(db, owner, bot_owner, channel_id, author_id):
+    """A Discord message by `author_id`, where 100 is the owner's linked account, 200
+    the bot `bot_owner` registered, channel 10 a server channel and 30 a DM with the bot."""
+    message = discord_message(db, author_id, owner=bot_owner)
+    me = Person(identifier="me", display_name="Me", user_id=owner.id)
+    db.add_all([me, DiscordChannel(id=30, name="me", channel_type="dm", bot_id=200)])
+    db.flush()
+    db.get(DiscordUser, 100).person_id = me.id
+    message.channel_id, message.server_id = channel_id, {10: 1, 30: None}[channel_id]
+    db.commit()
+    return message
+
+
+def own_slack_message(db, owner, app_owner, channel_id, author_id):
+    """A Slack message by `author_id` collected by an app `app_owner` registered, in
+    C1, a public channel, or D1, a DM with the app's bot user U_BOT."""
+    message = slack_message(db, owner, author_id)
+    app = db.query(SlackApp).one()
+    app.created_by_user_id = app_owner.id
+    db.add(SlackChannel(id="D1", workspace_id="T1", name="me", channel_type="dm"))
+    db.flush()
+    message.channel_id, message.slack_app_id = channel_id, app.id
+    db.commit()
+    return message
+
+
+@pytest.mark.parametrize(
+    "make_message,channel_id,collector_owner,author_id,fires",
+    [
+        # Writing to your own bot is how you address your agent.
+        (own_discord_message, 30, "admin_user", 100, True),
+        (own_slack_message, "D1", "admin_user", "U_OWNER", True),
+        (own_discord_message, 10, "admin_user", 100, False),
+        (own_slack_message, "C1", "admin_user", "U_OWNER", False),
+        (own_discord_message, 30, "stranger", 100, False),
+        (own_slack_message, "D1", "stranger", "U_OWNER", False),
+        # The bot's replies in that DM never re-trigger its agent.
+        (own_discord_message, 30, "admin_user", 200, False),
+        (own_slack_message, "D1", "admin_user", "U_BOT", False),
+    ],
+)
+def test_exclude_own_keeps_my_direct_messages_to_my_own_bots(
+    request, db_session, admin_user, no_celery_dispatch, make_message, channel_id, collector_owner, author_id, fires
+):
+    make_subscription(db_session, make_definition(db_session, admin_user))
+    collector = request.getfixturevalue(collector_owner)
+    message = make_message(db_session, admin_user, collector, channel_id, author_id)
 
     assert bool(route_item(db_session, message.id)) is fires
 

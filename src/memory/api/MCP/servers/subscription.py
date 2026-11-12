@@ -439,9 +439,9 @@ async def upsert(
       state, labels, assignees, draft, title, due, priority. An item stored before
       the subscription matches once its sync reports news about it (commits,
       comments, review, checks_complete or state). Our own bots' posts, your own
-      Slack and Discord messages (except for queue handlers; set
-      filter.exclude_own) and items the subscription's runs reported posting never
-      match. on_remove: an item the subscription was delivered is delivered again
+      Slack and Discord messages other than direct messages to your own bots and
+      apps (except for queue handlers; set filter.exclude_own) and items the
+      subscription's runs reported posting never match. on_remove: an item the subscription was delivered is delivered again
       once removed, as its id with the change "removed".
     - {"raw": {"source": github|slack|discord|transcripts, "account_id", "types",
       "outcome"}}: webhook deliveries to your own accounts of that source (one, with
@@ -787,8 +787,8 @@ async def test(
     exclude_channel_ids, exclude_authors, authors_any, repos, mentions_me,
     dms_to_me, text_contains, regex), regex_timeout (the regex took too long on it,
     which counts as no match), or own_authors (our bots' and syncs' posts),
-    readable (the subscription's credential can't read it), exclude_own,
-    threads_im_in, known_people_only, posted (one of its runs reported posting it),
+    readable (the subscription's credential can't read it), exclude_own (your
+    own message, other than a direct message to your own bot or app), threads_im_in, known_people_only, posted (one of its runs reported posting it),
     credentials (its key no longer works) or config (it no longer validates). Whether
     an event would count (active_since, on_edit, on_changes, changed_by_any) is not
     checked."""

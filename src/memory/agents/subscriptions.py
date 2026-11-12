@@ -14,7 +14,7 @@ import logging
 import re
 import time
 from datetime import datetime, timedelta, timezone
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import cached_property
 from typing import Annotated, Any, Collection, Iterable, Literal, cast
 
@@ -333,7 +333,8 @@ class Me:
 
     # Their bots, which mentions_me looks for.
     bots: frozenset[str] = frozenset()
-    # Their Slack users and the Discord accounts linked to them, which exclude_own leaves out.
+    # Their Slack users and the Discord accounts linked to them, which exclude_own
+    # leaves out except in direct messages to their collectors.
     users: frozenset[str] = frozenset()
     # Them in a thread: their bots and users.
     accounts: frozenset[str] = frozenset()
@@ -480,10 +481,9 @@ def direct_and_collector(item: SourceItem) -> tuple[bool, str | None]:
     return channel is not None and channel.channel_type in DIRECT_CHANNEL_TYPES, collector
 
 
-def item_facts(item: SourceItem, with_direct: bool = False) -> ItemFacts:
-    """`with_direct` also reads whether it's a direct message, which loads its channel."""
+def item_facts(item: SourceItem) -> ItemFacts:
+    """The item's facts, short of whether it's a direct message: see with_direct."""
     channel_id, authors = channel_and_authors(item)
-    direct, collector = direct_and_collector(item) if with_direct else (False, None)
     return ItemFacts(
         source_type=item.type or "",
         tags=frozenset(item.tags or []),
@@ -494,9 +494,19 @@ def item_facts(item: SourceItem, with_direct: bool = False) -> ItemFacts:
         parent_channel_id=parent_channel_id(item),
         repo=item.repo_path.lower() if isinstance(item, GithubItem) and item.repo_path else None,
         mentions=mentioned_ids(item),
-        direct=direct,
-        collector=collector,
     )
+
+
+def with_direct(facts: ItemFacts, item: SourceItem) -> ItemFacts:
+    """The facts plus whether the item is a direct message and what collected it, which
+    loads its channel."""
+    direct, collector = direct_and_collector(item)
+    return replace(facts, direct=direct, collector=collector)
+
+
+def dm_to_me(facts: ItemFacts, me: Me) -> bool:
+    """A direct message to one of my bots or apps; with_direct must have filled the facts."""
+    return facts.direct and facts.collector in me.collectors
 
 
 def regex_search(pattern: str, text: str, subscription_id: int | None = None) -> bool | None:
@@ -531,7 +541,7 @@ def failed_filter(f: IngestFilter, facts: ItemFacts, me: Me = Me(), subscription
         ("authors_any", lambda: bool(facts.author_ids & lowered(f.authors_any)), f.authors_any),
         ("repos", lambda: facts.repo in lowered(f.repos), f.repos),
         ("mentions_me", lambda: bool(facts.mentions & me.bots), f.mentions_me),
-        ("dms_to_me", lambda: facts.direct and facts.collector in me.collectors, f.dms_to_me),
+        ("dms_to_me", lambda: dm_to_me(facts, me), f.dms_to_me),
         ("text_contains", lambda: any(t.lower() in text for t in f.text_contains), f.text_contains),
         ("regex", lambda: regex_search(cast(str, f.regex), facts.text, subscription_id), f.regex is not None),
     )
@@ -1110,6 +1120,17 @@ def excludes_own(f: IngestFilter, handler: dict[str, Any] | None) -> bool:
     return f.exclude_own if f.exclude_own is not None else "queue" not in (handler or {})
 
 
+def needs_direct(t: LiveSubscription, facts: ItemFacts) -> bool:
+    """Whether matching the item needs with_direct: only dms_to_me and exclude_own on
+    one of the owner's own messages ask."""
+    return t.config.filter.dms_to_me or (t.exclude_own and bool(facts.author_ids & t.me.users))
+
+
+def live_facts(item: SourceItem, live: list[LiveSubscription]) -> ItemFacts:
+    facts = item_facts(item)
+    return with_direct(facts, item) if any(needs_direct(t, facts) for t in live) else facts
+
+
 def live_subscriptions(
     db: DBSession, item_ids: list[int], candidates: list[Subscription] | None = None
 ) -> list[LiveSubscription]:
@@ -1160,7 +1181,8 @@ def rejection(db: DBSession, t: LiveSubscription, facts: ItemFacts, lookups: Ite
         return "own_authors"
     if lookups.item.id not in t.readable:
         return "readable"
-    if t.exclude_own and facts.author_ids & t.me.users:
+    # Writing to your own bot is how you address your agent, not chatter to skip.
+    if t.exclude_own and facts.author_ids & t.me.users and not dm_to_me(facts, t.me):
         return "exclude_own"
     if f.threads_im_in and not lookups.thread_authors & t.me.accounts:
         return "threads_im_in"
@@ -1186,8 +1208,7 @@ def dry_run(db: DBSession, subscription: Subscription, item: SourceItem) -> str 
     if not live:
         return "config"
     [t] = live
-    facts = item_facts(item, with_direct=t.config.filter.dms_to_me)
-    return rejection(db, t, facts, ItemLookups(db, item))
+    return rejection(db, t, live_facts(item, live), ItemLookups(db, item))
 
 
 def match_item(
@@ -1200,7 +1221,7 @@ def match_item(
     item = db.get(SourceItem, item_id)
     if item is None:
         return []
-    facts = item_facts(item, with_direct=any(t.config.filter.dms_to_me for t in live))
+    facts = live_facts(item, live)
     lookups = ItemLookups(db, item)
     version = content_version(item)
     # Settles most reprocesses before the costlier checks; claim() re-checks under its lock.
