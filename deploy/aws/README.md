@@ -90,7 +90,7 @@ The Terraform state holds every generated secret. Use a remote backend with encr
 | `voyage_api_key` | `""` | Embeddings key, stored as a SecureString. Leave it out to enter it on the settings page after install. Blanking it on an existing stack deletes the SSM parameter; the box keeps its key file |
 | `release_signers` | required | SSH public keys whose signed `v*` tags auto-install |
 | `region` | `eu-central-1` | |
-| `instance_type` | `t3.large` | 2 vCPU and 8 GB, enough for light use. Use `t3.xlarge` for heavy agent use |
+| `instance_type` | `t3.large` | 2 vCPU and 8 GB, enough for light use. Use `t3.xlarge` for heavy agent use. The containers' memory limits don't follow it: on a larger instance, raise them in `.env` (see below) |
 | `disk_gb` | `100` | Data volume |
 | `availability_zone` | `null` | AZ for the subnet and data volume. Null takes the first available AZ at creation. Later changes are ignored, because moving AZ would replace the data volume |
 | `route53_zone_id` | `null` | Create the A record in this zone |
@@ -112,6 +112,18 @@ The instance reads its config from SSM. Changes to `release_signers`, `auto_upda
 ## On the instance
 
 The first boot takes 10–20 minutes: it installs Docker, Caddy, the AWS CLI and unattended-upgrades, builds the images and starts the stack. Follow it in `/var/log/memory-bootstrap.log` (root only; it never contains secret values). To re-run it, for example after a failure, run `sudo memory-bootstrap`. It keeps whatever is already set up. On an instance created from a release after v0.2.1, a re-run before any install has succeeded also moves the checkout to the newest signed release and rebuilds the images, so a fixed release replaces a broken one. Once installed, only `update-to` and the nightly update change the version.
+
+### Memory limits
+
+Each container has a fixed memory limit sized for `t3.large`. On a larger instance, or once Qdrant's storage outgrows its limit (its mmapped files are cached inside it, so a too-small limit shows as constant disk reads and slow searches), set the limits in `/opt/memory/.env` (README § Configuration) and run `docker compose up -d` there as root. For example, on 16 GB:
+
+```
+QDRANT_MEMORY_LIMIT=7G
+QDRANT_MEMORY_RESERVATION=1G
+POSTGRES_MEMORY_LIMIT=4G
+POSTGRES_SHARED_BUFFERS=1GB
+POSTGRES_EFFECTIVE_CACHE_SIZE=3GB
+```
 
 ### Recovering a failed first install on an older instance
 

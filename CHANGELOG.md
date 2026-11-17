@@ -22,6 +22,24 @@ a new, empty `## Unreleased` above it.
 
 ## Unreleased
 
+### Changes
+- Container memory for Qdrant, Postgres and `agents-worker`, and Postgres's `shared_buffers` / `effective_cache_size`, are set from `.env`, so an instance can be sized without editing or overriding `docker-compose.yaml`.
+
+### Required env vars
+None
+
+### Manual steps
+None
+
+### Other changes for operators
+- New optional `.env` settings, defaults unchanged: `QDRANT_MEMORY_LIMIT` (`2G`), `QDRANT_MEMORY_RESERVATION` (`512M`), `POSTGRES_MEMORY_LIMIT` (`1G`), `POSTGRES_SHARED_BUFFERS` (`128MB`), `POSTGRES_EFFECTIVE_CACHE_SIZE` (`4GB`), `AGENTS_WORKER_MEMORY_LIMIT` (`1536M`). Postgres now starts with `-c shared_buffers=… -c effective_cache_size=…`, which override `postgresql.conf` and `ALTER SYSTEM`; the defaults are Postgres's own. If you raised these limits with an untracked compose override file, move them into `.env` and drop the override. Qdrant caches its mmapped storage inside its limit: give it roughly the size of `qdrant_data` plus 1–2G (deploy/aws/README.md § Memory limits).
+
+### Migrations
+None
+
+### Post-deploy commands
+None
+
 ## v0.5.9 (2026-11-17)
 
 ### Changes

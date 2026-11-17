@@ -467,6 +467,10 @@ Configuration lives in `.env` (or environment variables on the host). LLM featur
 | `FORWARDED_ALLOW_IPS`             | `127.0.0.1,::1`      | Trusted-proxy IPs/CIDRs for `X-Forwarded-*` (see proxy section)|
 | `RATE_LIMIT_TRUSTED_PROXIES`      | `127.0.0.1,::1`      | Trusted-proxy IPs/CIDRs for the rate-limit bucket key          |
 | `KBNET_SUBNET`, `KBNET_GATEWAY`   | `10.213.47.0/24`, `.1` | Internal network's address with `deploy/aws/compose.proxy.yaml`; give each stack on a host its own |
+| `QDRANT_MEMORY_LIMIT`, `QDRANT_MEMORY_RESERVATION` | `2G` / `512M` | Qdrant's container memory. Its mmapped storage is cached inside the limit, so give it roughly the size of `qdrant_data` plus 1–2G, or searches reread from disk |
+| `POSTGRES_MEMORY_LIMIT`           | `1G`                 | Postgres's container memory                                    |
+| `POSTGRES_SHARED_BUFFERS`, `POSTGRES_EFFECTIVE_CACHE_SIZE` | `128MB` / `4GB` | Postgres's own defaults. Typically a quarter and three quarters of `POSTGRES_MEMORY_LIMIT` (e.g. `1GB` / `3GB` with `4G`) |
+| `AGENTS_WORKER_MEMORY_LIMIT`      | `1536M`              | `agents-worker`'s container memory; raise it with `AGENT_WORKER_CONCURRENCY` |
 | `ENABLE_BM25_SEARCH`              | `true`               | Postgres BM25 alongside vector search                          |
 | `ENABLE_HYDE_EXPANSION`           | `false`              | Hypothetical Document Embeddings query expansion               |
 | `ENABLE_QUERY_ANALYSIS`           | `true`               | LLM intent extraction from queries                             |
@@ -492,7 +496,7 @@ Configuration lives in `.env` (or environment variables on the host). LLM featur
 | `AGENT_WORK_MAX_LAPSES`           | `3`                  | Lapsed worker leases after which the run fails instead of going back for claiming |
 | `AGENT_WORK_MAX_RESULT_BYTES`     | `1048576`            | Largest result a worker may submit                             |
 | `AGENT_MAX_SUBSCRIPTIONS_PER_USER` | `20`               | Most subscriptions a user may have enabled at once             |
-| `AGENT_WORKER_CONCURRENCY`        | `2`                  | Concurrent agent runs in `agents-worker` (~270MB each; raise its memory limit with it) |
+| `AGENT_WORKER_CONCURRENCY`        | `2`                  | Concurrent agent runs in `agents-worker` (~270MB each; raise `AGENTS_WORKER_MEMORY_LIMIT` with it) |
 | `MCP_BLOCKED_NETWORKS`            | *(empty)*            | Comma-separated CIDRs external MCP servers may never reach, on top of the built-in list (see Security notes) |
 | `MCP_BLOCK_CONTAINER_NETWORKS`    | `false` (`1` in the images) | Also block every network the container is attached to; fails closed if they can't be read |
 | `MCP_MAX_SERVERS_PER_USER`        | `20`                 | External MCP servers one user may register                     |

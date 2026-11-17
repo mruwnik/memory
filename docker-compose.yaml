@@ -122,11 +122,19 @@ services:
     security_opt: ["no-new-privileges=true"]
     # Parallel vacuum and index builds overflow Docker's default 64 MB /dev/shm.
     shm_size: 256m
+    # Defaults are Postgres's own. Raise them with POSTGRES_MEMORY_LIMIT:
+    # shared_buffers must fit inside the limit.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=${POSTGRES_SHARED_BUFFERS:-128MB}
+      - -c
+      - effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE:-4GB}
     deploy:
       resources:
         limits:
           cpus: "2.0"
-          memory: 1G
+          memory: ${POSTGRES_MEMORY_LIMIT:-1G}
         reservations:
           cpus: "0.5"
           memory: 256M
@@ -209,14 +217,16 @@ services:
       retries: 5
     security_opt: ["no-new-privileges=true"]
     cap_drop: [ALL]
+    # Qdrant mmaps its storage and the page cache counts against this limit, so
+    # it needs room for its on-disk collections or it rereads them from disk.
     deploy:
       resources:
         limits:
           cpus: "2.0"
-          memory: 2G
+          memory: ${QDRANT_MEMORY_LIMIT:-2G}
         reservations:
           cpus: "0.5"
-          memory: 512M
+          memory: ${QDRANT_MEMORY_RESERVATION:-512M}
 
   # ------------------------------------------------------------ API / gateway
   api:
@@ -374,7 +384,7 @@ services:
       resources:
         limits:
           cpus: "1.0"
-          memory: 1536M
+          memory: ${AGENTS_WORKER_MEMORY_LIMIT:-1536M}
         reservations:
           cpus: "0.25"
           memory: 512M
