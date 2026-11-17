@@ -351,7 +351,7 @@ def push_to_qdrant(source_items: Sequence[SourceItem]):
             )
 
         for item in items_to_process:
-            item.embed_stored()
+            item.embed_stored(item.chunks[0].item_metadata)
             logger.debug(
                 f"Successfully stored embeddings for: {getattr(item, 'title', 'unknown')}"
             )
@@ -456,7 +456,7 @@ def process_content_item(
     try:
         push_chunks_to_qdrant(chunks_with_vectors)
         status = "processed"
-        item.embed_stored()
+        item.embed_stored(chunks_with_vectors[0].item_metadata)
         logger.debug(
             f"Successfully processed {type(item).__name__}: {getattr(item, 'title', 'unknown')} ({chunks_count} chunks embedded)"
         )

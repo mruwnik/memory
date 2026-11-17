@@ -838,17 +838,20 @@ def test_a_dm_a_token_shows_to_be_a_server_channel_keeps_no_creator(db_session, 
         DiscordUser(id=int(AUTHOR), username="alice"),
     ])
     db_session.flush()
-    db_session.add(DiscordMessage(
+    message = DiscordMessage(
         modality="message", sha256=b"\x04" * 32, content="in the dm", message_id=int(MESSAGE), channel_id=int(CHANNEL),
         author_id=int(AUTHOR), bot_id=user_owned_bot.id, creator_id=user_owned_bot.created_by_user_id,
         sent_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
-    ))
+    )
+    message.access_payload_stale = False
+    db_session.add(message)
     db_session.commit()
 
     token_listing(user_owned_bot)
 
     message = stored(db_session)
     assert (message.server_id, message.bot_id, message.creator_id) == (int(GUILD), user_owned_bot.id, None)
+    assert message.access_payload_stale is True
 
 
 @pytest.mark.parametrize("own_dm", [True, False], ids=["its own DM", "another owner's DM"])
@@ -1280,11 +1283,13 @@ def channel_stored_under_the_attackers_server(db_session, victim, attacker) -> N
         DiscordUser(id=int(AUTHOR), username="alice"),
     ])
     db_session.flush()
-    db_session.add(DiscordMessage(
+    planted = DiscordMessage(
         modality="message", sha256=b"\x03" * 32, content="planted", message_id=61, channel_id=int(CHANNEL),
         server_id=ATTACKERS_GUILD, author_id=int(AUTHOR), bot_id=attacker.id, creator_id=attacker.created_by_user_id,
         sent_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
-    ))
+    )
+    planted.access_payload_stale = False
+    db_session.add(planted)
     db_session.commit()
 
 
@@ -1314,7 +1319,7 @@ def test_trusted_data_takes_a_channel_back_from_the_server_a_push_filed_it_under
     assert (channel.project_id, channel.sensitivity, channel.collect_messages) == (None, "basic", None)
     assert user_can_manage_channel(attacker, db_session, channel) is False
     planted = db_session.query(DiscordMessage).filter_by(message_id=61).one()
-    assert (planted.bot_id, planted.creator_id) == (None, None)
+    assert (planted.bot_id, planted.creator_id, planted.access_payload_stale) == (None, None, True)
     assert {m.server_id for m in db_session.query(DiscordMessage)} <= {int(GUILD)}
     dispatched = [c.kwargs["args"][:2] for c in no_celery_dispatch.call_args_list if c.args[0] == UPDATE_SOURCE_ACCESS_CONTROL]
     assert ["discord_channel", int(CHANNEL)] in dispatched

@@ -8,6 +8,7 @@ import pytest
 from PIL import Image
 from memory.common import settings, chunker, extract, summarizer
 from memory.common.content_processing import process_content_item
+from memory.common.db.connection import make_session
 from memory.common.db.models.source_item import (
     Chunk,
     SourceItem,
@@ -466,6 +467,46 @@ def test_source_item_display_contents(content, filename):
         "sensitivity": "basic",  # Default when not explicitly set
         "creator_id": None,
     }
+
+
+@pytest.mark.parametrize(
+    "field, value, stale",
+    [
+        ("sensitivity", "basic", False),
+        ("sensitivity", "internal", True),
+        ("project_id", None, False),
+        ("creator_id", None, False),
+    ],
+)
+def test_assigning_access_control_marks_the_payload_stale_only_on_change(
+    db_session: Session, field, value, stale
+):
+    item = SourceItem(sha256=unique_sha256(), content="x", modality="email")
+    db_session.add(item)
+    db_session.commit()  # expires the attributes, so the old value is unloaded
+
+    setattr(item, field, value)
+
+    assert item.access_payload_stale is stale
+
+
+@pytest.mark.parametrize("meanwhile, stale", [("basic", False), ("internal", True)])
+def test_embed_stored_leaves_the_payload_stale_if_access_moved_meanwhile(
+    db_session: Session, meanwhile, stale
+):
+    item = SourceItem(sha256=unique_sha256(), content="x", modality="email", sensitivity="basic")
+    db_session.add(item)
+    db_session.commit()
+    payload = dict(item.as_payload())
+    with make_session() as other:
+        other.get_one(SourceItem, item.id).sensitivity = meanwhile
+        other.commit()
+
+    item.embed_stored(payload)
+    db_session.commit()
+
+    db_session.refresh(item)
+    assert (item.sensitivity, item.access_payload_stale) == (meanwhile, stale)
 
 
 def test_unique_source_items_same_commit(db_session: Session):

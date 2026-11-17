@@ -10,7 +10,7 @@ import pathlib
 import re
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Annotated, Sequence, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Annotated, Mapping, Sequence, TypedDict, cast
 import uuid
 
 from PIL import Image
@@ -32,11 +32,12 @@ from sqlalchemy import (
     func,
     text,
     UniqueConstraint,
+    update,
 )
 from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.dialects.postgresql import BYTEA, JSONB
 from sqlalchemy import orm
-from sqlalchemy.orm import Mapped, Session, mapped_column, relationship, validates
+from sqlalchemy.orm import Mapped, Session, mapped_column, object_session, relationship, validates
 from sqlalchemy.types import Numeric
 
 from memory.common import paths, settings
@@ -592,6 +593,12 @@ class SourceItem(AccessControlMixin, Base):
 
     # Access control columns (project_id / sensitivity / creator_id) and the
     # default_* ClassVars come from `AccessControlMixin`.
+    # Whether the chunks' Qdrant payloads may lag those columns. Lets the
+    # reconcile sweep write Qdrant only for rows that need it: rewriting every
+    # payload each sweep saturates Qdrant's disk.
+    access_payload_stale: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
 
     # Person associations (for filtering content by person)
     # Many-to-many relationship via source_item_people junction table
@@ -739,11 +746,37 @@ class SourceItem(AccessControlMixin, Base):
             self.embed_attempts - 1
         )
 
-    def embed_stored(self) -> None:
+    def embed_stored(self, payload: Mapping[str, Any]) -> None:
+        """Mark STORED once vectors carrying ``payload`` are in Qdrant."""
         self.embed_status = "STORED"
         self.embed_attempts = 0
         self.embed_error = None
         self.embed_retry_at = None
+        self.payload_written(payload)
+
+    def payload_written(self, payload: Mapping[str, Any]) -> None:
+        """Clear ``access_payload_stale`` now that ``payload`` is in Qdrant.
+
+        Conditional on the row still holding the payload's values, so an
+        access change committed after the payload was built leaves the row
+        stale rather than being lost.
+        """
+        session = object_session(self)
+        if session is None:
+            return
+        # The row's own pending changes must land first, or the WHERE checks stale values.
+        session.flush()
+        session.execute(
+            update(SourceItem)
+            .where(
+                SourceItem.id == self.id,
+                SourceItem.project_id.is_not_distinct_from(payload.get("project_id")),
+                SourceItem.sensitivity == payload.get("sensitivity"),
+                SourceItem.creator_id.is_not_distinct_from(payload.get("creator_id")),
+            )
+            .values(access_payload_stale=False)
+            .execution_options(synchronize_session="fetch")
+        )
 
     def data_chunks(self, metadata: dict[str, Any] | None = None) -> Sequence[Chunk]:
         metadata = metadata or {}
@@ -1038,3 +1071,14 @@ def register_access_control_inheritance_tracking(cls: type) -> None:
 
 
 register_access_control_inheritance_tracking(SourceItem)
+
+
+# Writes that skip the ORM (Core UPDATEs, a deleted project's or user's ON
+# DELETE SET NULL) bypass this: Core UPDATEs set the flag themselves, and a
+# deleted id left in a payload grants nothing, as ids are never reused.
+@event.listens_for(SourceItem.project_id, "set", propagate=True, active_history=True)
+@event.listens_for(SourceItem.sensitivity, "set", propagate=True, active_history=True)
+@event.listens_for(SourceItem.creator_id, "set", propagate=True, active_history=True)
+def mark_access_payload_stale(target, value, oldvalue, initiator):
+    if value != oldvalue:
+        target.access_payload_stale = True

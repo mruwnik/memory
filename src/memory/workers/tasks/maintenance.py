@@ -1046,22 +1046,21 @@ def update_source_access_control(
                 # the SQL row is still committed with the new values, so SQL
                 # and Qdrant can briefly disagree for that item. Access
                 # filters apply at both layers, so the stricter one wins —
-                # the divergence costs visibility, never leaks. The next run
-                # (after a config_version bump) reconciles it.
+                # the divergence costs visibility, never leaks. The item stays
+                # stale, so the reconcile sweep retries it.
+                payload = {
+                    "project_id": resolved_project_id,
+                    "sensitivity": resolved_sensitivity,
+                    "creator_id": item.creator_id,
+                }
+                errors_before = errors
                 for chunk in item.chunks:
                     if not chunk.id:
                         continue
 
                     try:
                         qdrant.set_payload(
-                            client,
-                            chunk.collection_name,
-                            str(chunk.id),
-                            {
-                                "project_id": resolved_project_id,
-                                "sensitivity": resolved_sensitivity,
-                                "creator_id": item.creator_id,
-                            },
+                            client, chunk.collection_name, str(chunk.id), payload
                         )
                         updated_chunks += 1
                     except (UnexpectedResponse, ApiException, ConnectionError) as e:
@@ -1078,6 +1077,8 @@ def update_source_access_control(
                         logger.exception(f"Failed to update chunk {chunk.id} payload")
                         errors += 1
 
+                if errors == errors_before:
+                    item.payload_written(payload)
                 updated_items += 1
 
             # Persist this batch's resolved project_id / sensitivity. Commit
@@ -1113,37 +1114,33 @@ def derived_items(session, parent_ids: list[int]) -> list[SourceItem]:
 
 
 def reconcile_item(client, item: SourceItem, rewrite_payloads: bool) -> bool:
-    """Resolve one item onto its row and, when needed, its Qdrant payloads.
+    """Resolve one item onto its row and, if its payload is stale, onto Qdrant.
 
-    Returns whether the payloads were rewritten.
+    Returns whether the payload needed writing, which its derived items follow.
     """
-    before = (item.project_id, item.sensitivity, item.creator_id)
     project_id, sensitivity = item.apply_inherited_access_control()
-    # Skip the Qdrant rewrite only when the row is fully inherited AND the
-    # resolved values didn't change — that's the case where we can trust
-    # Qdrant is in sync, because this same loop is the only thing that ever
-    # wrote it. For rows with any explicit override there is no event-driven
-    # dispatch from item-level writes (see #86), so the periodic sweep is the
-    # only path that can land the override in Qdrant — always rewrite.
-    # set_payload is idempotent, so the redundant case is cheap.
-    fully_inherited = item.project_id_inherited and item.sensitivity_inherited
-    unchanged = (item.project_id, item.sensitivity, item.creator_id) == before
-    if fully_inherited and unchanged and not rewrite_payloads:
+    if not (item.access_payload_stale or rewrite_payloads):
         return False
+    # Unstored items have no points to update; the push that stores them
+    # carries the current payload and clears the flag.
+    if item.embed_status != "STORED":
+        return True
     payload = {
         "project_id": project_id,
         "sensitivity": sensitivity,
         "creator_id": item.creator_id,
     }
+    failed = False
     for chunk in item.chunks:
         if not chunk.id or not chunk.collection_name:
             continue
         try:
             qdrant.set_payload(client, chunk.collection_name, str(chunk.id), payload)
         except Exception:
-            # Best-effort: the next run (or config dispatch) reconciles a
-            # chunk a transient error skipped.
             logger.exception("reconcile_access_control: failed to update chunk %s", chunk.id)
+            failed = True
+    if not failed:
+        item.payload_written(payload)
     return True
 
 
@@ -1186,9 +1183,11 @@ def reconcile_access_control(
     and the failure direction (stale resolved values) is corrected, not a
     hard breakage.
 
-    Idempotent: ``apply_inherited_access_control`` skips unchanged rows, the
-    Qdrant payload is rewritten only when the resolved values actually moved
-    (or ``rewrite_payloads``), and explicit overrides are never touched.
+    Idempotent: ``apply_inherited_access_control`` skips unchanged rows, and
+    the Qdrant payload is rewritten only for rows flagged
+    ``access_payload_stale`` (or with ``rewrite_payloads``). Any write of
+    project_id / sensitivity / creator_id sets that flag, explicit item-level
+    overrides included, and a successful Qdrant write clears it.
 
     Cost note: per item this lazy-loads the data-source chain
     (``apply_inherited_access_control`` -> ``resolve_access_control`` ->

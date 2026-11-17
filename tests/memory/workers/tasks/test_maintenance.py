@@ -1421,6 +1421,8 @@ def test_update_source_access_control_persists_to_sql_rows(
     # ...and the explicit override is left exactly as it was.
     assert explicit.project_id == other_project.id
     assert explicit.project_id_inherited is False
+    # Both payloads were just written, so the sweep has nothing left to push.
+    assert (inherited.access_payload_stale, explicit.access_payload_stale) == (False, False)
 
 
 def test_update_source_access_control_reresolves_when_source_moves(
@@ -1687,6 +1689,7 @@ def make_recon_setup(db_session, test_user, n_messages):
             sha256=b"recon" + str(i).zfill(27).encode(),
             subject=f"m{i}",
             email_account_id=account.id,
+            embed_status="STORED",
         )
         for i in range(n_messages)
     ]
@@ -1806,19 +1809,13 @@ def test_reconcile_access_control_crosses_batch_boundary(
     assert all(r.project_id == project.id for r in rows)
 
 
+@pytest.mark.parametrize("second_window", [None, 3600])
 def test_reconcile_access_control_writes_qdrant_for_explicit_override(
-    db_session, qdrant, test_user
+    db_session, qdrant, test_user, second_window
 ):
-    """Regression for #86: items with an item-level explicit override
-    (``project_id_inherited=False``) must have their Qdrant payload rewritten
-    even when ``apply_inherited_access_control`` is a no-op on the SQL row.
-
-    Item-level overrides have no event-driven dispatch path (only data-source
-    config changes trigger ``update_source_access_control``), so the periodic
-    sweep is the only thing that can land the override in Qdrant. The
-    ``before == after`` short-circuit silently assumes Qdrant is already in
-    sync, which is exactly what breaks when the override was just applied.
-    """
+    """An item-level override has no event-driven dispatch, so the sweep lands
+    it in Qdrant although ``apply_inherited_access_control`` leaves the row
+    alone, and then leaves it be."""
     project, account, messages = make_recon_setup(db_session, test_user, 1)
     msg = messages[0]
     other_project = Project(title="Override Project", state="open")
@@ -1852,6 +1849,60 @@ def test_reconcile_access_control_writes_qdrant_for_explicit_override(
         "creator_id": test_user.id,
     }
 
+    # Once landed, the override is not rewritten by later sweeps of either tier.
+    with patch("memory.workers.tasks.maintenance.qdrant.set_payload") as mock_set:
+        reconcile_access_control(updated_within_seconds=second_window)
+    mock_set.assert_not_called()
+
+
+def add_mail_chunk(db_session, message) -> Chunk:
+    chunk = Chunk(
+        id=str(uuid.uuid4()),
+        source=message,
+        content="chunk",
+        embedding_model="test-model",
+        collection_name="mail",
+    )
+    db_session.add(chunk)
+    db_session.commit()
+    return chunk
+
+
+def test_reconcile_access_control_retries_a_payload_it_failed_to_write(
+    db_session, qdrant, test_user
+):
+    project, account, messages = make_recon_setup(db_session, test_user, 1)
+    add_mail_chunk(db_session, messages[0])
+
+    with patch(
+        "memory.workers.tasks.maintenance.qdrant.set_payload", side_effect=ConnectionError
+    ):
+        reconcile_access_control()
+    db_session.refresh(messages[0])
+    assert messages[0].access_payload_stale is True
+
+    with patch("memory.workers.tasks.maintenance.qdrant.set_payload") as mock_set:
+        reconcile_access_control(updated_within_seconds=3600)
+    db_session.refresh(messages[0])
+    assert (mock_set.call_count, messages[0].access_payload_stale) == (1, False)
+
+
+@pytest.mark.parametrize(
+    "embed_status, writes", [("STORED", 1), ("RAW", 0), ("QUEUED", 0), ("FAILED", 0)]
+)
+def test_reconcile_access_control_writes_only_items_whose_vectors_are_stored(
+    db_session, qdrant, test_user, embed_status, writes
+):
+    """Unstored items have no points to update; their push carries the payload."""
+    project, account, messages = make_recon_setup(db_session, test_user, 1)
+    messages[0].embed_status = embed_status
+    add_mail_chunk(db_session, messages[0])
+
+    with patch("memory.workers.tasks.maintenance.qdrant.set_payload") as mock_set:
+        reconcile_access_control()
+
+    assert mock_set.call_count == writes
+
 
 @pytest.mark.parametrize("rewrite_payloads", [False, True])
 def test_reconcile_access_control_rewrite_payloads_writes_unchanged_items(
@@ -1861,6 +1912,7 @@ def test_reconcile_access_control_rewrite_payloads_writes_unchanged_items(
     payloads get creator_id only from an explicit rewrite."""
     project, account, messages = make_recon_setup(db_session, test_user, 1)
     messages[0].apply_inherited_access_control()
+    messages[0].access_payload_stale = False
     db_session.add(
         Chunk(
             id=str(uuid.uuid4()),
@@ -1899,6 +1951,8 @@ def test_reconcile_access_control_propagates_parent_override_to_derived_items(
     parent = child.get_data_source()
     parent.apply_inherited_access_control()
     child.apply_inherited_access_control()
+    parent.access_payload_stale = child.access_payload_stale = False
+    child.embed_status = "STORED"
     chunk = Chunk(
         id=str(uuid.uuid4()),
         source=child,

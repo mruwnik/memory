@@ -243,7 +243,7 @@ def disown_outsiders(session: DBSession, server_id: int, bot_id: int | None, cha
         return
     ids = session.scalars(select(DiscordMessage.id).where(in_server, DiscordMessage.bot_id.in_(outsiders))).all()
     # creator_id is on source_item and bot_id on discord_message: one UPDATE per table.
-    session.execute(update(SourceItem).where(SourceItem.id.in_(ids)).values(creator_id=None))
+    session.execute(update(SourceItem).where(SourceItem.id.in_(ids)).values(creator_id=None, access_payload_stale=True))
     session.execute(update(DiscordMessage).where(DiscordMessage.id.in_(ids)).values(bot_id=None))
     logger.info("Discord server %s channel %s: disowned %s messages of bots %s", server_id, channel_id, len(ids), outsiders)
     verify_disowned(bot_id, ids)
@@ -333,7 +333,7 @@ def move_to_server(
     have no creator, so a DM owner's creator rights over its messages end."""
     if channel.server_id is None:
         in_channel = select(DiscordMessage.id).where(DiscordMessage.channel_id == channel.id)
-        session.execute(update(SourceItem).where(SourceItem.id.in_(in_channel)).values(creator_id=None))
+        session.execute(update(SourceItem).where(SourceItem.id.in_(in_channel)).values(creator_id=None, access_payload_stale=True))
     channel.server_id, channel.bot_id, channel.channel_type, channel.parent_id = server_id, bot_id, channel_type, None
     reset_access(channel)
     session.execute(

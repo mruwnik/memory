@@ -52,7 +52,7 @@ def make_chunk(item: SourceItem) -> Chunk:
         content=item.content,
         embedding_model="test-model",
         vector=[0.1] * 1024,
-        item_metadata={},
+        item_metadata=dict(item.as_payload()),
         collection_name="session",
     )
 
@@ -120,6 +120,8 @@ def test_index_session_creates_segments(indexing_env, coding_session, sessions_d
         assert segment.project_id_inherited is False
         assert segment.modality == "session"
         assert segment.embed_status == "STORED"
+        # The explicit NULL override went out with the vectors, so the sweep skips it.
+        assert segment.access_payload_stale is False
         assert "message" in segment.content
         assert segment.roles == ["assistant", "user"]
 
