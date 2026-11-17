@@ -45,6 +45,9 @@ x-worker-base: &worker-base
     args:
       APP_VERSION: ${APP_VERSION:-dev}
   restart: unless-stopped
+  # Celery prefork and subprocesses leave zombies when nothing reaps them, and
+  # a zombie blocks `docker stop`, failing the container's recreate.
+  init: true
   networks: [kbnet]
   security_opt: ["no-new-privileges=true"]
   depends_on: [postgres, redis, qdrant]

@@ -24,6 +24,7 @@ a new, empty `## Unreleased` above it.
 
 ### Changes
 - Container memory for Qdrant, Postgres and `agents-worker`, and Postgres's `shared_buffers` / `effective_cache_size`, are set from `.env`, so an instance can be sized without editing or overriding `docker-compose.yaml`.
+- Fix: the worker containers (`worker`, `agents-worker`, `scheduler-worker`, `slack-sync-worker`, `ingest-hub`) run with an init process that reaps exited child processes, so a leftover zombie no longer makes `docker stop` fail and a `docker compose up -d` recreate abort half-way.
 
 ### Required env vars
 None
