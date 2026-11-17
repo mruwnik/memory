@@ -22,6 +22,8 @@ a new, empty `## Unreleased` above it.
 
 ## Unreleased
 
+## v0.5.9 (2026-11-17)
+
 ### Changes
 - Subscription inputs say whether a Slack or Discord message is a direct or group DM (`dm: True`) and name the bot or app that collected it (`collected_by`), in `{items}`, `{items_json}` and as `{item.dm}` / `{item.collected_by}`, so an agent can tell a DM to your bot from a message you posted elsewhere.
 - Fix: runs of a queue subscription are titled by the subscription and queue ("EA escalations → queue ea") in the Runs list and on the run page instead of "Ad-hoc run"; runs on a worker say "Waiting for a worker" or "Held by a worker" with the lease expiry, show the cost as paid by the worker (with what it reports) instead of "$0.00 of $0.00", and hide the server's empty turns and tokens. Runs now carry `subscription_name`.
